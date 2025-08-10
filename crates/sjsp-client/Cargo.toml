@@ -34,5 +34,5 @@ criterion.workspace = true
 [features] 
 default = ["tcp"]
 tcp = ["sjsp-transport/tcp"]
-quic = ["sjsp-transport/quic"]
+# quic = ["sjsp-transport/quic"]  # Will be added later
 tls = ["sjsp-transport/tls"]

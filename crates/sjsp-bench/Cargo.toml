@@ -32,18 +32,19 @@ rand = "0.8"
 [dev-dependencies]
 proptest.workspace = true
 
-[[bench]]
-name = "throughput"
-harness = false
-
-[[bench]]
-name = "latency" 
-harness = false
-
-[[bench]]
-name = "memory_usage"
-harness = false
-
-[[bench]]
-name = "comparison"
-harness = false
+# Benchmarks will be implemented later
+# [[bench]]
+# name = "throughput"
+# harness = false
+# 
+# [[bench]]
+# name = "latency" 
+# harness = false
+# 
+# [[bench]]
+# name = "memory_usage"
+# harness = false
+# 
+# [[bench]]
+# name = "comparison"
+# harness = false

@@ -14,19 +14,14 @@ categories.workspace = true
 # Core
 bytes.workspace = true
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 bitflags.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
 # Performance
-smallvec.workspace = true
+smallvec = { workspace = true, features = ["serde"] }
 ahash.workspace = true
-memchr.workspace = true
-bytemuck = { workspace = true, features = ["derive"] }
-
-# Memory management
-bumpalo.workspace = true
-typed-arena.workspace = true
 
 # Async
 futures.workspace = true
@@ -46,15 +41,16 @@ simd-avx2 = []          # AVX2 support
 simd-avx512 = []        # AVX-512 support
 simd-neon = []          # ARM NEON support
 
-# Optional features
-gpu = ["dep:cudarc", "dep:wgpu"]
+# Optional features (will be added later)
+# gpu = ["dep:cudarc", "dep:wgpu"]
 schema-validation = []
 compression = []
 
-[[bench]]
-name = "simd_parsing"
-harness = false
-
-[[bench]]
-name = "memory_pools"
-harness = false
+# Benchmarks will be implemented later
+# [[bench]]
+# name = "simd_parsing"
+# harness = false
+# 
+# [[bench]]
+# name = "memory_pools"
+# harness = false

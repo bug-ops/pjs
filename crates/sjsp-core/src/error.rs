@@ -1,7 +1,5 @@
 //! Error types for SJSP operations
 
-use std::fmt;
-
 /// Result type alias for SJSP operations
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -44,11 +42,11 @@ pub enum Error {
 
     /// I/O error
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(String),
 
     /// UTF-8 conversion error
     #[error("UTF-8 conversion failed: {0}")]
-    Utf8(#[from] std::str::Utf8Error),
+    Utf8(String),
 
     /// Generic error for other cases
     #[error("{0}")]
@@ -82,5 +80,17 @@ impl Error {
     /// Create a generic error
     pub fn other(message: impl Into<String>) -> Self {
         Self::Other(message.into())
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Io(err.to_string())
+    }
+}
+
+impl From<std::str::Utf8Error> for Error {
+    fn from(err: std::str::Utf8Error) -> Self {
+        Error::Utf8(err.to_string())
     }
 }

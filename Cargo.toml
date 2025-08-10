@@ -41,8 +41,8 @@ bytemuck = { version = "1.14", features = ["derive"] }
 
 # Async and network
 futures = "0.3"
-quinn = { version = "0.10", optional = true }
 socket2 = "0.5"
+# quinn = { version = "0.10", optional = true }  # Will add when needed
 
 # Memory management  
 bumpalo = "3.14"
@@ -52,9 +52,9 @@ typed-arena = "2.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.4"
 
-# GPU (optional)
-cudarc = { version = "0.10", optional = true, features = ["std"] }
-wgpu = { version = "0.18", optional = true }
+# GPU (will be added later as separate crate dependencies)
+# cudarc = { version = "0.10", optional = true }
+# wgpu = { version = "0.18", optional = true }
 
 # Utilities
 thiserror = "1.0"

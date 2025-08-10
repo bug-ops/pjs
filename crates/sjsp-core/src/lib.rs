@@ -10,7 +10,6 @@
 
 pub mod error;
 pub mod frame;
-pub mod memory;
 pub mod parser;
 pub mod semantic;
 pub mod stream;
@@ -18,6 +17,7 @@ pub mod stream;
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
 pub use semantic::{SemanticType, SemanticMeta};
+pub use parser::{Parser, ParseConfig, ParseStats};
 
 /// Re-export commonly used types
 pub mod prelude {

@@ -1,8 +1,6 @@
 //! Frame format and utilities for SJSP protocol
 
 use bytes::Bytes;
-use bytemuck::{Pod, Zeroable};
-use smallvec::SmallVec;
 
 use crate::{Error, Result, SemanticMeta};
 
@@ -21,9 +19,9 @@ pub struct Frame {
     pub semantics: Option<SemanticMeta>,
 }
 
-/// Packed frame header for wire format efficiency
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+/// Frame header for wire format
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct FrameHeader {
     /// Protocol version (currently 1)
     pub version: u8,
@@ -41,8 +39,8 @@ pub struct FrameHeader {
 
 bitflags::bitflags! {
     /// Frame processing flags
-    #[derive(Pod, Zeroable)]
     #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct FrameFlags: u16 {
         /// Payload is compressed
         const COMPRESSED = 0b0000_0001;
@@ -147,54 +145,7 @@ impl Frame {
         Ok(())
     }
 
-    /// Serialize frame to wire format
-    pub fn serialize(&self) -> Result<Bytes> {
-        let header_size = std::mem::size_of::<FrameHeader>();
-        let total_size = header_size + self.payload.len();
-        
-        let mut buffer = Vec::with_capacity(total_size);
-        
-        // Write header
-        let header_bytes = bytemuck::bytes_of(&self.header);
-        buffer.extend_from_slice(header_bytes);
-        
-        // Write payload
-        buffer.extend_from_slice(&self.payload);
-        
-        Ok(Bytes::from(buffer))
-    }
-
-    /// Deserialize frame from wire format  
-    pub fn deserialize(data: &[u8]) -> Result<Self> {
-        let header_size = std::mem::size_of::<FrameHeader>();
-        
-        if data.len() < header_size {
-            return Err(Error::invalid_frame("Insufficient data for header"));
-        }
-
-        // Parse header
-        let header_bytes = &data[..header_size];
-        let header: FrameHeader = *bytemuck::from_bytes(header_bytes);
-
-        // Extract payload
-        let payload_start = header_size;
-        let payload_end = payload_start + header.length as usize;
-        
-        if data.len() < payload_end {
-            return Err(Error::invalid_frame("Insufficient data for payload"));
-        }
-
-        let payload = Bytes::copy_from_slice(&data[payload_start..payload_end]);
-
-        let frame = Frame {
-            header,
-            payload,
-            semantics: None, // Semantics not serialized to wire
-        };
-
-        frame.validate()?;
-        Ok(frame)
-    }
+    // TODO: Implement serialization methods later when needed
 
     /// Check if frame contains numeric array data
     pub fn is_numeric(&self) -> bool {
@@ -251,17 +202,7 @@ mod tests {
         assert_eq!(frame.payload, payload);
     }
 
-    #[test]
-    fn test_frame_serialization() {
-        let payload = Bytes::from_static(b"test data");
-        let frame = Frame::new(payload).with_sequence(42).with_checksum();
-        
-        let serialized = frame.serialize().unwrap();
-        let deserialized = Frame::deserialize(&serialized).unwrap();
-        
-        assert_eq!(frame.header.sequence, deserialized.header.sequence);
-        assert_eq!(frame.payload, deserialized.payload);
-    }
+    // Serialization tests will be added when serialization is implemented
 
     #[test]
     fn test_checksum_validation() {

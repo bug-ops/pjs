@@ -21,8 +21,8 @@ thiserror.workspace = true
 tracing.workspace = true
 socket2.workspace = true
 
-# Optional transports
-quinn = { workspace = true, optional = true }
+# Optional transports (will be added later)
+# quinn = { workspace = true, optional = true }
 tokio-rustls = { version = "0.25", optional = true }
 io-uring = { version = "0.6", optional = true }
 
@@ -35,7 +35,7 @@ tokio-test = "0.4"
 [features]
 default = ["tcp"]
 tcp = []
-quic = ["dep:quinn"]
+# quic = ["dep:quinn"]  # Will be added later
 tls = ["dep:tokio-rustls"]
 io-uring = ["dep:io-uring"]
 dpdk = []  # For future DPDK integration

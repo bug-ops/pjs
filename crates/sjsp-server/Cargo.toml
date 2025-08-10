@@ -39,7 +39,7 @@ criterion.workspace = true
 [features]
 default = ["tcp", "metrics"]
 tcp = ["sjsp-transport/tcp"]
-quic = ["sjsp-transport/quic"] 
+# quic = ["sjsp-transport/quic"]  # Will be added later
 tls = ["sjsp-transport/tls"]
 io-uring = ["sjsp-transport/io-uring"]
 metrics = []

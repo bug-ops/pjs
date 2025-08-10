@@ -19,9 +19,9 @@ thiserror.workspace = true
 tracing.workspace = true
 futures.workspace = true
 
-# GPU backends (all optional)
-cudarc = { workspace = true, optional = true }
-wgpu = { workspace = true, optional = true }
+# GPU backends (all optional - will be added later)
+# cudarc = { workspace = true, optional = true }
+# wgpu = { workspace = true, optional = true }
 opencl3 = { version = "0.9", optional = true }
 
 [dev-dependencies]
@@ -29,12 +29,13 @@ criterion.workspace = true
 
 [features]
 default = []
-cuda = ["dep:cudarc"]
-wgpu = ["dep:wgpu"]  
+# cuda = ["dep:cudarc"]  # Will be added later
+# wgpu = ["dep:wgpu"]    # Will be added later
 opencl = ["dep:opencl3"]
-vulkan = ["wgpu/vulkan"]
+# vulkan = ["wgpu/vulkan"]  # Will be added later
 
-[[bench]]
-name = "gpu_numeric_parsing"
-harness = false
-required-features = ["cuda"]
+# Benchmarks will be added when GPU features are implemented
+# [[bench]]
+# name = "gpu_numeric_parsing"
+# harness = false
+# required-features = ["cuda"]
