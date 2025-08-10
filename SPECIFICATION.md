@@ -3,7 +3,7 @@
 Version: 1.0-draft  
 Status: Draft Specification  
 Authors: [Contributors]  
-Date: 2024
+Date: 2025
 
 ## Abstract
 
@@ -46,30 +46,30 @@ PJS solves these problems by:
 
 ### 2.1 Transmission Flow
 
-```
+```mermaid
 Client                          Server
-  |                               |
+  |                                |
   |--------- Request ------------->|
   |        (with PJS accept)       |
-  |                               |
-  |<-------- Skeleton ------------|
+  |                                |
+  |<-------- Skeleton -------------|
   |        (structure only)        |
-  |                               |
-  |<-------- Patch P100 ----------|
+  |                                |
+  |<-------- Patch P100 -----------|
   |       (critical data)          |
-  |                               |
-  |<-------- Patch P90 -----------|
+  |                                |
+  |<-------- Patch P90 ------------|
   |        (important data)        |
-  |                               |
-  |<-------- Patch P50 -----------|
+  |                                |
+  |<-------- Patch P50 ------------|
   |        (normal data)           |
-  |                               |
-  |<-------- Patch P10 -----------|
+  |                                |
+  |<-------- Patch P10 ------------|
   |         (low priority)         |
-  |                               |
-  |<-------- Complete ------------|
+  |                                |
+  |<-------- Complete -------------|
   |         (end signal)           |
-  |                               |
+  |                                |
 ```
 
 ### 2.2 Content Negotiation
@@ -282,7 +282,7 @@ Server may adjust priorities based on:
 
 Primary addressing method:
 
-```
+```js
 /user/profile/bio           -> user.profile.bio
 /posts/0/title              -> posts[0].title
 /stats/total_users          -> stats.total_users
@@ -293,7 +293,7 @@ Primary addressing method:
 
 Extended addressing for complex queries:
 
-```
+```js
 $.user.posts[*].title       -> all post titles
 $.user.posts[?(@.public)]   -> public posts only
 $.user.posts[-1]            -> last post
@@ -341,7 +341,7 @@ Each frame can be pushed as a separate stream with priority hints.
 
 Frames sent as individual WebSocket messages:
 
-```javascript
+```js
 ws.onmessage = (event) => {
   const frame = JSON.parse(event.data);
   processFrame(frame);
@@ -350,7 +350,7 @@ ws.onmessage = (event) => {
 
 ### 6.4 Server-Sent Events (SSE)
 
-```
+```http
 event: frame
 data: {"@type":"skeleton","data":{...}}
 
@@ -365,7 +365,7 @@ data: {"@type":"complete"}
 
 ### 7.1 State Management
 
-```typescript
+```ts
 class PJSClient {
   private skeleton: any = null;
   private document: any = null;
@@ -400,7 +400,7 @@ class PJSClient {
 
 ### 7.2 Progressive Rendering
 
-```javascript
+```js
 client.onSkeletonReceived = (skeleton) => {
   // Render UI with loading states
   renderUIStructure(skeleton);
@@ -625,7 +625,7 @@ Reference implementations are available at:
 
 ### Appendix A: MIME Type Registration
 
-```
+```mime
 Type name: application
 Subtype name: pjs+json
 Required parameters: none
