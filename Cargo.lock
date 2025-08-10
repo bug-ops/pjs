@@ -1143,6 +1143,113 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
+name = "pjs-bench"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "criterion",
+ "fake",
+ "pjs-client",
+ "pjs-core",
+ "pjs-server",
+ "proptest",
+ "rand 0.8.5",
+ "serde_json",
+ "simd-json",
+ "sonic-rs",
+ "tokio",
+]
+
+[[package]]
+name = "pjs-client"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "criterion",
+ "crossbeam",
+ "futures",
+ "parking_lot",
+ "pjs-core",
+ "pjs-transport",
+ "serde",
+ "smallvec",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+]
+
+[[package]]
+name = "pjs-core"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "bitflags 2.9.1",
+ "bytes",
+ "criterion",
+ "futures",
+ "proptest",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "sonic-rs",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "pjs-gpu"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "criterion",
+ "futures",
+ "opencl3",
+ "pjs-core",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "pjs-server"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "bytes",
+ "criterion",
+ "crossbeam",
+ "futures",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "parking_lot",
+ "pjs-core",
+ "pjs-transport",
+ "rayon",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+]
+
+[[package]]
+name = "pjs-transport"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "io-uring 0.6.4",
+ "mio 0.8.11",
+ "pjs-core",
+ "socket2 0.5.10",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-rustls",
+ "tokio-test",
+ "tracing",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1681,112 +1788,6 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
-
-[[package]]
-name = "sjsp-bench"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "criterion",
- "fake",
- "proptest",
- "rand 0.8.5",
- "serde_json",
- "simd-json",
- "sjsp-client",
- "sjsp-core",
- "sjsp-server",
- "sonic-rs",
- "tokio",
-]
-
-[[package]]
-name = "sjsp-client"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "criterion",
- "crossbeam",
- "futures",
- "parking_lot",
- "serde",
- "sjsp-core",
- "sjsp-transport",
- "smallvec",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
-]
-
-[[package]]
-name = "sjsp-core"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "bitflags 2.9.1",
- "bytes",
- "criterion",
- "futures",
- "proptest",
- "serde",
- "serde_json",
- "smallvec",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "sjsp-gpu"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "criterion",
- "futures",
- "opencl3",
- "sjsp-core",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "sjsp-server"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "bytes",
- "criterion",
- "crossbeam",
- "futures",
- "metrics",
- "metrics-exporter-prometheus",
- "parking_lot",
- "rayon",
- "serde",
- "sjsp-core",
- "sjsp-transport",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
-]
-
-[[package]]
-name = "sjsp-transport"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "futures",
- "io-uring 0.6.4",
- "mio 0.8.11",
- "sjsp-core",
- "socket2 0.5.10",
- "thiserror 1.0.69",
- "tokio",
- "tokio-rustls",
- "tokio-test",
- "tracing",
-]
 
 [[package]]
 name = "sketches-ddsketch"

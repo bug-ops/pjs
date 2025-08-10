@@ -1,4 +1,4 @@
-# SJSP - Semantic JSON Streaming Protocol
+# PJS - Priority JSON Streaming Protocol
 
 [![Rust](https://img.shields.io/badge/rust-1.75+-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
@@ -22,9 +22,9 @@ Modern web applications face a fundamental challenge: **large JSON responses blo
 | **JSON streaming** | No semantic understanding, can't prioritize |
 | **Compression** | Reduces size but not time-to-first-byte |
 
-## The Solution: SJSP
+## The Solution: PJS
 
-SJSP revolutionizes JSON transmission by **understanding your data semantically** and **prioritizing what matters**.
+PJS revolutionizes JSON transmission by **understanding your data semantically** and **prioritizing what matters**.
 
 ### Core Innovation: Semantic Prioritization
 
@@ -50,7 +50,7 @@ struct UserDashboard {
 Traditional JSON Loading:
 [████████████████████] 100% - 2000ms - Full UI renders
 
-SJSP Loading:
+PJS Loading:
 [██░░░░░░░░░░░░░░░░░░] 10%  - 10ms   - Critical UI visible
 [██████░░░░░░░░░░░░░░] 30%  - 50ms   - Interactive UI
 [████████████████████] 100% - 2000ms - Full data loaded
@@ -77,7 +77,7 @@ Adjusts chunk size and priority based on network conditions.
 
 ## Benchmarks
 
-| Metric | Traditional JSON | SJSP | Improvement |
+| Metric | Traditional JSON | PJS | Improvement |
 |--------|-----------------|------|-------------|
 | Time to First Paint | 2000ms | 50ms | **40x faster** |
 | Memory Usage (10MB JSON) | 45MB | 8MB | **5.6x less** |
@@ -88,13 +88,13 @@ Adjusts chunk size and priority based on network conditions.
 
 ### Server (Rust)
 ```rust
-use sjsp::prelude::*;
+use pjs::prelude::*;
 
 #[tokio::main]
 async fn main() {
     let data = load_large_dataset();
     
-    SjspStream::new(data)
+    PjsStream::new(data)
         .with_schema(DashboardSchema::auto())
         .serve("0.0.0.0:8080")
         .await?;
@@ -103,9 +103,9 @@ async fn main() {
 
 ### Client (JavaScript)
 ```javascript
-import { SjspClient } from '@sjsp/client';
+import { PjsClient } from '@pjs/client';
 
-const client = new SjspClient('ws://localhost:8080');
+const client = new PjsClient('ws://localhost:8080');
 
 client.on('critical', (data) => {
     // Render immediately - user sees content in 10ms
@@ -129,7 +129,7 @@ Perfect for:
 
 ## Architecture
 
-SJSP uses a hybrid architecture combining streaming semantics with high-performance parsing:
+PJS uses a hybrid architecture combining streaming semantics with high-performance parsing:
 
 ### 1. Schema Analysis
 Analyzes JSON structure to identify:
@@ -164,16 +164,16 @@ Responds to network conditions:
 ## Technical Architecture
 
 ```
-sjsp/
-├── sjsp-core        # Core protocol and types
-├── sjsp-analyzer    # Schema analysis engine
-├── sjsp-scheduler   # Priority scheduling
-├── sjsp-chunker     # Semantic chunking logic
-├── sjsp-parser      # Hybrid parser with sonic-rs
-├── sjsp-transport   # Network transport adapters
-├── sjsp-client      # Client implementations
-├── sjsp-server      # Server framework
-└── sjsp-bench       # Benchmarking suite
+pjs/
+├── pjs-core        # Core protocol and types
+├── pjs-analyzer    # Schema analysis engine
+├── pjs-scheduler   # Priority scheduling
+├── pjs-chunker     # Semantic chunking logic
+├── pjs-parser      # Hybrid parser with sonic-rs
+├── pjs-transport   # Network transport adapters
+├── pjs-client      # Client implementations
+├── pjs-server      # Server framework
+└── pjs-bench       # Benchmarking suite
 ```
 
 ## Implementation Roadmap
@@ -241,7 +241,7 @@ cargo bench
 ## Example: Real-time Dashboard
 
 ```rust
-use sjsp::prelude::*;
+use pjs::prelude::*;
 
 // Define your data with priorities
 #[derive(Serialize, JsonPriority)]
@@ -261,7 +261,7 @@ struct Dashboard {
 
 // Server sends data by priority
 let dashboard = fetch_dashboard_data().await?;
-SjspStream::new(dashboard)
+PjsStream::new(dashboard)
     .prioritize()
     .stream_to(client)
     .await?;
@@ -312,4 +312,4 @@ Built with:
 
 ---
 
-*SJSP: Because users shouldn't wait for data they don't need yet.*
+*PJS: Because users shouldn't wait for data they don't need yet.*

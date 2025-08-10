@@ -1,0 +1,46 @@
+[package]
+name = "pjs-server"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "High-performance PJS server with worker pool and request routing"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+pjs-core = { path = "../pjs-core" }
+pjs-transport = { path = "../pjs-transport" }
+
+# Core  
+bytes.workspace = true
+serde.workspace = true
+tokio.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Server utilities
+parking_lot.workspace = true
+crossbeam.workspace = true
+rayon.workspace = true
+ahash.workspace = true
+
+# Metrics
+metrics = "0.22"
+metrics-exporter-prometheus = { version = "0.13", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion.workspace = true
+
+[features]
+default = ["tcp", "metrics"]
+tcp = ["pjs-transport/tcp"]
+# quic = ["pjs-transport/quic"]  # Will be added later
+tls = ["pjs-transport/tls"]
+io-uring = ["pjs-transport/io-uring"]
+metrics = []
+prometheus = ["dep:metrics-exporter-prometheus"]

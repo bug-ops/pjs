@@ -1,0 +1,41 @@
+[package]
+name = "pjs-gpu"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "GPU acceleration for PJS using CUDA and OpenCL"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+pjs-core = { path = "../pjs-core" }
+
+# Core
+bytes.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+futures.workspace = true
+
+# GPU backends (all optional - will be added later)
+# cudarc = { workspace = true, optional = true }
+# wgpu = { workspace = true, optional = true }
+opencl3 = { version = "0.9", optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[features]
+default = []
+# cuda = ["dep:cudarc"]  # Will be added later
+# wgpu = ["dep:wgpu"]    # Will be added later
+opencl = ["dep:opencl3"]
+# vulkan = ["wgpu/vulkan"]  # Will be added later
+
+# Benchmarks will be added when GPU features are implemented
+# [[bench]]
+# name = "gpu_numeric_parsing"
+# harness = false
+# required-features = ["cuda"]

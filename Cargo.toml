@@ -1,22 +1,22 @@
 [workspace]
 members = [
-    "crates/sjsp-core",
-    "crates/sjsp-client", 
-    "crates/sjsp-server",
-    "crates/sjsp-transport",
-    "crates/sjsp-gpu",
-    "crates/sjsp-bench",
+    "crates/pjs-core",
+    "crates/pjs-client", 
+    "crates/pjs-server",
+    "crates/pjs-transport",
+    "crates/pjs-gpu",
+    "crates/pjs-bench",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-authors = ["SJSP Team"]
+authors = ["PJS Team"]
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/sjsp/sjsp"
-description = "Semantic JSON Streaming Protocol - high-performance streaming JSON library"
+repository = "https://github.com/pjs/pjs"
+description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming library"
 keywords = ["json", "streaming", "simd", "performance", "protocol"]
 categories = ["encoding", "network-programming", "parser-implementations"]
 
