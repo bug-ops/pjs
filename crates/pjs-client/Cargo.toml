@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-pjs-core = { path = "../pjs-core" }
+pjson-rs = { path = "../pjs-core" }
 pjs-transport = { path = "../pjs-transport" }
 
 # Core

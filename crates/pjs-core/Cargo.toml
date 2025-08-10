@@ -1,14 +1,15 @@
 [package]
-name = "pjs-core"
+name = "pjson-rs"
 version.workspace = true
-authors.workspace = true  
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Core protocol implementation for PJS with SIMD optimizations"
+description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming"
 keywords.workspace = true
 categories.workspace = true
+publish = true
 
 [dependencies]
 # Core
@@ -24,7 +25,7 @@ smallvec = { workspace = true, features = ["serde"] }
 ahash.workspace = true
 
 # SIMD JSON parsing
-sonic-rs = "0.3"
+sonic-rs = "0.5"
 
 # Async
 futures.workspace = true
@@ -38,11 +39,11 @@ serde_json.workspace = true
 default = ["simd-auto"]
 
 # SIMD features
-simd-auto = []          # Auto-detect best SIMD
-simd-sse42 = []         # SSE 4.2 support
-simd-avx2 = []          # AVX2 support  
-simd-avx512 = []        # AVX-512 support
-simd-neon = []          # ARM NEON support
+simd-auto = []   # Auto-detect best SIMD
+simd-sse42 = []  # SSE 4.2 support
+simd-avx2 = []   # AVX2 support  
+simd-avx512 = [] # AVX-512 support
+simd-neon = []   # ARM NEON support
 
 # Optional features (will be added later)
 # gpu = ["dep:cudarc", "dep:wgpu"]

@@ -1,6 +1,6 @@
 # PJS - Priority JSON Streaming Protocol
 
-[![Rust](https://img.shields.io/badge/rust-1.75+-blue.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.85+-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
 ## The Problem
@@ -219,7 +219,7 @@ pjs/
 ## Building
 
 ### Prerequisites
-- Rust 1.75+
+- Rust 1.85+
 - CPU with AVX2 support (recommended)
 
 ### Quick Start

@@ -2,7 +2,7 @@
 //! 
 //! This crate provides transport layer functionality for PJS protocol.
 
-pub use pjs_core::{Frame, Error, Result};
+pub use pjson_rs::{Frame, Error, Result};
 
 /// Transport layer (placeholder for future implementation)
 pub struct Transport {
