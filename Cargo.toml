@@ -62,6 +62,9 @@ proptest = "1.4"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+async-trait = "0.1"
 
 [profile.release]
 opt-level = 3

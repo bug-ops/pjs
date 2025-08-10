@@ -344,6 +344,21 @@ impl JsonPath {
         })
     }
     
+    /// Get segments (read-only)
+    pub fn segments(&self) -> &[PathSegment] {
+        &self.segments
+    }
+    
+    /// Get number of segments
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+    
+    /// Create JsonPath from segments (for testing)
+    pub fn from_segments(segments: SmallVec<[PathSegment; 8]>) -> Self {
+        Self { segments }
+    }
+    
     /// Convert to JSON Pointer string format
     pub fn to_json_pointer(&self) -> String {
         let mut pointer = String::new();

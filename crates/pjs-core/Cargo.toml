@@ -29,6 +29,11 @@ sonic-rs = "0.5"
 
 # Async
 futures.workspace = true
+async-trait.workspace = true
+
+# Time and IDs
+chrono.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

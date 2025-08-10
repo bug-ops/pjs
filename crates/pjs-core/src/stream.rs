@@ -6,11 +6,13 @@
 use crate::{Frame, Result};
 
 pub mod priority;
+pub mod reconstruction;
 
 pub use priority::{
     PriorityStreamer, StreamerConfig, Priority,
-    JsonPath, JsonPatch, PatchOperation, StreamFrame, StreamingPlan
+    JsonPath, JsonPatch, PatchOperation, StreamFrame, StreamingPlan, PathSegment
 };
+pub use reconstruction::{JsonReconstructor, ReconstructionStats, ProcessResult};
 
 /// High-level stream processor that combines parsing with priority streaming
 pub struct StreamProcessor {
