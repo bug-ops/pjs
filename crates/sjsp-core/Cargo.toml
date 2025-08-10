@@ -1,0 +1,60 @@
+[package]
+name = "sjsp-core"
+version.workspace = true
+authors.workspace = true  
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core protocol implementation for SJSP with SIMD optimizations"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+# Core
+bytes.workspace = true
+serde = { workspace = true, features = ["derive"] }
+bitflags.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Performance
+smallvec.workspace = true
+ahash.workspace = true
+memchr.workspace = true
+bytemuck = { workspace = true, features = ["derive"] }
+
+# Memory management
+bumpalo.workspace = true
+typed-arena.workspace = true
+
+# Async
+futures.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+serde_json.workspace = true
+
+[features]
+default = ["simd-auto"]
+
+# SIMD features
+simd-auto = []          # Auto-detect best SIMD
+simd-sse42 = []         # SSE 4.2 support
+simd-avx2 = []          # AVX2 support  
+simd-avx512 = []        # AVX-512 support
+simd-neon = []          # ARM NEON support
+
+# Optional features
+gpu = ["dep:cudarc", "dep:wgpu"]
+schema-validation = []
+compression = []
+
+[[bench]]
+name = "simd_parsing"
+harness = false
+
+[[bench]]
+name = "memory_pools"
+harness = false

@@ -1,0 +1,46 @@
+[package]
+name = "sjsp-server"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "High-performance SJSP server with worker pool and request routing"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sjsp-core = { path = "../sjsp-core" }
+sjsp-transport = { path = "../sjsp-transport" }
+
+# Core  
+bytes.workspace = true
+serde.workspace = true
+tokio.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Server utilities
+parking_lot.workspace = true
+crossbeam.workspace = true
+rayon.workspace = true
+ahash.workspace = true
+
+# Metrics
+metrics = "0.22"
+metrics-exporter-prometheus = { version = "0.13", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion.workspace = true
+
+[features]
+default = ["tcp", "metrics"]
+tcp = ["sjsp-transport/tcp"]
+quic = ["sjsp-transport/quic"] 
+tls = ["sjsp-transport/tls"]
+io-uring = ["sjsp-transport/io-uring"]
+metrics = []
+prometheus = ["dep:metrics-exporter-prometheus"]

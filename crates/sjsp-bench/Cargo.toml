@@ -1,0 +1,49 @@
+[package]
+name = "sjsp-bench"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Comprehensive benchmarking suite for SJSP"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sjsp-core = { path = "../sjsp-core" }
+sjsp-client = { path = "../sjsp-client" }
+sjsp-server = { path = "../sjsp-server" }
+
+# Benchmarking
+criterion.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+
+# Comparison with other libraries
+simd-json = "0.13"
+sonic-rs = "0.3"
+
+# Data generation
+fake = { version = "2.9", features = ["derive"] }
+rand = "0.8"
+
+[dev-dependencies]
+proptest.workspace = true
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "latency" 
+harness = false
+
+[[bench]]
+name = "memory_usage"
+harness = false
+
+[[bench]]
+name = "comparison"
+harness = false
