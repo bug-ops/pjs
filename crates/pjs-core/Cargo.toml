@@ -35,6 +35,19 @@ async-trait.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 
+# HTTP server integration
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+
+# Thread-safe concurrency
+parking_lot.workspace = true
+
+# HTTP client and metrics (optional)
+reqwest = { workspace = true, optional = true }
+prometheus = { workspace = true, optional = true }
+
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
@@ -54,6 +67,10 @@ simd-neon = []   # ARM NEON support
 # gpu = ["dep:cudarc", "dep:wgpu"]
 schema-validation = []
 compression = []
+
+# Infrastructure features
+http-client = ["dep:reqwest"]
+prometheus-metrics = ["dep:prometheus"]
 
 # Benchmarks will be implemented later
 # [[bench]]

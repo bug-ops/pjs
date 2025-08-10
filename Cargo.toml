@@ -44,6 +44,10 @@ sonic-rs = "0.5"
 # Async and network
 futures = "0.3"
 socket2 = "0.6"
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+hyper = { version = "1.6", features = ["full"] }
 # quinn = { version = "0.10", optional = true }  # Will add when needed
 
 # Memory management  
@@ -65,6 +69,10 @@ tracing-subscriber = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 async-trait = "0.1"
+
+# HTTP client and metrics
+reqwest = { version = "0.12", features = ["json"] }
+prometheus = "0.14"
 
 [profile.release]
 opt-level = 3
