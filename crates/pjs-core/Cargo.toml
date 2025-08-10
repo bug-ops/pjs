@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming"
 keywords.workspace = true
 categories.workspace = true
+exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
 
 [dependencies]
