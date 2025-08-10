@@ -69,7 +69,7 @@ mod tests {
         let id2 = SessionId::new();
         
         assert_ne!(id1, id2);
-        assert_eq!(id1.as_uuid().version(), Some(uuid::Version::Random));
+        assert_eq!(id1.as_uuid().get_version_num(), 4);
     }
     
     #[test]

@@ -282,12 +282,11 @@ pub struct SessionShutdownResult {
 mod tests {
     use super::*;
     use crate::{
-        application::{ApplicationError, handlers::{CommandResult, QueryResult}},
+        application::{ApplicationError, ApplicationResult},
         domain::aggregates::stream_session::SessionConfig,
     };
     use async_trait::async_trait;
     use std::collections::HashMap;
-    use tokio;
     
     // Mock command handler for testing
     struct MockCommandHandler {

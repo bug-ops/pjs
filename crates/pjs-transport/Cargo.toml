@@ -23,11 +23,14 @@ socket2.workspace = true
 
 # Optional transports (will be added later)
 # quinn = { workspace = true, optional = true }
-tokio-rustls = { version = "0.25", optional = true }
-io-uring = { version = "0.6", optional = true }
+tokio-rustls = { version = "0.26", optional = true }
 
 # Zero-copy I/O
-mio = { version = "0.8", features = ["net", "os-poll"] }
+mio = { version = "1.0", features = ["net", "os-poll"] }
+
+# Linux-specific optimizations
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { version = "0.6", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -37,5 +40,8 @@ default = ["tcp"]
 tcp = []
 # quic = ["dep:quinn"]  # Will be added later
 tls = ["dep:tokio-rustls"]
+dpdk = []                   # For future DPDK integration
+
+# Linux-specific features
+[target.'cfg(target_os = "linux")'.features]
 io-uring = ["dep:io-uring"]
-dpdk = []  # For future DPDK integration

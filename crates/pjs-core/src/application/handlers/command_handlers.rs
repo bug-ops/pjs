@@ -6,7 +6,7 @@ use crate::{
     application::{
         ApplicationResult, ApplicationError,
         commands::*,
-        handlers::{CommandHandler, CommandResult},
+        handlers::CommandHandler,
     },
     domain::{
         aggregates::StreamSession,
@@ -362,7 +362,6 @@ mod tests {
         events::{DomainEvent, InMemoryEventStore},
     };
     use std::collections::HashMap;
-    use tokio;
     
     // Mock implementations for testing
     struct MockRepository {

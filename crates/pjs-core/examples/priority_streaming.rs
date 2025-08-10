@@ -145,12 +145,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn demonstrate_priority_calculation() {
     let examples = vec![
-        ("id", Priority::Critical),
-        ("name", Priority::High), 
-        ("title", Priority::High),
-        ("description", Priority::Medium),
-        ("reviews", Priority::Background),
-        ("analytics", Priority::Low),
+        ("id", Priority::CRITICAL),
+        ("name", Priority::HIGH), 
+        ("title", Priority::HIGH),
+        ("description", Priority::MEDIUM),
+        ("reviews", Priority::BACKGROUND),
+        ("analytics", Priority::LOW),
     ];
     
     for (field, expected_priority) in examples {

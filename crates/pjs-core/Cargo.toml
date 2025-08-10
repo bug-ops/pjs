@@ -52,6 +52,7 @@ prometheus = { workspace = true, optional = true }
 criterion.workspace = true
 proptest.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 default = ["simd-auto"]
