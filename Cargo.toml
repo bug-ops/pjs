@@ -36,13 +36,14 @@ ahash = "0.8"
 parking_lot = "0.12"
 
 # SIMD and low-level
-bitflags = "2.4"
+bitflags = "2.9"
 memchr = "2.6"
 bytemuck = { version = "1.14", features = ["derive"] }
+sonic-rs = "0.5"
 
 # Async and network
 futures = "0.3"
-socket2 = "0.5"
+socket2 = "0.6"
 # quinn = { version = "0.10", optional = true }  # Will add when needed
 
 # Memory management  
@@ -50,7 +51,7 @@ bumpalo = "3.14"
 typed-arena = "2.0"
 
 # Testing and benchmarking
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 proptest = "1.4"
 
 # GPU (will be added later as separate crate dependencies)
@@ -58,7 +59,7 @@ proptest = "1.4"
 # wgpu = { version = "0.18", optional = true }
 
 # Utilities
-thiserror = "1.0"
+thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 

@@ -18,6 +18,7 @@ pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
 pub use semantic::{SemanticType, SemanticMeta};
 pub use parser::{Parser, ParseConfig, ParseStats};
+pub use stream::{StreamProcessor, PriorityStreamer, StreamerConfig, Priority, JsonPath, StreamFrame};
 
 /// Re-export commonly used types
 pub mod prelude {
@@ -25,5 +26,6 @@ pub mod prelude {
         Error, Result,
         Frame, FrameFlags, FrameHeader,
         SemanticType, SemanticMeta,
+        StreamProcessor, PriorityStreamer, Priority, JsonPath,
     };
 }
