@@ -13,7 +13,7 @@ description = "Interactive PJS streaming demonstration servers and examples"
 pjson-rs = { path = "../pjs-core" }
 
 # Web server
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 tower.workspace = true
 tower-http.workspace = true
 hyper.workspace = true
@@ -46,15 +46,16 @@ clap = { version = "4.4", features = ["derive"] }
 name = "interactive-demo-server"
 path = "src/servers/interactive_demo.rs"
 
-# TODO: Re-enable when WebSocket infrastructure is stable
-# [[bin]]
-# name = "websocket-streaming-server"
-# path = "src/servers/websocket_streaming.rs"
+[[bin]]
+name = "websocket-streaming-server"
+path = "src/servers/websocket_streaming.rs"
 
+# TODO: Fix compilation errors
 # [[bin]]
 # name = "performance-comparison-server"
 # path = "src/servers/performance_comparison.rs"
 
+# TODO: Fix compilation errors  
 # [[bin]]
 # name = "websocket-client-demo"
 # path = "src/clients/websocket_demo.rs"
