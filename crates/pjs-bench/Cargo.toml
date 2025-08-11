@@ -12,8 +12,6 @@ categories.workspace = true
 
 [dependencies]
 pjson-rs = { path = "../pjs-core" }
-pjs-client = { path = "../pjs-client" }
-pjs-server = { path = "../pjs-server" }
 
 # Benchmarking
 criterion.workspace = true

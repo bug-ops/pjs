@@ -6,8 +6,8 @@
 //! - Priority-based frame delivery
 //! - Incremental reconstruction
 
-use pjson_rs::stream::PatchOperation;
-use pjson_rs::{Priority, StreamFrame, StreamProcessor};
+use pjson_rs::domain::entities::frame::PatchOperation;
+use pjson_rs::{Priority, StreamFrame, StreamProcessor, StreamConfig};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -67,14 +67,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Create stream processor
-    let processor = StreamProcessor::new();
+    let config = StreamConfig::default();
+    let processor = StreamProcessor::new(config);
 
     // Convert to bytes for processing
     let json_bytes = serde_json::to_vec(&sample_data)?;
 
-    // Process JSON into streaming plan
-    println!("🔄 Analyzing JSON structure and creating streaming plan...");
-    let mut plan = processor.process_json(&json_bytes)?;
+    // Create frames manually for demonstration
+    println!("🔄 Creating streaming frames manually for demonstration...");
+    
+    // Create skeleton frame (highest priority)
+    let skeleton_frame = StreamFrame {
+        data: json!({
+            "dashboard": {
+                "title": sample_data["dashboard"]["title"],
+                "last_updated": sample_data["dashboard"]["last_updated"],
+                "critical_alerts": sample_data["dashboard"]["critical_alerts"],
+                "summary": null,
+                "charts": [],
+                "logs": []
+            }
+        }),
+        priority: Priority::new(100).unwrap(),
+        metadata: std::collections::HashMap::new(),
+    };
+    
+    // Create summary frame (high priority)
+    let summary_frame = StreamFrame {
+        data: json!({
+            "dashboard": {
+                "summary": sample_data["dashboard"]["summary"]
+            }
+        }),
+        priority: Priority::new(80).unwrap(),
+        metadata: std::collections::HashMap::new(),
+    };
+    
+    let mut frames = vec![skeleton_frame, summary_frame];
 
     println!(
         "📋 Streaming plan created with {} frames\n",

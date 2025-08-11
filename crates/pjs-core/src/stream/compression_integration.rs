@@ -6,7 +6,7 @@
 use crate::{
     compression::{SchemaCompressor, CompressionStrategy, CompressedData},
     domain::{DomainResult, DomainError},
-    stream::{ProcessResult, StreamFrame, Priority},
+    stream::{StreamFrame, Priority},
 };
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;

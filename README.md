@@ -1,12 +1,81 @@
 <!-- markdownlint-disable MD024 -->
 # PJS - Priority JSON Streaming Protocol
 
-[![Rust](https://img.shields.io/badge/rust-1.85+-blue.svg)](https://www.rust-lang.org)
+[![Crates.io](https://img.shields.io/crates/v/pjson-rs.svg)](https://crates.io/crates/pjson-rs)
+[![Documentation](https://docs.rs/pjson-rs/badge.svg)](https://docs.rs/pjson-rs)
+[![Build Status](https://github.com/bug-ops/pjs/workflows/Rust/badge.svg)](https://github.com/bug-ops/pjs/actions)
+[![codecov](https://codecov.io/gh/bug-ops/pjs/branch/main/graph/badge.svg)](https://codecov.io/gh/bug-ops/pjs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0--alpha.1-orange.svg)](CHANGELOG.md)
-[![CI](https://img.shields.io/badge/CI-passing-green.svg)](https://github.com/pjs/pjs)
+[![Rust Version](https://img.shields.io/badge/rust-1.88%2B-blue.svg)](https://www.rust-lang.org)
 
-## The Problem
+**🚀 6.3x faster than serde_json | 🎯 5.3x faster progressive loading | 💾 Bounded memory usage**
+
+</div>
+
+## 🌟 Key Features
+
+<table>
+<tr>
+<td>
+
+### ⚡ Blazing Fast
+
+- **6.3x faster** than serde_json
+- **1.71 GiB/s** throughput
+- SIMD-accelerated parsing
+
+</td>
+<td>
+
+### 🎯 Smart Streaming
+
+- Skeleton-first delivery
+- Priority-based transmission
+- Progressive enhancement
+
+</td>
+<td>
+
+### 💾 Memory Efficient
+
+- **5.3x** faster progressive loading
+- Bounded memory usage
+- Zero-copy operations
+
+</td>
+</tr>
+<tr>
+<td>
+
+### 🔧 Production Ready
+
+- WebSocket support
+- Axum integration
+- Comprehensive benchmarks
+
+</td>
+<td>
+
+### 📊 Schema Aware
+
+- Automatic compression
+- Semantic analysis
+- Type optimization
+
+</td>
+<td>
+
+### 🚀 Developer Friendly
+
+- Simple API
+- Drop-in replacement
+- Extensive documentation
+
+</td>
+</tr>
+</table>
+
+## 🎯 The Problem
 
 Modern web applications face a fundamental challenge: **large JSON responses block UI rendering**.
 
@@ -26,7 +95,7 @@ Modern web applications face a fundamental challenge: **large JSON responses blo
 | **JSON streaming** | No semantic understanding, can't prioritize |
 | **Compression** | Reduces size but not time-to-first-byte |
 
-## The Solution: PJS
+## ✨ The Solution: PJS
 
 PJS revolutionizes JSON transmission by **understanding your data semantically** and **prioritizing what matters**.
 
@@ -121,6 +190,25 @@ Complete WebSocket implementation with priority-based frame delivery:
 - **1.06x faster** than sonic-rs (SIMD library) on large datasets  
 - **5.3x faster** progressive loading vs traditional batch processing
 - **1.71 GiB/s** sustained throughput (exceeding sonic-rs 1.61 GiB/s)
+
+## Installation
+
+Add PJS to your `Cargo.toml`:
+
+```toml
+[dependencies]
+pjson-rs = "0.2.0"
+
+# Optional: for HTTP server integration
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+```
+
+Or use cargo:
+
+```bash
+cargo add pjson-rs
+```
 
 ## Quick Start
 

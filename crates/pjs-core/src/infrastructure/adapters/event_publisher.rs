@@ -23,12 +23,12 @@ pub struct InMemoryEventPublisher {
 }
 
 #[derive(Debug, Clone)]
-struct StoredEvent {
-    id: EventId,
-    event_type: String,
-    session_id: Option<SessionId>,
-    timestamp: chrono::DateTime<chrono::Utc>,
-    payload: serde_json::Value,
+pub struct StoredEvent {
+    pub id: EventId,
+    pub event_type: String,
+    pub session_id: Option<SessionId>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub payload: serde_json::Value,
 }
 
 impl InMemoryEventPublisher {

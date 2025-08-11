@@ -1,13 +1,5 @@
 [workspace]
-members = [
-    "crates/pjs-core",
-    "crates/pjs-client",
-    "crates/pjs-server",
-    "crates/pjs-transport",
-    "crates/pjs-gpu",
-    "crates/pjs-bench",
-    "crates/pjs-demo",
-]
+members = ["crates/pjs-core", "crates/pjs-bench", "crates/pjs-demo"]
 resolver = "2"
 
 [workspace.package]
