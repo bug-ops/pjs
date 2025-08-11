@@ -3,7 +3,8 @@
 //! Demonstrates PJS advantages in memory consumption patterns
 //! and progressive loading scenarios
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, black_box};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use pjson_rs::Parser;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -49,8 +50,17 @@ unsafe impl GlobalAlloc for TrackingAllocator {
         ptr
     }
 
+    /// # Safety
+    /// 
+    /// This function is safe to call because:
+    /// - We delegate to the inner allocator's dealloc method
+    /// - We only modify our own atomic counter after delegation
+    /// - All safety requirements are upheld by the inner allocator
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.inner.dealloc(ptr, layout);
+        // SAFETY: We delegate safety to the inner allocator
+        unsafe {
+            self.inner.dealloc(ptr, layout);
+        }
         self.deallocated.fetch_add(layout.size(), Ordering::SeqCst);
     }
 }

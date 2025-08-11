@@ -3,7 +3,8 @@
 //! Measures the performance characteristics that matter most for real-world
 //! streaming applications: latency, throughput, and perceived performance.
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main, black_box};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use pjson_rs::Parser;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -347,9 +348,9 @@ async fn benchmark_perceived_performance(c: &mut Criterion) {
     
     // Simulate slow network: Traditional approach
     group.bench_function("traditional_with_network_delay", |b| {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        
-        b.to_async(&rt).iter_custom(|iters| async move {
+        b.iter_custom(|iters| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
             let mut total_duration = Duration::ZERO;
             
             for _ in 0..iters {
@@ -367,14 +368,15 @@ async fn benchmark_perceived_performance(c: &mut Criterion) {
             }
             
             total_duration
+            })
         })
     });
     
     // PJS approach: Critical data available quickly, details stream later
     group.bench_function("pjs_progressive_with_network", |b| {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        
-        b.to_async(&rt).iter_custom(|iters| async move {
+        b.iter_custom(|iters| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
             let mut total_duration = Duration::ZERO;
             
             for _ in 0..iters {
@@ -400,6 +402,7 @@ async fn benchmark_perceived_performance(c: &mut Criterion) {
             }
             
             total_duration
+            })
         })
     });
     

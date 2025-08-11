@@ -3,7 +3,7 @@
 //! Demonstrates the massive advantage of PJS streaming for user experience
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use pjson_rs::{JsonReconstructor, PriorityStreamer};
+use pjs_bench::{JsonReconstructor, PriorityStreamer};
 use serde_json::Value;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -235,7 +235,7 @@ fn benchmark_time_to_first_data(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("pjs_skeleton_first", size_name),
             json_data,
-            |b, data| {
+            |b, _data| {
                 b.iter(|| {
                     let start = Instant::now();
 
