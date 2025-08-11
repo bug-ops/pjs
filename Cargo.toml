@@ -3,7 +3,6 @@ members = ["crates/pjs-core", "crates/pjs-bench", "crates/pjs-demo"]
 resolver = "2"
 
 [workspace.package]
-name = "pjson-rs"
 homepage = "https://github.com/bug-ops/pjs"
 documentation = "https://docs.rs/pjson-rs"
 version = "0.2.0-alpha.1"
