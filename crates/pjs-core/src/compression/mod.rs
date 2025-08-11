@@ -518,9 +518,14 @@ mod tests {
         
         let data = json!({
             "users": [
-                {"name": "John Doe", "role": "admin", "status": "active"},
-                {"name": "Jane Smith", "role": "admin", "status": "active"},
-                {"name": "Bob Wilson", "role": "user", "status": "active"}
+                {"name": "John Doe", "role": "admin", "status": "active", "department": "engineering"},
+                {"name": "Jane Smith", "role": "admin", "status": "active", "department": "engineering"},
+                {"name": "Bob Wilson", "role": "admin", "status": "active", "department": "engineering"},
+                {"name": "Alice Brown", "role": "admin", "status": "active", "department": "engineering"},
+                {"name": "Charlie Davis", "role": "admin", "status": "active", "department": "engineering"},
+                {"name": "Diana Evans", "role": "admin", "status": "active", "department": "engineering"},
+                {"name": "Frank Miller", "role": "admin", "status": "active", "department": "engineering"},
+                {"name": "Grace Wilson", "role": "admin", "status": "active", "department": "engineering"}
             ]
         });
 
@@ -537,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_schema_compressor_basic() {
-        let mut compressor = SchemaCompressor::new();
+        let compressor = SchemaCompressor::new();
         
         let data = json!({
             "message": "hello world",

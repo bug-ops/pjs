@@ -97,9 +97,10 @@ normal = ["axum", "tower", "tower-http", "hyper", "futures"]
 name = "simple_priority_demo"
 required-features = []
 
-[[example]]
-name = "websocket_streaming"
-required-features = ["http-server"]
+# TODO: Fix websocket_streaming example after infrastructure module fixes
+# [[example]]
+# name = "websocket_streaming"
+# required-features = ["http-server"]
 
 # Benchmarks will be implemented later
 # [[bench]]

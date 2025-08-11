@@ -4,7 +4,7 @@
 //! and backpressure handling for optimal client performance.
 
 use crate::{
-    stream::{StreamFrame, PriorityStreamer},
+    StreamFrame, StreamProcessor,
     Error as PjsError, Result as PjsResult,
 };
 use async_trait::async_trait;

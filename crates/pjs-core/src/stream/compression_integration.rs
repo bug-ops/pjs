@@ -420,7 +420,9 @@ mod tests {
         
         assert_eq!(stats.overall_compression_ratio(), 0.6);
         assert_eq!(stats.bytes_saved(), 400);
-        assert_eq!(stats.percentage_saved(), 40.0);
+        // Use approximate comparison for float precision
+        let percentage = stats.percentage_saved();
+        assert!((percentage - 40.0).abs() < 0.001);
     }
 
     #[test]
