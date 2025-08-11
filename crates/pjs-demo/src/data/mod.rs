@@ -8,7 +8,7 @@ pub mod realtime;
 pub use ecommerce::*;
 pub use social::*;
 pub use analytics::*;
-pub use realtime::*;
+// pub use realtime::*; // TODO: Enable when realtime module is used
 
 use serde_json::Value;
 use std::collections::HashMap;

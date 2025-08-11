@@ -6,18 +6,17 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        State,
     },
     http::StatusCode,
-    response::{Html, IntoResponse},
+    response::Html,
     routing::{get, post},
     Json, Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use pjson_rs::{
-    compression::{CompressionStrategy, SchemaCompressor},
-    domain::value_objects::{Priority, SessionId},
-    stream::{ProcessResult, StreamProcessor, StreamFrame},
+    compression::SchemaCompressor,
+    domain::value_objects::SessionId,
     ApplicationResult, ApplicationError, DomainResult, DomainError,
 };
 use serde::{Deserialize, Serialize};
@@ -40,7 +39,9 @@ pub struct AppState {
 /// Information about active streaming session
 #[derive(Debug, Clone)]
 struct SessionInfo {
+    #[allow(dead_code)] // TODO: Use in session management
     session_id: SessionId,
+    #[allow(dead_code)] // TODO: Use for session analytics
     started_at: Instant,
     frame_count: usize,
     total_bytes: u64,

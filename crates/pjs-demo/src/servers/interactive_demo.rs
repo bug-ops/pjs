@@ -48,6 +48,7 @@ struct DemoRequest {
     dataset_type: Option<String>,
     dataset_size: Option<String>,
     network_type: Option<String>,
+    #[allow(dead_code)] // TODO: Implement streaming toggle
     enable_streaming: Option<bool>,
 }
 
