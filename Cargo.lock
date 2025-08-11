@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-bench"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "criterion",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-demo"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "chrono",
@@ -1700,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "pjson-rs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ahash",
  "async-std",
