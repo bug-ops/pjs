@@ -1,10 +1,21 @@
 //! JSON Path Value Object with validation
+//!
+//! Pure domain object for JSON path addressing.
+//! Serialization is handled in the application layer via DTOs.
+//!
+//! TODO: Remove serde derives once all serialization uses DTOs
 
 use crate::domain::{DomainError, DomainResult};
-use serde::{Deserialize, Serialize};
 use std::fmt;
+use serde::{Deserialize, Serialize};
 
 /// Type-safe JSON Path for addressing nodes in JSON structures
+/// 
+/// This is a pure domain object. Serialization should be handled 
+/// in the application layer via DTOs, but serde is temporarily kept
+/// for compatibility with existing code.
+/// 
+/// TODO: Remove Serialize, Deserialize derives once all serialization uses DTOs
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct JsonPath(String);
 
@@ -30,15 +41,14 @@ impl JsonPath {
 
         if key.contains('.') || key.contains('[') || key.contains(']') {
             return Err(DomainError::InvalidPath(format!(
-                "Key '{}' contains invalid characters",
-                key
+                "Key '{key}' contains invalid characters"
             )));
         }
 
         let new_path = if self.0 == "$" {
-            format!("$.{}", key)
+            format!("$.{key}")
         } else {
-            format!("{}.{}", self.0, key)
+            format!("{}.{key}", self.0)
         };
 
         Ok(Self(new_path))
@@ -46,7 +56,7 @@ impl JsonPath {
 
     /// Append an array index to the path
     pub fn append_index(&self, index: usize) -> Self {
-        let new_path = format!("{}[{}]", self.0, index);
+        let new_path = format!("{}[{index}]", self.0);
         // Array index paths are always valid if base path is valid
         Self(new_path)
     }
@@ -200,8 +210,7 @@ impl JsonPath {
                         .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
                     {
                         return Err(DomainError::InvalidPath(format!(
-                            "Invalid characters in key '{}'",
-                            key
+                            "Invalid characters in key '{key}'"
                         )));
                     }
                 }
@@ -222,15 +231,13 @@ impl JsonPath {
 
                     if index_str.parse::<usize>().is_err() {
                         return Err(DomainError::InvalidPath(format!(
-                            "Invalid array index '{}'",
-                            index_str
+                            "Invalid array index '{index_str}'"
                         )));
                     }
                 }
                 _ => {
                     return Err(DomainError::InvalidPath(format!(
-                        "Unexpected character '{}' in path",
-                        ch
+                        "Unexpected character '{ch}' in path"
                     )));
                 }
             }
@@ -258,8 +265,8 @@ impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PathSegment::Root => write!(f, "$"),
-            PathSegment::Key(key) => write!(f, ".{}", key),
-            PathSegment::Index(index) => write!(f, "[{}]", index),
+            PathSegment::Key(key) => write!(f, ".{key}"),
+            PathSegment::Index(index) => write!(f, "[{index}]"),
         }
     }
 }

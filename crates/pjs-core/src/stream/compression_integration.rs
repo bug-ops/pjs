@@ -85,7 +85,7 @@ impl StreamingCompressor {
         
         // Calculate original size
         let original_size = serde_json::to_string(&frame.data)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {}", e)))?
+            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
             .len();
 
         // Compress based on frame content and priority
@@ -414,9 +414,11 @@ mod tests {
 
     #[test]
     fn test_compression_stats() {
-        let mut stats = CompressionStats::default();
-        stats.total_input_bytes = 1000;
-        stats.total_output_bytes = 600;
+        let stats = CompressionStats { 
+            total_input_bytes: 1000, 
+            total_output_bytes: 600, 
+            ..Default::default() 
+        };
         
         assert_eq!(stats.overall_compression_ratio(), 0.6);
         assert_eq!(stats.bytes_saved(), 400);

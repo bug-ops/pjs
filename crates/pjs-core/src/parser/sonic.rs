@@ -222,7 +222,7 @@ impl SonicParser {
 
         // Fast numeric array detection using SIMD
         if crate::parser::simd::SimdClassifier::is_numeric_array(arr) {
-            let dtype = if let Some(first) = arr.get(0) {
+            let dtype = if let Some(first) = arr.first() {
                 if let Some(num) = first.as_number() {
                     if num.is_i64() {
                         NumericDType::I64
@@ -273,7 +273,7 @@ impl SonicParser {
 
         // Check for tabular data (array of objects with similar structure)
         if len >= 3 && arr.iter().all(|v| v.is_object()) {
-            if let Some(first_obj) = arr.get(0).and_then(|v| v.as_object()) {
+            if let Some(first_obj) = arr.first().and_then(|v| v.as_object()) {
                 let first_scan = crate::parser::simd::SimdClassifier::scan_object_keys(first_obj);
 
                 // Simple homogeneity check - all objects should have similar key counts
@@ -308,7 +308,7 @@ impl SonicParser {
                         .collect();
 
                     return SemanticType::Table {
-                        columns,
+                        columns: Box::new(columns),
                         row_count: Some(len),
                     };
                 }

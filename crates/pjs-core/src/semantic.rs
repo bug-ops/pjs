@@ -27,7 +27,7 @@ pub enum SemanticType {
     /// Tabular data (columnar processing friendly)
     Table {
         /// Column metadata
-        columns: SmallVec<[ColumnMeta; 16]>,
+        columns: Box<SmallVec<[ColumnMeta; 16]>>,
         /// Estimated row count
         row_count: Option<usize>,
     },

@@ -4,6 +4,7 @@
 //! Orchestrates domain logic and infrastructure concerns.
 
 pub mod commands;
+pub mod dto;
 pub mod handlers;
 pub mod queries;
 pub mod services;

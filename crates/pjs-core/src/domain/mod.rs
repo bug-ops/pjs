@@ -62,6 +62,12 @@ pub enum DomainError {
 
     #[error("Validation error: {0}")]
     ValidationError(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }
 
 impl DomainError {
@@ -70,7 +76,7 @@ impl DomainError {
     }
 
     pub fn invalid_transition(from: &str, to: &str) -> Self {
-        Self::InvalidStateTransition(format!("{} -> {}", from, to))
+        Self::InvalidStateTransition(format!("{from} -> {to}"))
     }
 }
 

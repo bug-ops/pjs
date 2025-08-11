@@ -29,6 +29,9 @@ ahash.workspace = true
 # SIMD JSON parsing
 sonic-rs = "0.5"
 
+# Utilities
+maplit = "1.0"
+
 # Async
 async-trait.workspace = true
 async-std = { workspace = true, features = ["attributes"] }
@@ -95,6 +98,10 @@ normal = ["axum", "tower", "tower-http", "hyper", "futures"]
 
 [[example]]
 name = "simple_priority_demo"
+required-features = []
+
+[[example]]
+name = "zero_copy_demo"
 required-features = []
 
 # TODO: Fix websocket_streaming example after infrastructure module fixes

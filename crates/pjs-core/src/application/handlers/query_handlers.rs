@@ -38,7 +38,7 @@ where
     async fn handle(&self, query: GetSessionQuery) -> ApplicationResult<SessionResponse> {
         let session = self
             .repository
-            .find_session(query.session_id)
+            .find_session(query.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -91,7 +91,7 @@ where
     async fn handle(&self, query: GetSessionHealthQuery) -> ApplicationResult<HealthResponse> {
         let session = self
             .repository
-            .find_session(query.session_id)
+            .find_session(query.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -118,17 +118,14 @@ where
             .map_err(ApplicationError::Domain)?;
 
         // Apply filters
-        sessions = sessions
-            .into_iter()
-            .filter(|session| self.matches_filters(session, &query.filters))
-            .collect();
+        sessions.retain(|session| self.matches_filters(session, &query.filters));
 
         // Apply sorting
         if let Some(sort_field) = &query.sort_by {
             let ascending = query
                 .sort_order
                 .as_ref()
-                .map_or(true, |order| matches!(order, SortOrder::Ascending));
+                .is_none_or(|order| matches!(order, SortOrder::Ascending));
 
             sessions.sort_by(|a, b| {
                 let cmp = match sort_field {
@@ -245,7 +242,7 @@ where
     async fn handle(&self, query: GetStreamQuery) -> ApplicationResult<StreamResponse> {
         let session = self
             .session_repository
-            .find_session(query.session_id)
+            .find_session(query.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -253,7 +250,7 @@ where
             })?;
 
         let stream = session
-            .get_stream(query.stream_id)
+            .get_stream(query.stream_id.into())
             .ok_or_else(|| {
                 ApplicationError::NotFound(format!("Stream {} not found", query.stream_id))
             })?
@@ -272,7 +269,7 @@ where
     async fn handle(&self, query: GetStreamsForSessionQuery) -> ApplicationResult<StreamsResponse> {
         let session = self
             .session_repository
-            .find_session(query.session_id)
+            .find_session(query.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -316,8 +313,8 @@ where
     async fn handle(&self, query: GetSessionEventsQuery) -> ApplicationResult<EventsResponse> {
         let mut events = self
             .event_store
-            .get_events_for_session(query.session_id)
-            .map_err(|e| ApplicationError::Logic(e))?;
+            .get_events_for_session(query.session_id.into())
+            .map_err(ApplicationError::Logic)?;
 
         // Apply time filter
         if let Some(since) = query.since {
@@ -351,8 +348,8 @@ where
     async fn handle(&self, query: GetStreamEventsQuery) -> ApplicationResult<EventsResponse> {
         let mut events = self
             .event_store
-            .get_events_for_stream(query.stream_id)
-            .map_err(|e| ApplicationError::Logic(e))?;
+            .get_events_for_stream(query.stream_id.into())
+            .map_err(ApplicationError::Logic)?;
 
         // Apply time filter
         if let Some(since) = query.since {
@@ -514,7 +511,7 @@ mod tests {
         repository.add_session(session);
 
         // Query the session
-        let query = GetSessionQuery { session_id };
+        let query = GetSessionQuery { session_id: session_id.into() };
         let result = handler.handle(query).await;
 
         assert!(result.is_ok());
@@ -528,7 +525,7 @@ mod tests {
         let handler = SessionQueryHandler::new(repository);
 
         let query = GetSessionQuery {
-            session_id: SessionId::new(),
+            session_id: SessionId::new().into(),
         };
         let result = handler.handle(query).await;
 

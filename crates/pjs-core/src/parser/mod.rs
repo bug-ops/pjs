@@ -3,16 +3,22 @@
 //! This module provides both SIMD-optimized parsing and serde fallback,
 //! allowing rapid MVP development while building towards maximum performance.
 
+pub mod buffer_pool;
 pub mod scanner;
 pub mod simd;
+pub mod simd_zero_copy;
 pub mod simple;
 pub mod sonic;
 pub mod value;
+pub mod zero_copy;
 
+pub use buffer_pool::{BufferPool, PooledBuffer, BufferSize, PoolConfig, global_buffer_pool};
 pub use scanner::{JsonScanner, ScanResult, StringLocation};
+pub use simd_zero_copy::{SimdZeroCopyParser, SimdZeroCopyConfig, SimdParseResult, SimdParsingStats};
 pub use simple::{ParseConfig, ParseStats, SimpleParser};
 pub use sonic::{LazyFrame, SonicConfig, SonicParser};
 pub use value::{JsonValue, LazyArray, LazyObject};
+pub use zero_copy::{LazyParser, ZeroCopyParser, LazyJsonValue, MemoryUsage, IncrementalParser};
 
 use crate::{Result, SemanticMeta};
 
@@ -20,7 +26,9 @@ use crate::{Result, SemanticMeta};
 pub struct Parser {
     sonic: SonicParser,
     simple: SimpleParser,
+    zero_copy_simd: Option<SimdZeroCopyParser<'static>>,
     use_sonic: bool,
+    use_zero_copy: bool,
 }
 
 impl Parser {
@@ -29,7 +37,9 @@ impl Parser {
         Self {
             sonic: SonicParser::new(),
             simple: SimpleParser::new(),
+            zero_copy_simd: None, // Lazy initialization
             use_sonic: true,
+            use_zero_copy: true, // Enable zero-copy by default
         }
     }
 
@@ -43,7 +53,9 @@ impl Parser {
         Self {
             sonic: SonicParser::with_config(sonic_config),
             simple: SimpleParser::with_config(config),
+            zero_copy_simd: None, // Lazy initialization
             use_sonic: true,
+            use_zero_copy: true,
         }
     }
 
@@ -52,7 +64,20 @@ impl Parser {
         Self {
             sonic: SonicParser::new(),
             simple: SimpleParser::new(),
+            zero_copy_simd: None,
             use_sonic: false,
+            use_zero_copy: false, // Disable zero-copy for compatibility
+        }
+    }
+
+    /// Create parser optimized for zero-copy performance
+    pub fn zero_copy_optimized() -> Self {
+        Self {
+            sonic: SonicParser::new(),
+            simple: SimpleParser::new(),
+            zero_copy_simd: None, // Will be initialized on first use
+            use_sonic: false, // Use zero-copy instead
+            use_zero_copy: true,
         }
     }
 

@@ -77,8 +77,7 @@ impl ConnectionManager {
                 Ok(())
             }
             None => Err(DomainError::ValidationError(format!(
-                "Connection not found: {}",
-                session_id
+                "Connection not found: {session_id}"
             ))),
         }
     }
@@ -100,8 +99,7 @@ impl ConnectionManager {
                 Ok(())
             }
             None => Err(DomainError::ValidationError(format!(
-                "Connection not found: {}",
-                session_id
+                "Connection not found: {session_id}"
             ))),
         }
     }
@@ -121,8 +119,7 @@ impl ConnectionManager {
                 Ok(())
             }
             None => Err(DomainError::ValidationError(format!(
-                "Connection not found: {}",
-                session_id
+                "Connection not found: {session_id}"
             ))),
         }
     }
@@ -137,8 +134,7 @@ impl ConnectionManager {
                 Ok(())
             }
             None => Err(DomainError::ValidationError(format!(
-                "Connection not found: {}",
-                session_id
+                "Connection not found: {session_id}"
             ))),
         }
     }
@@ -150,8 +146,7 @@ impl ConnectionManager {
         match connections.remove(session_id) {
             Some(_) => Ok(()),
             None => Err(DomainError::ValidationError(format!(
-                "Connection not found: {}",
-                session_id
+                "Connection not found: {session_id}"
             ))),
         }
     }
@@ -191,7 +186,7 @@ impl ConnectionManager {
         let timed_out = self.check_timeouts().await;
         for session_id in timed_out {
             if let Err(e) = self.close_connection(&session_id).await {
-                tracing::warn!("Failed to close timed out connection: {}", e);
+                tracing::warn!("Failed to close timed out connection: {e}");
             }
         }
     }
@@ -236,7 +231,7 @@ mod tests {
         // Register connection
         assert!(
             manager
-                .register_connection(session_id.clone())
+                .register_connection(session_id)
                 .await
                 .is_ok()
         );
@@ -291,7 +286,7 @@ mod tests {
 
         assert!(
             manager
-                .register_connection(session_id.clone())
+                .register_connection(session_id)
                 .await
                 .is_ok()
         );
