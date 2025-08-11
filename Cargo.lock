@@ -2049,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-bench"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "bytes",
  "criterion",
@@ -2067,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-client"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "bytes",
  "criterion",
@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-demo"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "axum",
  "chrono",
@@ -2109,7 +2109,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-gpu"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "bytes",
  "criterion",
@@ -2122,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-server"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "ahash",
  "bytes",
@@ -2144,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-transport"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "bytes",
  "futures",
@@ -2161,7 +2161,7 @@ dependencies = [
 
 [[package]]
 name = "pjson-rs"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "ahash",
  "async-std",
