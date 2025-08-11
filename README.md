@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # PJS - Priority JSON Streaming Protocol
 
 [![Rust](https://img.shields.io/badge/rust-1.85+-blue.svg)](https://www.rust-lang.org)
@@ -49,7 +50,7 @@ struct UserDashboard {
 
 ### Real-World Impact
 
-```
+```plain
 Traditional JSON Loading:
 [████████████████████] 100% - 2000ms - Full UI renders
 
@@ -91,6 +92,16 @@ Automatic format detection supporting JSON, NDJSON, and Server-Sent Events based
 ### ⚡ SIMD-Accelerated Parsing
 
 Powered by `sonic-rs` for blazing fast JSON processing with zero-copy operations.
+
+### 🔄 Real-Time WebSocket Streaming
+
+Complete WebSocket implementation with priority-based frame delivery:
+
+- **Session Management**: Track active WebSocket connections with metrics
+- **Priority-Based Delivery**: Critical data sent first with adaptive delays
+- **Schema-Based Compression**: Intelligent compression using multiple strategies  
+- **Progressive Enhancement**: Skeleton-first streaming with incremental updates
+- **Demo Servers**: Interactive demonstrations of real-time streaming capabilities
 
 ## Benchmarks
 
@@ -185,6 +196,75 @@ eventSource.onmessage = (event) => {
 };
 ```
 
+### WebSocket Streaming
+
+```rust
+use pjson_rs::{
+    ApplicationResult,
+    domain::value_objects::SessionId,
+};
+use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+#[tokio::main]
+async fn main() -> ApplicationResult<()> {
+    // Connect to WebSocket streaming server
+    let (ws_stream, _) = connect_async("ws://127.0.0.1:3001/ws")
+        .await
+        .expect("Failed to connect");
+    
+    let (mut write, mut read) = ws_stream.split();
+    
+    // Receive prioritized frames
+    while let Some(message) = read.next().await {
+        match message? {
+            Message::Text(text) => {
+                let frame: serde_json::Value = serde_json::from_str(&text)?;
+                
+                match frame["@type"].as_str() {
+                    Some("pjs_frame") => {
+                        let priority = frame["@priority"].as_u64().unwrap_or(0);
+                        
+                        if priority >= 200 {
+                            println!("🚨 Critical data: {}", frame["data"]);
+                        } else if priority >= 100 {
+                            println!("📊 High priority: {}", frame["data"]);
+                        } else {
+                            println!("📝 Background data received");
+                        }
+                    }
+                    Some("stream_complete") => {
+                        println!("✅ Stream completed!");
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    Ok(())
+}
+```
+
+### Demo Servers
+
+Start the interactive demo to see PJS in action:
+
+```bash
+# WebSocket streaming server
+cargo run --bin websocket-streaming-server
+
+# Interactive demo with HTML interface  
+cargo run --bin interactive-demo-server
+
+# Simple demo server
+cargo run --bin simple-demo-server
+```
+
+Then visit `http://127.0.0.1:3000` to see priority-based streaming in action.
+
 ## Use Cases
 
 Perfect for:
@@ -235,10 +315,15 @@ Intelligent frame processing:
 
 ## Technical Architecture
 
-```
+```plain
 pjs/
 ├── crates/
 │   ├── pjs-core/        # Core protocol, domain logic, and HTTP integration
+│   ├── pjs-demo/        # Interactive demo servers with WebSocket streaming
+│   │   ├── servers/     # Demo server implementations
+│   │   ├── clients/     # WebSocket client demos  
+│   │   ├── data/        # Sample data generators
+│   │   └── static/      # HTML interfaces
 │   ├── pjs-client/      # Client implementations (planned)
 │   ├── pjs-server/      # Server framework extensions (planned)
 │   ├── pjs-transport/   # Advanced transport layers (planned)
@@ -255,7 +340,8 @@ pjs/
 - **Phase 3**: ✅ Client/Server framework (100% complete)
 - **Phase 4**: ✅ Transport layer (100% complete)
 - **Phase 5**: ✅ Production features (mostly complete)
-- **Overall**: ~80% of core functionality implemented
+- **Phase 6**: ✅ Real-Time Streaming (100% complete)
+- **Overall**: ~90% of core functionality implemented
 
 ## API Examples
 
@@ -469,11 +555,12 @@ The server will show:
 
 ### Next Steps
 
-- [ ] Connection lifecycle management
+- [x] Connection lifecycle management ✅
+- [x] WebSocket real-time streaming ✅
 - [ ] Performance benchmarks vs alternatives  
-- [ ] WebSocket real-time streaming
 - [ ] JavaScript/TypeScript client library
 - [ ] Schema validation engine
+- [ ] Custom priority strategies
 
 ## Acknowledgments
 
