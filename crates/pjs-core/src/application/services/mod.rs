@@ -8,6 +8,7 @@ pub mod session_service;
 pub mod streaming_service;
 
 // New specialized services following SRP
+pub mod event_service;
 pub mod prioritization_service;
 pub mod performance_analysis_service;  
 pub mod optimization_service;
@@ -18,6 +19,7 @@ pub use session_service::SessionService;
 pub use streaming_service::StreamingService;
 
 // Re-exports for new architecture
+pub use event_service::EventService;
 pub use prioritization_service::{PrioritizationService, PerformanceContext};
 pub use performance_analysis_service::{PerformanceAnalysisService, PerformanceAnalysisReport};
 pub use optimization_service::{OptimizationService, StreamingUseCase};

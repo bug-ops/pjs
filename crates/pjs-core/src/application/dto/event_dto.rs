@@ -1,0 +1,522 @@
+//! Event Data Transfer Objects for serialization
+//!
+//! Handles serialization/deserialization of domain events while keeping 
+//! the domain layer clean of serialization concerns.
+
+use crate::{
+    application::dto::{
+        session_id_dto::SessionIdDto,
+        stream_id_dto::StreamIdDto,
+        priority_dto::{ToDto, FromDto},
+    },
+    domain::{
+        events::{DomainEvent, PerformanceMetrics, PriorityDistribution, EventId},
+        value_objects::{SessionId, StreamId},
+        DomainError,
+    },
+};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// Serializable representation of domain events
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "event_type", rename_all = "snake_case")]
+pub enum DomainEventDto {
+    /// Session was activated and is ready to accept streams
+    SessionActivated {
+        session_id: SessionIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Session was closed gracefully
+    SessionClosed {
+        session_id: SessionIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Session expired due to timeout
+    SessionExpired {
+        session_id: SessionIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// New stream was created in the session
+    StreamCreated {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream started sending data
+    StreamStarted {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream completed successfully
+    StreamCompleted {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream failed with error
+    StreamFailed {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        error: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream was cancelled
+    StreamCancelled {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Skeleton frame was generated for a stream
+    SkeletonGenerated {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        frame_size_bytes: u64,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Patch frames were generated for a stream
+    PatchFramesGenerated {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        frame_count: usize,
+        total_bytes: u64,
+        highest_priority: u8,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Multiple frames were batched for efficient sending
+    FramesBatched {
+        session_id: SessionIdDto,
+        frame_count: usize,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Priority threshold was adjusted for adaptive streaming
+    PriorityThresholdAdjusted {
+        session_id: SessionIdDto,
+        old_threshold: u8,
+        new_threshold: u8,
+        reason: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream configuration was updated
+    StreamConfigUpdated {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Performance metrics were recorded
+    PerformanceMetricsRecorded {
+        session_id: SessionIdDto,
+        metrics: PerformanceMetricsDto,
+        timestamp: DateTime<Utc>,
+    },
+}
+
+/// Serializable representation of performance metrics
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceMetricsDto {
+    pub frames_per_second: f64,
+    pub bytes_per_second: f64,
+    pub average_frame_size: f64,
+    pub priority_distribution: PriorityDistributionDto,
+    pub latency_ms: Option<u64>,
+}
+
+/// Serializable representation of priority distribution
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PriorityDistributionDto {
+    pub critical_frames: u64,
+    pub high_frames: u64,
+    pub medium_frames: u64,
+    pub low_frames: u64,
+    pub background_frames: u64,
+}
+
+/// Serializable representation of event ID
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EventIdDto {
+    uuid: uuid::Uuid,
+}
+
+impl EventIdDto {
+    /// Create from UUID
+    pub fn new(uuid: uuid::Uuid) -> Self {
+        Self { uuid }
+    }
+    
+    /// Get UUID value
+    pub fn uuid(self) -> uuid::Uuid {
+        self.uuid
+    }
+    
+    /// Generate new unique event ID
+    pub fn generate() -> Self {
+        Self { uuid: uuid::Uuid::new_v4() }
+    }
+}
+
+impl std::fmt::Display for EventIdDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.uuid)
+    }
+}
+
+// Conversion implementations
+
+impl From<DomainEvent> for DomainEventDto {
+    fn from(event: DomainEvent) -> Self {
+        match event {
+            DomainEvent::SessionActivated { session_id, timestamp } => {
+                Self::SessionActivated {
+                    session_id: session_id.to_dto(),
+                    timestamp,
+                }
+            },
+            DomainEvent::SessionClosed { session_id, timestamp } => {
+                Self::SessionClosed {
+                    session_id: session_id.to_dto(),
+                    timestamp,
+                }
+            },
+            DomainEvent::SessionExpired { session_id, timestamp } => {
+                Self::SessionExpired {
+                    session_id: session_id.to_dto(),
+                    timestamp,
+                }
+            },
+            DomainEvent::StreamCreated { session_id, stream_id, timestamp } => {
+                Self::StreamCreated {
+                    session_id: session_id.to_dto(),
+                    stream_id: stream_id.to_dto(),
+                    timestamp,
+                }
+            },
+            DomainEvent::StreamStarted { session_id, stream_id, timestamp } => {
+                Self::StreamStarted {
+                    session_id: session_id.to_dto(),
+                    stream_id: stream_id.to_dto(),
+                    timestamp,
+                }
+            },
+            DomainEvent::StreamCompleted { session_id, stream_id, timestamp } => {
+                Self::StreamCompleted {
+                    session_id: session_id.to_dto(),
+                    stream_id: stream_id.to_dto(),
+                    timestamp,
+                }
+            },
+            DomainEvent::StreamFailed { session_id, stream_id, error, timestamp } => {
+                Self::StreamFailed {
+                    session_id: session_id.to_dto(),
+                    stream_id: stream_id.to_dto(),
+                    error,
+                    timestamp,
+                }
+            },
+            DomainEvent::StreamCancelled { session_id, stream_id, timestamp } => {
+                Self::StreamCancelled {
+                    session_id: session_id.to_dto(),
+                    stream_id: stream_id.to_dto(),
+                    timestamp,
+                }
+            },
+            DomainEvent::SkeletonGenerated { session_id, stream_id, frame_size_bytes, timestamp } => {
+                Self::SkeletonGenerated {
+                    session_id: session_id.to_dto(),
+                    stream_id: stream_id.to_dto(),
+                    frame_size_bytes,
+                    timestamp,
+                }
+            },
+            DomainEvent::PatchFramesGenerated { session_id, stream_id, frame_count, total_bytes, highest_priority, timestamp } => {
+                Self::PatchFramesGenerated {
+                    session_id: session_id.to_dto(),
+                    stream_id: stream_id.to_dto(),
+                    frame_count,
+                    total_bytes,
+                    highest_priority,
+                    timestamp,
+                }
+            },
+            DomainEvent::FramesBatched { session_id, frame_count, timestamp } => {
+                Self::FramesBatched {
+                    session_id: session_id.to_dto(),
+                    frame_count,
+                    timestamp,
+                }
+            },
+            DomainEvent::PriorityThresholdAdjusted { session_id, old_threshold, new_threshold, reason, timestamp } => {
+                Self::PriorityThresholdAdjusted {
+                    session_id: session_id.to_dto(),
+                    old_threshold,
+                    new_threshold,
+                    reason,
+                    timestamp,
+                }
+            },
+            DomainEvent::StreamConfigUpdated { session_id, stream_id, timestamp } => {
+                Self::StreamConfigUpdated {
+                    session_id: session_id.to_dto(),
+                    stream_id: stream_id.to_dto(),
+                    timestamp,
+                }
+            },
+            DomainEvent::PerformanceMetricsRecorded { session_id, metrics, timestamp } => {
+                Self::PerformanceMetricsRecorded {
+                    session_id: session_id.to_dto(),
+                    metrics: metrics.into(),
+                    timestamp,
+                }
+            },
+        }
+    }
+}
+
+impl ToDto<DomainEventDto> for DomainEvent {
+    fn to_dto(self) -> DomainEventDto {
+        DomainEventDto::from(self)
+    }
+}
+
+impl FromDto<DomainEventDto> for DomainEvent {
+    type Error = DomainError;
+    
+    fn from_dto(dto: DomainEventDto) -> Result<Self, Self::Error> {
+        match dto {
+            DomainEventDto::SessionActivated { session_id, timestamp } => {
+                Ok(Self::SessionActivated {
+                    session_id: SessionId::from_dto(session_id)?,
+                    timestamp,
+                })
+            },
+            DomainEventDto::SessionClosed { session_id, timestamp } => {
+                Ok(Self::SessionClosed {
+                    session_id: SessionId::from_dto(session_id)?,
+                    timestamp,
+                })
+            },
+            DomainEventDto::SessionExpired { session_id, timestamp } => {
+                Ok(Self::SessionExpired {
+                    session_id: SessionId::from_dto(session_id)?,
+                    timestamp,
+                })
+            },
+            DomainEventDto::StreamCreated { session_id, stream_id, timestamp } => {
+                Ok(Self::StreamCreated {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: StreamId::from_dto(stream_id)?,
+                    timestamp,
+                })
+            },
+            DomainEventDto::StreamStarted { session_id, stream_id, timestamp } => {
+                Ok(Self::StreamStarted {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: StreamId::from_dto(stream_id)?,
+                    timestamp,
+                })
+            },
+            DomainEventDto::StreamCompleted { session_id, stream_id, timestamp } => {
+                Ok(Self::StreamCompleted {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: StreamId::from_dto(stream_id)?,
+                    timestamp,
+                })
+            },
+            DomainEventDto::StreamFailed { session_id, stream_id, error, timestamp } => {
+                Ok(Self::StreamFailed {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: StreamId::from_dto(stream_id)?,
+                    error,
+                    timestamp,
+                })
+            },
+            DomainEventDto::StreamCancelled { session_id, stream_id, timestamp } => {
+                Ok(Self::StreamCancelled {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: StreamId::from_dto(stream_id)?,
+                    timestamp,
+                })
+            },
+            DomainEventDto::SkeletonGenerated { session_id, stream_id, frame_size_bytes, timestamp } => {
+                Ok(Self::SkeletonGenerated {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: StreamId::from_dto(stream_id)?,
+                    frame_size_bytes,
+                    timestamp,
+                })
+            },
+            DomainEventDto::PatchFramesGenerated { session_id, stream_id, frame_count, total_bytes, highest_priority, timestamp } => {
+                Ok(Self::PatchFramesGenerated {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: StreamId::from_dto(stream_id)?,
+                    frame_count,
+                    total_bytes,
+                    highest_priority,
+                    timestamp,
+                })
+            },
+            DomainEventDto::FramesBatched { session_id, frame_count, timestamp } => {
+                Ok(Self::FramesBatched {
+                    session_id: SessionId::from_dto(session_id)?,
+                    frame_count,
+                    timestamp,
+                })
+            },
+            DomainEventDto::PriorityThresholdAdjusted { session_id, old_threshold, new_threshold, reason, timestamp } => {
+                Ok(Self::PriorityThresholdAdjusted {
+                    session_id: SessionId::from_dto(session_id)?,
+                    old_threshold,
+                    new_threshold,
+                    reason,
+                    timestamp,
+                })
+            },
+            DomainEventDto::StreamConfigUpdated { session_id, stream_id, timestamp } => {
+                Ok(Self::StreamConfigUpdated {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: StreamId::from_dto(stream_id)?,
+                    timestamp,
+                })
+            },
+            DomainEventDto::PerformanceMetricsRecorded { session_id, metrics, timestamp } => {
+                Ok(Self::PerformanceMetricsRecorded {
+                    session_id: SessionId::from_dto(session_id)?,
+                    metrics: metrics.try_into().map_err(|_| DomainError::InvalidInput("Invalid performance metrics".to_string()))?,
+                    timestamp,
+                })
+            },
+        }
+    }
+}
+
+impl From<PerformanceMetrics> for PerformanceMetricsDto {
+    fn from(metrics: PerformanceMetrics) -> Self {
+        Self {
+            frames_per_second: metrics.frames_per_second,
+            bytes_per_second: metrics.bytes_per_second,
+            average_frame_size: metrics.average_frame_size,
+            priority_distribution: metrics.priority_distribution.into(),
+            latency_ms: metrics.latency_ms,
+        }
+    }
+}
+
+impl TryFrom<PerformanceMetricsDto> for PerformanceMetrics {
+    type Error = DomainError;
+    
+    fn try_from(dto: PerformanceMetricsDto) -> Result<Self, Self::Error> {
+        Ok(Self {
+            frames_per_second: dto.frames_per_second,
+            bytes_per_second: dto.bytes_per_second,
+            average_frame_size: dto.average_frame_size,
+            priority_distribution: dto.priority_distribution.into(),
+            latency_ms: dto.latency_ms,
+        })
+    }
+}
+
+impl From<PriorityDistribution> for PriorityDistributionDto {
+    fn from(dist: PriorityDistribution) -> Self {
+        Self {
+            critical_frames: dist.critical_frames,
+            high_frames: dist.high_frames,
+            medium_frames: dist.medium_frames,
+            low_frames: dist.low_frames,
+            background_frames: dist.background_frames,
+        }
+    }
+}
+
+impl From<PriorityDistributionDto> for PriorityDistribution {
+    fn from(dto: PriorityDistributionDto) -> Self {
+        Self {
+            critical_frames: dto.critical_frames,
+            high_frames: dto.high_frames,
+            medium_frames: dto.medium_frames,
+            low_frames: dto.low_frames,
+            background_frames: dto.background_frames,
+        }
+    }
+}
+
+impl From<EventId> for EventIdDto {
+    fn from(event_id: EventId) -> Self {
+        Self::new(event_id.inner())
+    }
+}
+
+impl From<EventIdDto> for EventId {
+    fn from(dto: EventIdDto) -> Self {
+        EventId::from_uuid(dto.uuid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn test_domain_event_dto_conversion() {
+        let session_id = SessionId::new();
+        let stream_id = StreamId::new();
+        let timestamp = Utc::now();
+
+        let domain_event = DomainEvent::StreamCreated {
+            session_id,
+            stream_id,
+            timestamp,
+        };
+
+        // Convert to DTO
+        let dto = domain_event.clone().to_dto();
+        
+        // Convert back to domain
+        let converted = DomainEvent::from_dto(dto).unwrap();
+        
+        assert_eq!(domain_event, converted);
+    }
+
+    #[test]
+    fn test_performance_metrics_dto_conversion() {
+        let metrics = PerformanceMetrics {
+            frames_per_second: 60.0,
+            bytes_per_second: 1024.0,
+            average_frame_size: 512.0,
+            priority_distribution: PriorityDistribution::default(),
+            latency_ms: Some(100),
+        };
+
+        let dto = PerformanceMetricsDto::from(metrics.clone());
+        let converted = PerformanceMetrics::try_from(dto).unwrap();
+        
+        assert_eq!(metrics, converted);
+    }
+
+    #[test]
+    fn test_event_dto_serialization() {
+        let session_id = SessionId::new();
+        let event_dto = DomainEventDto::SessionActivated {
+            session_id: session_id.to_dto(),
+            timestamp: Utc::now(),
+        };
+
+        let serialized = serde_json::to_string(&event_dto).unwrap();
+        let deserialized: DomainEventDto = serde_json::from_str(&serialized).unwrap();
+        
+        assert_eq!(event_dto, deserialized);
+    }
+}

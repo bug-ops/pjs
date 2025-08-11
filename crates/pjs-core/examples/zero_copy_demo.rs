@@ -4,7 +4,7 @@
 //! memory allocations, providing better performance for large documents.
 
 use pjson_rs::parser::{
-    ZeroCopyParser, LazyParser, LazyJsonValue, MemoryUsage,
+    ZeroCopyParser, LazyParser, LazyJsonValue,
     SimdZeroCopyParser, SimdZeroCopyConfig,
     BufferSize, global_buffer_pool,
 };
@@ -143,7 +143,7 @@ fn demo_simd_parsing() -> Result<(), Box<dyn std::error::Error>> {
         let mut parser = SimdZeroCopyParser::with_config(config);
         let start = std::time::Instant::now();
         let result = parser.parse_simd(json_data)?;
-        let duration = start.elapsed();
+        let _duration = start.elapsed();
         
         println!("  {:<15}: {:>6.0}ns, {:.1}% efficient, SIMD: {}",
             name,

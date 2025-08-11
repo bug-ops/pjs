@@ -2,7 +2,8 @@
 //!
 //! Run with: cargo bench --bench zero_copy_bench
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use std::hint::black_box;
 use pjson_rs::parser::{
     ZeroCopyParser, LazyParser, 
     SimdZeroCopyParser, SimdZeroCopyConfig,
