@@ -318,6 +318,11 @@ impl StreamingPlan {
     pub fn remaining_frames(&self) -> usize {
         self.frames.len()
     }
+
+    /// Get iterator over frames
+    pub fn frames(&self) -> impl Iterator<Item = &StreamFrame> {
+        self.frames.iter()
+    }
 }
 
 impl JsonPath {

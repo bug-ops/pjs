@@ -3,8 +3,8 @@
 //! Tests PJS against traditional parsers on very large JSON datasets
 //! that showcase the streaming and priority benefits
 
-use criterion::{criterion_group, criterion_main, Criterion, Throughput, BenchmarkId};
-use pjson_rs::{Parser, PriorityStreamer, JsonReconstructor};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use pjson_rs::{JsonReconstructor, Parser, PriorityStreamer};
 use serde_json::Value;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 /// Generate massive e-commerce catalog (1-10MB JSON)
 fn generate_massive_catalog(products: usize) -> String {
     let mut product_data = Vec::new();
-    
+
     for i in 0..products {
         product_data.push(format!(r#"{{
             "id": {},
@@ -179,8 +179,9 @@ fn generate_massive_catalog(products: usize) -> String {
             (i % 28) + 1,                               // updated date
         ));
     }
-    
-    format!(r#"{{
+
+    format!(
+        r#"{{
         "catalog": {{
             "metadata": {{
                 "total_products": {},
@@ -212,33 +213,48 @@ fn generate_massive_catalog(products: usize) -> String {
             "products": [{}]
         }}
     }}"#,
-        products,                                    // total_products
-        20,                                          // categories count
-        50,                                          // brands count
-        (0..20).map(|i| format!(r#"{{"id": {}, "name": "Category {}", "count": {}}}"#, 
-            i, i, products / 20)).collect::<Vec<_>>().join(", "), // categories
-        (0..50).map(|i| format!(r#"{{"id": {}, "name": "Brand {}", "count": {}}}"#, 
-            i, i, products / 50)).collect::<Vec<_>>().join(", "), // brands
-        products / 5,                                // price range counts
+        products, // total_products
+        20,       // categories count
+        50,       // brands count
+        (0..20)
+            .map(|i| format!(
+                r#"{{"id": {}, "name": "Category {}", "count": {}}}"#,
+                i,
+                i,
+                products / 20
+            ))
+            .collect::<Vec<_>>()
+            .join(", "), // categories
+        (0..50)
+            .map(|i| format!(
+                r#"{{"id": {}, "name": "Brand {}", "count": {}}}"#,
+                i,
+                i,
+                products / 50
+            ))
+            .collect::<Vec<_>>()
+            .join(", "), // brands
+        products / 5, // price range counts
         products / 4,
         products / 3,
         products / 6,
         products / 10,
-        products / 2,                                // rating counts
+        products / 2, // rating counts
         products / 3,
         products / 5,
         products / 10,
         products / 20,
-        product_data.join(",")                       // products
+        product_data.join(",") // products
     )
 }
 
 /// Generate massive analytics dataset
 fn generate_analytics_dataset(entries: usize) -> String {
     let mut events = Vec::new();
-    
+
     for i in 0..entries {
-        events.push(format!(r#"{{
+        events.push(format!(
+            r#"{{
             "id": "{}",
             "timestamp": "2024-01-{:02}T{:02}:{:02}:{:02}Z",
             "event_type": "{}",
@@ -272,43 +288,48 @@ fn generate_analytics_dataset(entries: usize) -> String {
                 "tags": ["{}", "{}", "{}"]
             }}
         }}"#,
-            format!("event_{:08}", i),               // id
-            (i % 28) + 1,                           // day
-            i % 24,                                 // hour
-            (i * 7) % 60,                          // minute
-            (i * 13) % 60,                         // second
+            format!("event_{:08}", i), // id
+            (i % 28) + 1,              // day
+            i % 24,                    // hour
+            (i * 7) % 60,              // minute
+            (i * 13) % 60,             // second
             ["page_view", "click", "scroll", "conversion", "exit"][i % 5], // event_type
-            i % 10000,                              // user_id
-            i % 1000,                               // session_id
-            i % 50,                                 // page
-            if i % 10 == 0 { "https://google.com" } else { "direct" }, // referrer
-            i % 256,                                // ip part 1
-            (i / 256) % 256,                       // ip part 2
+            i % 10000,                 // user_id
+            i % 1000,                  // session_id
+            i % 50,                    // page
+            if i % 10 == 0 {
+                "https://google.com"
+            } else {
+                "direct"
+            }, // referrer
+            i % 256,                   // ip part 1
+            (i / 256) % 256,           // ip part 2
             ["US", "UK", "DE", "FR", "JP", "AU", "CA", "BR"][i % 8], // country
             ["New York", "London", "Berlin", "Paris", "Tokyo", "Sydney"][i % 6], // city
             ["desktop", "mobile", "tablet"][i % 3], // device_type
             ["Chrome", "Firefox", "Safari", "Edge"][i % 4], // browser
             ["Windows", "macOS", "Linux", "iOS", "Android"][i % 5], // os
-            1920 + (i % 10) * 100,                 // screen width
-            1080 + (i % 6) * 100,                  // screen height
-            1200 + (i % 8) * 50,                   // viewport width
-            800 + (i % 5) * 50,                    // viewport height
-            (i % 30000) + 100,                     // duration
-            (i as f64 % 100.0),                    // scroll depth
-            i % 20,                                 // clicks
-            i % 10 + 1,                            // page views
-            i % 10 == 0,                           // bounce
-            (i as f64 % 100.0) + 10.0,            // conversion value
-            i % 100,                               // experiment_id
-            ["A", "B", "C"][i % 3],               // variant
-            i % 20,                                // cohort
-            format!("tag{}", i % 10),              // tag 1
-            format!("category{}", i % 5),          // tag 2
-            format!("segment{}", i % 8),           // tag 3
+            1920 + (i % 10) * 100,     // screen width
+            1080 + (i % 6) * 100,      // screen height
+            1200 + (i % 8) * 50,       // viewport width
+            800 + (i % 5) * 50,        // viewport height
+            (i % 30000) + 100,         // duration
+            (i as f64 % 100.0),        // scroll depth
+            i % 20,                    // clicks
+            i % 10 + 1,                // page views
+            i % 10 == 0,               // bounce
+            (i as f64 % 100.0) + 10.0, // conversion value
+            i % 100,                   // experiment_id
+            ["A", "B", "C"][i % 3],    // variant
+            i % 20,                    // cohort
+            format!("tag{}", i % 10),  // tag 1
+            format!("category{}", i % 5), // tag 2
+            format!("segment{}", i % 8), // tag 3
         ));
     }
-    
-    format!(r#"{{
+
+    format!(
+        r#"{{
         "analytics": {{
             "report_id": "report_001",
             "generated_at": "2024-01-15T12:00:00Z",
@@ -328,11 +349,11 @@ fn generate_analytics_dataset(entries: usize) -> String {
             "events": [{}]
         }}
     }}"#,
-        entries,                                    // total_events
-        entries / 10,                              // unique_users
-        entries / 100,                             // sessions
-        entries / 3,                               // page_views
-        events.join(",")                           // events
+        entries,          // total_events
+        entries / 10,     // unique_users
+        entries / 100,    // sessions
+        entries / 3,      // page_views
+        events.join(",")  // events
     )
 }
 
@@ -340,20 +361,20 @@ fn benchmark_massive_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("massive_data_parsing");
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10); // Fewer samples for large data
-    
+
     let sizes = vec![
         ("1MB", 1_000),
-        ("3MB", 3_000), 
+        ("3MB", 3_000),
         ("5MB", 5_000),
         ("10MB", 10_000),
     ];
-    
+
     for (size_name, product_count) in sizes {
         let json_data = generate_massive_catalog(product_count);
         let json_size = json_data.len() as u64;
-        
+
         group.throughput(Throughput::Bytes(json_size));
-        
+
         // serde_json baseline
         group.bench_with_input(
             BenchmarkId::new("serde_json", size_name),
@@ -364,7 +385,7 @@ fn benchmark_massive_parsing(c: &mut Criterion) {
                 })
             },
         );
-        
+
         // sonic-rs
         group.bench_with_input(
             BenchmarkId::new("sonic_rs", size_name),
@@ -375,7 +396,7 @@ fn benchmark_massive_parsing(c: &mut Criterion) {
                 })
             },
         );
-        
+
         // PJS raw parsing
         group.bench_with_input(
             BenchmarkId::new("pjs_parser", size_name),
@@ -388,16 +409,16 @@ fn benchmark_massive_parsing(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn benchmark_streaming_advantage(c: &mut Criterion) {
     let mut group = c.benchmark_group("streaming_advantage");
     group.measurement_time(Duration::from_secs(10));
-    
+
     let large_catalog = generate_massive_catalog(5_000); // ~5MB
-    
+
     // Traditional: Must parse everything before any data is available
     group.bench_function("traditional_all_or_nothing", |b| {
         b.iter(|| {
@@ -407,45 +428,45 @@ fn benchmark_streaming_advantage(c: &mut Criterion) {
             start.elapsed()
         })
     });
-    
-    // PJS: Skeleton + priority data available immediately  
+
+    // PJS: Skeleton + priority data available immediately
     group.bench_function("pjs_progressive_delivery", |b| {
         b.iter(|| {
             let start = Instant::now();
-            
+
             // This simulates the streaming advantage:
             // 1. Parse JSON with sonic-rs for speed
             let json_value: Value = sonic_rs::from_str(black_box(&large_catalog)).unwrap();
-            
+
             // 2. Create streaming plan
             let streamer = PriorityStreamer::new();
             let plan = streamer.analyze(&json_value).unwrap();
-            
+
             // 3. Get first high-priority frame (skeleton + critical data)
             let mut reconstructor = JsonReconstructor::new();
-            
+
             // In real streaming, this would be the first frame received over network
             if let Some(first_frame) = plan.frames().next() {
                 reconstructor.add_frame(first_frame.clone());
                 let _ = reconstructor.process_next_frame();
-                
+
                 // Critical data is now available for UI rendering!
                 // This happens orders of magnitude faster than waiting for full parse
             }
-            
+
             start.elapsed()
         })
     });
-    
+
     group.finish();
 }
 
 fn benchmark_event_streaming(c: &mut Criterion) {
     let mut group = c.benchmark_group("event_streaming");
     group.measurement_time(Duration::from_secs(10));
-    
+
     let analytics_data = generate_analytics_dataset(50_000); // Large event stream
-    
+
     // Traditional: Process entire event stream at once
     group.bench_function("batch_event_processing", |b| {
         b.iter(|| {
@@ -455,34 +476,34 @@ fn benchmark_event_streaming(c: &mut Criterion) {
             start.elapsed()
         })
     });
-    
+
     // PJS: Progressive event processing with priority
     group.bench_function("priority_event_streaming", |b| {
         b.iter(|| {
             let start = Instant::now();
-            
+
             // Simulate streaming advantage for event data
             let parser = Parser::new();
             let _frame = parser.parse(black_box(analytics_data.as_bytes())).unwrap();
-            
+
             // In real streaming scenario:
             // - Recent events (high priority) would be available immediately
             // - Historical data (low priority) streams in background
             // - UI can show real-time metrics while historical data loads
-            
+
             start.elapsed()
         })
     });
-    
+
     group.finish();
 }
 
 fn benchmark_memory_efficiency(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_efficiency");
     group.measurement_time(Duration::from_secs(8));
-    
+
     let huge_dataset = generate_massive_catalog(8_000); // ~8MB
-    
+
     // Traditional: All data in memory simultaneously
     group.bench_function("traditional_full_memory", |b| {
         b.iter(|| {
@@ -490,21 +511,21 @@ fn benchmark_memory_efficiency(c: &mut Criterion) {
             let _: Value = serde_json::from_str(black_box(&huge_dataset)).unwrap();
         })
     });
-    
+
     // PJS: Streaming with controlled memory usage
     group.bench_function("pjs_controlled_memory", |b| {
         b.iter(|| {
             // Parse incrementally with better memory patterns
             let parser = Parser::new();
             let _ = parser.parse(black_box(huge_dataset.as_bytes())).unwrap();
-            
+
             // In streaming scenario, memory usage would be much lower:
             // - Only skeleton + current priority data in memory
             // - Historical/low-priority data can be processed and discarded
             // - Enables processing datasets larger than available RAM
         })
     });
-    
+
     group.finish();
 }
 
