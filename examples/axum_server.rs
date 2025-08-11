@@ -3,7 +3,7 @@
 //! This example demonstrates how to set up a complete PJS streaming server
 //! using Axum HTTP framework with DDD architecture.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
@@ -18,6 +18,7 @@ use pjson_rs::{
     domain::{
         aggregates::stream_session::SessionConfig,
         value_objects::SessionId,
+        services::ConnectionManager,
     },
     infrastructure::{
         adapters::{
@@ -72,8 +73,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         command_handler.clone(),
     ));
 
+    // Create connection manager
+    let connection_manager = Arc::new(ConnectionManager::new(
+        Duration::from_secs(300),  // 5 minute timeout
+        1000,  // max 1000 connections
+    ));
+
+    // Start timeout monitoring
+    let manager_clone = connection_manager.clone();
+    manager_clone.start_timeout_monitor();
+
     // Create Axum app state
-    let app_state = PjsAppState::new(session_service, streaming_service);
+    let app_state = PjsAppState::new(session_service, streaming_service, connection_manager);
 
     // Build the router
     let app = Router::new()
@@ -95,6 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     println!("🚀 PJS Server starting on http://{}", addr);
     println!("📊 Health check: http://{}/pjs/health", addr);
+    println!("📈 Connection stats: http://{}/pjs/connections", addr);
     println!("📝 API Documentation:");
     println!("   POST http://{}/pjs/sessions - Create new session", addr);
     println!("   GET  http://{}/pjs/sessions/{{id}} - Get session info", addr);

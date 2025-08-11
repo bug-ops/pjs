@@ -56,6 +56,9 @@ pub enum DomainError {
     
     #[error("Domain logic error: {0}")]
     Logic(String),
+    
+    #[error("Validation error: {0}")]
+    ValidationError(String),
 }
 
 impl DomainError {

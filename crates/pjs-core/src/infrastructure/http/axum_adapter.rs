@@ -30,6 +30,7 @@ use crate::{
         value_objects::{SessionId, StreamId, Priority},
         aggregates::stream_session::SessionConfig,
         entities::Frame,
+        services::connection_manager::{ConnectionManager, ConnectionState},
     },
 };
 
@@ -50,6 +51,7 @@ where
 {
     session_service: Arc<SessionService<CH, QH>>,
     streaming_service: Arc<StreamingService<CH>>,
+    connection_manager: Arc<ConnectionManager>,
 }
 
 impl<CH, QH> PjsAppState<CH, QH>
@@ -68,10 +70,12 @@ where
     pub fn new(
         session_service: Arc<SessionService<CH, QH>>,
         streaming_service: Arc<StreamingService<CH>>,
+        connection_manager: Arc<ConnectionManager>,
     ) -> Self {
         Self {
             session_service,
             streaming_service,
+            connection_manager,
         }
     }
 }
@@ -134,6 +138,7 @@ where
         
         // System endpoints
         .route("/pjs/health", get(system_health))
+        .route("/pjs/connections", get(connection_stats::<CH, QH>))
         
         // Middleware
         .layer(CorsLayer::permissive())
@@ -180,6 +185,11 @@ where
         )
         .await
         .map_err(PjsError::Application)?;
+    
+    // Register connection with connection manager
+    if let Err(e) = state.connection_manager.register_connection(session_id.clone()).await {
+        tracing::warn!("Failed to register connection: {}", e);
+    }
     
     // Calculate expiration time
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
@@ -271,10 +281,20 @@ where
     let session_id = SessionId::from_string(&session_id)
         .map_err(|_| PjsError::InvalidSessionId(session_id))?;
     
+    // Update connection activity
+    if let Err(e) = state.connection_manager.update_activity(&session_id).await {
+        tracing::warn!("Failed to update connection activity: {}", e);
+    }
+    
     let stream_id = state.session_service
-        .create_and_start_stream(session_id, request.data, None)
+        .create_and_start_stream(session_id.clone(), request.data, None)
         .await
         .map_err(PjsError::Application)?;
+    
+    // Associate stream with connection
+    if let Err(e) = state.connection_manager.set_stream(&session_id, stream_id.clone()).await {
+        tracing::warn!("Failed to associate stream with connection: {}", e);
+    }
     
     Ok(Json(serde_json::json!({
         "stream_id": stream_id.to_string(),
@@ -465,6 +485,33 @@ where
         .header(header::CONNECTION, "keep-alive")
         .body(body)
         .map_err(|e| PjsError::HttpError(e.to_string()))
+}
+
+/// Get connection statistics
+async fn connection_stats<CH, QH>(
+    State(state): State<PjsAppState<CH, QH>>,
+) -> Json<serde_json::Value>
+where
+    CH: CommandHandler<CreateSessionCommand, SessionId> + 
+         CommandHandler<CreateStreamCommand, StreamId> +
+         CommandHandler<StartStreamCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<CompleteStreamCommand, ()> +
+         Clone + Send + Sync + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse> +
+         QueryHandler<GetSessionHealthQuery, HealthResponse> +
+         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
+         Clone + Send + Sync + 'static,
+{
+    let stats = state.connection_manager.get_statistics().await;
+    
+    Json(serde_json::json!({
+        "total_connections": stats.total_connections,
+        "active_connections": stats.active_connections,
+        "inactive_connections": stats.inactive_connections,
+        "total_bytes_sent": stats.total_bytes_sent,
+        "total_bytes_received": stats.total_bytes_received,
+    }))
 }
 
 /// PJS-specific errors for HTTP endpoints
