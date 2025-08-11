@@ -157,7 +157,7 @@ impl<'a> LazyArray<'a> {
 
     /// Get element at index, parsing if necessary (simplified)
     pub fn get_parsed(&self, index: usize) -> Option<JsonValue<'a>> {
-        self.get(index).map(|bytes| JsonValue::Raw(bytes))
+        self.get(index).map(JsonValue::Raw)
     }
 
     /// Iterator over array elements (lazy)
@@ -223,7 +223,7 @@ impl<'a> LazyObject<'a> {
         // Find field by key
         let field_range = self.fields.iter().find(|field| {
             let key_bytes = &self.raw[field.key.start..field.key.end];
-            std::str::from_utf8(key_bytes).map_or(false, |k| k == key)
+            std::str::from_utf8(key_bytes) == Ok(key)
         })?;
 
         // Return value bytes

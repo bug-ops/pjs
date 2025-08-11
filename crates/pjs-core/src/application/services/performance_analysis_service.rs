@@ -315,12 +315,12 @@ impl PerformanceAnalysisService {
             1.0
         };
 
-        let bandwidth_factor = (context.available_bandwidth_mbps / 5.0).min(2.0).max(0.5);
+        let bandwidth_factor = (context.available_bandwidth_mbps / 5.0).clamp(0.5, 2.0);
         let cpu_factor = if context.cpu_usage > 0.8 { 0.7 } else { 1.0 };
         let error_factor = if context.error_rate > 0.05 { 0.8 } else { 1.0 };
 
         let recommended_size = ((base_size as f64) * latency_factor * bandwidth_factor * cpu_factor * error_factor) as usize;
-        let recommended_size = recommended_size.max(1).min(1000); // Bounds checking
+        let recommended_size = recommended_size.clamp(1, 1000); // Bounds checking
 
         Ok(BatchSizeRecommendation {
             recommended_size,
@@ -542,7 +542,7 @@ impl PerformanceAnalysisService {
             score -= 5.0;
         }
 
-        score.max(0.0).min(100.0)
+        score.clamp(0.0, 100.0)
     }
 
     fn identify_performance_issues(

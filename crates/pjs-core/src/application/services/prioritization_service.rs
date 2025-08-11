@@ -138,8 +138,7 @@ impl PrioritizationService {
 
         base_result.calculated_priority = base_result.calculated_priority.increase_by(stream_factor);
         base_result.reasoning.push(format!(
-            "Increased priority by {} for {} concurrent streams",
-            stream_factor, stream_count
+            "Increased priority by {stream_factor} for {stream_count} concurrent streams"
         ));
 
         Ok(base_result)

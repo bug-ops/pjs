@@ -78,13 +78,12 @@ where
             .calculate_adaptive_priority(performance_context)?;
 
         // Delegate batch size calculation to performance service
-        let performance_guard = self.performance_service.lock()
-            .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire performance service lock".to_string()))?;
-        
-        let batch_recommendation = performance_guard
-            .calculate_optimal_batch_size(10)?; // Base size of 10
-
-        drop(performance_guard);
+        let batch_recommendation = {
+            let performance_guard = self.performance_service.lock()
+                .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire performance service lock".to_string()))?;
+            
+            performance_guard.calculate_optimal_batch_size(10)? // Base size of 10
+        };
 
         // Generate frames using calculated parameters
         let command = GenerateFramesCommand {
@@ -117,13 +116,13 @@ where
             .calculate_global_priority(performance_context, stream_count)?;
 
         // Calculate total frame budget
-        let performance_guard = self.performance_service.lock()
-            .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire performance service lock".to_string()))?;
-        
-        let base_batch = performance_guard.calculate_optimal_batch_size(10)?;
-        let total_frames = (base_batch.recommended_size as f64 * 1.5) as usize; // 50% more for multi-stream
-
-        drop(performance_guard);
+        let total_frames = {
+            let performance_guard = self.performance_service.lock()
+                .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire performance service lock".to_string()))?;
+            
+            let base_batch = performance_guard.calculate_optimal_batch_size(10)?;
+            (base_batch.recommended_size as f64 * 1.5) as usize // 50% more for multi-stream
+        };
 
         // Generate optimized batch
         let command = BatchGenerateFramesCommand {

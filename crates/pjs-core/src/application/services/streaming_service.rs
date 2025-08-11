@@ -252,7 +252,7 @@ where
         };
 
         // Adjust based on bandwidth
-        let bandwidth_factor = (context.available_bandwidth_mbps / 5.0).min(3.0).max(0.2);
+        let bandwidth_factor = (context.available_bandwidth_mbps / 5.0).clamp(0.2, 3.0);
 
         // Adjust based on CPU usage
         let cpu_factor = if context.cpu_usage > 0.8 {

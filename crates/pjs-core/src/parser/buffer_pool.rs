@@ -255,7 +255,7 @@ impl AlignedBuffer {
     fn new(capacity: usize, alignment: usize) -> DomainResult<Self> {
         // Validate alignment is power of 2
         if !alignment.is_power_of_two() {
-            return Err(DomainError::InvalidInput(format!("Alignment {} is not power of 2", alignment)));
+            return Err(DomainError::InvalidInput(format!("Alignment {alignment} is not power of 2")));
         }
         
         // Align capacity to SIMD boundaries
@@ -549,7 +549,7 @@ mod tests {
                 println!("Testing alignment {}: ptr=0x{:x}, aligned={}", 
                         alignment, buffer.data.as_ptr() as usize, buffer.is_aligned());
                 // For power-of-2 alignments, buffer should be considered aligned
-                assert!(buffer.is_aligned(), "Failed for alignment {}", alignment);
+                assert!(buffer.is_aligned(), "Failed for alignment {alignment}");
             }
         }
         

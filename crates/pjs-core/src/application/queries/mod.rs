@@ -92,7 +92,7 @@ pub struct SearchSessionsQuery {
 }
 
 /// Session filtering criteria
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionFilters {
     pub state: Option<String>,
     pub created_after: Option<DateTime<Utc>>,
@@ -120,7 +120,6 @@ pub enum SortOrder {
 }
 
 /// Query response types
-
 /// Response for session queries
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResponse {
@@ -181,14 +180,3 @@ pub struct SystemStatsResponse {
     pub uptime_seconds: u64,
 }
 
-impl Default for SessionFilters {
-    fn default() -> Self {
-        Self {
-            state: None,
-            created_after: None,
-            created_before: None,
-            client_info: None,
-            has_active_streams: None,
-        }
-    }
-}

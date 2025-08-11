@@ -55,16 +55,16 @@ impl SimpleParser {
     pub fn parse(&self, input: &[u8]) -> Result<Frame> {
         // Basic size check
         if input.len() > self.config.max_size_mb * 1024 * 1024 {
+            let input_mb = input.len() / (1024 * 1024);
+            let max_mb = self.config.max_size_mb;
             return Err(Error::buffer(format!(
-                "Input too large: {} MB, max: {} MB",
-                input.len() / (1024 * 1024),
-                self.config.max_size_mb
+                "Input too large: {input_mb} MB, max: {max_mb} MB"
             )));
         }
 
         // Parse with serde_json
         let value: Value = serde_json::from_slice(input)
-            .map_err(|e| Error::invalid_json(0, format!("serde_json error: {}", e)))?;
+            .map_err(|e| Error::invalid_json(0, format!("serde_json error: {e}")))?;
 
         // Detect semantic type
         let semantic_type = if self.config.detect_semantics {
@@ -127,7 +127,7 @@ impl SimpleParser {
         if self.is_tabular_data(arr) {
             let columns = self.extract_table_columns(&arr[0]);
             return SemanticType::Table {
-                columns,
+                columns: Box::new(columns),
                 row_count: Some(arr.len()),
             };
         }

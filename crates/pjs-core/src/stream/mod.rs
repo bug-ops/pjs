@@ -82,7 +82,7 @@ impl StreamProcessor {
     pub fn process_frame(&mut self, frame: StreamFrame) -> DomainResult<ProcessResult> {
         // Check frame size
         let frame_size = serde_json::to_string(&frame.data)
-            .map_err(|e| crate::domain::DomainError::Logic(format!("JSON serialization failed: {}", e)))?
+            .map_err(|e| crate::domain::DomainError::Logic(format!("JSON serialization failed: {e}")))?
             .len();
             
         if frame_size > self.config.max_frame_size {

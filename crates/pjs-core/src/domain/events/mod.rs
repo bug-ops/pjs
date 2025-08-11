@@ -446,7 +446,7 @@ impl DomainEvent {
     pub fn event_id(&self) -> EventId {
         // For now, generate deterministic ID based on event content
         // In future versions, this should be stored with the event
-        let content = format!("{:?}", self);
+        let content = format!("{self:?}");
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hash = DefaultHasher::new();

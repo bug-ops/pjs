@@ -165,7 +165,10 @@ impl<'a> SimdZeroCopyParser<'a> {
             b't' | b'f' => ValueType::Boolean,
             b'n' => ValueType::Null,
             b'-' | b'0'..=b'9' => ValueType::Number,
-            _ => return Err(DomainError::InvalidInput(format!("Invalid JSON start character: {}", input[pos] as char))),
+            _ => {
+                let ch = input[pos] as char;
+                return Err(DomainError::InvalidInput(format!("Invalid JSON start character: {ch}")));
+            },
         };
 
         Ok(SonicStructuralInfo {
@@ -316,7 +319,7 @@ impl<'a> SimdZeroCopyParser<'a> {
         }
 
         String::from_utf8(result)
-            .map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {}", e)))
+            .map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {e}")))
     }
 
     // Utility methods

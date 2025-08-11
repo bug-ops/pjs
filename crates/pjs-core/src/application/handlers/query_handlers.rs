@@ -118,17 +118,14 @@ where
             .map_err(ApplicationError::Domain)?;
 
         // Apply filters
-        sessions = sessions
-            .into_iter()
-            .filter(|session| self.matches_filters(session, &query.filters))
-            .collect();
+        sessions.retain(|session| self.matches_filters(session, &query.filters));
 
         // Apply sorting
         if let Some(sort_field) = &query.sort_by {
             let ascending = query
                 .sort_order
                 .as_ref()
-                .map_or(true, |order| matches!(order, SortOrder::Ascending));
+                .is_none_or(|order| matches!(order, SortOrder::Ascending));
 
             sessions.sort_by(|a, b| {
                 let cmp = match sort_field {
@@ -317,7 +314,7 @@ where
         let mut events = self
             .event_store
             .get_events_for_session(query.session_id.into())
-            .map_err(|e| ApplicationError::Logic(e))?;
+            .map_err(ApplicationError::Logic)?;
 
         // Apply time filter
         if let Some(since) = query.since {
@@ -352,7 +349,7 @@ where
         let mut events = self
             .event_store
             .get_events_for_stream(query.stream_id.into())
-            .map_err(|e| ApplicationError::Logic(e))?;
+            .map_err(ApplicationError::Logic)?;
 
         // Apply time filter
         if let Some(since) = query.since {

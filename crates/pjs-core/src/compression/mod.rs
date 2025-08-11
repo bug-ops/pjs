@@ -82,7 +82,7 @@ impl SchemaAnalyzer {
                     let field_path = if path.is_empty() {
                         key.clone()
                     } else {
-                        format!("{}.{}", path, key)
+                        format!("{path}.{key}")
                     };
                     self.analyze_recursive(val, &field_path)?;
                 }
@@ -93,7 +93,7 @@ impl SchemaAnalyzer {
                     self.analyze_array_patterns(arr, path)?;
                 }
                 for (idx, item) in arr.iter().enumerate() {
-                    let item_path = format!("{}[{}]", path, idx);
+                    let item_path = format!("{path}[{idx}]");
                     self.analyze_recursive(item, &item_path)?;
                 }
             }
@@ -114,7 +114,7 @@ impl SchemaAnalyzer {
     fn analyze_array_patterns(&mut self, arr: &[JsonValue], path: &str) -> DomainResult<()> {
         // Check for repeating object structures
         if let Some(JsonValue::Object(first)) = arr.first() {
-            let structure_key = format!("array_structure:{}", path);
+            let structure_key = format!("array_structure:{path}");
             let field_names: Vec<&str> = first.keys().map(|k| k.as_str()).collect();
             let pattern = field_names.join(",");
             
@@ -142,9 +142,9 @@ impl SchemaAnalyzer {
             let mut value_counts = HashMap::new();
             for value in arr {
                 let key = match value {
-                    JsonValue::String(s) => format!("string:{}", s),
-                    JsonValue::Number(n) => format!("number:{}", n),
-                    JsonValue::Bool(b) => format!("bool:{}", b),
+                    JsonValue::String(s) => format!("string:{s}"),
+                    JsonValue::Number(n) => format!("number:{n}"),
+                    JsonValue::Bool(b) => format!("bool:{b}"),
                     _ => continue,
                 };
                 *value_counts.entry(key).or_insert(0) += 1;
@@ -157,7 +157,7 @@ impl SchemaAnalyzer {
                         total_size: value_key.len() * count as usize,
                         compression_potential: (count as f32 - 1.0) / count as f32,
                     };
-                    self.patterns.insert(format!("array_value:{}:{}", path, value_key), info);
+                    self.patterns.insert(format!("array_value:{path}:{value_key}"), info);
                 }
             }
         }
@@ -175,7 +175,7 @@ impl SchemaAnalyzer {
             // Check for URL patterns
             if s.starts_with("http://") || s.starts_with("https://") {
                 let prefix = if s.starts_with("https://") { "https://" } else { "http://" };
-                self.patterns.entry(format!("url_prefix:{}", prefix)).or_insert(PatternInfo {
+                self.patterns.entry(format!("url_prefix:{prefix}")).or_insert(PatternInfo {
                     frequency: 0,
                     total_size: 0,
                     compression_potential: 0.0,
@@ -318,7 +318,7 @@ impl SchemaCompressor {
             CompressionStrategy::None => Ok(CompressedData {
                 strategy: self.strategy.clone(),
                 compressed_size: serde_json::to_string(data)
-                    .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {}", e)))?
+                    .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
                     .len(),
                 data: data.clone(),
                 compression_metadata: HashMap::new(),
@@ -348,13 +348,13 @@ impl SchemaCompressor {
         
         // Store dictionary for decompression
         for (string, index) in dictionary {
-            metadata.insert(format!("dict_{}", index), JsonValue::String(string.clone()));
+            metadata.insert(format!("dict_{index}"), JsonValue::String(string.clone()));
         }
 
         // Replace strings with dictionary indices
         let compressed = self.replace_strings_with_indices(data, dictionary)?;
         let compressed_size = serde_json::to_string(&compressed)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {}", e)))?
+            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
             .len();
 
         Ok(CompressedData {
@@ -371,13 +371,13 @@ impl SchemaCompressor {
         
         // Store base values
         for (path, base) in base_values {
-            metadata.insert(format!("base_{}", path), JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()));
+            metadata.insert(format!("base_{path}"), JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()));
         }
 
         // Apply delta compression
         let compressed = self.apply_delta_compression(data, base_values)?;
         let compressed_size = serde_json::to_string(&compressed)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {}", e)))?
+            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
             .len();
 
         Ok(CompressedData {
@@ -392,7 +392,7 @@ impl SchemaCompressor {
     fn compress_with_run_length(&self, data: &JsonValue) -> DomainResult<CompressedData> {
         // TODO: Implement run-length encoding for arrays with repeated values
         let compressed_size = serde_json::to_string(data)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {}", e)))?
+            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
             .len();
 
         Ok(CompressedData {
@@ -409,12 +409,12 @@ impl SchemaCompressor {
         
         // Add dictionary metadata
         for (string, index) in string_dict {
-            metadata.insert(format!("dict_{}", index), JsonValue::String(string.clone()));
+            metadata.insert(format!("dict_{index}"), JsonValue::String(string.clone()));
         }
         
         // Add delta base values
         for (path, base) in numeric_deltas {
-            metadata.insert(format!("base_{}", path), JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()));
+            metadata.insert(format!("base_{path}"), JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()));
         }
 
         // Apply both compression strategies
@@ -422,7 +422,7 @@ impl SchemaCompressor {
         let final_compressed = self.apply_delta_compression(&dict_compressed, numeric_deltas)?;
         
         let compressed_size = serde_json::to_string(&final_compressed)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {}", e)))?
+            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
             .len();
 
         Ok(CompressedData {
@@ -434,6 +434,7 @@ impl SchemaCompressor {
     }
 
     /// Replace strings with dictionary indices
+    #[allow(clippy::only_used_in_recursion)]
     fn replace_strings_with_indices(&self, data: &JsonValue, dictionary: &HashMap<String, u16>) -> DomainResult<JsonValue> {
         match data {
             JsonValue::Object(obj) => {

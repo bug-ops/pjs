@@ -47,7 +47,7 @@ where
         // Notify subscribers first
         for subscriber in &self.subscribers {
             subscriber.handle(&event).await
-                .map_err(|e| crate::application::ApplicationError::Domain(e))?;
+                .map_err(crate::application::ApplicationError::Domain)?;
         }
 
         // Store event
@@ -55,7 +55,7 @@ where
             .lock()
             .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire event store lock".to_string()))?
             .append_events(vec![event])
-            .map_err(|e| crate::application::ApplicationError::Logic(e))?;
+            .map_err(crate::application::ApplicationError::Logic)?;
 
         Ok(())
     }
@@ -66,7 +66,7 @@ where
         for event in &events {
             for subscriber in &self.subscribers {
                 subscriber.handle(event).await
-                    .map_err(|e| crate::application::ApplicationError::Domain(e))?;
+                    .map_err(crate::application::ApplicationError::Domain)?;
             }
         }
 
@@ -75,7 +75,7 @@ where
             .lock()
             .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire event store lock".to_string()))?
             .append_events(events)
-            .map_err(|e| crate::application::ApplicationError::Logic(e))?;
+            .map_err(crate::application::ApplicationError::Logic)?;
 
         Ok(())
     }
@@ -86,7 +86,7 @@ where
             .lock()
             .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire event store lock".to_string()))?
             .get_events_for_session(session_id)
-            .map_err(|e| crate::application::ApplicationError::Logic(e))?;
+            .map_err(crate::application::ApplicationError::Logic)?;
 
         Ok(events.into_iter().map(|e| e.to_dto()).collect())
     }
@@ -97,7 +97,7 @@ where
             .lock()
             .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire event store lock".to_string()))?
             .get_events_for_stream(stream_id)
-            .map_err(|e| crate::application::ApplicationError::Logic(e))?;
+            .map_err(crate::application::ApplicationError::Logic)?;
 
         Ok(events.into_iter().map(|e| e.to_dto()).collect())
     }
@@ -108,7 +108,7 @@ where
             .lock()
             .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire event store lock".to_string()))?
             .get_events_since(since)
-            .map_err(|e| crate::application::ApplicationError::Logic(e))?;
+            .map_err(crate::application::ApplicationError::Logic)?;
 
         Ok(events.into_iter().map(|e| e.to_dto()).collect())
     }
@@ -119,7 +119,7 @@ where
             .lock()
             .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire event store lock".to_string()))?
             .get_events_for_session(session_id)
-            .map_err(|e| crate::application::ApplicationError::Logic(e))
+            .map_err(crate::application::ApplicationError::Logic)
     }
 
     /// Get events for stream (domain objects, for internal use)
@@ -128,7 +128,7 @@ where
             .lock()
             .map_err(|_| crate::application::ApplicationError::Logic("Failed to acquire event store lock".to_string()))?
             .get_events_for_stream(stream_id)
-            .map_err(|e| crate::application::ApplicationError::Logic(e))
+            .map_err(crate::application::ApplicationError::Logic)
     }
 
     /// Replay events from DTOs (for event sourcing reconstruction)
@@ -137,7 +137,7 @@ where
         
         for dto in event_dtos {
             let event = DomainEvent::from_dto(dto)
-                .map_err(|e| crate::application::ApplicationError::Domain(e))?;
+                .map_err(crate::application::ApplicationError::Domain)?;
             events.push(event);
         }
 

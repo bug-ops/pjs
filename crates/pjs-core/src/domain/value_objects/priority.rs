@@ -80,8 +80,7 @@ impl Priority {
     pub fn from_percentage(percent: f32) -> DomainResult<Self> {
         if !(0.0..=100.0).contains(&percent) {
             return Err(DomainError::InvalidPriority(format!(
-                "Percentage must be 0-100, got {}",
-                percent
+                "Percentage must be 0-100, got {percent}"
             )));
         }
 
@@ -98,12 +97,12 @@ impl Priority {
 impl fmt::Display for Priority {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::CRITICAL => write!(f, "Critical({})", self.0.get()),
-            Self::HIGH => write!(f, "High({})", self.0.get()),
-            Self::MEDIUM => write!(f, "Medium({})", self.0.get()),
-            Self::LOW => write!(f, "Low({})", self.0.get()),
-            Self::BACKGROUND => write!(f, "Background({})", self.0.get()),
-            _ => write!(f, "Priority({})", self.0.get()),
+            Self::CRITICAL => { let val = self.0.get(); write!(f, "Critical({val})") },
+            Self::HIGH => { let val = self.0.get(); write!(f, "High({val})") },
+            Self::MEDIUM => { let val = self.0.get(); write!(f, "Medium({val})") },
+            Self::LOW => { let val = self.0.get(); write!(f, "Low({val})") },
+            Self::BACKGROUND => { let val = self.0.get(); write!(f, "Background({val})") },
+            _ => { let val = self.0.get(); write!(f, "Priority({val})") },
         }
     }
 }
@@ -178,8 +177,7 @@ impl PriorityRules {
         for rule in &self.rules {
             if !rule.validate(priority) {
                 return Err(DomainError::InvalidPriority(format!(
-                    "Priority {} violates rule: {}",
-                    priority,
+                    "Priority {priority} violates rule: {}", 
                     rule.name()
                 )));
             }

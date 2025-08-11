@@ -81,7 +81,10 @@ impl<'a> ZeroCopyParser<'a> {
             b't' | b'f' => self.parse_boolean(),
             b'n' => self.parse_null(),
             b'-' | b'0'..=b'9' => self.parse_number(),
-            _ => Err(DomainError::InvalidInput(format!("Unexpected character: {}", ch as char))),
+            _ => {
+                let ch_char = ch as char;
+                Err(DomainError::InvalidInput(format!("Unexpected character: {ch_char}")))
+            },
         }
     }
 
@@ -305,7 +308,8 @@ impl<'a> ZeroCopyParser<'a> {
     /// Expect specific character at current position
     fn expect_char(&mut self, ch: u8) -> DomainResult<()> {
         if self.position >= self.input.len() || self.input[self.position] != ch {
-            return Err(DomainError::InvalidInput(format!("Expected '{}'", ch as char)));
+            let ch_char = ch as char;
+            return Err(DomainError::InvalidInput(format!("Expected '{ch_char}'")));
         }
         self.position += 1;
         Ok(())
@@ -347,7 +351,7 @@ impl<'a> ZeroCopyParser<'a> {
         }
 
         String::from_utf8(result)
-            .map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {}", e)))
+            .map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {e}")))
     }
 }
 
@@ -439,7 +443,7 @@ impl<'a> LazyJsonValue<'a> {
     pub fn as_str(&self) -> DomainResult<&str> {
         match self {
             LazyJsonValue::StringBorrowed(bytes) => {
-                from_utf8(bytes).map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {}", e)))
+                from_utf8(bytes).map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {e}")))
             }
             LazyJsonValue::StringOwned(s) => Ok(s.as_str()),
             _ => Err(DomainError::InvalidInput("Value is not a string".to_string())),
@@ -451,9 +455,9 @@ impl<'a> LazyJsonValue<'a> {
         match self {
             LazyJsonValue::NumberSlice(bytes) => {
                 let s = from_utf8(bytes)
-                    .map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {}", e)))?;
+                    .map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {e}")))?;
                 s.parse::<f64>()
-                    .map_err(|e| DomainError::InvalidInput(format!("Invalid number: {}", e)))
+                    .map_err(|e| DomainError::InvalidInput(format!("Invalid number: {e}")))
             }
             _ => Err(DomainError::InvalidInput("Value is not a number".to_string())),
         }
@@ -548,6 +552,12 @@ pub struct IncrementalParser<'a> {
     base: ZeroCopyParser<'a>,
     buffer: Vec<u8>,
     complete_values: Vec<LazyJsonValue<'a>>,
+}
+
+impl<'a> Default for IncrementalParser<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<'a> IncrementalParser<'a> {

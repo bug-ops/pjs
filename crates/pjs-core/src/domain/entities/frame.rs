@@ -64,7 +64,7 @@ impl Frame {
         }
 
         let payload = serde_json::to_value(&PatchPayload { patches })
-            .map_err(|e| DomainError::Logic(format!("JSON serialization error: {}", e)))?;
+            .map_err(|e| DomainError::Logic(format!("JSON serialization error: {e}")))?;
 
         Ok(Self {
             stream_id,
@@ -207,7 +207,7 @@ impl Frame {
                     ));
                 }
 
-                if !self.payload.get("patches").map_or(false, |p| p.is_array()) {
+                if !self.payload.get("patches").is_some_and(|p| p.is_array()) {
                     return Err(DomainError::InvalidFrame(
                         "Patch frames must contain patches array".to_string(),
                     ));

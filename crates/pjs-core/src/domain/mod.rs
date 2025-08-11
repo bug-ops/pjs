@@ -76,7 +76,7 @@ impl DomainError {
     }
 
     pub fn invalid_transition(from: &str, to: &str) -> Self {
-        Self::InvalidStateTransition(format!("{} -> {}", from, to))
+        Self::InvalidStateTransition(format!("{from} -> {to}"))
     }
 }
 

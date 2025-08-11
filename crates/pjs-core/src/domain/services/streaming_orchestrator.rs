@@ -81,7 +81,7 @@ impl StreamingOrchestrator {
             .find_session(session_id)
             .await?
             .ok_or_else(|| {
-                crate::domain::DomainError::SessionNotFound(format!("Session {} not found", session_id))
+                crate::domain::DomainError::SessionNotFound(format!("Session {session_id} not found"))
             })?;
 
         // TODO: Re-enable cache when CacheRepository is fixed

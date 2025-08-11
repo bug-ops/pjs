@@ -88,7 +88,7 @@ impl OptimizationService {
                     .get(name)
                     .cloned()
                     .ok_or_else(|| crate::application::ApplicationError::Logic(
-                        format!("Custom strategy '{}' not found", name)
+                        format!("Custom strategy '{name}' not found")
                     ))
             }
         }
@@ -420,7 +420,7 @@ impl OptimizationService {
         let batch_efficiency = (strategy.batch_size as f64 / 20.0).min(1.0);
         utilization -= batch_efficiency * 0.1;
 
-        utilization.max(0.0).min(1.0)
+        utilization.clamp(0.0, 1.0)
     }
 
     fn calculate_quality_score(&self, frames: &[crate::domain::entities::Frame], strategy: &OptimizationStrategy) -> f64 {
