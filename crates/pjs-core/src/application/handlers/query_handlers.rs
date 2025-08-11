@@ -38,7 +38,7 @@ where
     async fn handle(&self, query: GetSessionQuery) -> ApplicationResult<SessionResponse> {
         let session = self
             .repository
-            .find_session(query.session_id)
+            .find_session(query.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -91,7 +91,7 @@ where
     async fn handle(&self, query: GetSessionHealthQuery) -> ApplicationResult<HealthResponse> {
         let session = self
             .repository
-            .find_session(query.session_id)
+            .find_session(query.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -245,7 +245,7 @@ where
     async fn handle(&self, query: GetStreamQuery) -> ApplicationResult<StreamResponse> {
         let session = self
             .session_repository
-            .find_session(query.session_id)
+            .find_session(query.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -253,7 +253,7 @@ where
             })?;
 
         let stream = session
-            .get_stream(query.stream_id)
+            .get_stream(query.stream_id.into())
             .ok_or_else(|| {
                 ApplicationError::NotFound(format!("Stream {} not found", query.stream_id))
             })?
@@ -272,7 +272,7 @@ where
     async fn handle(&self, query: GetStreamsForSessionQuery) -> ApplicationResult<StreamsResponse> {
         let session = self
             .session_repository
-            .find_session(query.session_id)
+            .find_session(query.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -316,7 +316,7 @@ where
     async fn handle(&self, query: GetSessionEventsQuery) -> ApplicationResult<EventsResponse> {
         let mut events = self
             .event_store
-            .get_events_for_session(query.session_id)
+            .get_events_for_session(query.session_id.into())
             .map_err(|e| ApplicationError::Logic(e))?;
 
         // Apply time filter
@@ -351,7 +351,7 @@ where
     async fn handle(&self, query: GetStreamEventsQuery) -> ApplicationResult<EventsResponse> {
         let mut events = self
             .event_store
-            .get_events_for_stream(query.stream_id)
+            .get_events_for_stream(query.stream_id.into())
             .map_err(|e| ApplicationError::Logic(e))?;
 
         // Apply time filter

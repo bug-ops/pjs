@@ -1,10 +1,10 @@
 //! Queries - Read operations that don't change system state
 
+use crate::application::dto::{PriorityDto, SessionIdDto, StreamIdDto};
 use crate::domain::{
     aggregates::{StreamSession, stream_session::SessionHealth},
     entities::{Frame, Stream},
     events::DomainEvent,
-    value_objects::{Priority, SessionId, StreamId},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Get session information by ID
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSessionQuery {
-    pub session_id: SessionId,
+    pub session_id: SessionIdDto,
 }
 
 /// Get all active sessions
@@ -25,37 +25,37 @@ pub struct GetActiveSessionsQuery {
 /// Get stream information by ID
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetStreamQuery {
-    pub session_id: SessionId,
-    pub stream_id: StreamId,
+    pub session_id: SessionIdDto,
+    pub stream_id: StreamIdDto,
 }
 
 /// Get all streams for a session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetStreamsForSessionQuery {
-    pub session_id: SessionId,
+    pub session_id: SessionIdDto,
     pub include_inactive: bool,
 }
 
 /// Get session health status
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSessionHealthQuery {
-    pub session_id: SessionId,
+    pub session_id: SessionIdDto,
 }
 
 /// Get frames for a stream with filtering
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetStreamFramesQuery {
-    pub session_id: SessionId,
-    pub stream_id: StreamId,
+    pub session_id: SessionIdDto,
+    pub stream_id: StreamIdDto,
     pub since_sequence: Option<u64>,
-    pub priority_filter: Option<Priority>,
+    pub priority_filter: Option<PriorityDto>,
     pub limit: Option<usize>,
 }
 
 /// Get session statistics and metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSessionStatsQuery {
-    pub session_id: SessionId,
+    pub session_id: SessionIdDto,
 }
 
 /// Get system-wide statistics
@@ -67,7 +67,7 @@ pub struct GetSystemStatsQuery {
 /// Get events for a session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSessionEventsQuery {
-    pub session_id: SessionId,
+    pub session_id: SessionIdDto,
     pub since: Option<DateTime<Utc>>,
     pub event_types: Option<Vec<String>>,
     pub limit: Option<usize>,
@@ -76,7 +76,7 @@ pub struct GetSessionEventsQuery {
 /// Get events for a stream
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetStreamEventsQuery {
-    pub stream_id: StreamId,
+    pub stream_id: StreamIdDto,
     pub since: Option<DateTime<Utc>>,
     pub limit: Option<usize>,
 }

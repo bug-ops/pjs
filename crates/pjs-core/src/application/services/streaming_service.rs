@@ -53,9 +53,9 @@ where
 
         // Generate frames
         let command = GenerateFramesCommand {
-            session_id,
-            stream_id,
-            priority_threshold,
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+            priority_threshold: priority_threshold.into(),
             max_frames,
         };
 
@@ -83,8 +83,8 @@ where
 
         // Generate cross-stream optimized batch
         let command = BatchGenerateFramesCommand {
-            session_id,
-            priority_threshold,
+            session_id: session_id.into(),
+            priority_threshold: priority_threshold.into(),
             max_frames,
         };
 
@@ -116,8 +116,8 @@ where
         // Analyze latency performance
         if let Some(adjustment) = self.analyze_latency_adjustment(streaming_metrics) {
             let command = AdjustPriorityThresholdCommand {
-                session_id,
-                new_threshold: adjustment.new_threshold,
+                session_id: session_id.into(),
+                new_threshold: adjustment.new_threshold.into(),
                 reason: adjustment.reason.clone(),
             };
 
@@ -128,8 +128,8 @@ where
         // Analyze throughput performance
         if let Some(adjustment) = self.analyze_throughput_adjustment(streaming_metrics) {
             let command = AdjustPriorityThresholdCommand {
-                session_id,
-                new_threshold: adjustment.new_threshold,
+                session_id: session_id.into(),
+                new_threshold: adjustment.new_threshold.into(),
                 reason: adjustment.reason.clone(),
             };
 
@@ -140,8 +140,8 @@ where
         // Analyze error rate performance
         if let Some(adjustment) = self.analyze_error_rate_adjustment(streaming_metrics) {
             let command = AdjustPriorityThresholdCommand {
-                session_id,
-                new_threshold: adjustment.new_threshold,
+                session_id: session_id.into(),
+                new_threshold: adjustment.new_threshold.into(),
                 reason: adjustment.reason.clone(),
             };
 
@@ -198,8 +198,8 @@ where
 
         // Apply optimization
         let command = BatchGenerateFramesCommand {
-            session_id,
-            priority_threshold: optimization_strategy.priority_threshold,
+            session_id: session_id.into(),
+            priority_threshold: optimization_strategy.priority_threshold.into(),
             max_frames: optimization_strategy.batch_size,
         };
 

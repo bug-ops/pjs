@@ -81,7 +81,7 @@ where
     ) -> ApplicationResult<StreamId> {
         // Create stream
         let create_command = CreateStreamCommand {
-            session_id,
+            session_id: session_id.into(),
             source_data,
             config,
         };
@@ -90,8 +90,8 @@ where
 
         // Start stream
         let start_command = StartStreamCommand {
-            session_id,
-            stream_id,
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
         };
 
         self.command_handler.handle(start_command).await?;
@@ -105,11 +105,11 @@ where
         session_id: SessionId,
     ) -> ApplicationResult<SessionWithHealth> {
         // Get session info
-        let session_query = GetSessionQuery { session_id };
+        let session_query = GetSessionQuery { session_id: session_id.into() };
         let session_response = self.query_handler.handle(session_query).await?;
 
         // Get health status
-        let health_query = GetSessionHealthQuery { session_id };
+        let health_query = GetSessionHealthQuery { session_id: session_id.into() };
         let health_response = self.query_handler.handle(health_query).await?;
 
         Ok(SessionWithHealth {
@@ -126,15 +126,15 @@ where
     ) -> ApplicationResult<SessionCompletionResult> {
         // Complete the stream
         let complete_command = CompleteStreamCommand {
-            session_id,
-            stream_id,
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
             checksum: None,
         };
 
         self.command_handler.handle(complete_command).await?;
 
         // Check if session should be closed
-        let session_query = GetSessionQuery { session_id };
+        let session_query = GetSessionQuery { session_id: session_id.into() };
         let session_response = self.query_handler.handle(session_query).await?;
 
         let active_streams = session_response
@@ -146,7 +146,7 @@ where
 
         let session_closed = if active_streams == 0 {
             // No more active streams, close the session
-            let close_command = CloseSessionCommand { session_id };
+            let close_command = CloseSessionCommand { session_id: session_id.into() };
             self.command_handler.handle(close_command).await?;
             true
         } else {
@@ -205,7 +205,7 @@ where
         session_id: SessionId,
     ) -> ApplicationResult<SessionShutdownResult> {
         // Get current session state
-        let session_query = GetSessionQuery { session_id };
+        let session_query = GetSessionQuery { session_id: session_id.into() };
         let session_response = self.query_handler.handle(session_query).await?;
 
         let active_stream_ids: Vec<StreamId> = session_response
@@ -222,8 +222,8 @@ where
 
         for stream_id in &active_stream_ids {
             let complete_command = CompleteStreamCommand {
-                session_id,
-                stream_id: *stream_id,
+                session_id: session_id.into(),
+                stream_id: (*stream_id).into(),
                 checksum: None,
             };
 
@@ -234,7 +234,7 @@ where
         }
 
         // Close the session
-        let close_command = CloseSessionCommand { session_id };
+        let close_command = CloseSessionCommand { session_id: session_id.into() };
         let session_closed = self.command_handler.handle(close_command).await.is_ok();
 
         Ok(SessionShutdownResult {

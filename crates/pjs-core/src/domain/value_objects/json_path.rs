@@ -1,10 +1,21 @@
 //! JSON Path Value Object with validation
+//!
+//! Pure domain object for JSON path addressing.
+//! Serialization is handled in the application layer via DTOs.
+//!
+//! TODO: Remove serde derives once all serialization uses DTOs
 
 use crate::domain::{DomainError, DomainResult};
-use serde::{Deserialize, Serialize};
 use std::fmt;
+use serde::{Deserialize, Serialize};
 
 /// Type-safe JSON Path for addressing nodes in JSON structures
+/// 
+/// This is a pure domain object. Serialization should be handled 
+/// in the application layer via DTOs, but serde is temporarily kept
+/// for compatibility with existing code.
+/// 
+/// TODO: Remove Serialize, Deserialize derives once all serialization uses DTOs
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct JsonPath(String);
 

@@ -87,7 +87,7 @@ where
         // Load session
         let mut session = self
             .repository
-            .find_session(command.session_id)
+            .find_session(command.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -137,7 +137,7 @@ where
         // Load session
         let mut session = self
             .repository
-            .find_session(command.session_id)
+            .find_session(command.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -146,7 +146,7 @@ where
 
         // Start stream
         session
-            .start_stream(command.stream_id)
+            .start_stream(command.stream_id.into())
             .map_err(ApplicationError::Domain)?;
 
         // Save updated session
@@ -178,7 +178,7 @@ where
         // Load session
         let mut session = self
             .repository
-            .find_session(command.session_id)
+            .find_session(command.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -187,7 +187,7 @@ where
 
         // Complete stream
         session
-            .complete_stream(command.stream_id)
+            .complete_stream(command.stream_id.into())
             .map_err(ApplicationError::Domain)?;
 
         // Save updated session
@@ -219,7 +219,7 @@ where
         // Load session
         let mut session = self
             .repository
-            .find_session(command.session_id)
+            .find_session(command.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -227,13 +227,15 @@ where
             })?;
 
         // Get stream
-        let stream = session.get_stream_mut(command.stream_id).ok_or_else(|| {
+        let stream = session.get_stream_mut(command.stream_id.into()).ok_or_else(|| {
             ApplicationError::NotFound(format!("Stream {} not found", command.stream_id))
         })?;
 
         // Generate frames
+        let priority = command.priority_threshold.try_into()
+            .map_err(ApplicationError::Domain)?;
         let frames = stream
-            .create_patch_frames(command.priority_threshold, command.max_frames)
+            .create_patch_frames(priority, command.max_frames)
             .map_err(ApplicationError::Domain)?;
 
         // Save updated session
@@ -265,7 +267,7 @@ where
         // Load session
         let mut session = self
             .repository
-            .find_session(command.session_id)
+            .find_session(command.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
@@ -306,7 +308,7 @@ where
         // Load session
         let mut session = self
             .repository
-            .find_session(command.session_id)
+            .find_session(command.session_id.into())
             .await
             .map_err(ApplicationError::Domain)?
             .ok_or_else(|| {
