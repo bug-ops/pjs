@@ -4,7 +4,8 @@
 //! that showcase the streaming and priority benefits
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use pjson_rs::{JsonReconstructor, Parser, PriorityStreamer};
+use pjson_rs::Parser;
+use pjs_bench::{JsonReconstructor, PriorityStreamer};
 use serde_json::Value;
 use std::hint::black_box;
 use std::time::{Duration, Instant};

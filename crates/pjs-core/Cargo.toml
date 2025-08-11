@@ -46,7 +46,7 @@ hyper = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 
 # WebSocket client (optional)
-tokio-tungstenite = { version = "0.24", optional = true }
+tokio-tungstenite = { version = "0.27", optional = true }
 url = { version = "2.5", optional = true }
 
 # Thread-safe concurrency
@@ -94,16 +94,13 @@ prometheus-metrics = ["dep:prometheus"]
 normal = ["axum", "tower", "tower-http", "hyper", "futures"]
 
 [[example]]
-name = "priority_streaming"
+name = "simple_priority_demo"
 required-features = []
 
-[[example]]
-name = "streaming_demo_server"
-required-features = []
-
-[[example]]
-name = "websocket_streaming"
-required-features = ["http-server"]
+# TODO: Fix websocket_streaming example after infrastructure module fixes
+# [[example]]
+# name = "websocket_streaming"
+# required-features = ["http-server"]
 
 # Benchmarks will be implemented later
 # [[bench]]

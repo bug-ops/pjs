@@ -19,9 +19,8 @@ use std::{
 };
 
 use crate::{
-    PriorityStreamer,
-    JsonReconstructor,
-    domain::value_objects::Priority,
+    Priority,
+    StreamProcessor,
 };
 
 /// Configuration for PJS extension

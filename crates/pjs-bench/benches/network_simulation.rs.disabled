@@ -4,7 +4,7 @@
 //! PJS advantages under latency, bandwidth, and packet loss constraints.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use pjson_rs::{JsonReconstructor, PriorityStreamer, StreamFrame};
+use pjs_bench::{JsonReconstructor, PriorityStreamer};
 use rand::Rng;
 use serde_json::Value;
 use std::hint::black_box;
@@ -199,15 +199,11 @@ async fn benchmark_pjs_streaming_with_network(
     // Stream frames with network simulation
     let mut frame_index = 0;
     while let Some(frame) = plan.next_frame() {
-        // Estimate frame size based on frame type
-        let frame_size = match &frame {
-            StreamFrame::Skeleton { data, .. } => {
-                serde_json::to_string(data).unwrap_or_default().len() + 50
-            }
-            StreamFrame::Patch { patches, .. } => {
-                patches.len() * 150 + 100 // Approximate patch overhead
-            }
-            StreamFrame::Complete { .. } => 50,
+        // Estimate frame size based on actual frame data
+        let frame_size = {
+            let data_size = serde_json::to_string(&frame.data).unwrap_or_default().len();
+            let metadata_size = frame.metadata.len() * 20; // Approximate metadata overhead
+            data_size + metadata_size + 100 // Base frame overhead
         };
         
         // Simulate network transmission for this frame

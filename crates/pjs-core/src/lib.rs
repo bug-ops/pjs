@@ -4,7 +4,6 @@
 //! This crate provides high-performance JSON parsing with SIMD optimizations,
 //! zero-copy operations, and semantic type hints for automatic optimization.
 
-#![cfg_attr(target_arch = "x86_64", feature(stdsimd))]
 #![warn(rust_2018_idioms)]
 #![deny(unsafe_op_in_unsafe_fn)]
 // Temporarily allow missing docs while in development
@@ -17,7 +16,8 @@ pub mod compression;
 pub mod domain;
 pub mod error;
 pub mod frame;
-pub mod infrastructure;
+// TODO: Fix infrastructure compilation issues before release
+// pub mod infrastructure;
 pub mod parser;
 pub mod semantic;
 pub mod stream;

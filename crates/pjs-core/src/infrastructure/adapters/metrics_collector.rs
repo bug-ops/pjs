@@ -53,7 +53,7 @@ pub struct InMemoryMetricsCollector {
 }
 
 #[derive(Debug, Clone)]
-struct SessionMetrics {
+pub struct SessionMetrics {
     session_id: SessionId,
     created_at: Instant,
     last_activity: Instant,
@@ -65,7 +65,7 @@ struct SessionMetrics {
 }
 
 #[derive(Debug, Clone)]
-struct StreamMetrics {
+pub struct StreamMetrics {
     stream_id: StreamId,
     session_id: SessionId,
     created_at: Instant,
@@ -77,7 +77,7 @@ struct StreamMetrics {
 }
 
 #[derive(Debug, Clone)]
-struct TimestampedMetrics {
+pub struct TimestampedMetrics {
     timestamp: Instant,
     metrics: PerformanceMetrics,
 }
