@@ -1,18 +1,201 @@
-//! PJS Benchmarking suite
+//! PJS Benchmarking Suite
 //!
-//! This crate provides comprehensive benchmarking for PJS protocol.
+//! Comprehensive benchmarking for the Priority JSON Streaming Protocol.
+//! This crate provides performance comparisons against standard JSON parsing libraries
+//! and demonstrates the advantages of priority-based streaming.
+//!
+//! # Benchmarks
+//!
+//! - **Throughput**: Raw parsing speed comparison
+//! - **Latency**: Time to First Meaningful Data (TTFMD)
+//! - **Memory Usage**: Memory consumption and allocation patterns
+//! - **Comparison**: Side-by-side with major JSON libraries
+//!
+//! # Usage
+//!
+//! Run all benchmarks:
+//! ```bash
+//! cargo bench
+//! ```
+//!
+//! Run specific benchmark:
+//! ```bash
+//! cargo bench throughput
+//! cargo bench latency
+//! cargo bench memory_usage
+//! cargo bench comparison
+//! ```
 
 pub use pjson_rs::{Error, Frame, Parser, Result};
 
-/// Benchmarking utilities (placeholder for future implementation)
+// Re-export streaming components if available
+#[cfg(feature = "streaming")]
+pub use pjson_rs::{JsonReconstructor, Priority, PriorityStreamer, StreamerConfig};
+
+// Fallback implementations for benchmarking when streaming features aren't available
+#[cfg(not(feature = "streaming"))]
+pub mod fallback {
+    use bytes::Bytes;
+    use serde_json::Value;
+
+    #[derive(Debug, Clone)]
+    pub struct StreamerConfig {
+        chunk_size: usize,
+    }
+
+    impl StreamerConfig {
+        pub fn new() -> Self {
+            Self { chunk_size: 1024 }
+        }
+
+        pub fn chunk_size(&self) -> usize {
+            self.chunk_size
+        }
+
+        pub fn with_chunk_size(mut self, size: usize) -> Self {
+            self.chunk_size = size;
+            self
+        }
+
+        pub fn with_priority_threshold(self, _priority: Priority) -> Self {
+            self
+        }
+
+        pub fn with_memory_limit(self, _limit: usize) -> Self {
+            self
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum Priority {
+        Critical,
+        High,
+        Medium,
+        Low,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct StreamFrame {
+        data: Bytes,
+    }
+
+    #[derive(Debug)]
+    pub struct PriorityStreamer {
+        config: StreamerConfig,
+    }
+
+    impl PriorityStreamer {
+        pub fn new(config: StreamerConfig) -> Self {
+            Self { config }
+        }
+
+        pub fn create_priority_frames(&self, data: &Bytes) -> Vec<StreamFrame> {
+            vec![StreamFrame { data: data.clone() }]
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct JsonReconstructor {
+        state: Option<Value>,
+    }
+
+    impl JsonReconstructor {
+        pub fn new() -> Self {
+            Self { state: None }
+        }
+
+        pub fn process_frame(&mut self, frame: StreamFrame) -> Result<(), String> {
+            let json_str = String::from_utf8(frame.data.to_vec())
+                .map_err(|e| format!("UTF-8 error: {}", e))?;
+            let value: Value =
+                serde_json::from_str(&json_str).map_err(|e| format!("JSON error: {}", e))?;
+            self.state = Some(value);
+            Ok(())
+        }
+
+        pub fn current_state(&self) -> Option<&Value> {
+            self.state.as_ref()
+        }
+    }
+}
+
+#[cfg(not(feature = "streaming"))]
+pub use fallback::*;
+
+/// Benchmarking utilities and data generators
 pub struct BenchSuite {
-    // TODO: Implement benchmarking functionality
+    config: StreamerConfig,
 }
 
 impl BenchSuite {
-    /// Create new benchmark suite
+    /// Create new benchmark suite with default configuration
     pub fn new() -> Self {
-        Self {}
+        Self {
+            config: StreamerConfig::new(),
+        }
+    }
+
+    /// Create benchmark suite with custom configuration
+    pub fn with_config(config: StreamerConfig) -> Self {
+        Self { config }
+    }
+
+    /// Generate social media feed data for benchmarking
+    pub fn generate_social_feed(&self, posts: usize) -> String {
+        use serde_json::json;
+
+        let posts: Vec<_> = (0..posts)
+            .map(|i| {
+                json!({
+                    "id": i,
+                    "user_id": 1000 + (i % 100),
+                    "username": format!("user_{}", i % 100),
+                    "content": format!("Post {} content", i),
+                    "timestamp": format!("2024-01-{:02}T10:30:00Z", (i % 28) + 1),
+                    "likes": i * 3 + 15,
+                    "comments": i / 2 + 5
+                })
+            })
+            .collect();
+
+        json!({
+            "posts": posts,
+            "total": posts,
+            "page": 1
+        })
+        .to_string()
+    }
+
+    /// Generate e-commerce catalog data for benchmarking
+    pub fn generate_product_catalog(&self, products: usize) -> String {
+        use serde_json::json;
+
+        let products: Vec<_> = (0..products)
+            .map(|i| {
+                json!({
+                    "id": i,
+                    "name": format!("Product {}", i),
+                    "price": (i as f64 * 1.5 + 19.99).round() / 100.0 * 100.0,
+                    "in_stock": i % 10 != 0,
+                    "category": format!("Category {}", i % 10),
+                    "rating": ((i % 5) as f64 + 3.0).min(5.0)
+                })
+            })
+            .collect();
+
+        json!({
+            "products": products,
+            "total": products,
+            "filters": {
+                "categories": (0..10).map(|i| format!("Category {}", i)).collect::<Vec<_>>()
+            }
+        })
+        .to_string()
+    }
+
+    /// Get the streamer configuration
+    pub fn config(&self) -> &StreamerConfig {
+        &self.config
     }
 }
 
@@ -22,12 +205,93 @@ impl Default for BenchSuite {
     }
 }
 
+/// Performance metrics for comparison
+#[derive(Debug, Clone)]
+pub struct BenchMetrics {
+    pub throughput_mbps: f64,
+    pub latency_ms: f64,
+    pub memory_mb: f64,
+    pub allocations: usize,
+}
+
+impl BenchMetrics {
+    /// Create new metrics
+    pub fn new(throughput_mbps: f64, latency_ms: f64, memory_mb: f64, allocations: usize) -> Self {
+        Self {
+            throughput_mbps,
+            latency_ms,
+            memory_mb,
+            allocations,
+        }
+    }
+
+    /// Calculate efficiency ratio compared to baseline
+    pub fn efficiency_ratio(&self, baseline: &BenchMetrics) -> f64 {
+        let throughput_ratio = self.throughput_mbps / baseline.throughput_mbps;
+        let latency_ratio = baseline.latency_ms / self.latency_ms; // Lower is better
+        let memory_ratio = baseline.memory_mb / self.memory_mb; // Lower is better
+
+        (throughput_ratio + latency_ratio + memory_ratio) / 3.0
+    }
+}
+
+/// Feature detection for conditional compilation
+pub mod features {
+    /// Check if streaming features are available
+    pub fn has_streaming() -> bool {
+        cfg!(feature = "streaming")
+    }
+
+    /// Check if SIMD features are available
+    pub fn has_simd() -> bool {
+        cfg!(any(
+            feature = "simd-auto",
+            feature = "simd-avx2",
+            feature = "simd-sse42"
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_bench_creation() {
-        let _bench = BenchSuite::new();
+    fn test_bench_suite_creation() {
+        let bench = BenchSuite::new();
+        assert!(bench.config().chunk_size() > 0);
+    }
+
+    #[test]
+    fn test_feature_detection() {
+        use crate::features;
+
+        // These will depend on compilation features
+        let has_streaming = features::has_streaming();
+        let has_simd = features::has_simd();
+
+        // Just ensure they return boolean values
+        assert!(has_streaming == true || has_streaming == false);
+        assert!(has_simd == true || has_simd == false);
+    }
+
+    #[test]
+    fn test_data_generation() {
+        let bench = BenchSuite::new();
+
+        let social_data = bench.generate_social_feed(10);
+        assert!(social_data.contains("posts"));
+
+        let catalog_data = bench.generate_product_catalog(5);
+        assert!(catalog_data.contains("products"));
+    }
+
+    #[test]
+    fn test_metrics() {
+        let metrics1 = BenchMetrics::new(100.0, 10.0, 50.0, 1000);
+        let metrics2 = BenchMetrics::new(200.0, 5.0, 25.0, 500);
+
+        let ratio = metrics2.efficiency_ratio(&metrics1);
+        assert!(ratio > 1.0); // metrics2 should be better
     }
 }

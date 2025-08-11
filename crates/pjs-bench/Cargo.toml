@@ -23,7 +23,7 @@ bytes.workspace = true
 
 # Comparison with other libraries
 simd-json = "0.13"
-sonic-rs = "0.3"
+sonic-rs.workspace = true
 
 # Data generation
 fake = { version = "2.9", features = ["derive"] }
@@ -32,19 +32,14 @@ rand = "0.8"
 [dev-dependencies]
 proptest.workspace = true
 
-# Benchmarks will be implemented later
-# [[bench]]
-# name = "throughput"
-# harness = false
-# 
-# [[bench]]
-# name = "latency" 
-# harness = false
-# 
-# [[bench]]
-# name = "memory_usage"
-# harness = false
-# 
-# [[bench]]
-# name = "comparison"
-# harness = false
+[[bench]]
+name = "simple_throughput"
+harness = false
+
+[[bench]]
+name = "massive_data"
+harness = false
+
+[[bench]]
+name = "time_to_first_data"
+harness = false
