@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PJS Performance Comparison</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .controls {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-weight: 600;
+            color: #555;
+        }
+        select, button {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #5a67d8;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .results {
+            display: none;
+        }
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        .method-card {
+            border: 2px solid #eee;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .traditional {
+            border-color: #f56565;
+        }
+        .pjs {
+            border-color: #48bb78;
+        }
+        .method-header {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        .traditional .method-header {
+            color: #f56565;
+        }
+        .pjs .method-header {
+            color: #48bb78;
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .metric {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .metric-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+        }
+        .metric-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        .improvements {
+            background: #e6fffa;
+            border: 2px solid #38b2ac;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .improvements h3 {
+            color: #38b2ac;
+            margin-bottom: 15px;
+        }
+        .improvement-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+        .improvement-item {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .improvement-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #38b2ac;
+        }
+        .compression-stats {
+            background: #f7fafc;
+            border: 2px solid #a0aec0;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 PJS Performance Comparison</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="dataset-type">Dataset Type:</label>
+                <select id="dataset-type">
+                    <option value="ecommerce">E-commerce</option>
+                    <option value="social">Social Media</option>
+                    <option value="analytics">Analytics</option>
+                    <option value="realtime">Real-time</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="size">Dataset Size:</label>
+                <select id="size">
+                    <option value="tiny">Tiny (< 1KB)</option>
+                    <option value="small">Small (< 10KB)</option>
+                    <option value="medium" selected>Medium (< 100KB)</option>
+                    <option value="large">Large (< 1MB)</option>
+                    <option value="huge">Huge (> 1MB)</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="network">Network Type:</label>
+                <select id="network">
+                    <option value="fast" selected>Fast (Fiber/5G)</option>
+                    <option value="slow">Slow (DSL)</option>
+                    <option value="mobile">Mobile (4G)</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="compression">Compression:</label>
+                <select id="compression">
+                    <option value="true" selected>Enabled</option>
+                    <option value="false">Disabled</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label>&nbsp;</label>
+                <button onclick="runComparison()">Run Comparison</button>
+            </div>
+        </div>
+        
+        <div id="loading" class="loading" style="display: none;">
+            <div class="spinner"></div>
+            Running performance comparison...
+        </div>
+        
+        <div id="results" class="results">
+            <div class="comparison-grid">
+                <div class="method-card traditional">
+                    <div class="method-header">📊 Traditional JSON</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="metric-label">Total Time</div>
+                            <div class="metric-value" id="trad-total-time">-</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">First Data</div>
+                            <div class="metric-value" id="trad-first-data">-</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Total Bytes</div>
+                            <div class="metric-value" id="trad-bytes">-</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Chunks</div>
+                            <div class="metric-value" id="trad-chunks">-</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="method-card pjs">
+                    <div class="method-header">⚡ PJS Priority Streaming</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="metric-label">Total Time</div>
+                            <div class="metric-value" id="pjs-total-time">-</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">First Data</div>
+                            <div class="metric-value" id="pjs-first-data">-</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Total Bytes</div>
+                            <div class="metric-value" id="pjs-bytes">-</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Chunks</div>
+                            <div class="metric-value" id="pjs-chunks">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="improvements">
+                <h3>📈 Performance Improvements</h3>
+                <div class="improvement-grid">
+                    <div class="improvement-item">
+                        <div class="improvement-value" id="ttfmd-improvement">-</div>
+                        <div>Time to First Meaningful Data</div>
+                    </div>
+                    <div class="improvement-item">
+                        <div class="improvement-value" id="total-time-improvement">-</div>
+                        <div>Total Delivery Time</div>
+                    </div>
+                    <div class="improvement-item">
+                        <div class="improvement-value" id="bandwidth-savings">-</div>
+                        <div>Bandwidth Savings</div>
+                    </div>
+                    <div class="improvement-item">
+                        <div class="improvement-value" id="ux-score">-</div>
+                        <div>Overall UX Score</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="compression-stats" class="compression-stats" style="display: none;">
+                <h3>🗜️ Compression Statistics</h3>
+                <div class="improvement-grid">
+                    <div class="improvement-item">
+                        <div class="improvement-value" id="compression-ratio">-</div>
+                        <div>Compression Ratio</div>
+                    </div>
+                    <div class="improvement-item">
+                        <div class="improvement-value" id="bytes-saved">-</div>
+                        <div>Bytes Saved</div>
+                    </div>
+                    <div class="improvement-item">
+                        <div class="improvement-value" id="percentage-saved">-</div>
+                        <div>Percentage Saved</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function runComparison() {
+            const datasetType = document.getElementById('dataset-type').value;
+            const size = document.getElementById('size').value;
+            const network = document.getElementById('network').value;
+            const compression = document.getElementById('compression').value === 'true';
+            
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            
+            try {
+                const response = await fetch(`/compare?dataset_type=${datasetType}&size=${size}&network_type=${network}&enable_compression=${compression}`);
+                const data = await response.json();
+                
+                displayResults(data);
+                
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('results').style.display = 'block';
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error running comparison: ' + error.message);
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+        
+        function displayResults(data) {
+            // Traditional metrics
+            document.getElementById('trad-total-time').textContent = `${data.traditional.total_time_ms}ms`;
+            document.getElementById('trad-first-data').textContent = `${data.traditional.first_meaningful_data_ms}ms`;
+            document.getElementById('trad-bytes').textContent = formatBytes(data.traditional.total_bytes);
+            document.getElementById('trad-chunks').textContent = data.traditional.chunks_sent;
+            
+            // PJS metrics
+            document.getElementById('pjs-total-time').textContent = `${data.pjs_priority.total_time_ms}ms`;
+            document.getElementById('pjs-first-data').textContent = `${data.pjs_priority.first_meaningful_data_ms}ms`;
+            document.getElementById('pjs-bytes').textContent = formatBytes(data.pjs_priority.total_bytes);
+            document.getElementById('pjs-chunks').textContent = data.pjs_priority.chunks_sent;
+            
+            // Improvements
+            document.getElementById('ttfmd-improvement').textContent = `${data.improvement.time_to_first_meaningful_data_improvement.toFixed(1)}%`;
+            document.getElementById('total-time-improvement').textContent = `${data.improvement.total_delivery_time_improvement.toFixed(1)}%`;
+            document.getElementById('bandwidth-savings').textContent = `${data.improvement.bandwidth_savings_percent.toFixed(1)}%`;
+            document.getElementById('ux-score').textContent = `${data.improvement.overall_user_experience_score.toFixed(1)}%`;
+            
+            // Compression stats
+            if (data.compression_stats) {
+                document.getElementById('compression-stats').style.display = 'block';
+                document.getElementById('compression-ratio').textContent = `${data.compression_stats.compression_ratio.toFixed(2)}`;
+                document.getElementById('bytes-saved').textContent = formatBytes(data.compression_stats.bytes_saved);
+                document.getElementById('percentage-saved').textContent = `${data.compression_stats.percentage_saved.toFixed(1)}%`;
+            } else {
+                document.getElementById('compression-stats').style.display = 'none';
+            }
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+        
+        // Run initial comparison
+        window.onload = () => {
+            setTimeout(runComparison, 500);
+        };
+    </script>
+</body>
+</html>

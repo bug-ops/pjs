@@ -7,22 +7,24 @@ use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, Json, Response},
-    routing::{get, post},
+    routing::get,
     Router,
 };
 use clap::Parser;
 use pjs_demo::{
     data::{generate_dataset, generate_metadata, DatasetSize, DatasetType},
-    utils::{format_bytes, format_duration, simulate_network_latency, NetworkType, PerfTimer},
+    utils::{simulate_network_latency, NetworkType, PerfTimer},
 };
-use pjson_rs::{
-    PriorityStreamer,
-};
+// TODO: Re-enable streaming imports when infrastructure is stable
+// use pjson_rs::{
+//     StreamProcessor, StreamConfig, StreamFrame, Priority,
+//     StreamingCompressor, SchemaCompressor, CompressionStrategy,
+// };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(name = "interactive-demo-server")]
@@ -307,7 +309,7 @@ fn generate_skeleton(dataset_type: DatasetType) -> Value {
 
 /// Serve interactive web demo page
 async fn demo_page() -> Html<&'static str> {
-    Html(include_str!("../static/interactive_demo.html"))
+    Html(include_str!("../static/performance_comparison.html"))
 }
 
 /// API information endpoint
