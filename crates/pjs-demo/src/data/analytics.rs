@@ -47,14 +47,15 @@ pub fn generate_realtime_data(size: DatasetSize) -> Value {
     let mut rng = rand::thread_rng();
     
     let metrics: Vec<Value> = (0..metric_count).map(|i| {
+        // Fixed: Extract complex expressions outside json! macro
+        let statuses = ["healthy", "warning", "critical"];
+        let status = statuses[rng.gen_range(0..3)];
+        
         json!({
             "id": format!("metric_{}", i),
             "name": format!("System Metric {}", i + 1),
             "value": rng.gen_range(0.0..100.0),
-            "status": {
-                let statuses = ["healthy", "warning", "critical"];
-                statuses[rng.gen_range(0..3)]
-            },
+            "status": status,
             "timestamp": chrono::Utc::now().to_rfc3339()
         })
     }).collect();

@@ -25,6 +25,10 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
     
     // Generate users
     let users: Vec<Value> = USERNAMES.iter().enumerate().map(|(i, &username)| {
+        // Fixed: Extract complex expressions outside json! macro
+        let locations = ["San Francisco", "New York", "London", "Berlin", "Tokyo"];
+        let user_location = locations[i % 5];
+        
         json!({
             "id": i + 1,
             "username": username,
@@ -36,12 +40,8 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
             "verified": i < 3, // First 3 users are verified
             "followers": rng.gen_range(100..100000),
             "following": rng.gen_range(50..5000),
-            "bio": format!("Software engineer passionate about technology and innovation. Building the future one line of code at a time."),
-            // TODO: Fix JSON macro syntax - cannot use array indexing directly in json! macro
-            "location": {
-                let locations = ["San Francisco", "New York", "London", "Berlin", "Tokyo"];
-                locations[i % 5]
-            },
+            "bio": "Software engineer passionate about technology and innovation. Building the future one line of code at a time.",
+            "location": user_location,
             "joined_date": format!("202{}-{:02}-{:02}", 
                 rng.gen_range(0..4), 
                 rng.gen_range(1..13), 
@@ -156,14 +156,15 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
 
     // Generate trending topics
     let trending: Vec<Value> = HASHTAGS.iter().take(10).enumerate().map(|(i, &hashtag)| {
+        // Fixed: Extract complex expressions outside json! macro
+        let categories = ["Technology", "Programming", "Innovation", "Design", "Startup"];
+        let category = categories[i % 5];
+        
         json!({
             "hashtag": hashtag,
             "posts_count": rng.gen_range(100..10000),
             "trend_score": 100 - i * 10,
-            "category": {
-                let categories = ["Technology", "Programming", "Innovation", "Design", "Startup"];
-                categories[i % 5]
-            }
+            "category": category
         })
     }).collect();
 

@@ -399,3 +399,98 @@ mod tests {
         assert_eq!(event, deserialized);
     }
 }
+
+/// Event identifier for tracking and correlation
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EventId(uuid::Uuid);
+
+impl EventId {
+    /// Generate new unique event ID
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+    
+    /// Create from existing UUID
+    pub fn from_uuid(uuid: uuid::Uuid) -> Self {
+        Self(uuid)
+    }
+    
+    /// Get inner UUID
+    pub fn inner(&self) -> uuid::Uuid {
+        self.0
+    }
+}
+
+impl std::fmt::Display for EventId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Default for EventId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Trait for event subscribers that handle domain events
+#[async_trait::async_trait]
+pub trait EventSubscriber {
+    /// Handle a domain event
+    async fn handle(&self, event: &DomainEvent) -> crate::domain::DomainResult<()>;
+}
+
+/// Extension methods for DomainEvent
+impl DomainEvent {
+    /// Get event ID for tracking (generated if not exists)
+    pub fn event_id(&self) -> EventId {
+        // For now, generate deterministic ID based on event content
+        // In future versions, this should be stored with the event
+        let content = format!("{:?}", self);
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hash = DefaultHasher::new();
+        content.hash(&mut hash);
+        let hash_val = hash.finish();
+        let uuid = uuid::Uuid::from_bytes([
+            (hash_val >> 56) as u8, (hash_val >> 48) as u8,
+            (hash_val >> 40) as u8, (hash_val >> 32) as u8,
+            (hash_val >> 24) as u8, (hash_val >> 16) as u8,
+            (hash_val >> 8) as u8, hash_val as u8,
+            0, 0, 0, 0, 0, 0, 0, 0
+        ]);
+        EventId::from_uuid(uuid)
+    }
+    
+    /// Get event timestamp
+    pub fn occurred_at(&self) -> DateTime<Utc> {
+        match self {
+            DomainEvent::SessionActivated { timestamp, .. }
+            | DomainEvent::SessionClosed { timestamp, .. }
+            | DomainEvent::SessionExpired { timestamp, .. }
+            | DomainEvent::StreamCreated { timestamp, .. }
+            | DomainEvent::StreamStarted { timestamp, .. }
+            | DomainEvent::StreamCompleted { timestamp, .. }
+            | DomainEvent::StreamFailed { timestamp, .. }
+            | DomainEvent::StreamCancelled { timestamp, .. }
+            | DomainEvent::SkeletonGenerated { timestamp, .. }
+            | DomainEvent::PatchFramesGenerated { timestamp, .. }
+            | DomainEvent::FramesBatched { timestamp, .. }
+            | DomainEvent::PriorityThresholdAdjusted { timestamp, .. }
+            | DomainEvent::StreamConfigUpdated { timestamp, .. }
+            | DomainEvent::PerformanceMetricsRecorded { timestamp, .. } => *timestamp,
+        }
+    }
+    
+    
+    /// Get event payload as JSON
+    pub fn payload(&self) -> &serde_json::Value {
+        // TODO: Fix architecture violation - domain events should not depend on serde_json::Value
+        // For now, return empty object - this should be implemented with domain value objects
+        use std::sync::LazyLock;
+        static EMPTY: LazyLock<serde_json::Value> = LazyLock::new(|| {
+            serde_json::Value::Object(serde_json::Map::new())
+        });
+        &*EMPTY
+    }
+}
