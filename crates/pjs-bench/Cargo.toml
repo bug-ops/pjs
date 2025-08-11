@@ -48,3 +48,11 @@ harness = false
 [[bench]]
 name = "network_simulation"
 harness = false
+
+[[bench]]
+name = "memory_benchmarks"
+harness = false
+
+[[bench]]
+name = "streaming_benchmarks"
+harness = false
