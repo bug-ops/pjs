@@ -57,6 +57,15 @@ pub enum DomainError {
     #[error("Domain logic error: {0}")]
     Logic(String),
 
+    #[error("I/O error: {0}")]
+    Io(String),
+
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+
+    #[error("Concurrency conflict: {0}")]
+    ConcurrencyConflict(String),
+
     #[error("Compression error: {0}")]
     CompressionError(String),
 

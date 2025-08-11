@@ -2,17 +2,14 @@
 
 use crate::domain::{
     DomainError, DomainResult,
-    value_objects::{JsonPath, Priority, StreamId},
+    value_objects::{JsonData, JsonPath, Priority, StreamId},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-// TODO: Fix architecture violation - domain layer should not depend on serde_json::Value
-// Create domain-specific value objects instead
-use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 /// Frame types for different stages of streaming
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FrameType {
     /// Initial skeleton with structure
     Skeleton,
@@ -25,20 +22,36 @@ pub enum FrameType {
 }
 
 /// Individual frame in a priority stream
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frame {
     stream_id: StreamId,
     frame_type: FrameType,
     priority: Priority,
     sequence: u64,
     timestamp: DateTime<Utc>,
-    payload: JsonValue,
+    payload: JsonData,
     metadata: HashMap<String, String>,
+}
+
+impl std::hash::Hash for Frame {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.stream_id.hash(state);
+        self.frame_type.hash(state);
+        self.priority.hash(state);
+        self.sequence.hash(state);
+        self.timestamp.hash(state);
+        self.payload.hash(state);
+        
+        // For HashMap, sort keys for consistent hashing
+        let mut pairs: Vec<_> = self.metadata.iter().collect();
+        pairs.sort_by_key(|(k, _)| *k);
+        pairs.hash(state);
+    }
 }
 
 impl Frame {
     /// Create new skeleton frame
-    pub fn skeleton(stream_id: StreamId, sequence: u64, skeleton_data: JsonValue) -> Self {
+    pub fn skeleton(stream_id: StreamId, sequence: u64, skeleton_data: JsonData) -> Self {
         Self {
             stream_id,
             frame_type: FrameType::Skeleton,
@@ -63,8 +76,25 @@ impl Frame {
             ));
         }
 
-        let payload = serde_json::to_value(&PatchPayload { patches })
-            .map_err(|e| DomainError::Logic(format!("JSON serialization error: {e}")))?;
+        // Create JsonData payload directly instead of using serde_json
+        let mut payload_obj = HashMap::new();
+        let patches_array: Vec<JsonData> = patches.into_iter().map(|patch| {
+            let mut patch_obj = HashMap::new();
+            patch_obj.insert("path".to_string(), JsonData::String(patch.path.to_string()));
+            patch_obj.insert("operation".to_string(), JsonData::String(
+                match patch.operation {
+                    PatchOperation::Set => "set",
+                    PatchOperation::Append => "append", 
+                    PatchOperation::Merge => "merge",
+                    PatchOperation::Delete => "delete",
+                }.to_string()
+            ));
+            patch_obj.insert("value".to_string(), patch.value);
+            JsonData::Object(patch_obj)
+        }).collect();
+        
+        payload_obj.insert("patches".to_string(), JsonData::Array(patches_array));
+        let payload = JsonData::Object(payload_obj);
 
         Ok(Self {
             stream_id,
@@ -80,9 +110,11 @@ impl Frame {
     /// Create completion frame
     pub fn complete(stream_id: StreamId, sequence: u64, checksum: Option<String>) -> Self {
         let payload = if let Some(checksum) = checksum {
-            serde_json::json!({"checksum": checksum})
+            let mut obj = HashMap::new();
+            obj.insert("checksum".to_string(), JsonData::String(checksum));
+            JsonData::Object(obj)
         } else {
-            serde_json::json!({})
+            JsonData::Object(HashMap::new())
         };
 
         Self {
@@ -104,9 +136,14 @@ impl Frame {
         error_code: Option<String>,
     ) -> Self {
         let payload = if let Some(code) = error_code {
-            serde_json::json!({"message": error_message, "code": code})
+            let mut obj = HashMap::new();
+            obj.insert("message".to_string(), JsonData::String(error_message));
+            obj.insert("code".to_string(), JsonData::String(code));
+            JsonData::Object(obj)
         } else {
-            serde_json::json!({"message": error_message})
+            let mut obj = HashMap::new();
+            obj.insert("message".to_string(), JsonData::String(error_message));
+            JsonData::Object(obj)
         };
 
         Self {
@@ -146,7 +183,7 @@ impl Frame {
     }
 
     /// Get payload
-    pub fn payload(&self) -> &JsonValue {
+    pub fn payload(&self) -> &JsonData {
         &self.payload
     }
 
@@ -244,7 +281,7 @@ impl Frame {
 pub struct FramePatch {
     pub path: JsonPath,
     pub operation: PatchOperation,
-    pub value: JsonValue,
+    pub value: JsonData,
 }
 
 /// Patch operation types
@@ -265,7 +302,7 @@ struct PatchPayload {
 
 impl FramePatch {
     /// Create set operation patch
-    pub fn set(path: JsonPath, value: JsonValue) -> Self {
+    pub fn set(path: JsonPath, value: JsonData) -> Self {
         Self {
             path,
             operation: PatchOperation::Set,
@@ -274,7 +311,7 @@ impl FramePatch {
     }
 
     /// Create append operation patch
-    pub fn append(path: JsonPath, value: JsonValue) -> Self {
+    pub fn append(path: JsonPath, value: JsonData) -> Self {
         Self {
             path,
             operation: PatchOperation::Append,
@@ -283,7 +320,7 @@ impl FramePatch {
     }
 
     /// Create merge operation patch
-    pub fn merge(path: JsonPath, value: JsonValue) -> Self {
+    pub fn merge(path: JsonPath, value: JsonData) -> Self {
         Self {
             path,
             operation: PatchOperation::Merge,
@@ -296,7 +333,7 @@ impl FramePatch {
         Self {
             path,
             operation: PatchOperation::Delete,
-            value: JsonValue::Null,
+            value: JsonData::Null,
         }
     }
 }
@@ -327,7 +364,7 @@ mod tests {
         let stream_id = StreamId::new();
         // TODO: Handle unwrap() - add proper error handling for JsonPath construction in tests
         let path = JsonPath::new("$.users[0].name").unwrap();
-        let patch = FramePatch::set(path, JsonValue::String("John".to_string()));
+        let patch = FramePatch::set(path, JsonData::String("John".to_string()));
 
         // TODO: Handle unwrap() - add proper error handling for Frame construction in tests
         let frame = Frame::patch(stream_id, 2, Priority::HIGH, vec![patch]).unwrap();

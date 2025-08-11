@@ -4,6 +4,7 @@
 //! concrete infrastructure implementations, following the Ports & Adapters pattern.
 
 pub mod event_publisher;
+pub mod json_adapter;
 pub mod memory_repository;
 pub mod metrics_collector;
 pub mod repository_adapters;
@@ -11,6 +12,7 @@ pub mod tokio_writer;
 
 // Re-export commonly used adapters
 pub use event_publisher::*;
+pub use json_adapter::*;
 pub use memory_repository::*;
 pub use metrics_collector::*;
 pub use repository_adapters::*;

@@ -5,20 +5,19 @@
 
 use crate::domain::{
     DomainResult, DomainError,
-    entities::{Frame, Stream},
+    entities::{Frame, Stream, stream::StreamState},
     aggregates::StreamSession,
     value_objects::{SessionId, StreamId, Priority, JsonPath},
-    events::DomainEvent,
     ports::repositories::*,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{Arc, RwLock},
     time::SystemTime,
 };
-use tokio::sync::{Mutex, RwLock as TokioRwLock};
+use tokio::sync::RwLock as TokioRwLock;
 
 /// In-memory implementation of StreamSessionRepository
 /// 
@@ -220,7 +219,7 @@ impl InMemoryStreamSessionRepository {
         // Apply active streams filter
         if let Some(has_active) = criteria.has_active_streams {
             let has_active_streams = session.streams().values()
-                .any(|stream| matches!(stream.status(), Some(StreamStatus::Active)));
+                .any(|stream| matches!(stream.state(), StreamState::Streaming));
             if has_active != has_active_streams {
                 return false;
             }
@@ -260,7 +259,7 @@ impl InMemorySessionTransaction {
 
 #[async_trait]
 impl SessionTransaction for InMemorySessionTransaction {
-    async fn save_session(&self, session: StreamSession) -> DomainResult<()> {
+    async fn save_session(&self, _session: StreamSession) -> DomainResult<()> {
         // In a real implementation, we'd store pending changes
         // For simplicity, we'll implement this as immediate operations
         Ok(())
@@ -328,7 +327,7 @@ impl InMemoryFrameRepository {
         }
     }
 
-    fn build_frame_index(&self, stream_id: StreamId, frame: &Frame, frame_index: usize) {
+    fn build_frame_index(&self, stream_id: StreamId, _frame: &Frame, frame_index: usize) {
         // This is a simplified indexing - in reality would parse JSON paths from frame content
         if let Ok(mut indices) = self.frame_indices.write() {
             // Example: index by frame type or priority
@@ -344,16 +343,15 @@ impl InMemoryFrameRepository {
 #[async_trait]
 impl FrameRepository for InMemoryFrameRepository {
     async fn store_frame(&self, frame: Frame) -> DomainResult<()> {
-        if let Some(stream_id) = frame.stream_id() {
-            if let Ok(mut frames) = self.frames.write() {
-                let stream_frames = frames.entry(stream_id).or_insert_with(Vec::new);
-                let frame_index = stream_frames.len();
-                
-                // Build indices for fast querying
-                self.build_frame_index(stream_id, &frame, frame_index);
-                
-                stream_frames.push(frame);
-            }
+        let stream_id = frame.stream_id();
+        if let Ok(mut frames) = self.frames.write() {
+            let stream_frames = frames.entry(stream_id).or_insert_with(Vec::new);
+            let frame_index = stream_frames.len();
+            
+            // Build indices for fast querying
+            self.build_frame_index(stream_id, &frame, frame_index);
+            
+            stream_frames.push(frame);
         }
         Ok(())
     }
@@ -377,11 +375,8 @@ impl FrameRepository for InMemoryFrameRepository {
                 let filtered_frames: Vec<Frame> = stream_frames.iter()
                     .filter(|frame| {
                         if let Some(min_priority) = priority_filter {
-                            if let Some(frame_priority) = frame.priority() {
-                                Priority::new(frame_priority).unwrap_or(Priority::LOW) >= min_priority
-                            } else {
-                                false
-                            }
+                            let frame_priority = frame.priority().unwrap_or(Priority::LOW.value());
+                            Priority::new(frame_priority).unwrap_or(Priority::LOW) >= min_priority
                         } else {
                             true
                         }
@@ -402,7 +397,7 @@ impl FrameRepository for InMemoryFrameRepository {
                 
                 // Calculate priority range
                 let priorities: Vec<u8> = paginated_frames.iter()
-                    .filter_map(|f| f.priority())
+                    .map(|f| f.priority().unwrap_or(Priority::LOW.value()))
                     .collect();
                 
                 let highest_priority = priorities.iter().max().map(|&p| Priority::new(p).unwrap_or(Priority::LOW));
@@ -463,7 +458,7 @@ impl FrameRepository for InMemoryFrameRepository {
             for stream_frames in frames.values_mut() {
                 let original_len = stream_frames.len();
                 stream_frames.retain(|frame| {
-                    frame.timestamp().map_or(true, |ts| ts > older_than)
+                    frame.timestamp() > older_than
                 });
                 cleaned_count += (original_len - stream_frames.len()) as u64;
             }
@@ -478,8 +473,8 @@ impl FrameRepository for InMemoryFrameRepository {
                 let mut distribution = PriorityDistribution::default();
                 
                 for frame in stream_frames {
-                    if let Some(priority) = frame.priority() {
-                        match priority {
+                    let priority = frame.priority().unwrap_or(Priority::LOW.value());
+                    match priority {
                             90..=255 => distribution.critical_count += 1,
                             70..=89 => distribution.high_count += 1,
                             40..=69 => distribution.medium_count += 1,
@@ -487,7 +482,6 @@ impl FrameRepository for InMemoryFrameRepository {
                             1..=19 => distribution.background_count += 1,
                             _ => distribution.background_count += 1,
                         }
-                    }
                 }
                 
                 Ok(distribution)

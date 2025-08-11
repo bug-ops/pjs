@@ -3,13 +3,10 @@
 use crate::domain::{
     DomainError, DomainResult,
     entities::Frame,
-    value_objects::{Priority, SessionId, StreamId},
+    value_objects::{JsonData, Priority, SessionId, StreamId},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-// TODO: Fix architecture violation - domain layer should not depend on serde_json::Value
-// Create domain-specific value objects instead
-use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 /// Stream state in its lifecycle
@@ -77,13 +74,13 @@ pub struct Stream {
     updated_at: DateTime<Utc>,
     completed_at: Option<DateTime<Utc>>,
     next_sequence: u64,
-    source_data: Option<JsonValue>,
+    source_data: Option<JsonData>,
     metadata: HashMap<String, String>,
 }
 
 impl Stream {
     /// Create new stream
-    pub fn new(session_id: SessionId, source_data: JsonValue, config: StreamConfig) -> Self {
+    pub fn new(session_id: SessionId, source_data: JsonData, config: StreamConfig) -> Self {
         let now = Utc::now();
 
         Self {
@@ -142,7 +139,7 @@ impl Stream {
     }
 
     /// Get source data
-    pub fn source_data(&self) -> Option<&JsonValue> {
+    pub fn source_data(&self) -> Option<&JsonData> {
         self.source_data.as_ref()
     }
 
@@ -376,35 +373,36 @@ impl Stream {
     }
 
     /// Private helper: Generate skeleton from source data
-    fn generate_skeleton(&self, data: &JsonValue) -> DomainResult<JsonValue> {
+    fn generate_skeleton(&self, data: &JsonData) -> DomainResult<JsonData> {
         // Simplified skeleton generation - create empty structure
         match data {
-            JsonValue::Object(obj) => {
-                let mut skeleton = serde_json::Map::new();
+            JsonData::Object(obj) => {
+                let mut skeleton = HashMap::new();
                 for (key, value) in obj.iter() {
                     skeleton.insert(
                         key.clone(),
                         match value {
-                            JsonValue::Array(_) => JsonValue::Array(Vec::new()),
-                            JsonValue::Object(_) => self.generate_skeleton(value)?,
-                            JsonValue::Number(_) => JsonValue::Number(0.into()),
-                            JsonValue::String(_) => JsonValue::Null,
-                            JsonValue::Bool(_) => JsonValue::Bool(false),
-                            JsonValue::Null => JsonValue::Null,
+                            JsonData::Array(_) => JsonData::Array(Vec::new()),
+                            JsonData::Object(_) => self.generate_skeleton(value)?,
+                            JsonData::Integer(_) => JsonData::Integer(0),
+                            JsonData::Float(_) => JsonData::Float(0.0),
+                            JsonData::String(_) => JsonData::Null,
+                            JsonData::Bool(_) => JsonData::Bool(false),
+                            JsonData::Null => JsonData::Null,
                         },
                     );
                 }
-                Ok(JsonValue::Object(skeleton))
+                Ok(JsonData::Object(skeleton))
             }
-            JsonValue::Array(_) => Ok(JsonValue::Array(Vec::new())),
-            _ => Ok(JsonValue::Null),
+            JsonData::Array(_) => Ok(JsonData::Array(Vec::new())),
+            _ => Ok(JsonData::Null),
         }
     }
 
     /// Private helper: Extract patches with priority filtering
     fn extract_patches(
         &self,
-        _data: &JsonValue,
+        _data: &JsonData,
         _threshold: Priority,
     ) -> DomainResult<Vec<crate::domain::entities::frame::FramePatch>> {
         // Simplified patch extraction - would need more sophisticated logic

@@ -30,8 +30,7 @@ pub mod compression;
 pub mod domain;
 pub mod error;
 pub mod frame;
-// TODO: Fix infrastructure compilation issues before release
-// pub mod infrastructure;
+pub mod infrastructure;
 pub mod parser;
 pub mod semantic;
 pub mod stream;
