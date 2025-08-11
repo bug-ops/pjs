@@ -342,12 +342,11 @@ impl PerformanceAnalysisService {
 
         for frame in frames {
             // Analyze priority distribution
-            if let Some(priority) = frame.priority() {
-                *priority_distribution.entry(priority).or_insert(0) += 1;
-            }
+            let priority = frame.priority();
+            *priority_distribution.entry(priority.value()).or_insert(0) += 1;
 
             // Analyze size distribution
-            let frame_size = frame.data().len();
+            let frame_size = frame.estimated_size();
             size_distribution.push(frame_size);
             total_bytes += frame_size as u64;
         }
@@ -371,7 +370,7 @@ impl PerformanceAnalysisService {
             total_bytes,
             average_frame_size: average_size,
             median_frame_size: median_size as f64,
-            priority_distribution,
+            priority_distribution: priority_distribution.clone(),
             efficiency_score: self.calculate_distribution_efficiency(&priority_distribution, frames.len()),
         })
     }
@@ -513,7 +512,7 @@ impl PerformanceAnalysisService {
         errors: &ErrorAnalysis,
         resources: &ResourceAnalysis,
     ) -> f64 {
-        let mut score = 100.0;
+        let mut score: f64 = 100.0;
 
         // Penalize high latency
         if latency.average > 1000.0 {
@@ -702,7 +701,7 @@ impl PerformanceAnalysisService {
     }
 
     fn calculate_recommendation_confidence(&self, context: &crate::application::services::prioritization_service::PerformanceContext) -> f64 {
-        let mut confidence = 1.0;
+        let mut confidence: f64 = 1.0;
 
         if context.error_rate > 0.1 {
             confidence *= 0.6; // High error rate reduces confidence

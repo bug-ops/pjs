@@ -312,7 +312,7 @@ impl PrioritizationService {
     }
 
     fn calculate_confidence_score(&self, context: &PerformanceContext) -> f64 {
-        let mut confidence = 1.0;
+        let mut confidence: f64 = 1.0;
 
         // Reduce confidence based on volatility indicators
         if context.error_rate > 0.1 {

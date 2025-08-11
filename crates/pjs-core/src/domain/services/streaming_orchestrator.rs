@@ -34,7 +34,8 @@ pub struct StreamingOrchestrator {
     session_repository: Arc<dyn StreamSessionRepository>,
     frame_repository: Arc<dyn FrameRepository>,
     event_repository: Arc<dyn EventRepository>,
-    cache: Arc<dyn CacheRepository>,
+    // TODO: Fix CacheRepository to be dyn-compatible or use different approach
+    // cache: Arc<dyn CacheRepository>,
     
     // I/O ports
     writer_factory: Arc<dyn WriterFactory>,
@@ -47,7 +48,8 @@ impl StreamingOrchestrator {
         session_repository: Arc<dyn StreamSessionRepository>,
         frame_repository: Arc<dyn FrameRepository>,
         event_repository: Arc<dyn EventRepository>,
-        cache: Arc<dyn CacheRepository>,
+        // TODO: Fix CacheRepository to be dyn-compatible or use different approach
+    // cache: Arc<dyn CacheRepository>,
         writer_factory: Arc<dyn WriterFactory>,
         event_publisher: Arc<dyn EventPublisher>,
         metrics: Arc<dyn MetricsCollector>,
@@ -56,7 +58,7 @@ impl StreamingOrchestrator {
             session_repository,
             frame_repository,
             event_repository,
-            cache,
+            // cache,
             writer_factory,
             event_publisher,
             metrics,
@@ -79,18 +81,19 @@ impl StreamingOrchestrator {
             .find_session(session_id)
             .await?
             .ok_or_else(|| {
-                crate::domain::DomainError::NotFound(format!("Session {} not found", session_id))
+                crate::domain::DomainError::SessionNotFound(format!("Session {} not found", session_id))
             })?;
 
+        // TODO: Re-enable cache when CacheRepository is fixed
         // 2. Check cache for recent frames
-        let cache_key = format!("frames:{}:{}", stream_id, priority_threshold.value());
-        let cached_frames: Option<Vec<Frame>> = self.cache
-            .get(&cache_key)
-            .await?;
+        // let cache_key = format!("frames:{}:{}", stream_id, priority_threshold.value());
+        // let cached_frames: Option<Vec<Frame>> = self.cache
+        //     .get(&cache_key)
+        //     .await?;
 
-        let frames = if let Some(cached) = cached_frames {
-            cached
-        } else {
+        // let frames = if let Some(cached) = cached_frames {
+        //     cached
+        // } else {
             // 3. Fetch frames from repository with priority filtering
             let frame_query = self.frame_repository
                 .get_frames_by_stream(
@@ -105,15 +108,16 @@ impl StreamingOrchestrator {
                 )
                 .await?;
 
+            // TODO: Re-enable cache when CacheRepository is fixed
             // 4. Cache the result for next time
-            self.cache.set(
-                &cache_key,
-                &frame_query.frames,
-                Some(Duration::from_secs(300)), // 5 minute TTL
-            ).await?;
+            // self.cache.set(
+            //     &cache_key,
+            //     &frame_query.frames,
+            //     Some(Duration::from_secs(300)), // 5 minute TTL
+            // ).await?;
 
-            frame_query.frames
-        };
+        let frames = frame_query.frames;
+        // };
 
         // 5. Create appropriate writer for the connection
         let writer_config = WriterConfig {
@@ -135,9 +139,8 @@ impl StreamingOrchestrator {
         // Group frames by priority for optimal streaming
         let mut priority_groups: HashMap<u8, Vec<Frame>> = HashMap::new();
         for frame in frames {
-            if let Some(priority) = frame.priority() {
-                priority_groups.entry(priority).or_insert_with(Vec::new).push(frame);
-            }
+            let priority = frame.priority();
+            priority_groups.entry(priority.value()).or_insert_with(Vec::new).push(frame);
         }
 
         // Stream in priority order (highest first)
@@ -151,7 +154,7 @@ impl StreamingOrchestrator {
                 
                 stats.frames_sent += frames.len() as u64;
                 stats.bytes_sent += frames.iter()
-                    .map(|f| f.data().len() as u64)
+                    .map(|f| f.estimated_size() as u64)
                     .sum::<u64>();
                 
                 // Record metrics for this priority level
@@ -166,8 +169,9 @@ impl StreamingOrchestrator {
             }
         }
 
+        // TODO: Add flush method to FrameWriter trait or use close()
         // 7. Finalize streaming
-        frame_writer.flush().await?;
+        // frame_writer.flush().await?;
         let streaming_duration = start_time.elapsed();
         
         stats.duration = streaming_duration;
@@ -235,11 +239,12 @@ impl StreamingOrchestrator {
 
     /// Get streaming performance metrics
     pub async fn get_performance_metrics(&self) -> DomainResult<StreamingPerformanceMetrics> {
-        let cache_stats = self.cache.get_stats().await?;
+        // TODO: Re-enable cache when CacheRepository is fixed
+        // let cache_stats = self.cache.get_stats().await?;
         
         Ok(StreamingPerformanceMetrics {
-            cache_hit_rate: cache_stats.hit_rate,
-            cache_memory_usage: cache_stats.memory_usage_bytes,
+            cache_hit_rate: 0.0, // cache_stats.hit_rate,
+            cache_memory_usage: 0, // cache_stats.memory_usage_bytes,
             total_sessions: 0, // Would get from session repository
             active_streams: 0,  // Would get from stream repository
         })
@@ -272,48 +277,49 @@ pub struct StreamingPerformanceMetrics {
 pub struct StreamingOrchestratorFactory;
 
 impl StreamingOrchestratorFactory {
-    pub fn create_with_in_memory_adapters() -> StreamingOrchestrator {
-        use crate::infrastructure::adapters::{
-            InMemoryStreamSessionRepository,
-            InMemoryFrameRepository, 
-            InMemoryCache,
-            TokioWriterFactory,
-        };
+    // TODO: Re-enable when infrastructure module is fixed
+    // pub fn create_with_in_memory_adapters() -> StreamingOrchestrator {
+        // use crate::infrastructure::adapters::{
+        //     InMemoryStreamSessionRepository,
+        //     InMemoryFrameRepository, 
+        //     InMemoryCache,
+        //     TokioWriterFactory,
+        // };
         
         // Create all dependencies using concrete adapters
-        let session_repository = Arc::new(InMemoryStreamSessionRepository::new()) 
-            as Arc<dyn StreamSessionRepository>;
+        // let session_repository = Arc::new(InMemoryStreamSessionRepository::new()) 
+        //     as Arc<dyn StreamSessionRepository>;
         
-        let frame_repository = Arc::new(InMemoryFrameRepository::new())
-            as Arc<dyn FrameRepository>;
+        // let frame_repository = Arc::new(InMemoryFrameRepository::new())
+        //     as Arc<dyn FrameRepository>;
             
-        let cache = Arc::new(InMemoryCache::new())
-            as Arc<dyn CacheRepository>;
+        // let cache = Arc::new(InMemoryCache::new())
+        //     as Arc<dyn CacheRepository>;
             
-        let writer_factory = Arc::new(TokioWriterFactory)
-            as Arc<dyn WriterFactory>;
+        // let writer_factory = Arc::new(TokioWriterFactory)
+        //     as Arc<dyn WriterFactory>;
             
         // For event repository, we'd create a concrete implementation
         // For now, use a placeholder
-        let event_repository = Arc::new(MockEventRepository)
-            as Arc<dyn EventRepository>;
+        // let event_repository = Arc::new(MockEventRepository)
+        //     as Arc<dyn EventRepository>;
             
-        let event_publisher = Arc::new(MockEventPublisher)
-            as Arc<dyn EventPublisher>;
+        // let event_publisher = Arc::new(MockEventPublisher)
+        //     as Arc<dyn EventPublisher>;
             
-        let metrics = Arc::new(MockMetricsCollector)
-            as Arc<dyn MetricsCollector>;
+        // let metrics = Arc::new(MockMetricsCollector)
+        //     as Arc<dyn MetricsCollector>;
 
-        StreamingOrchestrator::new(
-            session_repository,
-            frame_repository,
-            event_repository,
-            cache,
-            writer_factory,
-            event_publisher,
-            metrics,
-        )
-    }
+        // StreamingOrchestrator::new(
+        //     session_repository,
+        //     frame_repository,
+        //     event_repository,
+        //     cache,
+        //     writer_factory,
+        //     event_publisher,
+        //     metrics,
+        // )
+    // }
 }
 
 // Mock implementations for demonstration

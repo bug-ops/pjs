@@ -29,6 +29,9 @@ ahash.workspace = true
 # SIMD JSON parsing
 sonic-rs = "0.5"
 
+# Utilities
+maplit = "1.0"
+
 # Async
 async-trait.workspace = true
 async-std = { workspace = true, features = ["attributes"] }

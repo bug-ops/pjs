@@ -337,20 +337,19 @@ impl OptimizationService {
         let mut efficiency_sum = 0.0;
 
         for frame in frames {
-            if let Some(priority) = frame.priority() {
-                // Score based on how close the frame priority is to target
-                let priority_diff = (priority as i32 - target_priority as i32).abs() as f64;
-                let priority_score = 1.0 - (priority_diff / 255.0).min(1.0);
-                
-                // Score based on frame size efficiency
-                let size_score = if frame.data().len() <= strategy.max_frame_size {
-                    1.0
-                } else {
-                    strategy.max_frame_size as f64 / frame.data().len() as f64
-                };
+            let priority = frame.priority();
+            // Score based on how close the frame priority is to target
+            let priority_diff = (priority.value() as i32 - target_priority as i32).abs() as f64;
+            let priority_score = 1.0 - (priority_diff / 255.0).min(1.0);
+            
+            // Score based on frame size efficiency
+            let size_score = if frame.estimated_size() <= strategy.max_frame_size {
+                1.0
+            } else {
+                strategy.max_frame_size as f64 / frame.estimated_size() as f64
+            };
 
-                efficiency_sum += (priority_score + size_score) / 2.0;
-            }
+            efficiency_sum += (priority_score + size_score) / 2.0;
         }
 
         (efficiency_sum / frames.len() as f64).min(1.0)
@@ -435,16 +434,15 @@ impl OptimizationService {
             let mut frame_quality = 1.0;
 
             // Penalize frames that are too large
-            if frame.data().len() > strategy.max_frame_size {
+            if frame.estimated_size() > strategy.max_frame_size {
                 frame_quality *= 0.8;
             }
 
             // Reward frames with appropriate priority
-            if let Some(priority) = frame.priority() {
-                if priority >= strategy.priority_threshold.value() {
+            let priority = frame.priority();
+                if priority.value() >= strategy.priority_threshold.value() {
                     frame_quality *= 1.1;
                 }
-            }
 
             quality_sum += frame_quality;
         }
