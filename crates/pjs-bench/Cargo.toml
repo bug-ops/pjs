@@ -43,6 +43,10 @@ simd-sse42 = []
 name = "simple_throughput"
 harness = false
 
+[[bench]]
+name = "zero_copy_bench"
+harness = false
+
 # TODO: Fix benchmark compilation errors in future release
 # [[bench]]
 # name = "massive_data"
