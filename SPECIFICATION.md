@@ -46,7 +46,7 @@ PJS solves these problems by:
 
 ### 2.1 Transmission Flow
 
-```mermaid
+```plain
 Client                          Server
   |                                |
   |--------- Request ------------->|
@@ -617,9 +617,7 @@ ws.onmessage = (event) => {
 
 Reference implementations are available at:
 
-- Rust: [github.com/example/pjs-rust](https://github.com)
-- JavaScript: [github.com/example/pjs-js](https://github.com)
-- Go: [github.com/example/pjs-go](https://github.com)
+- Rust: [github.com/bug-ops/pjs](github.com/bug-ops/pjs)
 
 ## 13. Appendices
 

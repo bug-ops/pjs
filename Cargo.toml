@@ -11,6 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
+name = "pjson-rs"
 homepage = "https://github.com/bug-ops/pjs"
 documentation = "https://docs.rs/pjson-rs"
 version = "0.1.0"

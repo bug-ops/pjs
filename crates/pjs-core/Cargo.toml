@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming"
 keywords.workspace = true
 categories.workspace = true
+readme.workspace = true
 exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
 
@@ -75,9 +76,17 @@ schema-validation = []
 compression = []
 
 # Infrastructure features
-http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:hyper", "dep:futures"]
+http-server = [
+    "dep:axum",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:hyper",
+    "dep:futures",
+]
 websocket-client = ["dep:tokio-tungstenite", "dep:url"]
-websocket-server = ["http-server"] # WebSocket server requires HTTP server features
+websocket-server = [
+    "http-server",
+] # WebSocket server requires HTTP server features
 http-client = ["dep:reqwest"]
 prometheus-metrics = ["dep:prometheus"]
 
