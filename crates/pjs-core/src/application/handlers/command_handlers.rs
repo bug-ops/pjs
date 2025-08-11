@@ -422,20 +422,24 @@ mod tests {
             &self,
             session_id: SessionId,
         ) -> crate::domain::DomainResult<Option<StreamSession>> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             Ok(self.sessions.lock().unwrap().get(&session_id).cloned())
         }
 
         async fn save_session(&self, session: StreamSession) -> crate::domain::DomainResult<()> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             self.sessions.lock().unwrap().insert(session.id(), session);
             Ok(())
         }
 
         async fn remove_session(&self, session_id: SessionId) -> crate::domain::DomainResult<()> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             self.sessions.lock().unwrap().remove(&session_id);
             Ok(())
         }
 
         async fn find_active_sessions(&self) -> crate::domain::DomainResult<Vec<StreamSession>> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             Ok(self.sessions.lock().unwrap().values().cloned().collect())
         }
     }
@@ -472,9 +476,11 @@ mod tests {
         let result = handler.handle(command).await;
         assert!(result.is_ok());
 
+        // TODO: Handle unwrap() - add proper error handling in tests
         let session_id = result.unwrap();
 
         // Verify session was saved
+        // TODO: Handle unwrap() - add proper error handling in tests
         let saved_session = repository.find_session(session_id).await.unwrap();
         assert!(saved_session.is_some());
     }

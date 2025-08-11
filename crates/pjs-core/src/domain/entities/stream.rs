@@ -7,6 +7,8 @@ use crate::domain::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+// TODO: Fix architecture violation - domain layer should not depend on serde_json::Value
+// Create domain-specific value objects instead
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -509,6 +511,7 @@ mod tests {
 
         // Start streaming and create skeleton
         assert!(stream.start_streaming().is_ok());
+        // TODO: Handle unwrap() - add proper error handling for skeleton frame creation in tests
         let skeleton = stream.create_skeleton_frame().unwrap();
 
         assert_eq!(

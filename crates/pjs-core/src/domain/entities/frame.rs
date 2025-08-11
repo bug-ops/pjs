@@ -6,6 +6,8 @@ use crate::domain::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+// TODO: Fix architecture violation - domain layer should not depend on serde_json::Value
+// Create domain-specific value objects instead
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -323,9 +325,11 @@ mod tests {
     #[test]
     fn test_patch_frame_creation() {
         let stream_id = StreamId::new();
+        // TODO: Handle unwrap() - add proper error handling for JsonPath construction in tests
         let path = JsonPath::new("$.users[0].name").unwrap();
         let patch = FramePatch::set(path, JsonValue::String("John".to_string()));
 
+        // TODO: Handle unwrap() - add proper error handling for Frame construction in tests
         let frame = Frame::patch(stream_id, 2, Priority::HIGH, vec![patch]).unwrap();
 
         assert_eq!(frame.frame_type(), &FrameType::Patch);

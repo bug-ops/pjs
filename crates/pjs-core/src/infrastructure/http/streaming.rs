@@ -389,6 +389,7 @@ mod tests {
     #[test]
     fn test_stream_format_detection() {
         let mut headers = HeaderMap::new();
+        // TODO: Handle unwrap() - add proper error handling for header value parsing in tests
         headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
         
         let format = StreamFormat::from_accept_header(&headers);

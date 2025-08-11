@@ -131,6 +131,7 @@ async fn performance_comparison(Query(params): Query<DemoRequest>) -> Json<Compa
     let latency = params.latency.unwrap_or(100);
     
     let data = generate_demo_data(size);
+    // TODO: Handle unwrap() - add proper error handling for JSON serialization
     let data_size = serde_json::to_string(&data).unwrap().len();
     
     // Simulate traditional approach

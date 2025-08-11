@@ -310,6 +310,7 @@ mod tests {
             let mut session = StreamSession::new(command.config);
             let _ = session.activate();
             let session_id = session.id();
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             self.sessions.lock().unwrap().insert(session_id, session);
             Ok(session_id)
         }
@@ -318,6 +319,7 @@ mod tests {
     #[async_trait]
     impl CommandHandler<CreateStreamCommand, StreamId> for MockCommandHandler {
         async fn handle(&self, command: CreateStreamCommand) -> ApplicationResult<StreamId> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(session) = sessions.get_mut(&command.session_id) {
                 let stream_id = session
@@ -333,6 +335,7 @@ mod tests {
     #[async_trait]
     impl CommandHandler<StartStreamCommand, ()> for MockCommandHandler {
         async fn handle(&self, command: StartStreamCommand) -> ApplicationResult<()> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(session) = sessions.get_mut(&command.session_id) {
                 session
@@ -348,6 +351,7 @@ mod tests {
     #[async_trait]
     impl CommandHandler<CompleteStreamCommand, ()> for MockCommandHandler {
         async fn handle(&self, command: CompleteStreamCommand) -> ApplicationResult<()> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(session) = sessions.get_mut(&command.session_id) {
                 session
@@ -363,6 +367,7 @@ mod tests {
     #[async_trait]
     impl CommandHandler<CloseSessionCommand, ()> for MockCommandHandler {
         async fn handle(&self, command: CloseSessionCommand) -> ApplicationResult<()> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(session) = sessions.get_mut(&command.session_id) {
                 session.close().map_err(ApplicationError::Domain)?;
@@ -387,6 +392,7 @@ mod tests {
 
         #[allow(dead_code)]
         fn sync_sessions(&self, sessions: &HashMap<SessionId, StreamSession>) {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             *self.sessions.lock().unwrap() = sessions.clone();
         }
     }
@@ -394,6 +400,7 @@ mod tests {
     #[async_trait]
     impl QueryHandler<GetSessionQuery, SessionResponse> for MockQueryHandler {
         async fn handle(&self, query: GetSessionQuery) -> ApplicationResult<SessionResponse> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             let sessions = self.sessions.lock().unwrap();
             if let Some(session) = sessions.get(&query.session_id) {
                 Ok(SessionResponse {
@@ -408,6 +415,7 @@ mod tests {
     #[async_trait]
     impl QueryHandler<GetSessionHealthQuery, HealthResponse> for MockQueryHandler {
         async fn handle(&self, query: GetSessionHealthQuery) -> ApplicationResult<HealthResponse> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             let sessions = self.sessions.lock().unwrap();
             if let Some(session) = sessions.get(&query.session_id) {
                 Ok(HealthResponse {
@@ -425,6 +433,7 @@ mod tests {
             &self,
             query: GetActiveSessionsQuery,
         ) -> ApplicationResult<SessionsResponse> {
+            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
             let sessions: Vec<_> = self.sessions.lock().unwrap().values().cloned().collect();
             let limited_sessions = if let Some(limit) = query.limit {
                 sessions.into_iter().take(limit).collect()

@@ -370,12 +370,15 @@ mod tests {
             },
         ];
 
+        // TODO: Handle unwrap() - add proper error handling for event store operations in tests
         store.append_events(events.clone()).unwrap();
         assert_eq!(store.event_count(), 2);
 
+        // TODO: Handle unwrap() - add proper error handling for session events retrieval in tests
         let session_events = store.get_events_for_session(session_id).unwrap();
         assert_eq!(session_events.len(), 2);
 
+        // TODO: Handle unwrap() - add proper error handling for stream events retrieval in tests
         let stream_events = store.get_events_for_stream(stream_id).unwrap();
         assert_eq!(stream_events.len(), 1);
     }
@@ -388,7 +391,9 @@ mod tests {
             timestamp: Utc::now(),
         };
 
+        // TODO: Handle unwrap() - add proper error handling for event serialization in tests
         let serialized = serde_json::to_string(&event).unwrap();
+        // TODO: Handle unwrap() - add proper error handling for event deserialization in tests
         let deserialized: DomainEvent = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(event, deserialized);

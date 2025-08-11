@@ -8,6 +8,8 @@ use crate::domain::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+// TODO: Fix architecture violation - domain layer should not depend on serde_json::Value
+// Create domain-specific value objects instead
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, VecDeque};
 
