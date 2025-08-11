@@ -2,6 +2,16 @@
 //!
 //! Defines contracts that infrastructure adapters must implement.
 //! These are the domain's view of what it needs from the outside world.
+//!
+//! This module implements the Ports and Adapters pattern (Hexagonal Architecture)
+//! by defining abstract interfaces that decouple the domain from infrastructure concerns.
+
+pub mod repositories;
+pub mod writer;
+
+// Re-export commonly used types
+pub use repositories::*;
+pub use writer::*;
 
 use crate::domain::aggregates::StreamSession;
 use crate::domain::entities::{Frame, Stream};
