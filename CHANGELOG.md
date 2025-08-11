@@ -9,9 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Connection lifecycle management (in progress)
-- Performance benchmarks against standard JSON (planned)
-- WebSocket real-time streaming (planned)
+- **Connection Lifecycle Management**: Complete implementation with connection tracking
+  - `ConnectionManager` service for managing connection state and lifecycle
+  - Automatic timeout detection and cleanup with configurable duration
+  - Connection metrics tracking (bytes sent/received, active/inactive counts)
+  - Maximum connections limit enforcement
+  - Background timeout monitoring task
+  - REST endpoint for connection statistics (`GET /pjs/connections`)
+  - Integration with Axum HTTP adapter for automatic connection registration
+  - Thread-safe connection state management with async-std RwLock
+  - Comprehensive tests for lifecycle, max connections, and timeout scenarios
+
+### Planned
+
+- Performance benchmarks against standard JSON
+- WebSocket real-time streaming
 
 ## [0.2.0-alpha.1] - 2025-01-10 (HTTP Server Integration)
 
