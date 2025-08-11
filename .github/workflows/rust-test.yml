@@ -2,9 +2,9 @@ name: Rust Test & Coverage
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -41,4 +41,4 @@ jobs:
 
     strategy:
       matrix:
-        crate: [vkteams-bot, vkteams-bot-cli, vkteams-bot-mcp]
+        crate: [pjs-core, pjs-bench]

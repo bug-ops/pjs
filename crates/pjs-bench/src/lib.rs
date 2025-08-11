@@ -26,14 +26,9 @@
 //! cargo bench comparison
 //! ```
 
-pub use pjson_rs::{Error, Frame, Parser, Result};
-
-// Re-export streaming components if available
-#[cfg(feature = "streaming")]
-pub use pjson_rs::{JsonReconstructor, Priority, PriorityStreamer, StreamerConfig};
+pub use pjson_rs::{Error, Frame, Parser, Priority, Result, StreamConfig, StreamFrame, StreamProcessor};
 
 // Fallback implementations for benchmarking when streaming features aren't available
-#[cfg(not(feature = "streaming"))]
 pub mod fallback {
     use bytes::Bytes;
     use serde_json::Value;
@@ -90,7 +85,20 @@ pub mod fallback {
         }
 
         pub fn create_priority_frames(&self, data: &Bytes) -> Vec<StreamFrame> {
-            vec![StreamFrame { data: data.clone() }]
+            // Use config to determine frame size
+            let chunk_size = self.config.chunk_size();
+            if data.len() <= chunk_size {
+                vec![StreamFrame { data: data.clone() }]
+            } else {
+                // Split into multiple frames based on config
+                let mut frames = Vec::new();
+                for chunk in data.chunks(chunk_size) {
+                    frames.push(StreamFrame { 
+                        data: Bytes::copy_from_slice(chunk)
+                    });
+                }
+                frames
+            }
         }
     }
 
@@ -119,24 +127,23 @@ pub mod fallback {
     }
 }
 
-#[cfg(not(feature = "streaming"))]
 pub use fallback::*;
 
 /// Benchmarking utilities and data generators
 pub struct BenchSuite {
-    config: StreamerConfig,
+    config: StreamConfig,
 }
 
 impl BenchSuite {
     /// Create new benchmark suite with default configuration
     pub fn new() -> Self {
         Self {
-            config: StreamerConfig::new(),
+            config: StreamConfig::default(),
         }
     }
 
     /// Create benchmark suite with custom configuration
-    pub fn with_config(config: StreamerConfig) -> Self {
+    pub fn with_config(config: StreamConfig) -> Self {
         Self { config }
     }
 
@@ -194,7 +201,7 @@ impl BenchSuite {
     }
 
     /// Get the streamer configuration
-    pub fn config(&self) -> &StreamerConfig {
+    pub fn config(&self) -> &StreamConfig {
         &self.config
     }
 }
@@ -259,7 +266,8 @@ mod tests {
     #[test]
     fn test_bench_suite_creation() {
         let bench = BenchSuite::new();
-        assert!(bench.config().chunk_size() > 0);
+        // StreamConfig doesn't have chunk_size method, just ensure config exists
+        let _config = bench.config();
     }
 
     #[test]

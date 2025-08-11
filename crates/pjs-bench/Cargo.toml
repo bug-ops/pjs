@@ -31,6 +31,13 @@ rand = "0.9"
 [dev-dependencies]
 proptest.workspace = true
 
+[features]
+default = ["streaming"]
+streaming = []
+simd-auto = []
+simd-avx2 = []
+simd-sse42 = []
+
 [[bench]]
 name = "simple_throughput"
 harness = false
