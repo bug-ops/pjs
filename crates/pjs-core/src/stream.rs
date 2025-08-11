@@ -9,10 +9,10 @@ pub mod priority;
 pub mod reconstruction;
 
 pub use priority::{
-    PriorityStreamer, StreamerConfig, Priority,
-    JsonPath, JsonPatch, PatchOperation, StreamFrame, StreamingPlan, PathSegment
+    JsonPatch, JsonPath, PatchOperation, PathSegment, Priority, PriorityStreamer, StreamFrame,
+    StreamerConfig, StreamingPlan,
 };
-pub use reconstruction::{JsonReconstructor, ReconstructionStats, ProcessResult};
+pub use reconstruction::{JsonReconstructor, ProcessResult, ReconstructionStats};
 
 /// High-level stream processor that combines parsing with priority streaming
 pub struct StreamProcessor {
@@ -26,7 +26,7 @@ impl StreamProcessor {
             streamer: PriorityStreamer::new(),
         }
     }
-    
+
     /// Create with custom streamer configuration
     pub fn with_config(config: StreamerConfig) -> Self {
         Self {
@@ -39,7 +39,7 @@ impl StreamProcessor {
         // Parse JSON using serde_json for now
         let json: serde_json::Value = serde_json::from_slice(json_data)
             .map_err(|e| crate::Error::invalid_json(0, e.to_string()))?;
-        
+
         // Create streaming plan
         self.streamer.analyze(&json)
     }
@@ -49,7 +49,7 @@ impl StreamProcessor {
         // TODO: Implement frame-to-frame processing if needed
         Ok(vec![])
     }
-    
+
     /// Get reference to internal streamer
     pub fn streamer(&self) -> &PriorityStreamer {
         &self.streamer

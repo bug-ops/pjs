@@ -1,8 +1,8 @@
 //! PJS GPU acceleration
-//! 
+//!
 //! This crate provides GPU acceleration for PJS protocol (future implementation).
 
-pub use pjson_rs::{Frame, Error, Result};
+pub use pjson_rs::{Error, Frame, Result};
 
 /// GPU accelerator (placeholder for future implementation)
 pub struct GpuAccelerator {

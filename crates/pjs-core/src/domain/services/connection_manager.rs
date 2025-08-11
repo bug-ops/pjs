@@ -1,10 +1,10 @@
+use async_std::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use async_std::sync::RwLock;
 
-use crate::domain::value_objects::{SessionId, StreamId};
 use crate::domain::DomainError;
+use crate::domain::value_objects::{SessionId, StreamId};
 
 /// Connection state tracking
 #[derive(Debug, Clone)]
@@ -46,10 +46,10 @@ impl ConnectionManager {
     /// Register a new connection
     pub async fn register_connection(&self, session_id: SessionId) -> Result<(), DomainError> {
         let mut connections = self.connections.write().await;
-        
+
         if connections.len() >= self.max_connections {
             return Err(DomainError::ValidationError(
-                "Maximum connections reached".to_string()
+                "Maximum connections reached".to_string(),
             ));
         }
 
@@ -70,15 +70,16 @@ impl ConnectionManager {
     /// Update connection activity
     pub async fn update_activity(&self, session_id: &SessionId) -> Result<(), DomainError> {
         let mut connections = self.connections.write().await;
-        
+
         match connections.get_mut(session_id) {
             Some(state) => {
                 state.last_activity = Instant::now();
                 Ok(())
             }
-            None => Err(DomainError::ValidationError(
-                format!("Connection not found: {}", session_id)
-            ))
+            None => Err(DomainError::ValidationError(format!(
+                "Connection not found: {}",
+                session_id
+            ))),
         }
     }
 
@@ -90,7 +91,7 @@ impl ConnectionManager {
         bytes_received: usize,
     ) -> Result<(), DomainError> {
         let mut connections = self.connections.write().await;
-        
+
         match connections.get_mut(session_id) {
             Some(state) => {
                 state.bytes_sent += bytes_sent;
@@ -98,9 +99,10 @@ impl ConnectionManager {
                 state.last_activity = Instant::now();
                 Ok(())
             }
-            None => Err(DomainError::ValidationError(
-                format!("Connection not found: {}", session_id)
-            ))
+            None => Err(DomainError::ValidationError(format!(
+                "Connection not found: {}",
+                session_id
+            ))),
         }
     }
 
@@ -111,43 +113,46 @@ impl ConnectionManager {
         stream_id: StreamId,
     ) -> Result<(), DomainError> {
         let mut connections = self.connections.write().await;
-        
+
         match connections.get_mut(session_id) {
             Some(state) => {
                 state.stream_id = Some(stream_id);
                 state.last_activity = Instant::now();
                 Ok(())
             }
-            None => Err(DomainError::ValidationError(
-                format!("Connection not found: {}", session_id)
-            ))
+            None => Err(DomainError::ValidationError(format!(
+                "Connection not found: {}",
+                session_id
+            ))),
         }
     }
 
     /// Close connection
     pub async fn close_connection(&self, session_id: &SessionId) -> Result<(), DomainError> {
         let mut connections = self.connections.write().await;
-        
+
         match connections.get_mut(session_id) {
             Some(state) => {
                 state.is_active = false;
                 Ok(())
             }
-            None => Err(DomainError::ValidationError(
-                format!("Connection not found: {}", session_id)
-            ))
+            None => Err(DomainError::ValidationError(format!(
+                "Connection not found: {}",
+                session_id
+            ))),
         }
     }
 
     /// Remove connection completely
     pub async fn remove_connection(&self, session_id: &SessionId) -> Result<(), DomainError> {
         let mut connections = self.connections.write().await;
-        
+
         match connections.remove(session_id) {
             Some(_) => Ok(()),
-            None => Err(DomainError::ValidationError(
-                format!("Connection not found: {}", session_id)
-            ))
+            None => Err(DomainError::ValidationError(format!(
+                "Connection not found: {}",
+                session_id
+            ))),
         }
     }
 
@@ -171,44 +176,34 @@ impl ConnectionManager {
     pub async fn check_timeouts(&self) -> Vec<SessionId> {
         let now = Instant::now();
         let connections = self.connections.read().await;
-        
+
         connections
             .values()
             .filter(|state| {
-                state.is_active && 
-                now.duration_since(state.last_activity) > self.timeout_duration
+                state.is_active && now.duration_since(state.last_activity) > self.timeout_duration
             })
             .map(|state| state.session_id.clone())
             .collect()
     }
 
-    /// Start timeout monitoring task
-    #[cfg(feature = "tokio")]
-    pub fn start_timeout_monitor(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(30));
-            
-            loop {
-                ticker.tick().await;
-                
-                let timed_out = self.check_timeouts().await;
-                for session_id in timed_out {
-                    if let Err(e) = self.close_connection(&session_id).await {
-                        tracing::warn!("Failed to close timed out connection: {}", e);
-                    }
-                }
+    /// Process timeout check iteration (to be called by infrastructure layer)
+    pub async fn process_timeouts(&self) {
+        let timed_out = self.check_timeouts().await;
+        for session_id in timed_out {
+            if let Err(e) = self.close_connection(&session_id).await {
+                tracing::warn!("Failed to close timed out connection: {}", e);
             }
-        })
+        }
     }
 
     /// Get connection statistics
     pub async fn get_statistics(&self) -> ConnectionStatistics {
         let connections = self.connections.read().await;
-        
+
         let active_count = connections.values().filter(|s| s.is_active).count();
         let total_bytes_sent: usize = connections.values().map(|s| s.bytes_sent).sum();
         let total_bytes_received: usize = connections.values().map(|s| s.bytes_received).sum();
-        
+
         ConnectionStatistics {
             total_connections: connections.len(),
             active_connections: active_count,
@@ -239,7 +234,12 @@ mod tests {
         let session_id = SessionId::new();
 
         // Register connection
-        assert!(manager.register_connection(session_id.clone()).await.is_ok());
+        assert!(
+            manager
+                .register_connection(session_id.clone())
+                .await
+                .is_ok()
+        );
 
         // Get connection state
         let state = manager.get_connection(&session_id).await;
@@ -279,7 +279,7 @@ mod tests {
 
         assert!(manager.register_connection(session1).await.is_ok());
         assert!(manager.register_connection(session2).await.is_ok());
-        
+
         // Should fail - max reached
         assert!(manager.register_connection(session3).await.is_err());
     }
@@ -289,7 +289,12 @@ mod tests {
         let manager = ConnectionManager::new(Duration::from_millis(100), 10);
         let session_id = SessionId::new();
 
-        assert!(manager.register_connection(session_id.clone()).await.is_ok());
+        assert!(
+            manager
+                .register_connection(session_id.clone())
+                .await
+                .is_ok()
+        );
 
         // Wait for timeout
         tokio::time::sleep(Duration::from_millis(150)).await;

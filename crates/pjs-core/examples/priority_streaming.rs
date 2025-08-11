@@ -6,13 +6,13 @@
 //! - Priority-based frame delivery
 //! - Incremental reconstruction
 
-use pjson_rs::{StreamProcessor, Priority, StreamFrame};
 use pjson_rs::stream::PatchOperation;
+use pjson_rs::{Priority, StreamFrame, StreamProcessor};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Priority JSON Streaming Protocol Demo\n");
-    
+
     // Create sample data representing a typical API response
     let sample_data = json!({
         "store": {
@@ -60,59 +60,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ]
         }
     });
-    
-    println!("📊 Original JSON size: {} bytes", 
-             serde_json::to_string(&sample_data)?.len());
-    
+
+    println!(
+        "📊 Original JSON size: {} bytes",
+        serde_json::to_string(&sample_data)?.len()
+    );
+
     // Create stream processor
     let processor = StreamProcessor::new();
-    
+
     // Convert to bytes for processing
     let json_bytes = serde_json::to_vec(&sample_data)?;
-    
+
     // Process JSON into streaming plan
     println!("🔄 Analyzing JSON structure and creating streaming plan...");
     let mut plan = processor.process_json(&json_bytes)?;
-    
-    println!("📋 Streaming plan created with {} frames\n", plan.remaining_frames());
-    
+
+    println!(
+        "📋 Streaming plan created with {} frames\n",
+        plan.remaining_frames()
+    );
+
     // Simulate streaming each frame
     let mut frame_count = 1;
     while let Some(frame) = plan.next_frame() {
         match frame {
-            StreamFrame::Skeleton { data, priority, complete } => {
-                println!("📦 Frame {}: SKELETON (Priority: {:?})", frame_count, priority);
+            StreamFrame::Skeleton {
+                data,
+                priority,
+                complete,
+            } => {
+                println!(
+                    "📦 Frame {}: SKELETON (Priority: {:?})",
+                    frame_count, priority
+                );
                 println!("   Complete: {}", complete);
-                println!("   Structure: {}", 
-                         serde_json::to_string_pretty(&data)?.lines().take(10).collect::<Vec<_>>().join("\n"));
+                println!(
+                    "   Structure: {}",
+                    serde_json::to_string_pretty(&data)?
+                        .lines()
+                        .take(10)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
                 if serde_json::to_string(&data)?.lines().count() > 10 {
                     println!("   ... (truncated)");
                 }
                 println!();
-            },
+            }
             StreamFrame::Patch { patches, priority } => {
                 println!("🔧 Frame {}: PATCH (Priority: {:?})", frame_count, priority);
                 println!("   {} patch operations:", patches.len());
-                
+
                 for (i, patch) in patches.iter().take(3).enumerate() {
                     let op_desc = match &patch.operation {
                         PatchOperation::Set { .. } => "SET".to_string(),
-                        PatchOperation::Append { values } => 
-                            format!("APPEND {} items", values.len()),
+                        PatchOperation::Append { values } => {
+                            format!("APPEND {} items", values.len())
+                        }
                         PatchOperation::Replace { .. } => "REPLACE".to_string(),
                         PatchOperation::Remove => "REMOVE".to_string(),
                     };
-                    println!("     {}. Path: {} -> Operation: {}", 
-                             i + 1, 
-                             patch.path.to_json_pointer(),
-                             op_desc);
+                    println!(
+                        "     {}. Path: {} -> Operation: {}",
+                        i + 1,
+                        patch.path.to_json_pointer(),
+                        op_desc
+                    );
                 }
-                
+
                 if patches.len() > 3 {
                     println!("     ... and {} more patches", patches.len() - 3);
                 }
                 println!();
-            },
+            }
             StreamFrame::Complete { checksum } => {
                 println!("✅ Frame {}: COMPLETE", frame_count);
                 if let Some(checksum) = checksum {
@@ -121,41 +142,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!();
             }
         }
-        
+
         frame_count += 1;
-        
+
         // Simulate network delay between frames
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    
+
     println!("🎉 Streaming completed!");
     println!("\n📈 Performance Benefits:");
     println!("   • Critical data (ID, name, status) delivered in first frames");
-    println!("   • User sees essential information immediately");  
+    println!("   • User sees essential information immediately");
     println!("   • Large arrays (reviews, analytics) streamed progressively");
     println!("   • Total frames transmitted: {}", frame_count - 1);
     println!("   • Client can start rendering immediately after skeleton");
-    
+
     // Demonstrate priority ordering
     println!("\n🎯 Priority Analysis:");
     demonstrate_priority_calculation();
-    
+
     Ok(())
 }
 
 fn demonstrate_priority_calculation() {
     let examples = vec![
         ("id", Priority::CRITICAL),
-        ("name", Priority::HIGH), 
+        ("name", Priority::HIGH),
         ("title", Priority::HIGH),
         ("description", Priority::MEDIUM),
         ("reviews", Priority::BACKGROUND),
         ("analytics", Priority::LOW),
     ];
-    
+
     for (field, expected_priority) in examples {
         println!("   • '{}' field -> {:?} priority", field, expected_priority);
     }
-    
+
     println!("\n💡 This ensures users see the most important data first!");
 }

@@ -1,13 +1,12 @@
 //! Commands - Write operations that change system state
 
-use std::collections::HashMap;
+use crate::domain::{
+    aggregates::stream_session::SessionConfig,
+    entities::stream::StreamConfig,
+    value_objects::{Priority, SessionId, StreamId},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use crate::domain::{
-    value_objects::{SessionId, StreamId, Priority},
-    entities::stream::StreamConfig,
-    aggregates::stream_session::SessionConfig,
-};
 
 /// Create new streaming session
 #[derive(Debug, Clone, Serialize, Deserialize)]

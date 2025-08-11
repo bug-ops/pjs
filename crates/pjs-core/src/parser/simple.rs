@@ -3,10 +3,10 @@
 //! This parser uses serde_json as the foundation and focuses on PJS's
 //! unique features: semantic analysis, chunking, and streaming.
 
-use crate::{Error, Result, Frame};
-use crate::semantic::{SemanticType, SemanticMeta};
-use serde_json::{self, Value, Map};
+use crate::semantic::{SemanticMeta, SemanticType};
+use crate::{Error, Frame, Result};
 use bytes::Bytes;
+use serde_json::{self, Map, Value};
 use smallvec::SmallVec;
 
 /// Simple parser based on serde_json
@@ -141,7 +141,8 @@ impl SimpleParser {
         if obj.contains_key("type") && obj.contains_key("coordinates") {
             return SemanticType::Geospatial {
                 coordinate_system: "WGS84".to_string(),
-                geometry_type: obj.get("type")
+                geometry_type: obj
+                    .get("type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Point")
                     .to_string(),
@@ -156,8 +157,11 @@ impl SimpleParser {
                 "time"
             };
 
-            let value_fields: SmallVec<[String; 4]> = obj.keys()
-                .filter(|k| *k != timestamp_field && self.looks_like_numeric_value(obj.get(*k).unwrap()))
+            let value_fields: SmallVec<[String; 4]> = obj
+                .keys()
+                .filter(|k| {
+                    *k != timestamp_field && self.looks_like_numeric_value(obj.get(*k).unwrap())
+                })
                 .map(|k| k.clone())
                 .collect();
 
@@ -172,12 +176,14 @@ impl SimpleParser {
 
         // Matrix/image data detection
         if obj.contains_key("data") && obj.contains_key("shape") {
-            if let (Some(Value::Array(_)), Some(Value::Array(shape))) = 
-                (obj.get("data"), obj.get("shape")) {
-                let dimensions: SmallVec<[usize; 4]> = shape.iter()
+            if let (Some(Value::Array(_)), Some(Value::Array(shape))) =
+                (obj.get("data"), obj.get("shape"))
+            {
+                let dimensions: SmallVec<[usize; 4]> = shape
+                    .iter()
                     .filter_map(|v| v.as_u64().map(|n| n as usize))
                     .collect();
-                
+
                 if !dimensions.is_empty() {
                     return SemanticType::Matrix {
                         dimensions,
@@ -197,13 +203,14 @@ impl SimpleParser {
 
     /// Check if array looks like time series data
     fn is_time_series_array(&self, arr: &[Value]) -> bool {
-        arr.len() >= 2 && arr.iter().all(|v| {
-            if let Value::Object(obj) = v {
-                obj.contains_key("timestamp") || obj.contains_key("time")
-            } else {
-                false
-            }
-        })
+        arr.len() >= 2
+            && arr.iter().all(|v| {
+                if let Value::Object(obj) = v {
+                    obj.contains_key("timestamp") || obj.contains_key("time")
+                } else {
+                    false
+                }
+            })
     }
 
     /// Check if array looks like tabular data (array of similar objects)
@@ -249,9 +256,12 @@ impl SimpleParser {
     }
 
     /// Extract table columns from first object
-    fn extract_table_columns(&self, first_obj: &Value) -> SmallVec<[crate::semantic::ColumnMeta; 16]> {
+    fn extract_table_columns(
+        &self,
+        first_obj: &Value,
+    ) -> SmallVec<[crate::semantic::ColumnMeta; 16]> {
         let mut columns = SmallVec::new();
-        
+
         if let Value::Object(obj) = first_obj {
             for (key, value) in obj {
                 let column_type = self.detect_column_type(value);
@@ -262,7 +272,7 @@ impl SimpleParser {
                 });
             }
         }
-        
+
         columns
     }
 
@@ -280,9 +290,9 @@ impl SimpleParser {
             }
             Value::String(_) => crate::semantic::ColumnType::String,
             Value::Bool(_) => crate::semantic::ColumnType::Boolean,
-            Value::Array(_) => crate::semantic::ColumnType::Array(
-                Box::new(crate::semantic::ColumnType::Json)
-            ),
+            Value::Array(_) => {
+                crate::semantic::ColumnType::Array(Box::new(crate::semantic::ColumnType::Json))
+            }
             _ => crate::semantic::ColumnType::Json,
         }
     }
@@ -333,10 +343,10 @@ mod tests {
     fn test_basic_json_parsing() {
         let parser = SimpleParser::new();
         let json = br#"{"hello": "world", "count": 42}"#;
-        
+
         let result = parser.parse(json);
         assert!(result.is_ok());
-        
+
         let frame = result.unwrap();
         assert!(frame.semantics.is_some());
     }
@@ -345,10 +355,13 @@ mod tests {
     fn test_numeric_array_detection() {
         let parser = SimpleParser::new();
         let json = b"[1, 2, 3, 4, 5]";
-        
+
         let result = parser.parse(json).unwrap();
         if let Some(semantics) = result.semantics {
-            assert!(matches!(semantics.semantic_type, SemanticType::NumericArray { .. }));
+            assert!(matches!(
+                semantics.semantic_type,
+                SemanticType::NumericArray { .. }
+            ));
         }
     }
 
@@ -359,10 +372,13 @@ mod tests {
             {"timestamp": "2023-01-01T00:00:00Z", "value": 1.5},
             {"timestamp": "2023-01-01T00:01:00Z", "value": 2.3}
         ]"#;
-        
+
         let result = parser.parse(json).unwrap();
         if let Some(semantics) = result.semantics {
-            assert!(matches!(semantics.semantic_type, SemanticType::TimeSeries { .. }));
+            assert!(matches!(
+                semantics.semantic_type,
+                SemanticType::TimeSeries { .. }
+            ));
         }
     }
 
@@ -370,10 +386,13 @@ mod tests {
     fn test_geospatial_detection() {
         let parser = SimpleParser::new();
         let json = br#"{"type": "Point", "coordinates": [125.6, 10.1]}"#;
-        
+
         let result = parser.parse(json).unwrap();
         if let Some(semantics) = result.semantics {
-            assert!(matches!(semantics.semantic_type, SemanticType::Geospatial { .. }));
+            assert!(matches!(
+                semantics.semantic_type,
+                SemanticType::Geospatial { .. }
+            ));
         }
     }
 
@@ -385,10 +404,13 @@ mod tests {
             {"name": "Jane", "age": 25, "city": "Boston"},
             {"name": "Bob", "age": 35, "city": "Chicago"}
         ]"#;
-        
+
         let result = parser.parse(json).unwrap();
         if let Some(semantics) = result.semantics {
-            assert!(matches!(semantics.semantic_type, SemanticType::Table { .. }));
+            assert!(matches!(
+                semantics.semantic_type,
+                SemanticType::Table { .. }
+            ));
         }
     }
 
@@ -396,10 +418,10 @@ mod tests {
     fn test_large_input_rejection() {
         let mut parser = SimpleParser::new();
         parser.config.max_size_mb = 1; // 1MB limit
-        
+
         let large_json = vec![b'a'; 2 * 1024 * 1024]; // 2MB
         let result = parser.parse(&large_json);
-        
+
         assert!(result.is_err());
     }
 }

@@ -3,15 +3,15 @@
 //! This module provides both SIMD-optimized parsing and serde fallback,
 //! allowing rapid MVP development while building towards maximum performance.
 
-pub mod simple;
-pub mod simd;
 pub mod scanner;
+pub mod simd;
+pub mod simple;
 pub mod sonic;
 pub mod value;
 
-pub use simple::{SimpleParser, ParseConfig, ParseStats};
 pub use scanner::{JsonScanner, ScanResult, StringLocation};
-pub use sonic::{SonicParser, SonicConfig, LazyFrame};
+pub use simple::{ParseConfig, ParseStats, SimpleParser};
+pub use sonic::{LazyFrame, SonicConfig, SonicParser};
 pub use value::{JsonValue, LazyArray, LazyObject};
 
 use crate::{Result, SemanticMeta};
@@ -42,7 +42,11 @@ impl Parser {
     }
 
     /// Parse with explicit semantic hints
-    pub fn parse_with_semantics(&self, input: &[u8], semantics: &SemanticMeta) -> Result<crate::Frame> {
+    pub fn parse_with_semantics(
+        &self,
+        input: &[u8],
+        semantics: &SemanticMeta,
+    ) -> Result<crate::Frame> {
         self.simple.parse_with_semantics(input, semantics)
     }
 
@@ -50,7 +54,6 @@ impl Parser {
     pub fn stats(&self) -> ParseStats {
         self.simple.stats()
     }
-
 }
 
 impl Default for Parser {
@@ -86,7 +89,7 @@ mod tests {
         let input = br#"{"hello": "world"}"#;
         let result = parser.parse(input);
         assert!(result.is_ok());
-        
+
         let frame = result.unwrap();
         assert!(frame.semantics.is_some());
     }
@@ -103,14 +106,12 @@ mod tests {
     fn test_semantic_parsing() {
         let parser = Parser::new();
         let input = b"[1, 2, 3, 4]";
-        
-        let semantics = crate::SemanticMeta::new(
-            crate::semantic::SemanticType::NumericArray {
-                dtype: crate::semantic::NumericDType::I32,
-                length: Some(4),
-            }
-        );
-        
+
+        let semantics = crate::SemanticMeta::new(crate::semantic::SemanticType::NumericArray {
+            dtype: crate::semantic::NumericDType::I32,
+            length: Some(4),
+        });
+
         let result = parser.parse_with_semantics(input, &semantics);
         assert!(result.is_ok());
     }
@@ -123,7 +124,7 @@ mod tests {
             stream_large_arrays: false,
             stream_threshold: 500,
         };
-        
+
         let parser = Parser::with_config(config);
         let input = br#"{"test": "data"}"#;
         let result = parser.parse(input);

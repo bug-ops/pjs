@@ -1,7 +1,7 @@
 //! Lazy JSON value types for zero-copy parsing
 
+use crate::parser::scanner::{Range, ScanResult};
 use crate::{Error, Result};
-use crate::parser::scanner::{ScanResult, Range};
 use smallvec::SmallVec;
 
 /// Zero-copy JSON value representation
@@ -66,9 +66,7 @@ impl<'a> JsonValue<'a> {
     /// Get value as f64 if it's a number
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            JsonValue::Number(bytes) => {
-                std::str::from_utf8(bytes).ok()?.parse().ok()
-            }
+            JsonValue::Number(bytes) => std::str::from_utf8(bytes).ok()?.parse().ok(),
             _ => None,
         }
     }
@@ -76,9 +74,7 @@ impl<'a> JsonValue<'a> {
     /// Get value as i64 if it's an integer number
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            JsonValue::Number(bytes) => {
-                std::str::from_utf8(bytes).ok()?.parse().ok()
-            }
+            JsonValue::Number(bytes) => std::str::from_utf8(bytes).ok()?.parse().ok(),
             _ => None,
         }
     }
@@ -131,7 +127,7 @@ impl<'a> LazyArray<'a> {
     pub fn from_scan(raw: &'a [u8], scan_result: ScanResult) -> Self {
         // Extract array element boundaries from scan result
         let boundaries = Self::extract_element_boundaries(raw, &scan_result);
-        
+
         Self {
             raw,
             boundaries,
@@ -182,19 +178,21 @@ impl<'a> LazyArray<'a> {
     /// Check if this appears to be a numeric array for SIMD optimization
     pub fn is_numeric(&self) -> bool {
         // Heuristic: check first few elements
-        self.boundaries.len() > 4 && 
-        self.boundaries.iter().take(3).all(|range| {
-            let slice = &self.raw[range.start..range.end];
-            self.looks_like_number(slice)
-        })
+        self.boundaries.len() > 4
+            && self.boundaries.iter().take(3).all(|range| {
+                let slice = &self.raw[range.start..range.end];
+                self.looks_like_number(slice)
+            })
     }
 
     fn looks_like_number(&self, bytes: &[u8]) -> bool {
         if bytes.is_empty() {
             return false;
         }
-        
-        bytes.iter().all(|&b| b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'+' || b == b'e' || b == b'E')
+
+        bytes.iter().all(|&b| {
+            b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'+' || b == b'e' || b == b'E'
+        })
     }
 }
 
@@ -202,7 +200,7 @@ impl<'a> LazyObject<'a> {
     /// Create new lazy object from scan result
     pub fn from_scan(raw: &'a [u8], scan_result: ScanResult) -> Self {
         let fields = Self::extract_field_boundaries(raw, &scan_result);
-        
+
         Self {
             raw,
             fields,
@@ -234,14 +232,20 @@ impl<'a> LazyObject<'a> {
 
     /// Get all field keys
     pub fn keys(&self) -> Result<Vec<&str>> {
-        self.fields.iter().map(|field| {
-            let key_bytes = &self.raw[field.key.start..field.key.end];
-            std::str::from_utf8(key_bytes).map_err(Error::from)
-        }).collect()
+        self.fields
+            .iter()
+            .map(|field| {
+                let key_bytes = &self.raw[field.key.start..field.key.end];
+                std::str::from_utf8(key_bytes).map_err(Error::from)
+            })
+            .collect()
     }
 
     /// Extract field boundaries from structural analysis
-    fn extract_field_boundaries(_raw: &[u8], _scan_result: &ScanResult) -> SmallVec<[FieldRange; 16]> {
+    fn extract_field_boundaries(
+        _raw: &[u8],
+        _scan_result: &ScanResult,
+    ) -> SmallVec<[FieldRange; 16]> {
         // This would analyze the structural characters to find object field boundaries
         // For now, return empty fields as placeholder
         SmallVec::new()
@@ -264,7 +268,7 @@ impl<'a> Iterator for LazyArrayIter<'a> {
 
         let range = self.array.boundaries[self.index];
         self.index += 1;
-        
+
         Some(&self.array.raw[range.start..range.end])
     }
 }
@@ -292,7 +296,7 @@ mod tests {
         let raw = b"[1, 2, 3]";
         let scan_result = ScanResult::new();
         let array = LazyArray::from_scan(raw, scan_result);
-        
+
         assert_eq!(array.len(), 0); // Empty boundaries in placeholder
     }
 
@@ -301,7 +305,7 @@ mod tests {
         let raw = b"[1.0, 2.5, 3.14]";
         let scan_result = ScanResult::new();
         let array = LazyArray::from_scan(raw, scan_result);
-        
+
         assert!(array.looks_like_number(b"123.45"));
         assert!(!array.looks_like_number(b"\"string\""));
     }

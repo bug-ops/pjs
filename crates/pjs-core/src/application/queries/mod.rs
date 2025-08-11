@@ -1,14 +1,13 @@
 //! Queries - Read operations that don't change system state
 
-use std::collections::HashMap;
+use crate::domain::{
+    aggregates::{StreamSession, stream_session::SessionHealth},
+    entities::{Frame, Stream},
+    events::DomainEvent,
+    value_objects::{Priority, SessionId, StreamId},
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::domain::{
-    value_objects::{SessionId, StreamId, Priority},
-    entities::{Stream, Frame},
-    aggregates::{StreamSession, stream_session::SessionHealth},
-    events::DomainEvent,
-};
 
 /// Get session information by ID
 #[derive(Debug, Clone, Serialize, Deserialize)]

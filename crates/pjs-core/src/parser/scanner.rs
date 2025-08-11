@@ -7,16 +7,21 @@ use smallvec::SmallVec;
 pub trait JsonScanner {
     /// Scan JSON input and return structural information
     fn scan(&self, input: &[u8]) -> Result<ScanResult>;
-    
+
     /// Check if this scanner supports SIMD operations
     fn supports_simd(&self) -> bool;
-    
+
     /// Parse numeric array with SIMD optimization if available
-    fn parse_numeric_array(&self, input: &[u8], dtype: NumericDType, length: Option<usize>) -> Result<crate::parser::JsonValue<'_>>;
-    
+    fn parse_numeric_array(
+        &self,
+        input: &[u8],
+        dtype: NumericDType,
+        length: Option<usize>,
+    ) -> Result<crate::parser::JsonValue<'_>>;
+
     /// Find all string boundaries in the input
     fn find_strings(&self, input: &[u8]) -> Result<Vec<StringLocation>>;
-    
+
     /// Find structural characters ({}[],:) positions
     fn find_structural_chars(&self, input: &[u8]) -> Result<Vec<usize>>;
 }
@@ -89,22 +94,27 @@ impl ScanResult {
     /// Check if this appears to be a numeric array
     pub fn is_numeric_array(&self) -> bool {
         // Heuristic: starts with '[', has many numbers, few strings
-        self.structural_chars.first().map_or(false, |&c| c as u8 == b'[') &&
-        self.number_bounds.len() > 4 &&
-        self.string_bounds.len() < 2
+        self.structural_chars
+            .first()
+            .map_or(false, |&c| c as u8 == b'[')
+            && self.number_bounds.len() > 4
+            && self.string_bounds.len() < 2
     }
 
     /// Check if this appears to be a table/object array
     pub fn is_table_like(&self) -> bool {
         // Heuristic: starts with '[', has balanced objects and strings
-        self.structural_chars.first().map_or(false, |&c| c as u8 == b'[') &&
-        self.count_object_starts() > 2 &&
-        self.string_bounds.len() > self.number_bounds.len()
+        self.structural_chars
+            .first()
+            .map_or(false, |&c| c as u8 == b'[')
+            && self.count_object_starts() > 2
+            && self.string_bounds.len() > self.number_bounds.len()
     }
 
     /// Count opening braces to estimate object count
     fn count_object_starts(&self) -> usize {
-        self.structural_chars.iter()
+        self.structural_chars
+            .iter()
             .filter(|&&pos| pos as u8 == b'{')
             .count()
     }

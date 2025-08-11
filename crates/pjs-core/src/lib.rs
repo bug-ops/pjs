@@ -1,12 +1,16 @@
 //! # PJS Core
-//! 
+//!
 //! Core types and protocols for the Priority JSON Streaming Protocol.
 //! This crate provides high-performance JSON parsing with SIMD optimizations,
 //! zero-copy operations, and semantic type hints for automatic optimization.
 
 #![cfg_attr(target_arch = "x86_64", feature(stdsimd))]
-#![warn(missing_docs, rust_2018_idioms)]
+#![warn(rust_2018_idioms)]
 #![deny(unsafe_op_in_unsafe_fn)]
+// Temporarily allow missing docs while in development
+#![allow(missing_docs)]
+// Allow dead code for fields and methods that will be used in the future
+#![allow(dead_code)]
 
 pub mod application;
 pub mod domain;
@@ -18,40 +22,58 @@ pub mod stream;
 
 // Domain layer exports
 pub use domain::{
-    DomainResult, DomainError,
-    SessionId, StreamId, JsonPath, Priority,
-    Stream, Frame as DomainFrame, StreamSession, DomainEvent,
+    DomainError, DomainEvent, DomainResult, Frame as DomainFrame, JsonPath, Priority, SessionId,
+    Stream, StreamId, StreamSession,
 };
 
-// Application layer exports  
+// Application layer exports
 pub use application::{
-    ApplicationResult, ApplicationError,
-    commands, queries,
+    ApplicationError, ApplicationResult, commands,
     handlers::{CommandHandler, QueryHandler},
+    queries,
     services::{SessionService, StreamingService},
 };
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
-pub use semantic::{SemanticType, SemanticMeta};
-pub use parser::{Parser, ParseConfig, ParseStats};
-pub use stream::{StreamProcessor, PriorityStreamer, StreamerConfig, Priority as StreamPriority, JsonPath as StreamJsonPath, StreamFrame, JsonReconstructor, ProcessResult};
+pub use parser::{ParseConfig, ParseStats, Parser};
+pub use semantic::{SemanticMeta, SemanticType};
+pub use stream::{
+    JsonPath as StreamJsonPath, JsonReconstructor, Priority as StreamPriority, PriorityStreamer,
+    ProcessResult, StreamFrame, StreamProcessor, StreamerConfig,
+};
 
 /// Re-export commonly used types
 pub mod prelude {
     pub use super::{
-        // Domain layer
-        DomainResult, DomainError,
-        SessionId, StreamId, JsonPath, Priority,
-        Stream, DomainFrame, StreamSession, DomainEvent,
+        ApplicationError,
         // Application layer
-        ApplicationResult, ApplicationError,
-        CommandHandler, QueryHandler,
-        SessionService, StreamingService,
+        ApplicationResult,
+        CommandHandler,
+        DomainError,
+        DomainEvent,
+        DomainFrame,
+        // Domain layer
+        DomainResult,
         // Core types
-        Error, Result,
-        Frame, FrameFlags, FrameHeader,
-        SemanticType, SemanticMeta,
-        StreamProcessor, PriorityStreamer,
-        JsonReconstructor, ProcessResult,
+        Error,
+        Frame,
+        FrameFlags,
+        FrameHeader,
+        JsonPath,
+        JsonReconstructor,
+        Priority,
+        PriorityStreamer,
+        ProcessResult,
+        QueryHandler,
+        Result,
+        SemanticMeta,
+        SemanticType,
+        SessionId,
+        SessionService,
+        Stream,
+        StreamId,
+        StreamProcessor,
+        StreamSession,
+        StreamingService,
     };
 }

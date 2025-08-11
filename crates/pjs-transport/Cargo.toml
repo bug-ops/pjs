@@ -41,7 +41,4 @@ tcp = []
 # quic = ["dep:quinn"]  # Will be added later
 tls = ["dep:tokio-rustls"]
 dpdk = []                   # For future DPDK integration
-
-# Linux-specific features
-[target.'cfg(target_os = "linux")'.features]
-io-uring = ["dep:io-uring"]
+io-uring = ["dep:io-uring"]  # Linux-specific feature

@@ -1,19 +1,19 @@
 //! Semantic type hints for automatic optimization
 
-use smallvec::SmallVec;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 /// Semantic type hints that enable automatic optimization
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SemanticType {
     /// Array of homogeneous numeric data (SIMD-friendly)
-    NumericArray { 
+    NumericArray {
         /// Data type of array elements
         dtype: NumericDType,
         /// Number of elements (if known)
         length: Option<usize>,
     },
-    
+
     /// Time series data with timestamp and values
     TimeSeries {
         /// Field name containing timestamps
@@ -23,7 +23,7 @@ pub enum SemanticType {
         /// Optional sampling interval hint
         interval_ms: Option<u64>,
     },
-    
+
     /// Tabular data (columnar processing friendly)
     Table {
         /// Column metadata
@@ -31,7 +31,7 @@ pub enum SemanticType {
         /// Estimated row count
         row_count: Option<usize>,
     },
-    
+
     /// Graph/tree structure
     Graph {
         /// Node type identifier
@@ -41,7 +41,7 @@ pub enum SemanticType {
         /// Estimated node count
         node_count: Option<usize>,
     },
-    
+
     /// Geospatial data
     Geospatial {
         /// Coordinate system (e.g., "WGS84", "UTM")
@@ -49,7 +49,7 @@ pub enum SemanticType {
         /// Geometry type (Point, LineString, Polygon, etc.)
         geometry_type: String,
     },
-    
+
     /// Image/matrix data
     Matrix {
         /// Matrix dimensions
@@ -57,7 +57,7 @@ pub enum SemanticType {
         /// Element data type
         dtype: NumericDType,
     },
-    
+
     /// Generic JSON (no specific optimization)
     Generic,
 }
@@ -177,10 +177,7 @@ impl SemanticType {
 
     /// Check if type is suitable for SIMD processing
     pub fn is_simd_friendly(&self) -> bool {
-        matches!(
-            self,
-            Self::NumericArray { .. } | Self::Matrix { .. }
-        )
+        matches!(self, Self::NumericArray { .. } | Self::Matrix { .. })
     }
 
     /// Check if type is suitable for columnar processing
@@ -191,10 +188,14 @@ impl SemanticType {
     /// Get estimated data size hint
     pub fn size_hint(&self) -> Option<usize> {
         match self {
-            Self::NumericArray { dtype, length: Some(len) } => {
-                Some(len * dtype.size())
-            }
-            Self::Table { row_count: Some(rows), columns } => {
+            Self::NumericArray {
+                dtype,
+                length: Some(len),
+            } => Some(len * dtype.size()),
+            Self::Table {
+                row_count: Some(rows),
+                columns,
+            } => {
                 Some(rows * columns.len() * 8) // Rough estimate
             }
             Self::Matrix { dimensions, dtype } => {
@@ -223,7 +224,10 @@ impl NumericDType {
 
     /// Check if type is signed
     pub fn is_signed(self) -> bool {
-        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::F32 | Self::F64)
+        matches!(
+            self,
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::F32 | Self::F64
+        )
     }
 }
 
@@ -270,19 +274,20 @@ impl SemanticMeta {
         if self.hints.prefer_gpu {
             return ProcessingStrategy::Gpu;
         }
-        
+
         if self.hints.prefer_simd && self.semantic_type.is_simd_friendly() {
             return ProcessingStrategy::Simd;
         }
-        
+
         // Auto-select based on semantic type
         match &self.semantic_type {
-            SemanticType::NumericArray { length: Some(len), .. } if *len > 1000 => {
-                ProcessingStrategy::Simd
-            }
-            SemanticType::Table { row_count: Some(rows), .. } if *rows > 10000 => {
-                ProcessingStrategy::Columnar
-            }
+            SemanticType::NumericArray {
+                length: Some(len), ..
+            } if *len > 1000 => ProcessingStrategy::Simd,
+            SemanticType::Table {
+                row_count: Some(rows),
+                ..
+            } if *rows > 10000 => ProcessingStrategy::Columnar,
             SemanticType::TimeSeries { .. } => ProcessingStrategy::Streaming,
             _ => ProcessingStrategy::Generic,
         }
@@ -314,7 +319,7 @@ mod tests {
             dtype: NumericDType::F64,
             length: Some(1000),
         };
-        
+
         assert!(numeric_array.is_simd_friendly());
         assert_eq!(numeric_array.numeric_dtype(), Some(NumericDType::F64));
         assert_eq!(numeric_array.size_hint(), Some(8000)); // 1000 * 8 bytes
@@ -326,7 +331,7 @@ mod tests {
             dtype: NumericDType::F32,
             length: Some(2000),
         });
-        
+
         assert_eq!(meta.processing_strategy(), ProcessingStrategy::Simd);
     }
 
@@ -337,7 +342,7 @@ mod tests {
             dtype: ColumnType::Numeric(NumericDType::F64),
             nullable: false,
         };
-        
+
         assert_eq!(column.name, "value");
         assert!(!column.nullable);
     }

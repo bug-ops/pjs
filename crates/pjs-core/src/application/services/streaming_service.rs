@@ -1,46 +1,43 @@
 //! High-level streaming orchestration service
 
-use std::sync::Arc;
 use crate::{
-    application::{
-        ApplicationResult,
-        commands::*,
-        queries::*,
-        handlers::{CommandHandler, QueryHandler},
-    },
+    application::{ApplicationResult, commands::*, handlers::CommandHandler},
     domain::{
-        value_objects::{SessionId, StreamId, Priority},
         entities::Frame,
         services::PriorityService,
+        value_objects::{Priority, SessionId, StreamId},
     },
 };
+use std::sync::Arc;
 
 /// High-level service for streaming workflows and optimizations
 #[derive(Debug)]
-pub struct StreamingService<CH> 
+pub struct StreamingService<CH>
 where
-    CH: CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()>,
+    CH: CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>,
 {
     command_handler: Arc<CH>,
+    #[allow(dead_code)]
     priority_service: Arc<PriorityService>,
 }
 
 impl<CH> StreamingService<CH>
 where
-    CH: CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Send + Sync,
+    CH: CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Send
+        + Sync,
 {
-    pub fn new(command_handler: Arc<CH>, priority_service: Arc<PriorityService>) -> Self {
+    pub fn new(command_handler: Arc<CH>) -> Self {
         Self {
             command_handler,
-            priority_service,
+            priority_service: Arc::new(PriorityService::default()),
         }
     }
-    
+
     /// Generate optimized frames for a single stream based on adaptive priority
     pub async fn generate_adaptive_frames(
         &self,
@@ -50,10 +47,10 @@ where
     ) -> ApplicationResult<AdaptiveFrameResult> {
         // Calculate adaptive priority threshold based on performance
         let priority_threshold = self.calculate_adaptive_priority(performance_context);
-        
+
         // Calculate optimal batch size based on network conditions
         let max_frames = self.calculate_optimal_batch_size(performance_context);
-        
+
         // Generate frames
         let command = GenerateFramesCommand {
             session_id,
@@ -61,9 +58,9 @@ where
             priority_threshold,
             max_frames,
         };
-        
+
         let frames = self.command_handler.handle(command).await?;
-        
+
         Ok(AdaptiveFrameResult {
             frames,
             priority_threshold_used: priority_threshold,
@@ -71,7 +68,7 @@ where
             adaptation_reason: self.get_adaptation_reason(performance_context),
         })
     }
-    
+
     /// Generate priority-optimized frames across multiple streams
     pub async fn generate_cross_stream_optimized_frames(
         &self,
@@ -80,24 +77,25 @@ where
     ) -> ApplicationResult<CrossStreamFrameResult> {
         // Calculate global priority threshold
         let priority_threshold = self.calculate_global_priority_threshold(performance_context);
-        
+
         // Calculate total frame budget
         let max_frames = self.calculate_total_frame_budget(performance_context);
-        
+
         // Generate cross-stream optimized batch
         let command = BatchGenerateFramesCommand {
             session_id,
             priority_threshold,
             max_frames,
         };
-        
+
         let frames = self.command_handler.handle(command).await?;
-        
+
         // Analyze the results
         let frame_distribution = self.analyze_frame_distribution(&frames);
-        
-        let optimization_metrics = self.calculate_optimization_metrics(&frames, performance_context);
-        
+
+        let optimization_metrics =
+            self.calculate_optimization_metrics(&frames, performance_context);
+
         Ok(CrossStreamFrameResult {
             frames,
             priority_threshold_used: priority_threshold,
@@ -106,7 +104,7 @@ where
             optimization_metrics,
         })
     }
-    
+
     /// Automatically adjust priority thresholds based on streaming performance
     pub async fn auto_adjust_priorities(
         &self,
@@ -114,7 +112,7 @@ where
         streaming_metrics: &StreamingMetrics,
     ) -> ApplicationResult<PriorityAdjustmentResult> {
         let mut adjustments = Vec::new();
-        
+
         // Analyze latency performance
         if let Some(adjustment) = self.analyze_latency_adjustment(streaming_metrics) {
             let command = AdjustPriorityThresholdCommand {
@@ -122,11 +120,11 @@ where
                 new_threshold: adjustment.new_threshold,
                 reason: adjustment.reason.clone(),
             };
-            
+
             self.command_handler.handle(command).await?;
             adjustments.push(adjustment);
         }
-        
+
         // Analyze throughput performance
         if let Some(adjustment) = self.analyze_throughput_adjustment(streaming_metrics) {
             let command = AdjustPriorityThresholdCommand {
@@ -134,11 +132,11 @@ where
                 new_threshold: adjustment.new_threshold,
                 reason: adjustment.reason.clone(),
             };
-            
+
             self.command_handler.handle(command).await?;
             adjustments.push(adjustment);
         }
-        
+
         // Analyze error rate performance
         if let Some(adjustment) = self.analyze_error_rate_adjustment(streaming_metrics) {
             let command = AdjustPriorityThresholdCommand {
@@ -146,17 +144,17 @@ where
                 new_threshold: adjustment.new_threshold,
                 reason: adjustment.reason.clone(),
             };
-            
+
             self.command_handler.handle(command).await?;
             adjustments.push(adjustment);
         }
-        
+
         Ok(PriorityAdjustmentResult {
             adjustments,
             metrics_analyzed: streaming_metrics.clone(),
         })
     }
-    
+
     /// Optimize streaming for specific use cases
     pub async fn optimize_for_use_case(
         &self,
@@ -171,7 +169,7 @@ where
                     batch_size: 5,
                     description: "Optimized for real-time dashboard updates".to_string(),
                 }
-            },
+            }
             StreamingUseCase::BulkDataTransfer => {
                 OptimizationStrategy {
                     priority_threshold: Priority::MEDIUM,
@@ -179,7 +177,7 @@ where
                     batch_size: 20,
                     description: "Optimized for bulk data transfer efficiency".to_string(),
                 }
-            },
+            }
             StreamingUseCase::MobileApp => {
                 OptimizationStrategy {
                     priority_threshold: Priority::HIGH,
@@ -187,7 +185,7 @@ where
                     batch_size: 3,
                     description: "Optimized for mobile network constraints".to_string(),
                 }
-            },
+            }
             StreamingUseCase::ProgressiveWebApp => {
                 OptimizationStrategy {
                     priority_threshold: Priority::CRITICAL,
@@ -195,55 +193,55 @@ where
                     batch_size: 8,
                     description: "Optimized for progressive web app UX".to_string(),
                 }
-            },
+            }
         };
-        
+
         // Apply optimization
         let command = BatchGenerateFramesCommand {
             session_id,
             priority_threshold: optimization_strategy.priority_threshold,
             max_frames: optimization_strategy.batch_size,
         };
-        
+
         let frames = self.command_handler.handle(command).await?;
-        
+
         Ok(UseCaseOptimizationResult {
             use_case,
             strategy_applied: optimization_strategy,
             frames_generated: frames,
         })
     }
-    
+
     /// Private: Calculate adaptive priority based on performance
     fn calculate_adaptive_priority(&self, context: &PerformanceContext) -> Priority {
         let mut priority = Priority::MEDIUM;
-        
+
         // Adjust based on latency
         if context.average_latency_ms > 1000.0 {
             priority = Priority::HIGH; // Only send high priority in high latency
         } else if context.average_latency_ms < 100.0 {
             priority = Priority::LOW; // Can afford to send more data
         }
-        
+
         // Adjust based on bandwidth
         if context.available_bandwidth_mbps < 1.0 {
             priority = priority.increase_by(20); // Prioritize more aggressively
         } else if context.available_bandwidth_mbps > 10.0 {
             priority = priority.decrease_by(10); // Can send more data
         }
-        
+
         // Adjust based on error rate
         if context.error_rate > 0.05 {
             priority = priority.increase_by(30); // Much more selective
         }
-        
+
         priority
     }
-    
+
     /// Private: Calculate optimal batch size
     fn calculate_optimal_batch_size(&self, context: &PerformanceContext) -> usize {
         let base_size = 10;
-        
+
         // Adjust based on latency (lower latency = smaller batches for responsiveness)
         let latency_factor = if context.average_latency_ms < 50.0 {
             0.5
@@ -252,60 +250,60 @@ where
         } else {
             1.0
         };
-        
+
         // Adjust based on bandwidth
         let bandwidth_factor = (context.available_bandwidth_mbps / 5.0).min(3.0).max(0.2);
-        
+
         // Adjust based on CPU usage
         let cpu_factor = if context.cpu_usage > 0.8 {
             0.7 // Reduce batch size when CPU is high
         } else {
             1.0
         };
-        
+
         ((base_size as f64) * latency_factor * bandwidth_factor * cpu_factor) as usize
     }
-    
+
     /// Private: Calculate global priority threshold for multi-stream optimization
     fn calculate_global_priority_threshold(&self, context: &PerformanceContext) -> Priority {
         // More aggressive prioritization for global optimization
         let individual_threshold = self.calculate_adaptive_priority(context);
         individual_threshold.increase_by(10)
     }
-    
+
     /// Private: Calculate total frame budget
     fn calculate_total_frame_budget(&self, context: &PerformanceContext) -> usize {
         let individual_budget = self.calculate_optimal_batch_size(context);
         (individual_budget as f64 * 1.5) as usize // 50% more for multi-stream
     }
-    
+
     /// Private: Get adaptation reason description
     fn get_adaptation_reason(&self, context: &PerformanceContext) -> String {
         let mut reasons = Vec::new();
-        
+
         if context.average_latency_ms > 1000.0 {
             reasons.push("High latency detected".to_string());
         }
-        
+
         if context.available_bandwidth_mbps < 1.0 {
             reasons.push("Limited bandwidth".to_string());
         }
-        
+
         if context.error_rate > 0.05 {
             reasons.push("High error rate".to_string());
         }
-        
+
         if context.cpu_usage > 0.8 {
             reasons.push("High CPU usage".to_string());
         }
-        
+
         if reasons.is_empty() {
             "Optimal conditions".to_string()
         } else {
             reasons.join(", ")
         }
     }
-    
+
     /// Private: Analyze frame distribution
     fn analyze_frame_distribution(&self, frames: &[Frame]) -> FrameDistribution {
         let mut critical = 0;
@@ -313,7 +311,7 @@ where
         let mut medium = 0;
         let mut low = 0;
         let mut background = 0;
-        
+
         for frame in frames {
             match frame.priority() {
                 p if p >= Priority::CRITICAL => critical += 1,
@@ -323,7 +321,7 @@ where
                 _ => background += 1,
             }
         }
-        
+
         FrameDistribution {
             critical,
             high,
@@ -332,7 +330,7 @@ where
             background,
         }
     }
-    
+
     /// Private: Calculate optimization metrics
     fn calculate_optimization_metrics(
         &self,
@@ -340,13 +338,15 @@ where
         context: &PerformanceContext,
     ) -> OptimizationMetrics {
         let total_size: usize = frames.iter().map(|f| f.estimated_size()).sum();
-        let average_priority: f64 = frames.iter()
+        let average_priority: f64 = frames
+            .iter()
             .map(|f| f.priority().value() as f64)
-            .sum::<f64>() / frames.len() as f64;
-        
-        let estimated_transfer_time = total_size as f64 / 
-            (context.available_bandwidth_mbps * 125_000.0); // Convert to bytes/sec
-        
+            .sum::<f64>()
+            / frames.len() as f64;
+
+        let estimated_transfer_time =
+            total_size as f64 / (context.available_bandwidth_mbps * 125_000.0); // Convert to bytes/sec
+
         OptimizationMetrics {
             total_frames: frames.len(),
             total_bytes: total_size,
@@ -355,7 +355,7 @@ where
             compression_ratio: 1.0, // Would calculate actual compression
         }
     }
-    
+
     /// Private: Analyze latency-based adjustments
     fn analyze_latency_adjustment(&self, metrics: &StreamingMetrics) -> Option<PriorityAdjustment> {
         if metrics.average_latency_ms > 2000.0 {
@@ -374,9 +374,12 @@ where
             None
         }
     }
-    
+
     /// Private: Analyze throughput-based adjustments
-    fn analyze_throughput_adjustment(&self, metrics: &StreamingMetrics) -> Option<PriorityAdjustment> {
+    fn analyze_throughput_adjustment(
+        &self,
+        metrics: &StreamingMetrics,
+    ) -> Option<PriorityAdjustment> {
         if metrics.throughput_mbps < 0.5 {
             Some(PriorityAdjustment {
                 new_threshold: Priority::HIGH,
@@ -387,9 +390,12 @@ where
             None
         }
     }
-    
+
     /// Private: Analyze error rate adjustments
-    fn analyze_error_rate_adjustment(&self, metrics: &StreamingMetrics) -> Option<PriorityAdjustment> {
+    fn analyze_error_rate_adjustment(
+        &self,
+        metrics: &StreamingMetrics,
+    ) -> Option<PriorityAdjustment> {
         if metrics.error_rate > 0.1 {
             Some(PriorityAdjustment {
                 new_threshold: Priority::CRITICAL,

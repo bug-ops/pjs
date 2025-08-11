@@ -79,9 +79,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         1000,  // max 1000 connections
     ));
 
-    // Start timeout monitoring
-    let manager_clone = connection_manager.clone();
-    manager_clone.start_timeout_monitor();
+    // Start timeout monitoring using infrastructure service
+    use pjson_rs::infrastructure::TimeoutMonitor;
+    let timeout_monitor = TimeoutMonitor::new(connection_manager.clone());
+    timeout_monitor.start();
 
     // Create Axum app state
     let app_state = PjsAppState::new(session_service, streaming_service, connection_manager);

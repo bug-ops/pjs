@@ -1,8 +1,8 @@
 //! PJS Benchmarking suite
-//! 
+//!
 //! This crate provides comprehensive benchmarking for PJS protocol.
 
-pub use pjson_rs::{Parser, Frame, Error, Result};
+pub use pjson_rs::{Error, Frame, Parser, Result};
 
 /// Benchmarking utilities (placeholder for future implementation)
 pub struct BenchSuite {

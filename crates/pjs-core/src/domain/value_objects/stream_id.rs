@@ -1,8 +1,8 @@
 //! Stream ID Value Object
 
-use uuid::Uuid;
-use std::fmt;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use uuid::Uuid;
 
 /// Unique identifier for streams within a session
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -13,22 +13,22 @@ impl StreamId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
-    
+
     /// Create stream ID from UUID
     pub fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
     }
-    
+
     /// Create stream ID from string
     pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
         Uuid::parse_str(s).map(Self)
     }
-    
+
     /// Get underlying UUID
     pub fn as_uuid(&self) -> Uuid {
         self.0
     }
-    
+
     /// Get string representation
     pub fn as_str(&self) -> String {
         self.0.to_string()
@@ -62,15 +62,15 @@ impl From<StreamId> for Uuid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_stream_id_creation() {
         let id1 = StreamId::new();
         let id2 = StreamId::new();
-        
+
         assert_ne!(id1, id2);
     }
-    
+
     #[test]
     fn test_stream_id_from_string() {
         let uuid_str = "550e8400-e29b-41d4-a716-446655440000";

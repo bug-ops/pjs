@@ -1,8 +1,8 @@
 //! PJS Server implementation
-//! 
+//!
 //! This crate provides high-performance server functionality for PJS protocol.
 
-pub use pjson_rs::{Frame, SemanticType, Error, Result};
+pub use pjson_rs::{Error, Frame, Result, SemanticType};
 
 /// PJS server (placeholder for future implementation)
 pub struct SjspServer {

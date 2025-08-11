@@ -1,18 +1,18 @@
 //! Hybrid parser using sonic-rs for SIMD acceleration
-//! 
+//!
 //! This module provides a high-performance parser that combines:
 //! - sonic-rs for SIMD-accelerated JSON parsing
 //! - PJS semantic analysis for intelligent chunking
 
-use sonic_rs::{Value as SonicValue, JsonValueTrait, JsonContainerTrait, JsonNumberTrait};
 use crate::{
     error::{Error, Result},
     frame::Frame,
-    semantic::{SemanticType, SemanticMeta, NumericDType},
-    frame::{FrameHeader, FrameFlags},
+    frame::{FrameFlags, FrameHeader},
+    semantic::{NumericDType, SemanticMeta, SemanticType},
 };
 use bytes::Bytes;
 use smallvec::SmallVec;
+use sonic_rs::{JsonContainerTrait, JsonNumberTrait, JsonValueTrait, Value as SonicValue};
 
 /// Configuration for the sonic hybrid parser
 #[derive(Debug, Clone)]
@@ -58,12 +58,11 @@ impl SonicParser {
         }
 
         // Convert to string for sonic-rs
-        let json_str = std::str::from_utf8(input)
-            .map_err(|e| Error::Utf8(e.to_string()))?;
+        let json_str = std::str::from_utf8(input).map_err(|e| Error::Utf8(e.to_string()))?;
 
         // Parse with sonic-rs
-        let value: SonicValue = sonic_rs::from_str(json_str)
-            .map_err(|e| Error::invalid_json(0, e.to_string()))?;
+        let value: SonicValue =
+            sonic_rs::from_str(json_str).map_err(|e| Error::invalid_json(0, e.to_string()))?;
 
         // Detect semantic type if enabled
         let semantic_type = if self.config.detect_semantics {
@@ -220,10 +219,10 @@ mod tests {
     fn test_sonic_basic_parsing() {
         let parser = SonicParser::new();
         let json = br#"{"name": "test", "value": 42}"#;
-        
+
         let result = parser.parse(json);
         assert!(result.is_ok());
-        
+
         let frame = result.unwrap();
         assert_eq!(frame.header.version, 1);
         assert_eq!(frame.payload.len(), json.len());
@@ -233,10 +232,13 @@ mod tests {
     fn test_sonic_numeric_array_detection() {
         let parser = SonicParser::new();
         let json = br#"[1.5, 2.7, 3.14, 4.2, 5.1]"#;
-        
+
         let result = parser.parse(json).unwrap();
         if let Some(semantics) = result.semantics {
-            assert!(matches!(semantics.semantic_type, SemanticType::NumericArray { .. }));
+            assert!(matches!(
+                semantics.semantic_type,
+                SemanticType::NumericArray { .. }
+            ));
         } else {
             panic!("Expected semantic metadata");
         }
@@ -249,10 +251,13 @@ mod tests {
             {"timestamp": "2023-01-01T00:00:00Z", "value": 1.5},
             {"timestamp": "2023-01-01T00:01:00Z", "value": 2.3}
         ]"#;
-        
+
         let result = parser.parse(json).unwrap();
         if let Some(semantics) = result.semantics {
-            assert!(matches!(semantics.semantic_type, SemanticType::TimeSeries { .. }));
+            assert!(matches!(
+                semantics.semantic_type,
+                SemanticType::TimeSeries { .. }
+            ));
         } else {
             panic!("Expected semantic metadata");
         }
@@ -264,7 +269,7 @@ mod tests {
             detect_semantics: false,
             max_input_size: 1024,
         };
-        
+
         let parser = SonicParser::with_config(config);
         assert!(!parser.config.detect_semantics);
         assert_eq!(parser.config.max_input_size, 1024);

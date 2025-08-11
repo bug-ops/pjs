@@ -44,7 +44,7 @@ bitflags::bitflags! {
     pub struct FrameFlags: u16 {
         /// Payload is compressed
         const COMPRESSED = 0b0000_0001;
-        /// Payload is encrypted  
+        /// Payload is encrypted
         const ENCRYPTED  = 0b0000_0010;
         /// Frame is part of chunked sequence
         const CHUNKED    = 0b0000_0100;
@@ -117,15 +117,16 @@ impl Frame {
         // Check version
         if self.header.version != 1 {
             return Err(Error::invalid_frame(format!(
-                "Unsupported version: {}", self.header.version
+                "Unsupported version: {}",
+                self.header.version
             )));
         }
 
         // Check length
         if self.header.length != self.payload.len() as u32 {
             return Err(Error::invalid_frame(format!(
-                "Length mismatch: header={}, payload={}", 
-                self.header.length, 
+                "Length mismatch: header={}, payload={}",
+                self.header.length,
                 self.payload.len()
             )));
         }
@@ -136,8 +137,7 @@ impl Frame {
             if actual != self.header.checksum {
                 return Err(Error::invalid_frame(format!(
                     "Checksum mismatch: expected={:08x}, actual={:08x}",
-                    self.header.checksum,
-                    actual
+                    self.header.checksum, actual
                 )));
             }
         }
@@ -173,7 +173,7 @@ fn crc32c(data: &[u8]) -> u32 {
 fn crc32c_sw(data: &[u8]) -> u32 {
     const CRC32C_POLY: u32 = 0x82F63B78;
     let mut crc = !0u32;
-    
+
     for &byte in data {
         crc ^= u32::from(byte);
         for _ in 0..8 {
@@ -184,7 +184,7 @@ fn crc32c_sw(data: &[u8]) -> u32 {
             };
         }
     }
-    
+
     !crc
 }
 
@@ -196,7 +196,7 @@ mod tests {
     fn test_frame_creation() {
         let payload = Bytes::from_static(b"Hello, PJS!");
         let frame = Frame::new(payload.clone());
-        
+
         assert_eq!(frame.header.version, 1);
         assert_eq!(frame.header.length, payload.len() as u32);
         assert_eq!(frame.payload, payload);
@@ -208,13 +208,13 @@ mod tests {
     fn test_checksum_validation() {
         let payload = Bytes::from_static(b"checksum test");
         let frame = Frame::new(payload).with_checksum();
-        
+
         frame.validate().unwrap();
-        
+
         // Corrupt payload should fail validation
         let mut bad_frame = frame.clone();
         bad_frame.payload = Bytes::from_static(b"corrupted data");
-        
+
         assert!(bad_frame.validate().is_err());
     }
 }

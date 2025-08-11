@@ -29,7 +29,6 @@ ahash.workspace = true
 sonic-rs = "0.5"
 
 # Async
-futures.workspace = true
 async-trait.workspace = true
 async-std = { workspace = true, features = ["attributes"] }
 
@@ -37,11 +36,12 @@ async-std = { workspace = true, features = ["attributes"] }
 chrono.workspace = true
 uuid.workspace = true
 
-# HTTP server integration
-axum.workspace = true
-tower.workspace = true
-tower-http.workspace = true
-hyper.workspace = true
+# HTTP server integration (optional)
+axum = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 
 # Thread-safe concurrency
 parking_lot.workspace = true
@@ -51,8 +51,6 @@ reqwest = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
 
 [dev-dependencies]
-criterion.workspace = true
-proptest.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
@@ -72,8 +70,16 @@ schema-validation = []
 compression = []
 
 # Infrastructure features
+http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:hyper", "dep:futures"]
 http-client = ["dep:reqwest"]
 prometheus-metrics = ["dep:prometheus"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["axum", "tower", "tower-http", "hyper", "futures"]
+
+[[example]]
+name = "priority_streaming"
+required-features = []
 
 # Benchmarks will be implemented later
 # [[bench]]

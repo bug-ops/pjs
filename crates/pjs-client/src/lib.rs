@@ -1,8 +1,8 @@
 //! PJS Client implementation
-//! 
+//!
 //! This crate provides high-performance client functionality for PJS protocol.
 
-pub use pjson_rs::{Frame, SemanticType, Error, Result};
+pub use pjson_rs::{Error, Frame, Result, SemanticType};
 
 /// PJS client (placeholder for future implementation)
 pub struct SjspClient {
