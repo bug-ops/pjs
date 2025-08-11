@@ -7,6 +7,7 @@ use crate::domain::aggregates::StreamSession;
 use crate::domain::entities::{Frame, Stream};
 use crate::domain::{DomainResult, SessionId, StreamId};
 use async_trait::async_trait;
+use std::{collections::HashMap, time::Duration};
 
 /// Source of streaming frames
 #[async_trait]
@@ -90,23 +91,26 @@ pub trait EventPublisher: Send + Sync {
 /// Metrics collection port
 #[async_trait]
 pub trait MetricsCollector: Send + Sync {
-    /// Record a counter metric
-    fn counter(&self, name: &str, value: u64, labels: &[(&str, &str)]);
+    /// Increment a counter metric
+    async fn increment_counter(&self, name: &str, value: u64, tags: HashMap<String, String>) -> DomainResult<()>;
 
-    /// Record a gauge metric
-    fn gauge(&self, name: &str, value: f64, labels: &[(&str, &str)]);
+    /// Set a gauge metric value
+    async fn set_gauge(&self, name: &str, value: f64, tags: HashMap<String, String>) -> DomainResult<()>;
 
-    /// Record a histogram metric
-    fn histogram(&self, name: &str, value: f64, labels: &[(&str, &str)]);
+    /// Record timing information
+    async fn record_timing(&self, name: &str, duration: Duration, tags: HashMap<String, String>) -> DomainResult<()>;
 
-    /// Start timing a duration
-    fn timer_start(&self, name: &str) -> Box<dyn Timer + Send + Sync>;
-}
+    /// Record session creation event
+    async fn record_session_created(&self, session_id: SessionId, metadata: HashMap<String, String>) -> DomainResult<()>;
 
-/// Timer for measuring durations
-pub trait Timer {
-    /// Stop the timer and record the duration
-    fn stop(self: Box<Self>);
+    /// Record session ending event
+    async fn record_session_ended(&self, session_id: SessionId) -> DomainResult<()>;
+
+    /// Record stream creation event
+    async fn record_stream_created(&self, stream_id: StreamId, session_id: SessionId) -> DomainResult<()>;
+
+    /// Record stream completion event
+    async fn record_stream_completed(&self, stream_id: StreamId) -> DomainResult<()>;
 }
 
 /// Time provider port (for testability)

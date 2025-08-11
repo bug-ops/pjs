@@ -1,12 +1,11 @@
 //! Event publisher implementation for PJS domain events
 
 use async_trait::async_trait;
-use parking_lot::RwLock;
 use std::{
     collections::HashMap,
     sync::Arc,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 
 use crate::domain::{
     DomainResult,
@@ -16,7 +15,7 @@ use crate::domain::{
 };
 
 /// In-memory event publisher with subscription support
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InMemoryEventPublisher {
     subscribers: Arc<RwLock<HashMap<String, Vec<Arc<dyn EventSubscriber + Send + Sync>>>>>,
     event_log: Arc<RwLock<Vec<StoredEvent>>>,
@@ -53,11 +52,11 @@ impl InMemoryEventPublisher {
     }
     
     /// Subscribe to specific event types
-    pub fn subscribe<S>(&self, event_type: &str, subscriber: S) 
+    pub async fn subscribe<S>(&self, event_type: &str, subscriber: S) 
     where
         S: EventSubscriber + Send + Sync + 'static,
     {
-        let mut subscribers = self.subscribers.write();
+        let mut subscribers = self.subscribers.write().await;
         subscribers
             .entry(event_type.to_string())
             .or_insert_with(Vec::new)
@@ -65,14 +64,15 @@ impl InMemoryEventPublisher {
     }
     
     /// Get event count for testing
-    pub fn event_count(&self) -> usize {
-        self.event_log.read().len()
+    pub async fn event_count(&self) -> usize {
+        self.event_log.read().await.len()
     }
     
     /// Get events by type
-    pub fn events_by_type(&self, event_type: &str) -> Vec<StoredEvent> {
+    pub async fn events_by_type(&self, event_type: &str) -> Vec<StoredEvent> {
         self.event_log
             .read()
+            .await
             .iter()
             .filter(|event| event.event_type == event_type)
             .cloned()
@@ -80,9 +80,10 @@ impl InMemoryEventPublisher {
     }
     
     /// Get events for session
-    pub fn events_for_session(&self, session_id: SessionId) -> Vec<StoredEvent> {
+    pub async fn events_for_session(&self, session_id: SessionId) -> Vec<StoredEvent> {
         self.event_log
             .read()
+            .await
             .iter()
             .filter(|event| event.session_id == Some(session_id))
             .cloned()
@@ -90,19 +91,27 @@ impl InMemoryEventPublisher {
     }
     
     /// Clear all events (for testing)
-    pub fn clear(&self) {
-        self.event_log.write().clear();
+    pub async fn clear(&self) {
+        self.event_log.write().await.clear();
     }
     
     /// Get recent events
-    pub fn recent_events(&self, limit: usize) -> Vec<StoredEvent> {
-        let events = self.event_log.read();
+    pub async fn recent_events(&self, limit: usize) -> Vec<StoredEvent> {
+        let events = self.event_log.read().await;
         events
             .iter()
             .rev()
             .take(limit)
             .cloned()
             .collect()
+    }
+}
+
+impl std::fmt::Debug for InMemoryEventPublisher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InMemoryEventPublisher")
+            .field("async_fields", &"<async RwLock>")
+            .finish()
     }
 }
 
@@ -119,14 +128,14 @@ impl EventPublisher for InMemoryEventPublisher {
         let stored_event = StoredEvent {
             id: event.event_id(),
             event_type: event_type.clone(),
-            session_id: event.session_id(),
+            session_id: Some(event.session_id()),
             timestamp: event.occurred_at(),
             payload: event.payload().clone(),
         };
         
         // Store event
         {
-            let mut log = self.event_log.write();
+            let mut log = self.event_log.write().await;
             log.push(stored_event.clone());
             
             // Keep only last 10000 events to prevent memory growth
@@ -136,13 +145,13 @@ impl EventPublisher for InMemoryEventPublisher {
         }
         
         // Send to channel if configured
-        if let Some(tx) = self.channel_tx.read().as_ref() {
+        if let Some(tx) = self.channel_tx.read().await.as_ref() {
             let _ = tx.send(stored_event.clone());
         }
         
         // Notify subscribers
         {
-            let subscribers = self.subscribers.read();
+            let subscribers = self.subscribers.read().await;
             if let Some(event_subscribers) = subscribers.get(&event_type) {
                 for subscriber in event_subscribers {
                     if let Err(e) = subscriber.handle(&event).await {
@@ -356,7 +365,7 @@ impl EventPublisher for CompositeEventPublisher {
 mod tests {
     use super::*;
     use crate::domain::{
-        events::{SessionCreated, StreamStarted},
+        events::DomainEvent,
         value_objects::{SessionId, StreamId},
     };
     
@@ -372,15 +381,15 @@ mod tests {
             }
         }
         
-        fn event_count(&self) -> usize {
-            self.received_events.read().len()
+        async fn event_count(&self) -> usize {
+            self.received_events.read().await.len()
         }
     }
     
     #[async_trait]
     impl EventSubscriber for TestSubscriber {
         async fn handle(&self, event: &DomainEvent) -> DomainResult<()> {
-            self.received_events.write().push(event.clone());
+            self.received_events.write().await.push(event.clone());
             Ok(())
         }
     }
@@ -390,17 +399,20 @@ mod tests {
         let publisher = InMemoryEventPublisher::new();
         let subscriber = TestSubscriber::new();
         
-        publisher.subscribe("SessionCreated", subscriber.clone());
+        publisher.subscribe("session_activated", subscriber.clone()).await;
         
         let session_id = SessionId::new();
-        let event = SessionCreated::new(session_id, chrono::Utc::now()).into();
+        let event = DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        };
         
         publisher.publish(event).await.unwrap();
         
-        assert_eq!(publisher.event_count(), 1);
-        assert_eq!(subscriber.event_count(), 1);
+        assert_eq!(publisher.event_count().await, 1);
+        assert_eq!(subscriber.event_count().await, 1);
         
-        let events_for_session = publisher.events_for_session(session_id);
+        let events_for_session = publisher.events_for_session(session_id).await;
         assert_eq!(events_for_session.len(), 1);
     }
     
@@ -409,12 +421,15 @@ mod tests {
         let (publisher, mut rx) = InMemoryEventPublisher::with_channel();
         
         let session_id = SessionId::new();
-        let event = SessionCreated::new(session_id, chrono::Utc::now()).into();
+        let event = DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        };
         
         publisher.publish(event).await.unwrap();
         
         let received = rx.recv().await.unwrap();
-        assert_eq!(received.event_type, "SessionCreated");
+        assert_eq!(received.event_type, "session_activated");
         assert_eq!(received.session_id, Some(session_id));
     }
     
@@ -425,13 +440,20 @@ mod tests {
         let stream_id = StreamId::new();
         
         let events = vec![
-            SessionCreated::new(session_id, chrono::Utc::now()).into(),
-            StreamStarted::new(stream_id, session_id, chrono::Utc::now()).into(),
+            DomainEvent::SessionActivated {
+                session_id,
+                timestamp: chrono::Utc::now(),
+            },
+            DomainEvent::StreamStarted {
+                session_id,
+                stream_id,
+                timestamp: chrono::Utc::now(),
+            },
         ];
         
         publisher.publish_batch(events).await.unwrap();
         
-        assert_eq!(publisher.event_count(), 2);
+        assert_eq!(publisher.event_count().await, 2);
     }
     
     #[tokio::test]
@@ -444,11 +466,14 @@ mod tests {
             .add_publisher(publisher2.clone());
         
         let session_id = SessionId::new();
-        let event = SessionCreated::new(session_id, chrono::Utc::now()).into();
+        let event = DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        };
         
         composite.publish(event).await.unwrap();
         
-        assert_eq!(publisher1.event_count(), 1);
-        assert_eq!(publisher2.event_count(), 1);
+        assert_eq!(publisher1.event_count().await, 1);
+        assert_eq!(publisher2.event_count().await, 1);
     }
 }

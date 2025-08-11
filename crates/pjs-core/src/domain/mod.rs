@@ -73,3 +73,9 @@ impl DomainError {
         Self::InvalidStateTransition(format!("{} -> {}", from, to))
     }
 }
+
+impl From<String> for DomainError {
+    fn from(error: String) -> Self {
+        Self::Logic(error)
+    }
+}

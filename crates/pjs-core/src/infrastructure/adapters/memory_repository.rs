@@ -354,8 +354,8 @@ mod tests {
                 let mut session = StreamSession::new(SessionConfig::default());
                 let _ = session.activate();
                 
-                // Add unique identifier to distinguish sessions
-                session.add_metadata("test_id".to_string(), i.to_string());
+                // TODO: Add unique identifier when metadata support is added
+                // Each session is already unique by its SessionId
                 
                 repo_clone.save_session(session).await.unwrap();
             });

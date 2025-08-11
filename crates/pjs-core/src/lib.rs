@@ -17,14 +17,7 @@ pub mod compression;
 pub mod domain;
 pub mod error;
 pub mod frame;
-// TODO: Infrastructure module needs major refactoring
-// Issues to fix:
-// 1. MetricsCollector trait methods mismatch - trait has counter/gauge/histogram, impl has increment_counter/set_gauge/record_timing etc.
-// 2. DomainEvent.session_id() returns SessionId but expected Option<SessionId>  
-// 3. DomainError needs From<String> implementation
-// 4. Multiple method signature mismatches between trait and implementations
-// EventId and EventSubscriber are now available, but more architectural fixes needed
-// pub mod infrastructure;
+pub mod infrastructure;
 pub mod parser;
 pub mod semantic;
 pub mod stream;
