@@ -16,6 +16,10 @@ pub mod application;
 pub mod domain;
 pub mod error;
 pub mod frame;
+// TODO: Fix infrastructure module compilation errors (event_publisher.rs and metrics_collector.rs) 
+// TODO: Missing EventId and EventSubscriber in domain::events
+// TODO: MetricsCollector trait methods not matching implementations
+// pub mod infrastructure;
 pub mod parser;
 pub mod semantic;
 pub mod stream;

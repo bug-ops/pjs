@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 PJS Interactive Demo</title>
+    <style>
+        :root {
+            --primary-color: #4a6cf7;
+            --secondary-color: #2c3e50;
+            --success-color: #27ae60;
+            --warning-color: #f39c12;
+            --error-color: #e74c3c;
+            --bg-light: #f8f9fa;
+            --bg-dark: #2c3e50;
+            --text-dark: #333;
+            --text-light: #666;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: var(--text-dark);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .demo-panel {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+            margin-bottom: 30px;
+        }
+
+        .panel-header {
+            background: linear-gradient(135deg, var(--secondary-color), var(--primary-color));
+            color: white;
+            padding: 20px 30px;
+        }
+
+        .panel-header h2 {
+            font-size: 1.8em;
+            margin-bottom: 5px;
+        }
+
+        .panel-body {
+            padding: 30px;
+        }
+
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .control-group label {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-dark);
+        }
+
+        select, button {
+            padding: 12px 16px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: all 0.2s ease;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(74, 108, 247, 0.1);
+        }
+
+        button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        button:hover {
+            background: #3b5bf2;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(74, 108, 247, 0.3);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-top: 30px;
+        }
+
+        .result-card {
+            border: 2px solid #e1e8ed;
+            border-radius: 12px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .result-card.traditional {
+            border-left: 5px solid var(--error-color);
+        }
+
+        .result-card.pjs {
+            border-left: 5px solid var(--success-color);
+        }
+
+        .result-header {
+            padding: 20px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .result-header.traditional {
+            background: rgba(231, 76, 60, 0.1);
+        }
+
+        .result-header.pjs {
+            background: rgba(39, 174, 96, 0.1);
+        }
+
+        .result-body {
+            padding: 20px;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .metric:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            color: var(--text-light);
+        }
+
+        .metric-value {
+            font-weight: 600;
+            font-size: 1.1em;
+        }
+
+        .metric-value.time {
+            font-family: 'Monaco', 'Menlo', monospace;
+        }
+
+        .improvement-banner {
+            background: linear-gradient(135deg, var(--success-color), #2ecc71);
+            color: white;
+            text-align: center;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            font-size: 1.2em;
+            font-weight: 600;
+        }
+
+        .loading {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top: 2px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-ready { background: var(--success-color); }
+        .status-loading { background: var(--warning-color); animation: pulse 1.5s infinite; }
+        .status-error { background: var(--error-color); }
+
+        @keyframes pulse {
+            0%, 50%, 100% { opacity: 1; }
+            25%, 75% { opacity: 0.5; }
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .info-card {
+            background: var(--bg-light);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .info-card .value {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+
+        .info-card .label {
+            color: var(--text-light);
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        @media (max-width: 768px) {
+            .results-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .controls-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+
+        .demo-explanation {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+
+        .demo-explanation h3 {
+            margin-bottom: 10px;
+        }
+
+        .demo-explanation ul {
+            margin-left: 20px;
+        }
+
+        .websocket-panel {
+            margin-top: 20px;
+            border-top: 2px solid #eee;
+            padding-top: 20px;
+        }
+
+        .websocket-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 PJS Interactive Demo</h1>
+            <p>Experience the difference: Traditional JSON vs Priority JSON Streaming</p>
+        </div>
+
+        <div class="demo-explanation">
+            <h3>🎯 What you'll see:</h3>
+            <ul>
+                <li><strong>Traditional:</strong> Complete data loads after full network round-trip</li>
+                <li><strong>PJS Streaming:</strong> Critical data appears immediately, rest loads progressively</li>
+                <li><strong>Real Benefits:</strong> Better user experience, especially on slow networks</li>
+            </ul>
+        </div>
+
+        <div class="demo-panel">
+            <div class="panel-header">
+                <h2>🎛️ Demo Configuration</h2>
+                <p>Configure your test scenario</p>
+            </div>
+            <div class="panel-body">
+                <div class="controls-grid">
+                    <div class="control-group">
+                        <label for="dataset-type">📊 Dataset Type</label>
+                        <select id="dataset-type">
+                            <option value="ecommerce">🛒 E-commerce Store</option>
+                            <option value="social">📱 Social Media Feed</option>
+                            <option value="analytics">📈 Analytics Dashboard</option>
+                            <option value="realtime">⚡ Real-time Monitoring</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="dataset-size">📏 Dataset Size</label>
+                        <select id="dataset-size">
+                            <option value="small">Small (~1-10KB)</option>
+                            <option value="medium" selected>Medium (~10-100KB)</option>
+                            <option value="large">Large (~100KB-1MB)</option>
+                            <option value="huge">Huge (~1-10MB)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="network-type">🌐 Network Simulation</label>
+                        <select id="network-type">
+                            <option value="fiber">🚀 Fiber (5ms)</option>
+                            <option value="cable">🔗 Cable (20ms)</option>
+                            <option value="wifi" selected>📶 WiFi (50ms)</option>
+                            <option value="4g">📱 4G Mobile (100ms)</option>
+                            <option value="3g">📱 3G Mobile (300ms)</option>
+                            <option value="satellite">🛰️ Satellite (600ms)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label>&nbsp;</label>
+                        <button id="run-comparison" onclick="runComparison()">
+                            🏁 Run Performance Test
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="results-panel" class="demo-panel" style="display: none;">
+            <div class="panel-header">
+                <h2>📊 Performance Results</h2>
+                <p>Real-time comparison of both approaches</p>
+            </div>
+            <div class="panel-body">
+                <div class="results-grid">
+                    <div class="result-card traditional">
+                        <div class="result-header traditional">
+                            <span class="status-indicator" id="traditional-status"></span>
+                            <span>🐌 Traditional JSON Loading</span>
+                        </div>
+                        <div class="result-body">
+                            <div class="metric">
+                                <span class="metric-label">Response Time</span>
+                                <span class="metric-value time" id="traditional-time">-</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">User Experience</span>
+                                <span class="metric-value">Wait → Complete</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Data Size</span>
+                                <span class="metric-value" id="traditional-size">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="result-card pjs">
+                        <div class="result-header pjs">
+                            <span class="status-indicator" id="pjs-status"></span>
+                            <span>⚡ PJS Priority Streaming</span>
+                        </div>
+                        <div class="result-body">
+                            <div class="metric">
+                                <span class="metric-label">First Content</span>
+                                <span class="metric-value time" id="pjs-time">-</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">User Experience</span>
+                                <span class="metric-value">Instant → Progressive</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Improvement</span>
+                                <span class="metric-value" id="improvement-factor">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="improvement-banner" class="improvement-banner" style="display: none;">
+                    🎉 PJS delivers content <span id="improvement-text">-</span> faster!
+                </div>
+
+                <div class="info-grid" id="dataset-info" style="display: none;">
+                    <div class="info-card">
+                        <div class="value" id="info-type">-</div>
+                        <div class="label">Dataset Type</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="info-size">-</div>
+                        <div class="label">Data Size</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="info-network">-</div>
+                        <div class="label">Network</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="info-items">-</div>
+                        <div class="label">Items</div>
+                    </div>
+                </div>
+
+                <div class="websocket-panel">
+                    <h3>🔌 WebSocket Streaming (Advanced)</h3>
+                    <div class="websocket-status">
+                        <span class="status-indicator status-ready" id="ws-status"></span>
+                        <span id="ws-status-text">Ready to connect</span>
+                    </div>
+                    <button id="ws-test" onclick="testWebSocket()" disabled>
+                        🌊 Test Real-time Streaming
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let wsConnection = null;
+
+        async function runComparison() {
+            const button = document.getElementById('run-comparison');
+            const resultsPanel = document.getElementById('results-panel');
+            const improvementBanner = document.getElementById('improvement-banner');
+            const datasetInfo = document.getElementById('dataset-info');
+            
+            // Get parameters
+            const datasetType = document.getElementById('dataset-type').value;
+            const datasetSize = document.getElementById('dataset-size').value;
+            const networkType = document.getElementById('network-type').value;
+            
+            // Update button state
+            button.disabled = true;
+            button.innerHTML = '<div class="loading"><div class="spinner"></div>Running tests...</div>';
+            
+            // Show results panel
+            resultsPanel.style.display = 'block';
+            improvementBanner.style.display = 'none';
+            datasetInfo.style.display = 'none';
+            
+            // Reset status indicators
+            const traditionalStatus = document.getElementById('traditional-status');
+            const pjsStatus = document.getElementById('pjs-status');
+            traditionalStatus.className = 'status-indicator status-loading';
+            pjsStatus.className = 'status-indicator status-loading';
+            
+            // Reset metrics
+            document.getElementById('traditional-time').textContent = 'Loading...';
+            document.getElementById('pjs-time').textContent = 'Loading...';
+            document.getElementById('improvement-factor').textContent = '-';
+            document.getElementById('traditional-size').textContent = '-';
+
+            try {
+                // Run performance comparison
+                const params = new URLSearchParams({
+                    dataset_type: datasetType,
+                    dataset_size: datasetSize,
+                    network_type: networkType
+                });
+                
+                const response = await fetch(`/performance?${params}`);
+                const results = await response.json();
+                
+                // Update results
+                document.getElementById('traditional-time').textContent = `${results.traditional_time_ms}ms`;
+                document.getElementById('pjs-time').textContent = `${results.pjs_time_ms}ms`;
+                document.getElementById('improvement-factor').textContent = `${results.improvement_factor.toFixed(1)}x faster`;
+                document.getElementById('traditional-size').textContent = formatBytes(results.data_size_bytes);
+                
+                // Update status indicators
+                traditionalStatus.className = 'status-indicator status-ready';
+                pjsStatus.className = 'status-indicator status-ready';
+                
+                // Show improvement banner
+                document.getElementById('improvement-text').textContent = `${results.improvement_factor.toFixed(1)}x`;
+                improvementBanner.style.display = 'block';
+                
+                // Show dataset info
+                document.getElementById('info-type').textContent = datasetType.toUpperCase();
+                document.getElementById('info-size').textContent = formatBytes(results.data_size_bytes);
+                document.getElementById('info-network').textContent = networkType.toUpperCase();
+                document.getElementById('info-items').textContent = results.metadata.items || 'N/A';
+                datasetInfo.style.display = 'grid';
+                
+                // Enable WebSocket test
+                document.getElementById('ws-test').disabled = false;
+                
+            } catch (error) {
+                console.error('Test failed:', error);
+                traditionalStatus.className = 'status-indicator status-error';
+                pjsStatus.className = 'status-indicator status-error';
+                document.getElementById('traditional-time').textContent = 'Error';
+                document.getElementById('pjs-time').textContent = 'Error';
+            } finally {
+                // Reset button
+                button.disabled = false;
+                button.innerHTML = '🏁 Run Performance Test';
+            }
+        }
+
+        async function testWebSocket() {
+            const wsStatus = document.getElementById('ws-status');
+            const wsStatusText = document.getElementById('ws-status-text');
+            const wsButton = document.getElementById('ws-test');
+            
+            if (wsConnection) {
+                wsConnection.close();
+                wsConnection = null;
+                wsButton.textContent = '🌊 Test Real-time Streaming';
+                wsStatus.className = 'status-indicator status-ready';
+                wsStatusText.textContent = 'Ready to connect';
+                return;
+            }
+            
+            try {
+                wsStatus.className = 'status-indicator status-loading';
+                wsStatusText.textContent = 'Connecting...';
+                wsButton.disabled = true;
+                
+                const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${location.host}/ws`;
+                wsConnection = new WebSocket(wsUrl);
+                
+                wsConnection.onopen = () => {
+                    wsStatus.className = 'status-indicator status-ready';
+                    wsStatusText.textContent = 'Connected - Streaming data';
+                    wsButton.textContent = '🔌 Disconnect';
+                    wsButton.disabled = false;
+                    
+                    // Send test streaming request
+                    const message = {
+                        type: 'stream_init',
+                        session_id: 'demo-' + Date.now(),
+                        data: { test: 'streaming data' },
+                        options: {
+                            max_frame_size: 64000,
+                            compression: true
+                        }
+                    };
+                    wsConnection.send(JSON.stringify(message));
+                };
+                
+                wsConnection.onmessage = (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        console.log('WebSocket message:', message);
+                        if (message.type === 'stream_frame') {
+                            wsStatusText.textContent = `Frame ${message.frame_id} received (Priority: ${message.priority})`;
+                        }
+                    } catch (e) {
+                        console.error('Error parsing WebSocket message:', e);
+                    }
+                };
+                
+                wsConnection.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    wsStatus.className = 'status-indicator status-error';
+                    wsStatusText.textContent = 'Connection error';
+                    wsButton.disabled = false;
+                    wsButton.textContent = '🌊 Test Real-time Streaming';
+                };
+                
+                wsConnection.onclose = () => {
+                    wsStatus.className = 'status-indicator status-ready';
+                    wsStatusText.textContent = 'Disconnected';
+                    wsButton.disabled = false;
+                    wsButton.textContent = '🌊 Test Real-time Streaming';
+                    wsConnection = null;
+                };
+                
+            } catch (error) {
+                console.error('WebSocket connection failed:', error);
+                wsStatus.className = 'status-indicator status-error';
+                wsStatusText.textContent = 'Connection failed';
+                wsButton.disabled = false;
+            }
+        }
+
+        function formatBytes(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let size = bytes;
+            let unitIndex = 0;
+            
+            while (size >= 1024 && unitIndex < units.length - 1) {
+                size /= 1024;
+                unitIndex++;
+            }
+            
+            return unitIndex === 0 ? 
+                `${size} ${units[unitIndex]}` : 
+                `${size.toFixed(1)} ${units[unitIndex]}`;
+        }
+
+        // Auto-run demo on page load
+        window.addEventListener('load', () => {
+            setTimeout(runComparison, 1000);
+        });
+    </script>
+</body>
+</html>

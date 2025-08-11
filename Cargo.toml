@@ -6,6 +6,7 @@ members = [
     "crates/pjs-transport",
     "crates/pjs-gpu",
     "crates/pjs-bench",
+    "crates/pjs-demo",
 ]
 resolver = "2"
 
@@ -71,12 +72,19 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.6", features = ["v4", "serde"] }
+uuid = { version = "1.18", features = ["v4", "serde"] }
 async-trait = "0.1"
 
 # HTTP client and metrics
 reqwest = { version = "0.12", features = ["json"] }
 prometheus = "0.14"
+
+# WebSocket
+tokio-tungstenite = "0.27"
+url = "2.5"
+
+# Random generation  
+rand = "0.9"
 
 [profile.release]
 opt-level = 3

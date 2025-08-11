@@ -17,17 +17,18 @@ pjs-server = { path = "../pjs-server" }
 
 # Benchmarking
 criterion.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["time", "rt", "macros"] }
 serde_json.workspace = true
 bytes.workspace = true
 
 # Comparison with other libraries
-simd-json = "0.13"
+simd-json = "0.15"
 sonic-rs.workspace = true
 
 # Data generation
-fake = { version = "2.9", features = ["derive"] }
-rand = "0.8"
+fake = { version = "4.4", features = ["derive"] }
+rand = "0.9"
+
 
 [dev-dependencies]
 proptest.workspace = true
@@ -42,4 +43,8 @@ harness = false
 
 [[bench]]
 name = "time_to_first_data"
+harness = false
+
+[[bench]]
+name = "network_simulation"
 harness = false

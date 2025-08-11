@@ -31,17 +31,22 @@ sonic-rs = "0.5"
 # Async
 async-trait.workspace = true
 async-std = { workspace = true, features = ["attributes"] }
+tokio = { workspace = true, features = ["full"] }
 
 # Time and IDs
 chrono.workspace = true
 uuid.workspace = true
 
 # HTTP server integration (optional)
-axum = { workspace = true, optional = true }
+axum = { workspace = true, optional = true, features = ["ws"] }
 tower = { workspace = true, optional = true }
 tower-http = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+
+# WebSocket client (optional)
+tokio-tungstenite = { version = "0.24", optional = true }
+url = { version = "2.5", optional = true }
 
 # Thread-safe concurrency
 parking_lot.workspace = true
@@ -71,6 +76,8 @@ compression = []
 
 # Infrastructure features
 http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:hyper", "dep:futures"]
+websocket-client = ["dep:tokio-tungstenite", "dep:url"]
+websocket-server = ["http-server"] # WebSocket server requires HTTP server features
 http-client = ["dep:reqwest"]
 prometheus-metrics = ["dep:prometheus"]
 
@@ -80,6 +87,14 @@ normal = ["axum", "tower", "tower-http", "hyper", "futures"]
 [[example]]
 name = "priority_streaming"
 required-features = []
+
+[[example]]
+name = "streaming_demo_server"
+required-features = []
+
+[[example]]
+name = "websocket_streaming"
+required-features = ["http-server"]
 
 # Benchmarks will be implemented later
 # [[bench]]
