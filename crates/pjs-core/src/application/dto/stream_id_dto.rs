@@ -3,8 +3,10 @@
 //! Handles serialization/deserialization of StreamId domain objects
 //! while keeping domain layer clean of serialization concerns.
 
-use crate::domain::value_objects::StreamId;
-use crate::domain::DomainError;
+use crate::{
+    domain::{value_objects::StreamId, DomainError},
+    application::dto::priority_dto::{ToDto, FromDto},
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -53,14 +55,14 @@ impl From<StreamIdDto> for StreamId {
 }
 
 /// Utility trait implementation for StreamId
-impl super::ToDto<StreamIdDto> for StreamId {
+impl ToDto<StreamIdDto> for StreamId {
     fn to_dto(self) -> StreamIdDto {
         StreamIdDto::from(self)
     }
 }
 
 /// Utility trait implementation for StreamId
-impl super::FromDto<StreamIdDto> for StreamId {
+impl FromDto<StreamIdDto> for StreamId {
     type Error = DomainError;
     
     fn from_dto(dto: StreamIdDto) -> Result<Self, Self::Error> {

@@ -514,7 +514,7 @@ mod tests {
         repository.add_session(session);
 
         // Query the session
-        let query = GetSessionQuery { session_id };
+        let query = GetSessionQuery { session_id: session_id.into() };
         let result = handler.handle(query).await;
 
         assert!(result.is_ok());
@@ -528,7 +528,7 @@ mod tests {
         let handler = SessionQueryHandler::new(repository);
 
         let query = GetSessionQuery {
-            session_id: SessionId::new(),
+            session_id: SessionId::new().into(),
         };
         let result = handler.handle(query).await;
 

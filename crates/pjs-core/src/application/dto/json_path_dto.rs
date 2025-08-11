@@ -3,8 +3,10 @@
 //! Handles serialization/deserialization of JsonPath domain objects
 //! while keeping domain layer clean of serialization concerns.
 
-use crate::domain::value_objects::JsonPath;
-use crate::domain::{DomainError, DomainResult};
+use crate::{
+    domain::{value_objects::JsonPath, DomainError, DomainResult},
+    application::dto::priority_dto::{ToDto, FromDto},
+};
 use serde::{Deserialize, Serialize};
 
 /// Serializable representation of JsonPath domain object
@@ -58,14 +60,14 @@ impl TryFrom<JsonPathDto> for JsonPath {
 }
 
 /// Utility trait implementation for JsonPath
-impl super::ToDto<JsonPathDto> for JsonPath {
+impl ToDto<JsonPathDto> for JsonPath {
     fn to_dto(self) -> JsonPathDto {
         JsonPathDto::from(self)
     }
 }
 
 /// Utility trait implementation for JsonPath
-impl super::FromDto<JsonPathDto> for JsonPath {
+impl FromDto<JsonPathDto> for JsonPath {
     type Error = DomainError;
     
     fn from_dto(dto: JsonPathDto) -> Result<Self, Self::Error> {
@@ -140,12 +142,13 @@ mod tests {
         
         for path in paths {
             let original = JsonPath::new(path).unwrap();
+            let original_str = original.as_str().to_string(); // Save string before move
             let dto = original.to_dto();
             let serialized = serde_json::to_string(&dto).unwrap();
             let deserialized: JsonPathDto = serde_json::from_str(&serialized).unwrap();
             let restored = JsonPath::from_dto(deserialized).unwrap();
             
-            assert_eq!(original.as_str(), restored.as_str());
+            assert_eq!(original_str, restored.as_str());
         }
     }
 }

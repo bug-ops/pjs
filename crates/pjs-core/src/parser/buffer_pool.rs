@@ -508,7 +508,8 @@ mod tests {
     fn test_buffer_size_selection() {
         assert_eq!(BufferSize::for_capacity(500), BufferSize::Small);
         assert_eq!(BufferSize::for_capacity(2000), BufferSize::Medium);
-        assert_eq!(BufferSize::for_capacity(100000), BufferSize::Large);
+        assert_eq!(BufferSize::for_capacity(50000), BufferSize::Large);
+        assert_eq!(BufferSize::for_capacity(100000), BufferSize::XLarge);
     }
 
     #[test]

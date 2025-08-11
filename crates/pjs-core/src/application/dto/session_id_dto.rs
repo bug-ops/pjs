@@ -3,8 +3,10 @@
 //! Handles serialization/deserialization of SessionId domain objects
 //! while keeping domain layer clean of serialization concerns.
 
-use crate::domain::value_objects::SessionId;
-use crate::domain::DomainError;
+use crate::{
+    domain::{value_objects::SessionId, DomainError},
+    application::dto::priority_dto::{ToDto, FromDto},
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -53,14 +55,14 @@ impl From<SessionIdDto> for SessionId {
 }
 
 /// Utility trait implementation for SessionId
-impl super::ToDto<SessionIdDto> for SessionId {
+impl ToDto<SessionIdDto> for SessionId {
     fn to_dto(self) -> SessionIdDto {
         SessionIdDto::from(self)
     }
 }
 
 /// Utility trait implementation for SessionId
-impl super::FromDto<SessionIdDto> for SessionId {
+impl FromDto<SessionIdDto> for SessionId {
     type Error = DomainError;
     
     fn from_dto(dto: SessionIdDto) -> Result<Self, Self::Error> {

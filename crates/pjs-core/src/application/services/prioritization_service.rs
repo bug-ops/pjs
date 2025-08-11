@@ -209,6 +209,7 @@ impl PrioritizationService {
         reasoning: &mut Vec<String>,
     ) -> ApplicationResult<Priority> {
         let mut priority = Priority::MEDIUM; // Start balanced
+        reasoning.push("Balanced: Starting with medium priority".to_string());
 
         // Latency adjustments
         if context.average_latency_ms > 1000.0 {

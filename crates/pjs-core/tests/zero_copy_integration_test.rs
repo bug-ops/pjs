@@ -5,11 +5,10 @@
 
 use pjson_rs::{
     parser::{
-        ZeroCopyParser, LazyParser, LazyJsonValue, MemoryUsage,
+        ZeroCopyParser, LazyParser, LazyJsonValue,
         SimdZeroCopyParser, SimdZeroCopyConfig, BufferSize,
         global_buffer_pool,
     },
-    domain::DomainResult,
 };
 
 #[tokio::test]
@@ -52,7 +51,7 @@ async fn test_escaped_string_allocation() {
     
     let result = parser.parse_lazy(input).unwrap();
     match result {
-        LazyJsonValue::StringOwned(s) => {
+        LazyJsonValue::StringOwned(ref s) => {
             assert_eq!(s, r#"hello "world"!"#);
             let memory_usage = result.memory_usage();
             assert!(memory_usage.allocated_bytes > 0); // Required allocation

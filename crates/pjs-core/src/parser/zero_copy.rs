@@ -498,9 +498,13 @@ impl<'a> LazyJsonValue<'a> {
                 allocated_bytes: 0,
                 referenced_bytes: bytes.len(),
             },
-            LazyJsonValue::Boolean(_) | LazyJsonValue::Null => MemoryUsage {
+            LazyJsonValue::Boolean(val) => MemoryUsage {
                 allocated_bytes: 0,
-                referenced_bytes: 0,
+                referenced_bytes: if *val { 4 } else { 5 }, // "true" or "false"
+            },
+            LazyJsonValue::Null => MemoryUsage {
+                allocated_bytes: 0,
+                referenced_bytes: 4, // "null"
             },
             LazyJsonValue::ObjectSlice(bytes) => MemoryUsage {
                 allocated_bytes: 0,
