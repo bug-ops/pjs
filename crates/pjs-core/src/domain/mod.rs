@@ -57,6 +57,9 @@ pub enum DomainError {
     #[error("Domain logic error: {0}")]
     Logic(String),
 
+    #[error("Compression error: {0}")]
+    CompressionError(String),
+
     #[error("Validation error: {0}")]
     ValidationError(String),
 }

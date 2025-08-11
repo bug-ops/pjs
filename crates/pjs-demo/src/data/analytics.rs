@@ -7,7 +7,7 @@ use rand::Rng;
 /// Generate analytics dashboard data
 pub fn generate_analytics_data(size: DatasetSize) -> Value {
     let data_points = size.item_count(super::DatasetType::Analytics);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     
     // Time series data for charts
     let time_series: Vec<Value> = (0..data_points).map(|i| {
@@ -15,12 +15,12 @@ pub fn generate_analytics_data(size: DatasetSize) -> Value {
         json!({
             "timestamp": timestamp.to_rfc3339(),
             "metrics": {
-                "revenue": rng.gen_range(1000.0..50000.0),
-                "users": rng.gen_range(100..5000),
-                "sessions": rng.gen_range(500..25000),
-                "page_views": rng.gen_range(2000..100000),
-                "bounce_rate": rng.gen_range(20.0..60.0),
-                "conversion_rate": rng.gen_range(1.0..8.0)
+                "revenue": rng.random_range(1000.0..50000.0),
+                "users": rng.random_range(100..5000),
+                "sessions": rng.random_range(500..25000),
+                "page_views": rng.random_range(2000..100000),
+                "bounce_rate": rng.random_range(20.0..60.0),
+                "conversion_rate": rng.random_range(1.0..8.0)
             }
         })
     }).collect();
@@ -33,9 +33,9 @@ pub fn generate_analytics_data(size: DatasetSize) -> Value {
         },
         "time_series": time_series,
         "summary": {
-            "total_revenue": rng.gen_range(100000.0..1000000.0),
-            "total_users": rng.gen_range(10000..500000),
-            "growth_rate": rng.gen_range(-5.0..25.0)
+            "total_revenue": rng.random_range(100000.0..1000000.0),
+            "total_users": rng.random_range(10000..500000),
+            "growth_rate": rng.random_range(-5.0..25.0)
         },
         "generated_at": chrono::Utc::now().to_rfc3339()
     })
@@ -44,17 +44,17 @@ pub fn generate_analytics_data(size: DatasetSize) -> Value {
 /// Generate real-time monitoring data  
 pub fn generate_realtime_data(size: DatasetSize) -> Value {
     let metric_count = size.item_count(super::DatasetType::RealTime);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     
     let metrics: Vec<Value> = (0..metric_count).map(|i| {
         // Fixed: Extract complex expressions outside json! macro
         let statuses = ["healthy", "warning", "critical"];
-        let status = statuses[rng.gen_range(0..3)];
+        let status = statuses[rng.random_range(0..3)];
         
         json!({
             "id": format!("metric_{}", i),
             "name": format!("System Metric {}", i + 1),
-            "value": rng.gen_range(0.0..100.0),
+            "value": rng.random_range(0.0..100.0),
             "status": status,
             "timestamp": chrono::Utc::now().to_rfc3339()
         })

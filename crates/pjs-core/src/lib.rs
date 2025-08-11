@@ -13,6 +13,7 @@
 #![allow(dead_code)]
 
 pub mod application;
+pub mod compression;
 pub mod domain;
 pub mod error;
 pub mod frame;
@@ -41,14 +42,27 @@ pub use application::{
     queries,
     services::{SessionService, StreamingService},
 };
+
+// Compression exports
+pub use compression::{
+    CompressedData, CompressionStrategy, SchemaAnalyzer, SchemaCompressor,
+};
+
+// Streaming exports
+pub use stream::{
+    CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
+    ProcessResult, StreamConfig, StreamFrame, StreamProcessor, StreamStats,
+    StreamingCompressor, StreamingDecompressor,
+};
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
 pub use parser::{ParseConfig, ParseStats, Parser};
 pub use semantic::{SemanticMeta, SemanticType};
-pub use stream::{
-    JsonPath as StreamJsonPath, JsonReconstructor, Priority as StreamPriority, PriorityStreamer,
-    ProcessResult, StreamFrame, StreamProcessor, StreamerConfig,
-};
+// Legacy stream exports (will be deprecated)
+// pub use stream::{
+//     JsonPath as StreamJsonPath, JsonReconstructor, Priority as StreamPriority, PriorityStreamer,
+//     ProcessResult, StreamFrame, StreamProcessor, StreamerConfig,
+// };
 
 /// Re-export commonly used types
 pub mod prelude {
@@ -68,9 +82,10 @@ pub mod prelude {
         FrameFlags,
         FrameHeader,
         JsonPath,
-        JsonReconstructor,
+        // TODO: Re-add when legacy modules are reconciled
+        // JsonReconstructor,
         Priority,
-        PriorityStreamer,
+        // PriorityStreamer,
         ProcessResult,
         QueryHandler,
         Result,

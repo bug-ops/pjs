@@ -21,7 +21,7 @@ const HASHTAGS: &[&str] = &[
 /// Generate social media feed dataset
 pub fn generate_social_data(size: DatasetSize) -> Value {
     let post_count = size.item_count(super::DatasetType::SocialMedia);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     
     // Generate users
     let users: Vec<Value> = USERNAMES.iter().enumerate().map(|(i, &username)| {
@@ -38,14 +38,14 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
             ),
             "avatar": format!("https://cdn.social.com/avatars/{}.jpg", username),
             "verified": i < 3, // First 3 users are verified
-            "followers": rng.gen_range(100..100000),
-            "following": rng.gen_range(50..5000),
+            "followers": rng.random_range(100..100000),
+            "following": rng.random_range(50..5000),
             "bio": "Software engineer passionate about technology and innovation. Building the future one line of code at a time.",
             "location": user_location,
             "joined_date": format!("202{}-{:02}-{:02}", 
-                rng.gen_range(0..4), 
-                rng.gen_range(1..13), 
-                rng.gen_range(1..29)
+                rng.random_range(0..4), 
+                rng.random_range(1..13), 
+                rng.random_range(1..29)
             )
         })
     }).collect();
@@ -54,26 +54,26 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
     let posts: Vec<Value> = (0..post_count).map(|i| {
         let user_id = (i % USERNAMES.len()) + 1;
         let post_type = POST_TYPES[i % POST_TYPES.len()];
-        let likes = rng.gen_range(0..1000);
-        let shares = rng.gen_range(0..likes/3);
-        let comments_count = rng.gen_range(0..50);
+        let likes = rng.random_range(0..1000);
+        let shares = rng.random_range(0..likes/3);
+        let comments_count = rng.random_range(0..50);
         
         let mut post = json!({
             "id": format!("post_{}", i + 1),
             "user_id": user_id,
             "type": post_type,
             "created_at": format!("2024-01-{:02}T{:02}:{:02}:00Z", 
-                rng.gen_range(1..29), 
-                rng.gen_range(0..24),
-                rng.gen_range(0..60)
+                rng.random_range(1..29), 
+                rng.random_range(0..24),
+                rng.random_range(0..60)
             ),
             "content": {
                 "text": generate_post_content(post_type, i),
-                "hashtags": (0..rng.gen_range(1..4)).map(|_| 
-                    HASHTAGS[rng.gen_range(0..HASHTAGS.len())]
+                "hashtags": (0..rng.random_range(1..4)).map(|_| 
+                    HASHTAGS[rng.random_range(0..HASHTAGS.len())]
                 ).collect::<Vec<_>>(),
-                "mentions": if rng.gen_bool(0.3) { 
-                    vec![format!("@{}", USERNAMES[rng.gen_range(0..USERNAMES.len())])]
+                "mentions": if rng.random_bool(0.3) { 
+                    vec![format!("@{}", USERNAMES[rng.random_range(0..USERNAMES.len())])]
                 } else { 
                     vec![] 
                 }
@@ -82,10 +82,10 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
                 "likes": likes,
                 "shares": shares,
                 "comments": comments_count,
-                "views": rng.gen_range(likes..likes*10)
+                "views": rng.random_range(likes..likes*10)
             },
-            "location": if rng.gen_bool(0.4) {
-                Some(["San Francisco, CA", "New York, NY", "London, UK", "Berlin, Germany", "Tokyo, Japan"][rng.gen_range(0..5)])
+            "location": if rng.random_bool(0.4) {
+                Some(["San Francisco, CA", "New York, NY", "London, UK", "Berlin, Germany", "Tokyo, Japan"][rng.random_range(0..5)])
             } else {
                 None
             }
@@ -100,8 +100,8 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
                     "thumbnail": format!("https://cdn.social.com/thumbs/post_{}_thumb.jpg", i + 1),
                     "alt_text": "Shared image",
                     "dimensions": {
-                        "width": rng.gen_range(800..1920),
-                        "height": rng.gen_range(600..1080)
+                        "width": rng.random_range(800..1920),
+                        "height": rng.random_range(600..1080)
                     }
                 });
             }
@@ -110,10 +110,10 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
                     "type": "video",
                     "url": format!("https://cdn.social.com/videos/post_{}.mp4", i + 1),
                     "thumbnail": format!("https://cdn.social.com/thumbs/post_{}_thumb.jpg", i + 1),
-                    "duration_seconds": rng.gen_range(15..300),
+                    "duration_seconds": rng.random_range(15..300),
                     "dimensions": {
-                        "width": rng.gen_range(720..1920),
-                        "height": rng.gen_range(480..1080)
+                        "width": rng.random_range(720..1920),
+                        "height": rng.random_range(480..1080)
                     }
                 });
             }
@@ -133,18 +133,18 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
         // Add comments for larger datasets
         if matches!(size, DatasetSize::Large | DatasetSize::Huge) && comments_count > 0 {
             let comments: Vec<Value> = (0..comments_count.min(10)).map(|j| {
-                let commenter_id = rng.gen_range(1..=USERNAMES.len());
+                let commenter_id = rng.random_range(1..=USERNAMES.len());
                 json!({
                     "id": format!("comment_{}_{}", i + 1, j + 1),
                     "user_id": commenter_id,
                     "content": generate_comment_content(),
                     "created_at": format!("2024-01-{:02}T{:02}:{:02}:00Z", 
-                        rng.gen_range(1..29), 
-                        rng.gen_range(0..24),
-                        rng.gen_range(0..60)
+                        rng.random_range(1..29), 
+                        rng.random_range(0..24),
+                        rng.random_range(0..60)
                     ),
-                    "likes": rng.gen_range(0..20),
-                    "replies": if rng.gen_bool(0.2) { rng.gen_range(1..5) } else { 0 }
+                    "likes": rng.random_range(0..20),
+                    "replies": if rng.random_bool(0.2) { rng.random_range(1..5) } else { 0 }
                 })
             }).collect();
             
@@ -162,7 +162,7 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
         
         json!({
             "hashtag": hashtag,
-            "posts_count": rng.gen_range(100..10000),
+            "posts_count": rng.random_range(100..10000),
             "trend_score": 100 - i * 10,
             "category": category
         })
@@ -174,12 +174,12 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
             "total_likes": posts.iter().map(|p| p["engagement"]["likes"].as_u64().unwrap_or(0)).sum::<u64>(),
             "total_shares": posts.iter().map(|p| p["engagement"]["shares"].as_u64().unwrap_or(0)).sum::<u64>(),
             "total_comments": posts.iter().map(|p| p["engagement"]["comments"].as_u64().unwrap_or(0)).sum::<u64>(),
-            "engagement_rate": rng.gen_range(3.0..8.0)
+            "engagement_rate": rng.random_range(3.0..8.0)
         },
         "reach": {
-            "impressions": rng.gen_range(50000..500000),
-            "unique_users": rng.gen_range(10000..100000),
-            "viral_coefficient": rng.gen_range(1.1..2.5)
+            "impressions": rng.random_range(50000..500000),
+            "unique_users": rng.random_range(10000..100000),
+            "viral_coefficient": rng.random_range(1.1..2.5)
         },
         "demographics": {
             "age_groups": {
@@ -246,6 +246,6 @@ fn generate_comment_content() -> String {
         "Thanks for the insights, very helpful!",
     ];
     
-    let mut rng = rand::thread_rng();
-    comments[rng.gen_range(0..comments.len())].to_string()
+    let mut rng = rand::rng();
+    comments[rng.random_range(0..comments.len())].to_string()
 }
