@@ -100,6 +100,10 @@ normal = ["axum", "tower", "tower-http", "hyper", "futures"]
 name = "simple_priority_demo"
 required-features = []
 
+[[example]]
+name = "zero_copy_demo"
+required-features = []
+
 # TODO: Fix websocket_streaming example after infrastructure module fixes
 # [[example]]
 # name = "websocket_streaming"

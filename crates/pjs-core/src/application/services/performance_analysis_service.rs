@@ -5,7 +5,7 @@
 
 use crate::{
     application::ApplicationResult,
-    domain::value_objects::{Priority, SessionId, StreamId},
+    domain::value_objects::{SessionId, StreamId},
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -151,7 +151,7 @@ struct ResourceSample {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ErrorSeverity {
+pub enum ErrorSeverity {
     Low,
     Medium,
     High,

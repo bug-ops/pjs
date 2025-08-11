@@ -93,26 +93,24 @@ impl PrioritizationService {
         context: &PerformanceContext,
     ) -> ApplicationResult<PriorityCalculationResult> {
         let mut reasoning = Vec::new();
-        let mut priority = Priority::MEDIUM;
-        let mut confidence = 0.8; // Base confidence
-
-        match &self.strategy {
+        
+        let priority = match &self.strategy {
             PrioritizationStrategy::Conservative => {
-                priority = self.calculate_conservative_priority(context, &mut reasoning)?;
+                self.calculate_conservative_priority(context, &mut reasoning)?
             }
             PrioritizationStrategy::Balanced => {
-                priority = self.calculate_balanced_priority(context, &mut reasoning)?;
+                self.calculate_balanced_priority(context, &mut reasoning)?
             }
             PrioritizationStrategy::Aggressive => {
-                priority = self.calculate_aggressive_priority(context, &mut reasoning)?;
+                self.calculate_aggressive_priority(context, &mut reasoning)?
             }
             PrioritizationStrategy::Custom(rules) => {
-                priority = self.calculate_custom_priority(context, rules, &mut reasoning)?;
+                self.calculate_custom_priority(context, rules, &mut reasoning)?
             }
-        }
+        };
 
         // Adjust confidence based on context stability
-        confidence = self.calculate_confidence_score(context);
+        let confidence = self.calculate_confidence_score(context);
 
         Ok(PriorityCalculationResult {
             calculated_priority: priority,

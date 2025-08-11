@@ -5,13 +5,13 @@
 
 use crate::domain::{
     DomainResult,
-    entities::{Frame, Stream},
+    entities::{Frame},
     value_objects::{SessionId, StreamId, Priority},
     ports::{
-        writer::{StreamWriter, FrameWriter, WriterFactory, WriterConfig},
+        writer::{WriterFactory, WriterConfig},
         repositories::{
             StreamSessionRepository, FrameRepository, 
-            EventRepository, CacheRepository
+            EventRepository
         },
         EventPublisher, MetricsCollector,
     },
@@ -77,7 +77,7 @@ impl StreamingOrchestrator {
         connection_id: &str,
     ) -> DomainResult<StreamingStats> {
         // 1. Validate session exists
-        let session = self.session_repository
+        let _session = self.session_repository
             .find_session(session_id)
             .await?
             .ok_or_else(|| {
