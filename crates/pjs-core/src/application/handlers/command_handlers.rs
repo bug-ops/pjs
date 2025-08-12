@@ -100,13 +100,12 @@ where
             .map_err(ApplicationError::Domain)?;
 
         // Update stream configuration if provided
-        if let Some(config) = command.config {
-            if let Some(stream) = session.get_stream_mut(stream_id) {
+        if let Some(config) = command.config
+            && let Some(stream) = session.get_stream_mut(stream_id) {
                 stream
                     .update_config(config)
                     .map_err(ApplicationError::Domain)?;
             }
-        }
 
         // Save updated session
         self.repository

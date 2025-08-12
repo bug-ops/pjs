@@ -77,23 +77,23 @@ impl Frame {
         }
 
         // Create JsonData payload directly instead of using serde_json
-        let mut payload_obj = HashMap::new();
+        let mut payload_obj = HashMap::with_capacity(1);
         let patches_array: Vec<JsonData> = patches.into_iter().map(|patch| {
-            let mut patch_obj = HashMap::new();
-            patch_obj.insert("path".to_string(), JsonData::String(patch.path.to_string()));
-            patch_obj.insert("operation".to_string(), JsonData::String(
+            let mut patch_obj = HashMap::with_capacity(3);
+            patch_obj.insert("path".into(), JsonData::String(patch.path.to_string()));
+            patch_obj.insert("operation".into(), JsonData::String(
                 match patch.operation {
                     PatchOperation::Set => "set",
                     PatchOperation::Append => "append", 
                     PatchOperation::Merge => "merge",
                     PatchOperation::Delete => "delete",
-                }.to_string()
+                }.into()
             ));
-            patch_obj.insert("value".to_string(), patch.value);
+            patch_obj.insert("value".into(), patch.value);
             JsonData::Object(patch_obj)
         }).collect();
         
-        payload_obj.insert("patches".to_string(), JsonData::Array(patches_array));
+        payload_obj.insert("patches".into(), JsonData::Array(patches_array));
         let payload = JsonData::Object(payload_obj);
 
         Ok(Self {
@@ -264,7 +264,7 @@ impl Frame {
                     ));
                 }
 
-                if !self.payload.get("message").map_or(false, |m| m.is_string()) {
+                if !self.payload.get("message").is_some_and(|m| m.is_string()) {
                     return Err(DomainError::InvalidFrame(
                         "Error frames must contain message".to_string(),
                     ));

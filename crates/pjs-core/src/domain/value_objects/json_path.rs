@@ -83,11 +83,10 @@ impl JsonPath {
         }
 
         // Handle array index case: $.key[0] -> $.key
-        if let Some(pos) = self.0.rfind('[') {
-            if pos > 1 {
+        if let Some(pos) = self.0.rfind('[')
+            && pos > 1 {
                 return Some(Self(self.0[..pos].to_string()));
             }
-        }
 
         // If no separator found and not root, parent is root
         Some(Self::root())
@@ -100,16 +99,14 @@ impl JsonPath {
         }
 
         // Check for array index: [123]
-        if let Some(start) = self.0.rfind('[') {
-            if let Some(end) = self.0.rfind(']') {
-                if end > start {
+        if let Some(start) = self.0.rfind('[')
+            && let Some(end) = self.0.rfind(']')
+                && end > start {
                     let index_str = &self.0[start + 1..end];
                     if let Ok(index) = index_str.parse::<usize>() {
                         return Some(PathSegment::Index(index));
                     }
                 }
-            }
-        }
 
         // Check for key segment
         if let Some(pos) = self.0.rfind('.') {
@@ -143,7 +140,7 @@ impl JsonPath {
                 '.' => depth += 1,
                 '[' => {
                     // Skip to end of array index
-                    while let Some(ch) = chars.next() {
+                    for ch in chars.by_ref() {
                         if ch == ']' {
                             break;
                         }
@@ -219,7 +216,7 @@ impl JsonPath {
                     // Must contain valid array index
                     let mut index_str = String::new();
 
-                    while let Some(ch) = chars.next() {
+                    for ch in chars.by_ref() {
                         if ch == ']' {
                             break;
                         }

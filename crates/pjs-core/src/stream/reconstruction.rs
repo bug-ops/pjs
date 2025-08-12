@@ -216,11 +216,10 @@ impl JsonReconstructor {
                 map.remove(&target_key);
             }
             JsonValue::Array(arr) => {
-                if let Ok(index) = target_key.parse::<usize>() {
-                    if index < arr.len() {
+                if let Ok(index) = target_key.parse::<usize>()
+                    && index < arr.len() {
                         arr.remove(index);
                     }
-                }
             }
             _ => {
                 return Err(crate::Error::Other(
@@ -414,7 +413,6 @@ mod tests {
     use super::*;
     use crate::stream::Priority;
     use serde_json::json;
-    use smallvec::SmallVec;
 
     #[test]
     fn test_reconstructor_creation() {

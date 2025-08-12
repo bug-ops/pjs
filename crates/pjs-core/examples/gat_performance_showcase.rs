@@ -19,12 +19,13 @@ use std::future::Future;
 struct LegacyAsyncTraitAdapter;
 
 #[async_trait]
+#[allow(dead_code)]
 trait LegacyStreamingAdapter: Send + Sync {
     type Request;
     type Response;
     type Error: std::error::Error + Send + Sync + 'static;
 
-    fn from_request(&self, request: Self::Request) -> IntegrationResult<UniversalRequest>;
+    fn convert_request(&self, request: Self::Request) -> IntegrationResult<UniversalRequest>;
     fn to_response(&self, response: UniversalResponse) -> IntegrationResult<Self::Response>;
     
     async fn create_streaming_response(
@@ -45,7 +46,7 @@ impl LegacyStreamingAdapter for LegacyAsyncTraitAdapter {
     type Response = String;
     type Error = IntegrationError;
 
-    fn from_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
+    fn convert_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
         Ok(UniversalRequest::new("GET", "/test"))
     }
 
@@ -97,7 +98,7 @@ impl StreamingAdapter for ModernGatAdapter {
     where
         Self: 'a;
 
-    fn from_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
+    fn convert_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
         Ok(UniversalRequest::new("GET", "/test"))
     }
 

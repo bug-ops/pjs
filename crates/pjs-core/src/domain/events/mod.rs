@@ -122,7 +122,7 @@ pub struct PerformanceMetrics {
 }
 
 /// Distribution of frames by priority level
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PriorityDistribution {
     pub critical_frames: u64,
     pub high_frames: u64,
@@ -131,17 +131,6 @@ pub struct PriorityDistribution {
     pub background_frames: u64,
 }
 
-impl Default for PriorityDistribution {
-    fn default() -> Self {
-        Self {
-            critical_frames: 0,
-            high_frames: 0,
-            medium_frames: 0,
-            low_frames: 0,
-            background_frames: 0,
-        }
-    }
-}
 
 impl PriorityDistribution {
     /// Create new empty distribution
@@ -558,6 +547,6 @@ impl DomainEvent {
         static EMPTY: LazyLock<serde_json::Value> = LazyLock::new(|| {
             serde_json::Value::Object(serde_json::Map::new())
         });
-        &*EMPTY
+        &EMPTY
     }
 }

@@ -402,7 +402,7 @@ impl From<PerformanceMetrics> for PerformanceMetricsDto {
             frames_per_second: metrics.frames_per_second,
             bytes_per_second: metrics.bytes_per_second,
             average_frame_size: metrics.average_frame_size,
-            priority_distribution: metrics.priority_distribution.into(),
+            priority_distribution: metrics.priority_distribution,
             latency_ms: metrics.latency_ms,
         }
     }
@@ -416,7 +416,7 @@ impl TryFrom<PerformanceMetricsDto> for PerformanceMetrics {
             frames_per_second: dto.frames_per_second,
             bytes_per_second: dto.bytes_per_second,
             average_frame_size: dto.average_frame_size,
-            priority_distribution: dto.priority_distribution.into(),
+            priority_distribution: dto.priority_distribution,
             latency_ms: dto.latency_ms,
         })
     }

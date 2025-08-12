@@ -280,7 +280,7 @@ pub trait StreamingAdapter: Send + Sync {
         Self: 'a;
 
     /// Convert framework request to universal format
-    fn from_request(&self, request: Self::Request) -> IntegrationResult<UniversalRequest>;
+    fn convert_request(&self, request: Self::Request) -> IntegrationResult<UniversalRequest>;
 
     /// Convert universal response to framework format
     fn to_response(&self, response: UniversalResponse) -> IntegrationResult<Self::Response>;

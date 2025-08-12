@@ -287,6 +287,12 @@ pub struct StreamingPlan {
     pub frames: VecDeque<PriorityStreamFrame>,
 }
 
+impl Default for StreamingPlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamingPlan {
     pub fn new() -> Self {
         Self {

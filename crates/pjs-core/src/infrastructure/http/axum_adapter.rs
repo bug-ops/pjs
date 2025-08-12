@@ -198,7 +198,7 @@ where
         .map_err(PjsError::Application)?;
     
     // Register connection with connection manager
-    if let Err(e) = state.connection_manager.register_connection(session_id.clone()).await {
+    if let Err(e) = state.connection_manager.register_connection(session_id).await {
         tracing::warn!("Failed to register connection: {}", e);
     }
     
@@ -307,12 +307,12 @@ where
     }
     
     let stream_id = state.session_service
-        .create_and_start_stream(session_id.clone(), request.data, None)
+        .create_and_start_stream(session_id, request.data, None)
         .await
         .map_err(PjsError::Application)?;
     
     // Associate stream with connection
-    if let Err(e) = state.connection_manager.set_stream(&session_id, stream_id.clone()).await {
+    if let Err(e) = state.connection_manager.set_stream(&session_id, stream_id).await {
         tracing::warn!("Failed to associate stream with connection: {}", e);
     }
     

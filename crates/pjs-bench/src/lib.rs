@@ -31,12 +31,17 @@ pub use pjson_rs::{Error, Frame, Parser, Priority, Result, StreamConfig, StreamF
 // Fallback implementations for benchmarking when streaming features aren't available
 pub mod fallback {
     use bytes::Bytes;
-    use serde_json::Value;
     use crate::Priority;
 
     #[derive(Debug, Clone)]
     pub struct StreamerConfig {
         chunk_size: usize,
+    }
+
+    impl Default for StreamerConfig {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl StreamerConfig {
@@ -165,7 +170,7 @@ impl BenchSuite {
             "products": products,
             "total": products,
             "filters": {
-                "categories": (0..10).map(|i| format!("Category {}", i)).collect::<Vec<_>>()
+                "categories": (0..10).map(|i| format!("Category {i}")).collect::<Vec<_>>()
             }
         })
         .to_string()

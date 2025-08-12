@@ -72,12 +72,11 @@ impl<T> ObjectPool<T> {
     /// Return an object to the pool
     fn return_object(&self, obj: T) {
         // Try to return to pool
-        if self.objects.push(obj).is_ok() {
-            if let Ok(mut stats) = self.stats.lock() {
+        if self.objects.push(obj).is_ok()
+            && let Ok(mut stats) = self.stats.lock() {
                 stats.objects_returned += 1;
                 stats.current_pool_size += 1;
             }
-        }
         // If pool is full, object is dropped (let GC handle it)
     }
 
@@ -543,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_pool_capacity_limits() {
-        let pool = ObjectPool::new(2, || Vec::<i32>::new());
+        let pool = ObjectPool::new(2, Vec::<i32>::new);
         
         let obj1 = pool.get();
         let obj2 = pool.get();
@@ -563,7 +562,7 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
         
-        let pool = Arc::new(ObjectPool::new(10, || Vec::<i32>::new()));
+        let pool = Arc::new(ObjectPool::new(10, Vec::<i32>::new));
         let mut handles = vec![];
         
         for _ in 0..5 {

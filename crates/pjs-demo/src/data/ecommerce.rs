@@ -35,7 +35,7 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
         .map(|i| {
             let base_price = 50.0 + (i as f64 * 23.7) % 2000.0;
             let discount_percent = if i % 7 == 0 { rng.random_range(5..30) } else { 0 };
-            let final_price = base_price * (100 - discount_percent) as f64 / 100.0;
+            let final_price = base_price * f64::from(100 - discount_percent) / 100.0;
             
             let mut product = json!({
                 "id": 1000 + i,
@@ -63,7 +63,7 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
                     }
                 },
                 "rating": {
-                    "average": ((rng.random_range(30..50) as f64) / 10.0).min(5.0),
+                    "average": (f64::from(rng.random_range(30..50)) / 10.0).min(5.0),
                     "count": rng.random_range(5..500),
                     "distribution": {
                         "5": rng.random_range(20..60),
@@ -104,7 +104,7 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
                         rng.random_range(10..50), 
                         rng.random_range(5..30)
                     ),
-                    "weight": format!("{:.1}kg", (rng.random_range(100..5000) as f64) / 1000.0),
+                    "weight": format!("{:.1}kg", f64::from(rng.random_range(100..5000)) / 1000.0),
                     "material": "Premium Materials",
                     "warranty": format!("{} year{}", 
                         rng.random_range(1..4), 
@@ -183,7 +183,7 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
             "name": category,
             "product_count": count,
             "featured": i < 4, // First 4 categories are featured
-            "icon": format!("icon-{}", category.to_lowercase().replace(" ", "-"))
+            "icon": format!("icon-{}", category.to_lowercase().replace(' ', "-"))
         })
     }).collect();
 
@@ -240,7 +240,7 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
         "generated_at": chrono::Utc::now().to_rfc3339(),
         "dataset_info": {
             "type": "ecommerce",
-            "size": format!("{:?}", size).to_lowercase(),
+            "size": format!("{size:?}").to_lowercase(),
             "product_count": product_count
         }
     })

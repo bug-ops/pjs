@@ -115,7 +115,7 @@ where
     where
         Self: 'a;
 
-    fn from_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
+    fn convert_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
         // Universal adapter cannot convert framework-specific requests generically
         // This should only be used with concrete adapter implementations
         Err(IntegrationError::UnsupportedFramework(
@@ -150,7 +150,7 @@ where
                     let data = JsonData::Array(
                         json_frames
                             .into_iter()
-                            .map(|v| JsonData::from(v))
+                            .map(JsonData::from)
                             .collect()
                     );
                     

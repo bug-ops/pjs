@@ -177,17 +177,15 @@ where
         }
 
         // Date range filters
-        if let Some(after) = filters.created_after {
-            if session.created_at() <= after {
+        if let Some(after) = filters.created_after
+            && session.created_at() <= after {
                 return false;
             }
-        }
 
-        if let Some(before) = filters.created_before {
-            if session.created_at() >= before {
+        if let Some(before) = filters.created_before
+            && session.created_at() >= before {
                 return false;
             }
-        }
 
         // Client info filter
         if let Some(ref client_filter) = filters.client_info {

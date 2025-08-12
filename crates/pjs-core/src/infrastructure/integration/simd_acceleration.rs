@@ -110,11 +110,10 @@ impl SimdJsonProcessor {
     pub fn extract_priority_field(input: &[u8]) -> Result<Option<u8>, sonic_rs::Error> {
         let doc = sonic_rs::from_slice::<LazyValue<'_>>(input)?;
         
-        if let Some(priority_value) = doc.get("priority") {
-            if let Some(priority) = priority_value.as_u64() {
+        if let Some(priority_value) = doc.get("priority")
+            && let Some(priority) = priority_value.as_u64() {
                 return Ok(Some(priority as u8));
             }
-        }
         
         Ok(None)
     }

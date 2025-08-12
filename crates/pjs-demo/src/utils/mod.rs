@@ -39,7 +39,7 @@ impl std::str::FromStr for NetworkType {
             "4g" | "mobile4g" => Ok(NetworkType::Mobile4G),
             "3g" | "mobile3g" => Ok(NetworkType::Mobile3G),
             "satellite" | "s" => Ok(NetworkType::Satellite),
-            _ => Err(format!("Unknown network type: {}", s)),
+            _ => Err(format!("Unknown network type: {s}")),
         }
     }
 }
@@ -95,7 +95,7 @@ pub fn format_bytes(bytes: usize) -> String {
 pub fn format_duration(duration: Duration) -> String {
     let millis = duration.as_millis();
     if millis < 1000 {
-        format!("{}ms", millis)
+        format!("{millis}ms")
     } else {
         format!("{:.1}s", duration.as_secs_f64())
     }

@@ -27,8 +27,8 @@ pub enum StreamFormat {
 
 impl StreamFormat {
     pub fn from_accept_header(headers: &HeaderMap) -> Self {
-        if let Some(accept) = headers.get(header::ACCEPT) {
-            if let Ok(accept_str) = accept.to_str() {
+        if let Some(accept) = headers.get(header::ACCEPT)
+            && let Ok(accept_str) = accept.to_str() {
                 if accept_str.contains("text/event-stream") {
                     return Self::ServerSentEvents;
                 } else if accept_str.contains("application/x-ndjson") {
@@ -37,7 +37,6 @@ impl StreamFormat {
                     return Self::Binary;
                 }
             }
-        }
         Self::Json
     }
     

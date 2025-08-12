@@ -150,17 +150,15 @@ impl SonicParser {
 
     /// Detect semantic type using sonic-rs Value with SIMD acceleration
     fn detect_semantic_type_sonic(&self, value: &SonicValue) -> SemanticType {
-        if value.is_array() {
-            if let Some(arr) = value.as_array() {
+        if value.is_array()
+            && let Some(arr) = value.as_array() {
                 return self.analyze_array_semantics_simd(arr);
             }
-        }
 
-        if value.is_object() {
-            if let Some(obj) = value.as_object() {
+        if value.is_object()
+            && let Some(obj) = value.as_object() {
                 return self.analyze_object_semantics_simd(obj);
             }
-        }
 
         SemanticType::Generic
     }
@@ -272,8 +270,8 @@ impl SonicParser {
         }
 
         // Check for tabular data (array of objects with similar structure)
-        if len >= 3 && arr.iter().all(|v| v.is_object()) {
-            if let Some(first_obj) = arr.first().and_then(|v| v.as_object()) {
+        if len >= 3 && arr.iter().all(|v| v.is_object())
+            && let Some(first_obj) = arr.first().and_then(|v| v.as_object()) {
                 let first_scan = crate::parser::simd::SimdClassifier::scan_object_keys(first_obj);
 
                 // Simple homogeneity check - all objects should have similar key counts
@@ -313,7 +311,6 @@ impl SonicParser {
                     };
                 }
             }
-        }
 
         SemanticType::Generic
     }

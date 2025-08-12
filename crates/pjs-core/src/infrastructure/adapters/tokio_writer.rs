@@ -333,6 +333,12 @@ pub struct TokioConnectionMonitor {
     connections: Arc<tokio::sync::Mutex<std::collections::HashMap<String, ConnectionState>>>,
 }
 
+impl Default for TokioConnectionMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TokioConnectionMonitor {
     pub fn new() -> Self {
         Self {

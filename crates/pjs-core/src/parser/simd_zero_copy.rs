@@ -62,6 +62,12 @@ pub struct SimdParsingStats {
     pub simd_efficiency: f64,
 }
 
+impl<'a> Default for SimdZeroCopyParser<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> SimdZeroCopyParser<'a> {
     /// Create new SIMD zero-copy parser with default configuration
     pub fn new() -> Self {
@@ -330,7 +336,7 @@ impl<'a> SimdZeroCopyParser<'a> {
 
     fn is_simd_friendly(&self, input: &[u8]) -> bool {
         // Check if input is large enough and aligned for SIMD processing
-        input.len() >= 32 && (input.as_ptr() as usize) % 32 == 0
+        input.len() >= 32 && (input.as_ptr() as usize).is_multiple_of(32)
     }
 
     fn is_simd_available() -> bool {
