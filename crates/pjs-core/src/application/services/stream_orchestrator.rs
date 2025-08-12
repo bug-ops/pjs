@@ -193,12 +193,7 @@ where
                 new_threshold: adjustment.new_threshold,
                 reason: adjustment.reason,
                 confidence: adjustment.confidence,
-                urgency: match adjustment.urgency {
-                    crate::application::services::prioritization_service::AdjustmentUrgency::Low => AdjustmentUrgency::Low,
-                    crate::application::services::prioritization_service::AdjustmentUrgency::Medium => AdjustmentUrgency::Medium,
-                    crate::application::services::prioritization_service::AdjustmentUrgency::High => AdjustmentUrgency::High,
-                    crate::application::services::prioritization_service::AdjustmentUrgency::Critical => AdjustmentUrgency::Critical,
-                },
+                urgency: adjustment.urgency, // Same type now - no conversion needed
             });
         }
 
@@ -378,13 +373,8 @@ pub struct PriorityAdjustment {
     pub urgency: AdjustmentUrgency,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum AdjustmentUrgency {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
+// Use shared AdjustmentUrgency type
+use crate::application::shared::AdjustmentUrgency;
 
 pub type UseCaseOptimizationResult = crate::application::services::optimization_service::UseCaseOptimizationResult;
 

@@ -8,10 +8,12 @@ pub mod dto;
 pub mod handlers;
 pub mod queries;
 pub mod services;
+pub mod shared;
 
 pub use commands::*;
 pub use handlers::{CommandHandler, QueryHandler};
 pub use queries::*;
+pub use shared::AdjustmentUrgency;
 
 /// Application Result type
 pub type ApplicationResult<T> = Result<T, ApplicationError>;

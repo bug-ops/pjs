@@ -76,7 +76,7 @@ impl std::str::FromStr for DatasetSize {
             "medium" | "m" => Ok(DatasetSize::Medium),
             "large" | "l" => Ok(DatasetSize::Large),
             "huge" | "h" => Ok(DatasetSize::Huge),
-            _ => Err(format!("Unknown dataset size: {}", s)),
+            _ => Err(format!("Unknown dataset size: {s}")),
         }
     }
 }
@@ -90,7 +90,7 @@ impl std::str::FromStr for DatasetType {
             "social" | "s" | "feed" => Ok(DatasetType::SocialMedia),
             "analytics" | "a" | "dashboard" => Ok(DatasetType::Analytics),
             "realtime" | "r" | "live" => Ok(DatasetType::RealTime),
-            _ => Err(format!("Unknown dataset type: {}", s)),
+            _ => Err(format!("Unknown dataset type: {s}")),
         }
     }
 }
@@ -109,8 +109,8 @@ pub fn generate_dataset(dataset_type: DatasetType, size: DatasetSize) -> Value {
 pub fn generate_metadata(dataset_type: DatasetType, size: DatasetSize, data: &Value) -> HashMap<String, Value> {
     let mut metadata = HashMap::new();
     
-    metadata.insert("type".to_string(), serde_json::json!(format!("{:?}", dataset_type).to_lowercase()));
-    metadata.insert("size".to_string(), serde_json::json!(format!("{:?}", size).to_lowercase()));
+    metadata.insert("type".to_string(), serde_json::json!(format!("{dataset_type:?}").to_lowercase()));
+    metadata.insert("size".to_string(), serde_json::json!(format!("{size:?}").to_lowercase()));
     
     let json_str = serde_json::to_string(data).unwrap_or_default();
     metadata.insert("bytes".to_string(), serde_json::json!(json_str.len()));

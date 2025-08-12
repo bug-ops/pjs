@@ -206,7 +206,7 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
         "generated_at": chrono::Utc::now().to_rfc3339(),
         "dataset_info": {
             "type": "social",
-            "size": format!("{:?}", size).to_lowercase(),
+            "size": format!("{size:?}").to_lowercase(),
             "post_count": post_count,
             "user_count": users.len()
         }

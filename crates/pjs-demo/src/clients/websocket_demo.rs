@@ -7,7 +7,7 @@ use futures::{SinkExt, StreamExt};
 use pjson_rs::{
     compression::{CompressionStrategy, SchemaCompressor},
     domain::value_objects::{Priority, SessionId},
-    ApplicationResult,
+    ApplicationResult, JsonReconstructor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -128,7 +128,7 @@ impl ClientStats {
 
 /// JSON reconstructor for building complete objects from PJS frames
 #[derive(Debug)]
-pub struct JsonReconstructor {
+pub struct DemoJsonReconstructor {
     /// Partial JSON state being built
     state: JsonValue,
     /// Frames received so far
@@ -137,7 +137,7 @@ pub struct JsonReconstructor {
     decompressor: SchemaCompressor,
 }
 
-impl JsonReconstructor {
+impl DemoJsonReconstructor {
     pub fn new() -> Self {
         Self {
             state: JsonValue::Null,
@@ -214,7 +214,7 @@ impl JsonReconstructor {
 pub struct WebSocketClient {
     config: ClientConfig,
     stats: ClientStats,
-    reconstructor: JsonReconstructor,
+    reconstructor: DemoJsonReconstructor,
 }
 
 impl WebSocketClient {
@@ -222,7 +222,7 @@ impl WebSocketClient {
         Self {
             config,
             stats: ClientStats::new(),
-            reconstructor: JsonReconstructor::new(),
+            reconstructor: DemoDemoJsonReconstructor::new(),
         }
     }
 

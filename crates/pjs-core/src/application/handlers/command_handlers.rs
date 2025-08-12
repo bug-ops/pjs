@@ -100,13 +100,12 @@ where
             .map_err(ApplicationError::Domain)?;
 
         // Update stream configuration if provided
-        if let Some(config) = command.config {
-            if let Some(stream) = session.get_stream_mut(stream_id) {
+        if let Some(config) = command.config
+            && let Some(stream) = session.get_stream_mut(stream_id) {
                 stream
                     .update_config(config)
                     .map_err(ApplicationError::Domain)?;
             }
-        }
 
         // Save updated session
         self.repository
@@ -478,12 +477,288 @@ mod tests {
         let result = handler.handle(command).await;
         assert!(result.is_ok());
 
-        // TODO: Handle unwrap() - add proper error handling in tests
         let session_id = result.unwrap();
 
         // Verify session was saved
-        // TODO: Handle unwrap() - add proper error handling in tests
         let saved_session = repository.find_session(session_id).await.unwrap();
         assert!(saved_session.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_session_command_handler_creation() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher.clone());
+
+        assert!(std::ptr::eq(handler.repository.as_ref(), repository.as_ref()));
+        assert!(std::ptr::eq(handler.event_publisher.as_ref(), event_publisher.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn test_create_session_with_full_client_info() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
+
+        let command = CreateSessionCommand {
+            config: SessionConfig::default(),
+            client_info: Some("test-client".to_string()),
+            user_agent: Some("Mozilla/5.0".to_string()),
+            ip_address: Some("192.168.1.1".to_string()),
+        };
+
+        let result = handler.handle(command).await;
+        assert!(result.is_ok());
+
+        let session_id = result.unwrap();
+        let saved_session = repository.find_session(session_id).await.unwrap();
+        assert!(saved_session.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_create_session_without_client_info() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let command = CreateSessionCommand {
+            config: SessionConfig::default(),
+            client_info: None,
+            user_agent: None,
+            ip_address: None,
+        };
+
+        let result = handler.handle(command).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_command() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
+
+        // First create a session
+        let create_session_cmd = CreateSessionCommand {
+            config: SessionConfig::default(),
+            client_info: None,
+            user_agent: None,
+            ip_address: None,
+        };
+
+        let session_id = handler.handle(create_session_cmd).await.unwrap();
+
+        // Then create a stream
+        let create_stream_cmd = CreateStreamCommand {
+            session_id: session_id.into(),
+            source_data: serde_json::json!({"test": "data"}),
+            config: None,
+        };
+
+        let result = handler.handle(create_stream_cmd).await;
+        assert!(result.is_ok());
+
+        let stream_id = result.unwrap();
+        assert_ne!(stream_id, StreamId::new()); // Should be a valid stream ID
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_with_config() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
+
+        // Create session first
+        let session_id = handler.handle(CreateSessionCommand {
+            config: SessionConfig::default(),
+            client_info: None,
+            user_agent: None,
+            ip_address: None,
+        }).await.unwrap();
+
+        // Create stream with config
+        let stream_config = crate::domain::entities::stream::StreamConfig::default();
+        let create_stream_cmd = CreateStreamCommand {
+            session_id: session_id.into(),
+            source_data: serde_json::json!({"test": "data"}),
+            config: Some(stream_config),
+        };
+
+        let result = handler.handle(create_stream_cmd).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_session_not_found() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let non_existent_session_id = SessionId::new();
+        let create_stream_cmd = CreateStreamCommand {
+            session_id: non_existent_session_id.into(),
+            source_data: serde_json::json!({"test": "data"}),
+            config: None,
+        };
+
+        let result = handler.handle(create_stream_cmd).await;
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), ApplicationError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_start_stream_command() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
+
+        // Create session and stream first
+        let session_id = handler.handle(CreateSessionCommand {
+            config: SessionConfig::default(),
+            client_info: None,
+            user_agent: None,
+            ip_address: None,
+        }).await.unwrap();
+
+        let stream_id = handler.handle(CreateStreamCommand {
+            session_id: session_id.into(),
+            source_data: serde_json::json!({"test": "data"}),
+            config: None,
+        }).await.unwrap();
+
+        // Start the stream
+        let start_stream_cmd = StartStreamCommand {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+        };
+
+        let result = handler.handle(start_stream_cmd).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_start_stream_session_not_found() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let start_stream_cmd = StartStreamCommand {
+            session_id: SessionId::new().into(),
+            stream_id: StreamId::new().into(),
+        };
+
+        let result = handler.handle(start_stream_cmd).await;
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), ApplicationError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_complete_stream_command() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
+
+        // Create session, stream, and start it
+        let session_id = handler.handle(CreateSessionCommand {
+            config: SessionConfig::default(),
+            client_info: None,
+            user_agent: None,
+            ip_address: None,
+        }).await.unwrap();
+
+        let stream_id = handler.handle(CreateStreamCommand {
+            session_id: session_id.into(),
+            source_data: serde_json::json!({"test": "data"}),
+            config: None,
+        }).await.unwrap();
+
+        handler.handle(StartStreamCommand {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+        }).await.unwrap();
+
+        // Complete the stream
+        let complete_stream_cmd = CompleteStreamCommand {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+            checksum: Some("abc123".to_string()),
+        };
+
+        let result = handler.handle(complete_stream_cmd).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_complete_stream_without_checksum() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
+
+        // Create and start stream
+        let session_id = handler.handle(CreateSessionCommand {
+            config: SessionConfig::default(),
+            client_info: None,
+            user_agent: None,
+            ip_address: None,
+        }).await.unwrap();
+
+        let stream_id = handler.handle(CreateStreamCommand {
+            session_id: session_id.into(),
+            source_data: serde_json::json!({"test": "data"}),
+            config: None,
+        }).await.unwrap();
+
+        handler.handle(StartStreamCommand {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+        }).await.unwrap();
+
+        // Complete without checksum
+        let complete_stream_cmd = CompleteStreamCommand {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+            checksum: None,
+        };
+
+        let result = handler.handle(complete_stream_cmd).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_close_session_command() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
+
+        // Create session first
+        let session_id = handler.handle(CreateSessionCommand {
+            config: SessionConfig::default(),
+            client_info: None,
+            user_agent: None,
+            ip_address: None,
+        }).await.unwrap();
+
+        // Close the session
+        let close_session_cmd = CloseSessionCommand {
+            session_id: session_id.into(),
+        };
+
+        let result = handler.handle(close_session_cmd).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_close_session_not_found() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let close_session_cmd = CloseSessionCommand {
+            session_id: SessionId::new().into(),
+        };
+
+        let result = handler.handle(close_session_cmd).await;
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), ApplicationError::NotFound(_)));
     }
 }

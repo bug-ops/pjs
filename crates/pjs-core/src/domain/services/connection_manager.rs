@@ -54,7 +54,7 @@ impl ConnectionManager {
         }
 
         let state = ConnectionState {
-            session_id: session_id.clone(),
+            session_id,
             stream_id: None,
             connected_at: Instant::now(),
             last_activity: Instant::now(),
@@ -177,7 +177,7 @@ impl ConnectionManager {
             .filter(|state| {
                 state.is_active && now.duration_since(state.last_activity) > self.timeout_duration
             })
-            .map(|state| state.session_id.clone())
+            .map(|state| state.session_id)
             .collect()
     }
 

@@ -162,8 +162,7 @@ impl SimpleParser {
                 .filter(|k| {
                     // TODO: Handle unwrap() - add proper error handling for object field access
                     *k != timestamp_field && self.looks_like_numeric_value(obj.get(*k).unwrap())
-                })
-                .map(|k| k.clone())
+                }).cloned()
                 .collect();
 
             if !value_fields.is_empty() {
@@ -176,8 +175,8 @@ impl SimpleParser {
         }
 
         // Matrix/image data detection
-        if obj.contains_key("data") && obj.contains_key("shape") {
-            if let (Some(Value::Array(_)), Some(Value::Array(shape))) =
+        if obj.contains_key("data") && obj.contains_key("shape")
+            && let (Some(Value::Array(_)), Some(Value::Array(shape))) =
                 (obj.get("data"), obj.get("shape"))
             {
                 let dimensions: SmallVec<[usize; 4]> = shape
@@ -192,7 +191,6 @@ impl SimpleParser {
                     };
                 }
             }
-        }
 
         SemanticType::Generic
     }

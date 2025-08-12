@@ -1,0 +1,9 @@
+[toolchain]
+channel = "nightly"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
+
+# This project requires nightly Rust for:
+# - impl Trait in associated types (GAT zero-cost abstractions)
+# - Enhanced SIMD optimizations
+# - Advanced const evaluation features
