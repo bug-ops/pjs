@@ -4,9 +4,11 @@
 // to support PJS streaming capabilities.
 
 use super::{UniversalRequest, UniversalResponse, IntegrationResult};
+use super::simd_acceleration::{SimdStreamProcessor, SimdConfig};
 use crate::stream::StreamFrame;
 use crate::domain::value_objects::{SessionId, JsonData};
 use async_trait::async_trait;
+use std::borrow::Cow;
 
 /// Core trait for integrating PJS streaming with any web framework
 #[async_trait]
@@ -32,22 +34,40 @@ pub trait StreamingAdapter: Send + Sync {
         format: StreamingFormat,
     ) -> IntegrationResult<Self::Response>;
 
-    /// Create a Server-Sent Events response
+    /// Create a Server-Sent Events response with SIMD acceleration
     async fn create_sse_response(
         &self,
         session_id: SessionId,
         frames: Vec<StreamFrame>,
     ) -> IntegrationResult<Self::Response> {
-        // Default implementation converts frames to SSE format
-        let events: Vec<String> = frames
-            .into_iter()
-            .map(|frame| format!("data: {}\n\n", serde_json::to_string(&frame).unwrap_or_default()))
-            .collect();
+        // Use SIMD-accelerated serialization for better performance
+        let config = SimdConfig::default();
+        let mut processor = SimdStreamProcessor::new(config);
+        
+        match processor.process_to_sse(&frames) {
+            Ok(sse_data) => {
+                let sse_string = String::from_utf8(sse_data.to_vec())
+                    .map_err(|e| super::IntegrationError::ResponseConversion(e.to_string()))?;
+                
+                let events = vec![sse_string];
+                let response = UniversalResponse::server_sent_events(events)
+                    .with_header(Cow::Borrowed("X-PJS-Session-ID"), Cow::Owned(session_id.to_string()));
 
-        let response = UniversalResponse::server_sent_events(events)
-            .with_header("X-PJS-Session-ID", session_id.to_string());
+                self.to_response(response)
+            }
+            Err(_e) => {
+                // Fallback to standard serialization
+                let events: Vec<String> = frames
+                    .into_iter()
+                    .map(|frame| format!("data: {}\n\n", serde_json::to_string(&frame).unwrap_or_default()))
+                    .collect();
 
-        self.to_response(response)
+                let response = UniversalResponse::server_sent_events(events)
+                    .with_header(Cow::Borrowed("X-PJS-Session-ID"), Cow::Owned(session_id.to_string()));
+
+                self.to_response(response)
+            }
+        }
     }
 
     /// Create a JSON response with optional streaming

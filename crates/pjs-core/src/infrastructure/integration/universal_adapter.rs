@@ -9,30 +9,31 @@ use crate::stream::StreamFrame;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::borrow::Cow;
 
 /// Configuration for the universal adapter
 #[derive(Debug, Clone)]
 pub struct AdapterConfig {
     /// Framework name for logging/debugging
-    pub framework_name: String,
+    pub framework_name: Cow<'static, str>,
     /// Whether the framework supports streaming
     pub supports_streaming: bool,
     /// Whether the framework supports Server-Sent Events
     pub supports_sse: bool,
     /// Default content type for responses
-    pub default_content_type: String,
+    pub default_content_type: Cow<'static, str>,
     /// Custom headers to add to all responses
-    pub default_headers: HashMap<String, String>,
+    pub default_headers: HashMap<Cow<'static, str>, Cow<'static, str>>,
 }
 
 impl Default for AdapterConfig {
     fn default() -> Self {
         Self {
-            framework_name: "universal".to_string(),
+            framework_name: Cow::Borrowed("universal"),
             supports_streaming: true,
             supports_sse: true,
-            default_content_type: "application/json".to_string(),
-            default_headers: HashMap::new(),
+            default_content_type: Cow::Borrowed("application/json"),
+            default_headers: HashMap::with_capacity(2), // Pre-allocate for common headers
         }
     }
 }
@@ -69,7 +70,7 @@ where
     }
 
     /// Add a default header
-    pub fn add_default_header(&mut self, name: impl Into<String>, value: impl Into<String>) {
+    pub fn add_default_header(&mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) {
         self.config.default_headers.insert(name.into(), value.into());
     }
 }
@@ -97,13 +98,19 @@ where
     type Error = Err;
 
     fn from_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
-        // This is a placeholder - each framework must implement this
-        todo!("Framework-specific implementation required")
+        // Universal adapter cannot convert framework-specific requests generically
+        // This should only be used with concrete adapter implementations
+        Err(super::IntegrationError::UnsupportedFramework(
+            "Generic UniversalAdapter cannot convert requests - use concrete adapter implementation".to_string()
+        ))
     }
 
     fn to_response(&self, _response: UniversalResponse) -> IntegrationResult<Self::Response> {
-        // This is a placeholder - each framework must implement this
-        todo!("Framework-specific implementation required")
+        // Universal adapter cannot convert responses to framework-specific types generically  
+        // This should only be used with concrete adapter implementations
+        Err(super::IntegrationError::UnsupportedFramework(
+            "Generic UniversalAdapter cannot convert responses - use concrete adapter implementation".to_string()
+        ))
     }
 
     async fn create_streaming_response(
@@ -140,7 +147,7 @@ where
                     status_code: 200,
                     headers: self.config.default_headers.clone(),
                     body: super::ResponseBody::ServerSentEvents(ndjson_lines),
-                    content_type: format.content_type().to_string(),
+                    content_type: Cow::Borrowed(format.content_type()),
                 }
             }
             StreamingFormat::ServerSentEvents => {
@@ -159,7 +166,7 @@ where
                     status_code: 200,
                     headers: self.config.default_headers.clone(),
                     body: super::ResponseBody::Binary(binary_data),
-                    content_type: format.content_type().to_string(),
+                    content_type: Cow::Borrowed(format.content_type()),
                 }
             }
         };
@@ -195,7 +202,7 @@ impl UniversalAdapterBuilder {
     }
 
     /// Set the framework name
-    pub fn framework_name(mut self, name: impl Into<String>) -> Self {
+    pub fn framework_name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
         self.config.framework_name = name.into();
         self
     }
@@ -213,13 +220,13 @@ impl UniversalAdapterBuilder {
     }
 
     /// Set default content type
-    pub fn default_content_type(mut self, content_type: impl Into<String>) -> Self {
+    pub fn default_content_type(mut self, content_type: impl Into<Cow<'static, str>>) -> Self {
         self.config.default_content_type = content_type.into();
         self
     }
 
     /// Add a default header
-    pub fn default_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn default_header(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) -> Self {
         self.config.default_headers.insert(name.into(), value.into());
         self
     }
@@ -259,7 +266,7 @@ mod tests {
         assert!(adapter.config.supports_sse);
         assert_eq!(
             adapter.config.default_headers.get("X-Test"),
-            Some(&"test".to_string())
+            Some(&Cow::Borrowed("test"))
         );
     }
 

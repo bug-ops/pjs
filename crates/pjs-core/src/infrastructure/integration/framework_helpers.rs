@@ -5,6 +5,7 @@
 
 use super::{UniversalRequest, UniversalResponse, IntegrationResult};
 use std::collections::HashMap;
+use std::borrow::Cow;
 
 /// Helper trait for converting framework-specific types to universal types
 pub trait IntoUniversalRequest {
@@ -185,13 +186,13 @@ impl ResponseBuilder {
     }
 
     /// Add a header
-    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn header(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) -> Self {
         self.response.headers.insert(name.into(), value.into());
         self
     }
 
     /// Set the content type
-    pub fn content_type(mut self, content_type: impl Into<String>) -> Self {
+    pub fn content_type(mut self, content_type: impl Into<Cow<'static, str>>) -> Self {
         self.response.content_type = content_type.into();
         self
     }
@@ -199,14 +200,14 @@ impl ResponseBuilder {
     /// Set JSON body
     pub fn json(mut self, data: crate::domain::value_objects::JsonData) -> Self {
         self.response.body = super::ResponseBody::Json(data);
-        self.response.content_type = "application/json".to_string();
+        self.response.content_type = Cow::Borrowed("application/json");
         self
     }
 
     /// Set binary body
     pub fn binary(mut self, data: Vec<u8>) -> Self {
         self.response.body = super::ResponseBody::Binary(data);
-        self.response.content_type = "application/octet-stream".to_string();
+        self.response.content_type = Cow::Borrowed("application/octet-stream");
         self
     }
 
@@ -223,22 +224,22 @@ impl Default for ResponseBuilder {
 }
 
 /// Common CORS headers
-pub fn default_cors_headers() -> HashMap<String, String> {
-    let mut headers = HashMap::new();
-    headers.insert("Access-Control-Allow-Origin".to_string(), "*".to_string());
-    headers.insert("Access-Control-Allow-Methods".to_string(), "GET, POST, PUT, DELETE, OPTIONS".to_string());
-    headers.insert("Access-Control-Allow-Headers".to_string(), "Content-Type, Authorization, Accept".to_string());
-    headers.insert("Access-Control-Max-Age".to_string(), "86400".to_string());
+pub fn default_cors_headers() -> HashMap<Cow<'static, str>, Cow<'static, str>> {
+    let mut headers = HashMap::with_capacity(4);
+    headers.insert(Cow::Borrowed("Access-Control-Allow-Origin"), Cow::Borrowed("*"));
+    headers.insert(Cow::Borrowed("Access-Control-Allow-Methods"), Cow::Borrowed("GET, POST, PUT, DELETE, OPTIONS"));
+    headers.insert(Cow::Borrowed("Access-Control-Allow-Headers"), Cow::Borrowed("Content-Type, Authorization, Accept"));
+    headers.insert(Cow::Borrowed("Access-Control-Max-Age"), Cow::Borrowed("86400"));
     headers
 }
 
 /// Common security headers
-pub fn default_security_headers() -> HashMap<String, String> {
-    let mut headers = HashMap::new();
-    headers.insert("X-Content-Type-Options".to_string(), "nosniff".to_string());
-    headers.insert("X-Frame-Options".to_string(), "DENY".to_string());
-    headers.insert("X-XSS-Protection".to_string(), "1; mode=block".to_string());
-    headers.insert("Referrer-Policy".to_string(), "strict-origin-when-cross-origin".to_string());
+pub fn default_security_headers() -> HashMap<Cow<'static, str>, Cow<'static, str>> {
+    let mut headers = HashMap::with_capacity(4);
+    headers.insert(Cow::Borrowed("X-Content-Type-Options"), Cow::Borrowed("nosniff"));
+    headers.insert(Cow::Borrowed("X-Frame-Options"), Cow::Borrowed("DENY"));
+    headers.insert(Cow::Borrowed("X-XSS-Protection"), Cow::Borrowed("1; mode=block"));
+    headers.insert(Cow::Borrowed("Referrer-Policy"), Cow::Borrowed("strict-origin-when-cross-origin"));
     headers
 }
 
@@ -332,7 +333,7 @@ mod tests {
             .build();
 
         assert_eq!(response.status_code, 201);
-        assert_eq!(response.headers.get("X-Test"), Some(&"test".to_string()));
+        assert_eq!(response.headers.get("X-Test"), Some(&Cow::Borrowed("test")));
         assert_eq!(response.content_type, "application/json");
     }
 
