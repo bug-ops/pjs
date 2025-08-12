@@ -5,6 +5,7 @@
 
 use super::{UniversalRequest, UniversalResponse, IntegrationResult};
 use super::simd_acceleration::{SimdStreamProcessor, SimdConfig};
+use super::object_pool::pooled_builders::PooledResponseBuilder;
 use crate::stream::StreamFrame;
 use crate::domain::value_objects::{SessionId, JsonData};
 use async_trait::async_trait;
@@ -192,8 +193,10 @@ pub trait StreamingAdapterExt: StreamingAdapter {
             map
         });
 
-        let response = UniversalResponse::json(error_data)
-            .with_status(status);
+        // Use pooled response builder for better performance
+        let response = PooledResponseBuilder::new()
+            .status(status)
+            .json(error_data);
 
         self.to_response(response)
     }
@@ -209,7 +212,11 @@ pub trait StreamingAdapterExt: StreamingAdapter {
             map
         });
 
-        let response = UniversalResponse::json(health_data);
+        // Use pooled response builder for better performance
+        let response = PooledResponseBuilder::new()
+            .header(Cow::Borrowed("X-Health-Check"), Cow::Borrowed("pjs"))
+            .json(health_data);
+        
         self.to_response(response)
     }
 }

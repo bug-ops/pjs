@@ -7,11 +7,15 @@ pub mod streaming_adapter;
 pub mod universal_adapter;
 pub mod framework_helpers;
 pub mod simd_acceleration;
+pub mod object_pool;
 
 pub use streaming_adapter::{StreamingAdapter, StreamingAdapterExt, StreamingFormat};
 pub use universal_adapter::{UniversalAdapter, AdapterConfig};
 pub use framework_helpers::*;
 pub use simd_acceleration::{SimdFrameSerializer, SimdJsonProcessor, SimdStreamProcessor, SimdConfig};
+pub use object_pool::{get_cow_hashmap, get_string_hashmap, get_byte_vec, get_string_vec, 
+                      get_global_pool_stats, GlobalPoolStats, PoolStats, 
+                      pooled_builders::{PooledResponseBuilder, PooledSSEBuilder}};
 
 use crate::stream::StreamFrame;
 use crate::domain::value_objects::JsonData;
@@ -48,6 +52,17 @@ impl UniversalResponse {
         }
     }
 
+    /// Create a JSON response using pooled HashMap (more efficient)
+    pub fn json_pooled(data: JsonData) -> Self {
+        let headers = object_pool::get_cow_hashmap().take(); // Use pooled HashMap
+        Self {
+            status_code: 200,
+            headers,
+            body: ResponseBody::Json(data),
+            content_type: Cow::Borrowed("application/json"),
+        }
+    }
+
     /// Create a streaming response
     pub fn stream(frames: Vec<StreamFrame>) -> Self {
         Self {
@@ -61,6 +76,20 @@ impl UniversalResponse {
     /// Create a Server-Sent Events response
     pub fn server_sent_events(events: Vec<String>) -> Self {
         let mut headers = HashMap::with_capacity(4); // Pre-allocate for SSE headers
+        headers.insert(Cow::Borrowed("Cache-Control"), Cow::Borrowed("no-cache"));
+        headers.insert(Cow::Borrowed("Connection"), Cow::Borrowed("keep-alive"));
+
+        Self {
+            status_code: 200,
+            headers,
+            body: ResponseBody::ServerSentEvents(events),
+            content_type: Cow::Borrowed("text/event-stream"),
+        }
+    }
+
+    /// Create a Server-Sent Events response using pooled collections (more efficient)
+    pub fn server_sent_events_pooled(events: Vec<String>) -> Self {
+        let mut headers = object_pool::get_cow_hashmap().take(); // Use pooled HashMap
         headers.insert(Cow::Borrowed("Cache-Control"), Cow::Borrowed("no-cache"));
         headers.insert(Cow::Borrowed("Connection"), Cow::Borrowed("keep-alive"));
 
