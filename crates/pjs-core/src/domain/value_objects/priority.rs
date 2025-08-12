@@ -92,6 +92,11 @@ impl Priority {
     pub fn to_percentage(self) -> f32 {
         (self.0.get() as f32 / 255.0) * 100.0
     }
+
+    /// Get priority value with fallback for compatibility
+    pub fn unwrap_or(self, _default: u8) -> u8 {
+        self.0.get()
+    }
 }
 
 impl fmt::Display for Priority {

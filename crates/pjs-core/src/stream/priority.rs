@@ -8,11 +8,10 @@
 
 use crate::Result;
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use smallvec::SmallVec;
 use std::collections::VecDeque;
 
 /// Priority levels for JSON fields and structures
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub enum Priority {
     Critical = 100,  // ID fields, status, essential metadata
     High = 80,       // Names, titles, key identifiers
@@ -22,12 +21,12 @@ pub enum Priority {
 }
 
 /// JSON Path for addressing specific nodes in the JSON structure
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct JsonPath {
-    segments: SmallVec<[PathSegment; 8]>,
+    segments: Vec<PathSegment>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum PathSegment {
     Root,
     Key(String),
@@ -36,14 +35,14 @@ pub enum PathSegment {
 }
 
 /// Patch operation for updating JSON structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct JsonPatch {
     pub path: JsonPath,
     pub operation: PatchOperation,
     pub priority: Priority,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum PatchOperation {
     Set { value: JsonValue },
     Append { values: Vec<JsonValue> },
@@ -52,7 +51,7 @@ pub enum PatchOperation {
 }
 
 /// Streaming frame containing skeleton or patch data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum StreamFrame {
     Skeleton {
         data: JsonValue,
@@ -328,8 +327,7 @@ impl StreamingPlan {
 impl JsonPath {
     /// Create root path
     pub fn root() -> Self {
-        let mut segments = SmallVec::new();
-        segments.push(PathSegment::Root);
+        let segments = vec![PathSegment::Root];
         Self { segments }
     }
 
@@ -368,8 +366,13 @@ impl JsonPath {
         self.segments.len()
     }
 
+    /// Check if path is empty
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
     /// Create JsonPath from segments (for testing)
-    pub fn from_segments(segments: SmallVec<[PathSegment; 8]>) -> Self {
+    pub fn from_segments(segments: Vec<PathSegment>) -> Self {
         Self { segments }
     }
 

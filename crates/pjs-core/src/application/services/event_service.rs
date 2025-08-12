@@ -235,14 +235,18 @@ mod tests {
         }
 
         fn event_count(&self) -> usize {
-            self.received_events.lock().unwrap().len()
+            self.received_events.lock()
+                .map(|events| events.len())
+                .unwrap_or(0)
         }
     }
 
     #[async_trait]
     impl EventSubscriber for MockSubscriber {
         async fn handle(&self, event: &DomainEvent) -> crate::domain::DomainResult<()> {
-            self.received_events.lock().unwrap().push(event.clone());
+            self.received_events.lock()
+                .map_err(|_| crate::domain::DomainError::Logic("Event subscriber lock poisoned".to_string()))?
+                .push(event.clone());
             Ok(())
         }
     }

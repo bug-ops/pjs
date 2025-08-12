@@ -4,7 +4,7 @@
 //! performance metrics to support optimization decisions.
 
 use crate::{
-    application::ApplicationResult,
+    application::{ApplicationError, ApplicationResult},
     domain::value_objects::{SessionId, StreamId},
 };
 use std::{
@@ -326,10 +326,10 @@ impl PerformanceAnalysisService {
             recommended_size,
             confidence: self.calculate_recommendation_confidence(&context),
             reasoning: vec![
-                format!("Latency factor: {:.2}", latency_factor),
-                format!("Bandwidth factor: {:.2}", bandwidth_factor),
-                format!("CPU factor: {:.2}", cpu_factor),
-                format!("Error factor: {:.2}", error_factor),
+                format!("Latency factor: {latency_factor:.2}"),
+                format!("Bandwidth factor: {bandwidth_factor:.2}"),
+                format!("CPU factor: {cpu_factor:.2}"),
+                format!("Error factor: {error_factor:.2}"),
             ],
         })
     }
@@ -387,7 +387,7 @@ impl PerformanceAnalysisService {
             .map(|s| s.latency_ms)
             .collect();
 
-        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let count = latencies.len();
         let average = latencies.iter().sum::<f64>() / count as f64;
@@ -480,7 +480,8 @@ impl PerformanceAnalysisService {
             return Ok(ResourceAnalysis::default());
         }
 
-        let latest_sample = self.metrics_history.resource_samples.back().unwrap();
+        let latest_sample = self.metrics_history.resource_samples.back()
+            .ok_or_else(|| ApplicationError::Logic("No resource samples available for analysis".to_string()))?;
         
         let cpu_values: Vec<f64> = self.metrics_history.resource_samples
             .iter()
@@ -661,7 +662,8 @@ impl PerformanceAnalysisService {
         }
 
         // Use the most recent sample for current throughput
-        let latest_sample = self.metrics_history.throughput_samples.back().unwrap();
+        let latest_sample = self.metrics_history.throughput_samples.back()
+            .ok_or_else(|| ApplicationError::Logic("No throughput samples available for statistics".to_string()))?;
         let current_mbps = if latest_sample.duration.as_secs_f64() > 0.0 {
             (latest_sample.bytes_transferred as f64 * 8.0) / (latest_sample.duration.as_secs_f64() * 1_000_000.0)
         } else {
@@ -691,7 +693,8 @@ impl PerformanceAnalysisService {
             return Ok(ResourceStatistics::default());
         }
 
-        let latest = self.metrics_history.resource_samples.back().unwrap();
+        let latest = self.metrics_history.resource_samples.back()
+            .ok_or_else(|| ApplicationError::Logic("No resource samples available for resource statistics".to_string()))?;
         
         Ok(ResourceStatistics {
             cpu_usage: latest.cpu_usage,

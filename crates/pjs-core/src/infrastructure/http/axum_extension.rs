@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
@@ -20,7 +21,7 @@ use std::{
 
 use crate::{
     Priority,
-    StreamProcessor,
+    PriorityStreamer,
 };
 
 /// Configuration for PJS extension
@@ -86,7 +87,7 @@ impl PjsExtension {
     {
         axum::Router::new()
             .route("/stream", axum::routing::post(handle_stream_request))
-            .route("/stream/:stream_id/sse", axum::routing::get(handle_sse_stream))
+            .route("/stream/{stream_id}/sse", axum::routing::get(handle_sse_stream))
             .route("/health", axum::routing::get(handle_pjs_health))
             .layer(Extension(self.config.clone()))
             .layer(Extension(self.streamer.clone()))
@@ -94,6 +95,7 @@ impl PjsExtension {
 }
 
 /// Middleware that automatically detects PJS streaming requests
+#[allow(clippy::extra_unused_type_parameters)]
 async fn pjs_middleware<S>(
     State(_state): State<Arc<PjsExtension>>,
     headers: HeaderMap,
@@ -114,9 +116,9 @@ where
         })
         .unwrap_or(false);
 
+    let mut request = request;
     if wants_pjs {
         // Add PJS metadata to request
-        let mut request = request;
         request.extensions_mut().insert(PjsStreamingRequest { enabled: true });
     }
 
@@ -169,13 +171,13 @@ async fn handle_stream_request(
             headers
                 .get(header::ACCEPT)
                 .and_then(|h| h.to_str().ok())
-                .and_then(|accept| {
+                .map(|accept| {
                     if accept.contains("text/event-stream") {
-                        Some("sse".to_string())
+                        "sse".to_string()
                     } else if accept.contains("application/x-ndjson") {
-                        Some("ndjson".to_string())
+                        "ndjson".to_string()
                     } else {
-                        Some("json".to_string())
+                        "json".to_string()
                     }
                 })
                 .unwrap_or_else(|| "json".to_string())
@@ -199,9 +201,9 @@ async fn handle_stream_request(
 
 /// Handle Server-Sent Events streaming
 async fn handle_sse_stream(
-    Path(stream_id): Path<String>,
+    Path(_stream_id): Path<String>,
     Extension(streamer): Extension<Arc<PriorityStreamer>>,
-    Query(params): Query<HashMap<String, String>>,
+    Query(_params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, StreamError> {
     // In production, retrieve stream data from store using stream_id
     let sample_data = serde_json::json!({
@@ -220,10 +222,12 @@ async fn handle_sse_stream(
         .analyze(&sample_data)
         .map_err(|e| StreamError::AnalysisError(e.to_string()))?;
 
-    let stream = futures::stream::iter(plan.frames())
+    // Collect frames to avoid lifetime issues
+    let frames: Vec<_> = plan.frames().cloned().collect();
+    let stream = futures::stream::iter(frames)
         .map(|frame| {
             let data = serde_json::to_string(&frame).unwrap_or_default();
-            Ok::<_, StreamError>(format!("data: {}\n\n", data))
+            Ok::<_, StreamError>(format!("data: {data}\n\n"))
         });
 
     let response = axum::response::Response::builder()
@@ -364,9 +368,9 @@ mod tests {
     #[tokio::test]
     async fn test_auto_detection_middleware() {
         let config = PjsConfig::default();
-        let pjs_extension = Arc::new(PjsExtension::new(config));
+        let _pjs_extension = Arc::new(PjsExtension::new(config));
         
-        let headers = HeaderMap::new();
+        let _headers = HeaderMap::new();
         let request = axum::http::Request::builder()
             .header("Accept", "text/event-stream")
             .body(axum::body::Body::empty())

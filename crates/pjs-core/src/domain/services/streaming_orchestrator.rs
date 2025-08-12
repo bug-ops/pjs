@@ -11,7 +11,7 @@ use crate::domain::{
         writer::{WriterFactory, WriterConfig},
         repositories::{
             StreamSessionRepository, FrameRepository, 
-            EventRepository
+            EventRepository, CacheRepository
         },
         EventPublisher, MetricsCollector,
     },
@@ -34,8 +34,7 @@ pub struct StreamingOrchestrator {
     session_repository: Arc<dyn StreamSessionRepository>,
     frame_repository: Arc<dyn FrameRepository>,
     event_repository: Arc<dyn EventRepository>,
-    // TODO: Fix CacheRepository to be dyn-compatible or use different approach
-    // cache: Arc<dyn CacheRepository>,
+    cache: Arc<dyn CacheRepository>,
     
     // I/O ports
     writer_factory: Arc<dyn WriterFactory>,
@@ -48,8 +47,7 @@ impl StreamingOrchestrator {
         session_repository: Arc<dyn StreamSessionRepository>,
         frame_repository: Arc<dyn FrameRepository>,
         event_repository: Arc<dyn EventRepository>,
-        // TODO: Fix CacheRepository to be dyn-compatible or use different approach
-    // cache: Arc<dyn CacheRepository>,
+        cache: Arc<dyn CacheRepository>,
         writer_factory: Arc<dyn WriterFactory>,
         event_publisher: Arc<dyn EventPublisher>,
         metrics: Arc<dyn MetricsCollector>,
@@ -58,7 +56,7 @@ impl StreamingOrchestrator {
             session_repository,
             frame_repository,
             event_repository,
-            // cache,
+            cache,
             writer_factory,
             event_publisher,
             metrics,
@@ -84,16 +82,18 @@ impl StreamingOrchestrator {
                 crate::domain::DomainError::SessionNotFound(format!("Session {session_id} not found"))
             })?;
 
-        // TODO: Re-enable cache when CacheRepository is fixed
         // 2. Check cache for recent frames
-        // let cache_key = format!("frames:{}:{}", stream_id, priority_threshold.value());
-        // let cached_frames: Option<Vec<Frame>> = self.cache
-        //     .get(&cache_key)
-        //     .await?;
+        let cache_key = format!("frames:{}:{}", stream_id, priority_threshold.value());
+        let cached_frames: Option<Vec<Frame>> = if let Some(bytes) = self.cache.get_bytes(&cache_key).await? {
+            Some(serde_json::from_slice(&bytes)
+                .map_err(|e| crate::domain::DomainError::Logic(format!("Cache deserialization failed: {e}")))?)
+        } else {
+            None
+        };
 
-        // let frames = if let Some(cached) = cached_frames {
-        //     cached
-        // } else {
+        let frames = if let Some(cached) = cached_frames {
+            cached
+        } else {
             // 3. Fetch frames from repository with priority filtering
             let frame_query = self.frame_repository
                 .get_frames_by_stream(
@@ -108,16 +108,17 @@ impl StreamingOrchestrator {
                 )
                 .await?;
 
-            // TODO: Re-enable cache when CacheRepository is fixed
             // 4. Cache the result for next time
-            // self.cache.set(
-            //     &cache_key,
-            //     &frame_query.frames,
-            //     Some(Duration::from_secs(300)), // 5 minute TTL
-            // ).await?;
+            let serialized = serde_json::to_vec(&frame_query.frames)
+                .map_err(|e| crate::domain::DomainError::Logic(format!("Cache serialization failed: {e}")))?;
+            self.cache.set_bytes(
+                &cache_key,
+                serialized,
+                Some(Duration::from_secs(300)), // 5 minute TTL
+            ).await?;
 
-        let frames = frame_query.frames;
-        // };
+            frame_query.frames
+        };
 
         // 5. Create appropriate writer for the connection
         let writer_config = WriterConfig {
@@ -239,12 +240,11 @@ impl StreamingOrchestrator {
 
     /// Get streaming performance metrics
     pub async fn get_performance_metrics(&self) -> DomainResult<StreamingPerformanceMetrics> {
-        // TODO: Re-enable cache when CacheRepository is fixed
-        // let cache_stats = self.cache.get_stats().await?;
+        let cache_stats = self.cache.get_stats().await?;
         
         Ok(StreamingPerformanceMetrics {
-            cache_hit_rate: 0.0, // cache_stats.hit_rate,
-            cache_memory_usage: 0, // cache_stats.memory_usage_bytes,
+            cache_hit_rate: cache_stats.hit_rate,
+            cache_memory_usage: cache_stats.memory_usage_bytes,
             total_sessions: 0, // Would get from session repository
             active_streams: 0,  // Would get from stream repository
         })

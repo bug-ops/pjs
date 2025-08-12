@@ -1,0 +1,38 @@
+# Source files
+src/
+tests/
+coverage/
+
+# Configuration files
+.eslintrc.js
+.gitignore
+jest.config.js
+rollup.config.js
+tsconfig.json
+
+# Development files
+*.log
+*.tgz
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# CI/CD
+.github/
+.travis.yml
+.circleci/
+
+# Documentation sources
+docs/
+examples/dev/
+
+# Test artifacts
+coverage/
+.nyc_output/
+test-results/
+
+# Build artifacts (keep only dist)
+node_modules/
+*.log

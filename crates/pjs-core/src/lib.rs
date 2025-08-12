@@ -30,8 +30,7 @@ pub mod compression;
 pub mod domain;
 pub mod error;
 pub mod frame;
-// TODO: Fix infrastructure compilation issues before release
-// pub mod infrastructure;
+pub mod infrastructure;
 pub mod parser;
 pub mod semantic;
 pub mod stream;
@@ -59,7 +58,7 @@ pub use compression::{
 pub use stream::{
     CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
     ProcessResult, StreamConfig, StreamFrame, StreamProcessor, StreamStats,
-    StreamingCompressor, StreamingDecompressor,
+    StreamingCompressor, StreamingDecompressor, PriorityStreamer,
 };
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};

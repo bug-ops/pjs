@@ -159,17 +159,14 @@ pub trait EventRepository: Send + Sync {
 }
 
 /// Cache abstraction for performance optimization
+/// Using bytes for object-safe interface
 #[async_trait]
 pub trait CacheRepository: Send + Sync {
-    /// Get cached value
-    async fn get<T>(&self, key: &str) -> DomainResult<Option<T>>
-    where
-        T: Send + Sync + 'static + serde::de::DeserializeOwned;
+    /// Get cached value as bytes
+    async fn get_bytes(&self, key: &str) -> DomainResult<Option<Vec<u8>>>;
     
-    /// Set cached value with TTL
-    async fn set<T>(&self, key: &str, value: T, ttl: Option<std::time::Duration>) -> DomainResult<()>
-    where
-        T: Send + Sync + 'static + serde::Serialize;
+    /// Set cached value as bytes with TTL
+    async fn set_bytes(&self, key: &str, value: Vec<u8>, ttl: Option<std::time::Duration>) -> DomainResult<()>;
     
     /// Remove cached value
     async fn remove(&self, key: &str) -> DomainResult<()>;
@@ -180,6 +177,38 @@ pub trait CacheRepository: Send + Sync {
     /// Get cache statistics
     async fn get_stats(&self) -> DomainResult<CacheStatistics>;
 }
+
+/// Helper extension trait for type-safe cache operations
+/// This can be used as extension methods on implementers
+#[allow(async_fn_in_trait)]
+pub trait CacheExtensions: CacheRepository {
+    /// Get cached value with deserialization
+    async fn get_typed<T>(&self, key: &str) -> DomainResult<Option<T>>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        if let Some(bytes) = self.get_bytes(key).await? {
+            let value = serde_json::from_slice(&bytes)
+                .map_err(|e| crate::domain::DomainError::Logic(format!("Deserialization failed: {e}")))?;
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Set cached value with serialization
+    async fn set_typed<T>(&self, key: &str, value: &T, ttl: Option<std::time::Duration>) -> DomainResult<()>
+    where
+        T: serde::Serialize,
+    {
+        let bytes = serde_json::to_vec(value)
+            .map_err(|e| crate::domain::DomainError::Logic(format!("Serialization failed: {e}")))?;
+        self.set_bytes(key, bytes, ttl).await
+    }
+}
+
+// Blanket implementation for all CacheRepository implementers
+impl<T: CacheRepository> CacheExtensions for T {}
 
 // Supporting types for query operations
 

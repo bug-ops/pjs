@@ -248,7 +248,7 @@ impl JsonReconstructor {
                 PathSegment::Key(key) => {
                     if let JsonValue::Object(map) = current {
                         current = map.get_mut(key).ok_or_else(|| {
-                            crate::Error::Other(format!("Key not found: {}", key))
+                            crate::Error::Other(format!("Key not found: {key}"))
                         })?;
                     } else {
                         return Err(crate::Error::Other("Expected object".to_string()));
@@ -257,7 +257,7 @@ impl JsonReconstructor {
                 PathSegment::Index(idx) => {
                     if let JsonValue::Array(arr) = current {
                         current = arr.get_mut(*idx).ok_or_else(|| {
-                            crate::Error::Other(format!("Index out of bounds: {}", idx))
+                            crate::Error::Other(format!("Index out of bounds: {idx}"))
                         })?;
                     } else {
                         return Err(crate::Error::Other("Expected array".to_string()));
@@ -282,7 +282,7 @@ impl JsonReconstructor {
                 PathSegment::Key(key) => {
                     if let JsonValue::Object(map) = current {
                         current = map.get_mut(key).ok_or_else(|| {
-                            crate::Error::Other(format!("Key not found: {}", key))
+                            crate::Error::Other(format!("Key not found: {key}"))
                         })?;
                     } else {
                         return Err(crate::Error::Other("Expected object".to_string()));
@@ -291,7 +291,7 @@ impl JsonReconstructor {
                 PathSegment::Index(idx) => {
                     if let JsonValue::Array(arr) = current {
                         current = arr.get_mut(*idx).ok_or_else(|| {
-                            crate::Error::Other(format!("Index out of bounds: {}", idx))
+                            crate::Error::Other(format!("Index out of bounds: {idx}"))
                         })?;
                     } else {
                         return Err(crate::Error::Other("Expected array".to_string()));

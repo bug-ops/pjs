@@ -3,6 +3,8 @@
 //! These tests verify that the zero-copy parser works correctly with
 //! the rest of the PJS system and provides the expected performance benefits.
 
+#![allow(clippy::uninlined_format_args)]
+
 use pjson_rs::{
     parser::{
         ZeroCopyParser, LazyParser, LazyJsonValue,
@@ -133,7 +135,7 @@ async fn test_memory_efficiency_comparison() {
         
         // Basic sanity checks
         assert!(memory_usage.total() > 0);
-        assert!(efficiency >= 0.0 && efficiency <= 1.0);
+        assert!((0.0..=1.0).contains(&efficiency));
     }
     
     let average_efficiency = total_zero_copy_efficiency / test_count as f64;

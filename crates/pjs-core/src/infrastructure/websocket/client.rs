@@ -11,11 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    net::TcpStream,
     sync::{mpsc, RwLock},
 };
 use tokio_tungstenite::{
-    connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream,
+    connect_async, tungstenite::Message,
 };
 use tracing::{debug, error, info, warn};
 use url::Url;
@@ -68,7 +67,7 @@ impl PjsWebSocketClient {
     pub async fn connect(&self) -> PjsResult<()> {
         info!("Connecting to WebSocket server: {}", self.url);
         
-        let (ws_stream, _) = connect_async(&self.url)
+        let (ws_stream, _) = connect_async(self.url.as_str())
             .await
             .map_err(|e| PjsError::ConnectionFailed(e.to_string()))?;
         
@@ -86,7 +85,7 @@ impl PjsWebSocketClient {
             while let Some(message) = message_rx.recv().await {
                 match serde_json::to_string(&message) {
                     Ok(json_str) => {
-                        if let Err(e) = write.send(Message::Text(json_str)).await {
+                        if let Err(e) = write.send(Message::Text(json_str.into())).await {
                             error!("Failed to send message: {}", e);
                             break;
                         }
@@ -123,7 +122,7 @@ impl PjsWebSocketClient {
                     Ok(Message::Binary(data)) => {
                         debug!("Received binary data: {} bytes", data.len());
                     }
-                    Ok(Message::Ping(data)) => {
+                    Ok(Message::Ping(_data)) => {
                         debug!("Received ping, sending pong");
                         // Pong is handled automatically by tungstenite
                     }
@@ -133,6 +132,10 @@ impl PjsWebSocketClient {
                     Ok(Message::Close(_)) => {
                         info!("Server closed connection");
                         break;
+                    }
+                    Ok(Message::Frame(_)) => {
+                        // Raw frame - usually handled internally by tungstenite
+                        debug!("Received raw frame");
                     }
                     Err(e) => {
                         error!("WebSocket error: {}", e);
@@ -172,7 +175,7 @@ impl PjsWebSocketClient {
         };
         
         self.message_tx.send(message)
-            .map_err(|e| PjsError::ClientError(format!("Failed to send stream request: {}", e)))?;
+            .map_err(|e| PjsError::ClientError(format!("Failed to send stream request: {e}")))?;
         
         // Initialize session tracking
         let session = StreamSession {
@@ -318,8 +321,8 @@ impl PjsWebSocketClient {
 
     fn apply_frame_to_data(data: &mut Value, payload: &Value) -> PjsResult<()> {
         // Simple merge strategy - in production, this would be more sophisticated
-        match (data, payload) {
-            (Value::Object(data_map), Value::Object(payload_map)) => {
+        match (data.as_object_mut(), payload.as_object()) {
+            (Some(data_map), Some(payload_map)) => {
                 for (key, value) in payload_map {
                     data_map.insert(key.clone(), value.clone());
                 }

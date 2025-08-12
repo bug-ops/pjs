@@ -44,6 +44,26 @@ pub enum Error {
     #[error("I/O error: {0}")]
     Io(String),
 
+    /// Connection failed error
+    #[error("Connection failed: {0}")]
+    ConnectionFailed(String),
+
+    /// Client error
+    #[error("Client error: {0}")]
+    ClientError(String),
+
+    /// Invalid session error
+    #[error("Invalid session: {0}")]
+    InvalidSession(String),
+
+    /// Invalid URL error
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+
+    /// Serialization error
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+
     /// UTF-8 conversion error
     #[error("UTF-8 conversion failed: {0}")]
     Utf8(String),

@@ -4,14 +4,43 @@ use crate::domain::{
     DomainError, DomainResult,
     entities::{Frame, Stream, stream::StreamConfig},
     events::DomainEvent,
-    value_objects::{Priority, SessionId, StreamId},
+    value_objects::{JsonData, Priority, SessionId, StreamId},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-// TODO: Fix architecture violation - domain layer should not depend on serde_json::Value
-// Create domain-specific value objects instead
-use serde_json::Value as JsonValue;
+use serde_json::Value as SerdeValue;
 use std::collections::{HashMap, VecDeque};
+
+/// Temporary converter function until full refactor is complete
+fn convert_serde_to_domain(value: &SerdeValue) -> JsonData {
+    match value {
+        SerdeValue::Null => JsonData::Null,
+        SerdeValue::Bool(b) => JsonData::Bool(*b),
+        SerdeValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                JsonData::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                JsonData::Float(f)
+            } else {
+                JsonData::Integer(0)
+            }
+        }
+        SerdeValue::String(s) => JsonData::String(s.clone()),
+        SerdeValue::Array(arr) => {
+            let values: Vec<JsonData> = arr.iter()
+                .map(convert_serde_to_domain)
+                .collect();
+            JsonData::Array(values)
+        }
+        SerdeValue::Object(obj) => {
+            let mut map = HashMap::new();
+            for (key, value) in obj {
+                map.insert(key.clone(), convert_serde_to_domain(value));
+            }
+            JsonData::Object(map)
+        }
+    }
+}
 
 /// Session state in its lifecycle
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,7 +233,7 @@ impl StreamSession {
     }
 
     /// Create new stream in this session
-    pub fn create_stream(&mut self, source_data: JsonValue) -> DomainResult<StreamId> {
+    pub fn create_stream(&mut self, source_data: SerdeValue) -> DomainResult<StreamId> {
         if !self.is_active() {
             return Err(DomainError::InvalidSessionState(
                 "Session is not active".to_string(),
@@ -218,9 +247,12 @@ impl StreamSession {
             )));
         }
 
+        // Convert serde_json::Value to domain JsonData
+        let domain_data = convert_serde_to_domain(&source_data);
+        
         let stream = Stream::new(
             self.id,
-            source_data,
+            domain_data,
             self.config.default_stream_config.clone(),
         );
         let stream_id = stream.id();

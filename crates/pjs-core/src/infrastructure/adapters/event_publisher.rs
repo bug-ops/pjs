@@ -14,10 +14,13 @@ use crate::domain::{
     value_objects::SessionId,
 };
 
+/// Type alias for complex subscriber map to reduce type complexity
+type SubscriberMap = Arc<RwLock<HashMap<String, Vec<Arc<dyn EventSubscriber + Send + Sync>>>>>;
+
 /// In-memory event publisher with subscription support
 #[derive(Clone)]
 pub struct InMemoryEventPublisher {
-    subscribers: Arc<RwLock<HashMap<String, Vec<Arc<dyn EventSubscriber + Send + Sync>>>>>,
+    subscribers: SubscriberMap,
     event_log: Arc<RwLock<Vec<StoredEvent>>>,
     channel_tx: Arc<RwLock<Option<mpsc::UnboundedSender<StoredEvent>>>>,
 }
@@ -205,7 +208,7 @@ impl EventPublisher for HttpEventPublisher {
         let payload = serde_json::json!({
             "event_id": event.event_id().to_string(),
             "event_type": event.event_type(),
-            "session_id": event.session_id().map(|id| id.to_string()),
+            "session_id": event.session_id().to_string(),
             "occurred_at": event.occurred_at(),
             "payload": event.payload()
         });
@@ -227,7 +230,7 @@ impl EventPublisher for HttpEventPublisher {
                 Err(e) => {
                     eprintln!("HTTP event publish error (attempt {}): {}", attempt + 1, e);
                     if attempt == self.retry_attempts - 1 {
-                        return Err(format!("HTTP publish error: {}", e).into());
+                        return Err(format!("HTTP publish error: {e}").into());
                     }
                 }
             }
@@ -244,7 +247,7 @@ impl EventPublisher for HttpEventPublisher {
             .map(|event| serde_json::json!({
                 "event_id": event.event_id().to_string(),
                 "event_type": event.event_type(),
-                "session_id": event.session_id().map(|id| id.to_string()),
+                "session_id": event.session_id().to_string(),
                 "occurred_at": event.occurred_at(),
                 "payload": event.payload()
             }))
@@ -252,7 +255,7 @@ impl EventPublisher for HttpEventPublisher {
         
         for attempt in 0..self.retry_attempts {
             match self.client
-                .post(&format!("{}/batch", self.endpoint))
+                .post(format!("{}/batch", self.endpoint))
                 .json(&batch_payload)
                 .send()
                 .await
@@ -267,7 +270,7 @@ impl EventPublisher for HttpEventPublisher {
                 Err(e) => {
                     eprintln!("HTTP batch publish error (attempt {}): {}", attempt + 1, e);
                     if attempt == self.retry_attempts - 1 {
-                        return Err(format!("HTTP batch publish error: {}", e).into());
+                        return Err(format!("HTTP batch publish error: {e}").into());
                     }
                 }
             }
@@ -334,7 +337,7 @@ impl EventPublisher for CompositeEventPublisher {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(format!("Multiple publish errors: {:?}", errors).into())
+            Err(format!("Multiple publish errors: {errors:?}").into())
         }
     }
     
@@ -356,7 +359,7 @@ impl EventPublisher for CompositeEventPublisher {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(format!("Multiple batch publish errors: {:?}", errors).into())
+            Err(format!("Multiple batch publish errors: {errors:?}").into())
         }
     }
 }

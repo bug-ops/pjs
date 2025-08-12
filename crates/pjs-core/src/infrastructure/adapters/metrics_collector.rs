@@ -400,8 +400,8 @@ impl MetricsCollector for PrometheusMetricsCollector {
         let mut counters = self.counters.write();
         
         let counter = counters.entry(name.to_string()).or_insert_with(|| {
-            let opts = prometheus::Opts::new(name, format!("PJS counter metric: {}", name));
-            let labels: Vec<_> = tags.keys().cloned().collect();
+            let opts = prometheus::Opts::new(name, format!("PJS counter metric: {name}"));
+            let labels: Vec<_> = tags.keys().map(|s| s.as_str()).collect();
             prometheus::CounterVec::new(opts, &labels).unwrap()
         });
         
@@ -415,8 +415,8 @@ impl MetricsCollector for PrometheusMetricsCollector {
         let mut gauges = self.gauges.write();
         
         let gauge = gauges.entry(name.to_string()).or_insert_with(|| {
-            let opts = prometheus::Opts::new(name, format!("PJS gauge metric: {}", name));
-            let labels: Vec<_> = tags.keys().cloned().collect();
+            let opts = prometheus::Opts::new(name, format!("PJS gauge metric: {name}"));
+            let labels: Vec<_> = tags.keys().map(|s| s.as_str()).collect();
             prometheus::GaugeVec::new(opts, &labels).unwrap()
         });
         
@@ -430,8 +430,8 @@ impl MetricsCollector for PrometheusMetricsCollector {
         let mut histograms = self.histograms.write();
         
         let histogram = histograms.entry(name.to_string()).or_insert_with(|| {
-            let opts = prometheus::HistogramOpts::new(name, format!("PJS timing metric: {}", name));
-            let labels: Vec<_> = tags.keys().cloned().collect();
+            let opts = prometheus::HistogramOpts::new(name, format!("PJS timing metric: {name}"));
+            let labels: Vec<_> = tags.keys().map(|s| s.as_str()).collect();
             prometheus::HistogramVec::new(opts, &labels).unwrap()
         });
         

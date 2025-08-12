@@ -197,7 +197,8 @@ impl JsonPath {
                         if next_ch == '.' || next_ch == '[' {
                             break;
                         }
-                        key.push(chars.next().unwrap());
+                        key.push(chars.next()
+                            .ok_or_else(|| DomainError::InvalidPath("Incomplete key segment".to_string()))?);
                     }
 
                     if key.is_empty() {

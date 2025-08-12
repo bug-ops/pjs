@@ -2,7 +2,7 @@
 
 use axum::{
     extract::Request,
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -98,8 +98,8 @@ where
                             return Ok(Response::builder()
                                 .status(StatusCode::PAYLOAD_TOO_LARGE)
                                 .body("Request too large".into())
-                                // TODO: Handle unwrap() - add proper error handling for Response building
-                                .unwrap());
+                                .map_err(|_| Response::new("Failed to build error response".into()))
+                                .unwrap_or_else(|err_response| err_response));
                         }
                     }
                 }
@@ -111,24 +111,19 @@ where
             // Add performance headers
             if config.enable_metrics {
                 let duration = start_time.elapsed();
-                response.headers_mut().insert(
-                    "X-PJS-Duration-Ms",
-                    // TODO: Handle unwrap() - add proper error handling for header value parsing
-                    duration.as_millis().to_string().parse().unwrap()
-                );
+                if let Ok(duration_value) = HeaderValue::from_str(&duration.as_millis().to_string()) {
+                    response.headers_mut().insert("X-PJS-Duration-Ms", duration_value);
+                }
                 
-                response.headers_mut().insert(
-                    "X-PJS-Version",
-                    // TODO: Handle unwrap() - add proper error handling for header value parsing
-                    env!("CARGO_PKG_VERSION").parse().unwrap()
-                );
+                let version_value = HeaderValue::from_static(env!("CARGO_PKG_VERSION"));
+                response.headers_mut().insert("X-PJS-Version", version_value);
             }
             
             // Add compression hints
             if config.enable_compression {
                 response.headers_mut().insert(
                     "X-PJS-Compression",
-                    // TODO: Handle unwrap() - add proper error handling for header value parsing\n                    "available".parse().unwrap()
+                    HeaderValue::from_static("available")
                 );
             }
             
@@ -178,11 +173,10 @@ pub async fn websocket_upgrade_middleware(
 async fn handle_websocket_upgrade(_request: Request) -> Result<Response, StatusCode> {
     // Placeholder - would implement actual WebSocket upgrade logic
     // using axum-websocket or similar
-    // TODO: Handle unwrap() - add proper error handling for Response building
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::NOT_IMPLEMENTED)
         .body("WebSocket support coming soon".into())
-        .unwrap())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// Compression middleware for reducing bandwidth
@@ -200,10 +194,9 @@ pub async fn compression_middleware(
     
     // Add compression headers if client supports it
     if accepts_compression {
-        // TODO: Handle unwrap() - add proper error handling for header value parsing
         response.headers_mut().insert(
             "X-PJS-Compression-Available",
-            "gzip,deflate".parse().unwrap()
+            HeaderValue::from_static("gzip,deflate")
         );
         
         // In production, would apply actual compression here
@@ -222,22 +215,18 @@ pub async fn pjs_cors_middleware(
     
     // Add CORS headers for streaming endpoints
     let headers = response.headers_mut();
-    // TODO: Handle unwrap() - add proper error handling for header value parsing
-    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
-        // TODO: Handle unwrap() - add proper error handling for header value parsing
-        "GET,POST,OPTIONS".parse().unwrap()
+        HeaderValue::from_static("GET,POST,OPTIONS")
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        // TODO: Handle unwrap() - add proper error handling for header value parsing
-        "Content-Type,Authorization,X-PJS-Priority,X-PJS-Format".parse().unwrap()
+        HeaderValue::from_static("Content-Type,Authorization,X-PJS-Priority,X-PJS-Format")
     );
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
-        // TODO: Handle unwrap() - add proper error handling for header value parsing
-        "X-PJS-Duration-Ms,X-PJS-Version,X-PJS-Stream-Id".parse().unwrap()
+        HeaderValue::from_static("X-PJS-Duration-Ms,X-PJS-Version,X-PJS-Stream-Id")
     );
     
     response
@@ -252,14 +241,11 @@ pub async fn security_middleware(
     
     // Add security headers
     let headers = response.headers_mut();
-    // TODO: Handle unwrap() - add proper error handling for header value parsing
-    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
-    // TODO: Handle unwrap() - add proper error handling for header value parsing
-    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    headers.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
     headers.insert(
         "Content-Security-Policy",
-        // TODO: Handle unwrap() - add proper error handling for header value parsing
-        "default-src 'self'".parse().unwrap()
+        HeaderValue::from_static("default-src 'self'")
     );
     
     response
@@ -308,7 +294,7 @@ pub async fn health_check_middleware(
     // In production, would check actual service health
     response.headers_mut().insert(
         "X-PJS-Health",
-        // TODO: Handle unwrap() - add proper error handling for header value parsing\n        "healthy".parse().unwrap()
+        HeaderValue::from_static("healthy")
     );
     
     response
@@ -317,7 +303,6 @@ pub async fn health_check_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::Method};
     
     #[tokio::test]
     async fn test_pjs_middleware_creation() {

@@ -4,23 +4,22 @@
 //! and backpressure handling for optimal client performance.
 
 use crate::{
-    StreamFrame, StreamProcessor,
+    StreamFrame, PriorityStreamer,
     Error as PjsError, Result as PjsResult,
+    domain::Priority,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
-use futures::{stream::Stream, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    pin::Pin,
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+use sha2::{Sha256, Digest};
 
 #[cfg(feature = "websocket-client")]
 pub mod client;
@@ -203,7 +202,11 @@ impl AdaptiveStreamController {
         options: StreamOptions,
     ) -> PjsResult<String> {
         let session_id = Uuid::new_v4().to_string();
-        let plan = vec![StreamFrame::new(data.clone(), 100)]; // Simplified for now
+        let plan = vec![StreamFrame {
+            data: data.clone(),
+            priority: Priority::HIGH,
+            metadata: std::collections::HashMap::new(),
+        }]; // Simplified for now
         
         let session = StreamSession {
             id: session_id.clone(),
@@ -233,7 +236,9 @@ impl AdaptiveStreamController {
         let plan = session.plan.clone();
         
         tokio::spawn(async move {
-            Self::stream_frames(session_id, plan, frame_tx).await;
+            if let Err(e) = Self::stream_frames(session_id, plan, frame_tx).await {
+                error!("Error streaming frames: {}", e);
+            }
         });
         
         Ok(())
@@ -243,16 +248,20 @@ impl AdaptiveStreamController {
         session_id: String,
         plan: Vec<StreamFrame>, // Simplified for now
         frame_tx: broadcast::Sender<(String, WsMessage)>,
-    ) {
-        let mut frame_id = 0;
+    ) -> Result<(), PjsError> {
+        let mut frames_data = Vec::new();
         
-        for frame in plan.iter() {
+        for (frame_id, frame) in plan.iter().enumerate() {
+            // Collect frame payload for checksum calculation
+            let payload_bytes = serde_json::to_vec(&frame.data).map_err(|e| PjsError::Other(e.to_string()))?;
+            frames_data.push(payload_bytes);
+            
             let ws_message = WsMessage::StreamFrame {
                 session_id: session_id.clone(),
-                frame_id,
-                priority: frame.priority(),
-                payload: frame.payload().clone(),
-                is_complete: frame_id == plan.len() - 1,
+                frame_id: frame_id as u32,
+                priority: frame.priority.value(),
+                payload: frame.data.clone(),
+                is_complete: frame_id == (plan.len() - 1),
             };
             
             if let Err(e) = frame_tx.send((session_id.clone(), ws_message)) {
@@ -260,19 +269,19 @@ impl AdaptiveStreamController {
                 break;
             }
             
-            frame_id += 1;
             
             // TODO: Add adaptive delay based on client metrics
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         
-        // Send completion message
+        // Send completion message with calculated checksum
         let complete_message = WsMessage::StreamComplete {
             session_id: session_id.clone(),
-            checksum: "todo".to_string(), // TODO: Calculate actual checksum
+            checksum: calculate_stream_checksum(&frames_data),
         };
         
         let _ = frame_tx.send((session_id, complete_message));
+        Ok(())
     }
     
     /// Handle frame acknowledgment
@@ -334,6 +343,22 @@ impl Default for AdaptiveStreamController {
     }
 }
 
+/// Calculate SHA-256 checksum for stream completion verification
+fn calculate_stream_checksum(frames_data: &[Vec<u8>]) -> String {
+    let mut hasher = Sha256::new();
+    
+    // Hash each frame's data
+    for frame_data in frames_data {
+        hasher.update(frame_data);
+    }
+    
+    // Hash frame count to ensure integrity
+    hasher.update((frames_data.len() as u64).to_le_bytes());
+    
+    let result = hasher.finalize();
+    format!("sha256:{result:x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,5 +416,38 @@ mod tests {
         assert!((metrics.average_processing_time_ms - 130.0).abs() < 0.1);
         
         assert!(metrics.is_client_slow());
+    }
+
+    #[test]
+    fn test_checksum_calculation() {
+        // Test empty frames
+        let empty_frames: Vec<Vec<u8>> = vec![];
+        let checksum = calculate_stream_checksum(&empty_frames);
+        assert!(checksum.starts_with("sha256:"));
+        
+        // Test single frame
+        let single_frame = vec![vec![1, 2, 3, 4]];
+        let checksum1 = calculate_stream_checksum(&single_frame);
+        assert!(checksum1.starts_with("sha256:"));
+        
+        // Test multiple frames
+        let multi_frames = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+        let checksum2 = calculate_stream_checksum(&multi_frames);
+        assert!(checksum2.starts_with("sha256:"));
+        
+        // Same data should produce same checksum
+        let same_frames = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+        let checksum3 = calculate_stream_checksum(&same_frames);
+        assert_eq!(checksum2, checksum3);
+        
+        // Different data should produce different checksum
+        let diff_frames = vec![vec![1, 2], vec![3, 4], vec![5, 7]]; // Last byte different
+        let checksum4 = calculate_stream_checksum(&diff_frames);
+        assert_ne!(checksum2, checksum4);
+        
+        // Different order should produce different checksum
+        let reordered_frames = vec![vec![3, 4], vec![1, 2], vec![5, 6]];
+        let checksum5 = calculate_stream_checksum(&reordered_frames);
+        assert_ne!(checksum2, checksum5);
     }
 }

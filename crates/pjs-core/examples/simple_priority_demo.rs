@@ -2,6 +2,8 @@
 //!
 //! Demonstrates basic PJS functionality with working API
 
+#![allow(clippy::uninlined_format_args)]
+
 use pjson_rs::{Priority, StreamFrame, StreamProcessor, StreamConfig};
 use serde_json::json;
 
@@ -111,12 +113,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("   ⏳ Frame processing incomplete, waiting for more data");
                     },
                     pjson_rs::stream::ProcessResult::Error(e) => {
-                        println!("   ❌ Processing error: {}", e);
+                        println!("   ❌ Processing error: {e}");
                     },
                 }
             },
             Err(e) => {
-                println!("   ❌ Processing error: {:?}", e);
+                println!("   ❌ Processing error: {e:?}");
             }
         }
         println!();
