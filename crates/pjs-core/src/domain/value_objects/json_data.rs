@@ -216,7 +216,8 @@ impl JsonData {
                     if !obj.contains_key(*part) {
                         obj.insert(part.to_string(), Self::object(HashMap::new()));
                     }
-                    current = obj.get_mut(*part).unwrap();
+                    current = obj.get_mut(*part)
+                        .expect("Key must exist as we just inserted it above");
                 }
                 _ => return false,
             }
@@ -253,17 +254,17 @@ impl fmt::Display for JsonData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Null => write!(f, "null"),
-            Self::Bool(b) => write!(f, "{}", b),
-            Self::Integer(i) => write!(f, "{}", i),
-            Self::Float(float_val) => write!(f, "{}", float_val),
-            Self::String(s) => write!(f, "\"{}\"", s),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Integer(i) => write!(f, "{i}"),
+            Self::Float(float_val) => write!(f, "{float_val}"),
+            Self::String(s) => write!(f, "\"{s}\""),
             Self::Array(arr) => {
                 write!(f, "[")?;
                 for (i, item) in arr.iter().enumerate() {
                     if i > 0 {
                         write!(f, ",")?;
                     }
-                    write!(f, "{}", item)?;
+                    write!(f, "{item}")?;
                 }
                 write!(f, "]")
             }
@@ -273,7 +274,7 @@ impl fmt::Display for JsonData {
                     if i > 0 {
                         write!(f, ",")?;
                     }
-                    write!(f, "\"{}\":{}", key, value)?;
+                    write!(f, "\"{key}\":{value}")?;
                 }
                 write!(f, "}}")
             }
@@ -368,6 +369,36 @@ impl From<HashMap<String, JsonData>> for JsonData {
     }
 }
 
+impl From<serde_json::Value> for JsonData {
+    fn from(value: serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Null => Self::Null,
+            serde_json::Value::Bool(b) => Self::Bool(b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Self::Integer(i)
+                } else if let Some(f) = n.as_f64() {
+                    Self::Float(f)
+                } else {
+                    Self::Float(0.0) // fallback
+                }
+            }
+            serde_json::Value::String(s) => Self::String(s),
+            serde_json::Value::Array(arr) => {
+                let converted: Vec<JsonData> = arr.into_iter().map(JsonData::from).collect();
+                Self::Array(converted)
+            }
+            serde_json::Value::Object(obj) => {
+                let converted: HashMap<String, JsonData> = obj
+                    .into_iter()
+                    .map(|(k, v)| (k, JsonData::from(v)))
+                    .collect();
+                Self::Object(converted)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,7 +470,7 @@ mod tests {
             .collect(),
         );
         
-        let display = format!("{}", data);
+        let display = format!("{data}");
         assert!(display.contains("name"));
         assert!(display.contains("John"));
     }

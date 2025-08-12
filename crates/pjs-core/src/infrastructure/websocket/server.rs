@@ -17,18 +17,20 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
+use uuid;
 
 /// Axum WebSocket transport implementation
 pub struct AxumWebSocketTransport {
     controller: Arc<AdaptiveStreamController>,
-    connections: Arc<RwLock<Vec<Arc<WebSocket>>>>,
+    // Store connection IDs instead of WebSocket objects for Send/Sync compatibility
+    active_connections: Arc<RwLock<Vec<String>>>,
 }
 
 impl AxumWebSocketTransport {
     pub fn new() -> Self {
         Self {
             controller: Arc::new(AdaptiveStreamController::new()),
-            connections: Arc::new(RwLock::new(Vec::new())),
+            active_connections: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -44,96 +46,133 @@ impl AxumWebSocketTransport {
     pub async fn handle_socket(self: Arc<Self>, socket: WebSocket) {
         info!("New WebSocket connection established");
         
-        let socket = Arc::new(socket);
-        self.connections.write().await.push(socket.clone());
+        let connection_id = uuid::Uuid::new_v4().to_string();
+        self.active_connections.write().await.push(connection_id.clone());
         
-        let mut frame_rx = self.controller.subscribe_frames();
+        let frame_rx = self.controller.subscribe_frames();
         
-        let (mut sender, mut receiver) = {
-            let socket_ref = Arc::try_unwrap(socket.clone())
-                .unwrap_or_else(|arc| (*arc).clone())
-                .split();
-            socket_ref
-        };
+        // Create channels for communication between tasks
+        let (_outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<WsMessage>();
+        let (mut sender, mut receiver) = socket.split();
 
-        // Spawn task to send frames to client
+        // Spawn single task to handle both sending and receiving
         let transport_clone = self.clone();
-        let send_task = tokio::spawn(async move {
-            while let Ok((session_id, message)) = frame_rx.recv().await {
-                match serde_json::to_string(&message) {
-                    Ok(json_str) => {
-                        if let Err(e) = sender.send(Message::Text(json_str)).await {
-                            error!("Failed to send message to client: {}", e);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to serialize message: {}", e);
-                    }
-                }
-            }
-        });
-
-        // Handle incoming messages from client
-        let transport_clone = self.clone();
-        let receive_task = tokio::spawn(async move {
-            while let Some(msg) = receiver.next().await {
-                match msg {
-                    Ok(Message::Text(text)) => {
-                        match serde_json::from_str::<WsMessage>(&text) {
-                            Ok(ws_message) => {
-                                if let Err(e) = transport_clone.handle_message(socket.clone(), ws_message).await {
-                                    error!("Failed to handle message: {}", e);
+        let connection_id_clone = connection_id.clone();
+        let websocket_task = {
+            let mut frame_rx = frame_rx;
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        // Handle frames from stream controller
+                        Ok((_session_id, message)) = frame_rx.recv() => {
+                            match serde_json::to_string(&message) {
+                                Ok(json_str) => {
+                                    if let Err(e) = sender.send(Message::Text(json_str.into())).await {
+                                        error!("Failed to send message to client: {}", e);
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to serialize message: {}", e);
                                 }
                             }
-                            Err(e) => {
-                                warn!("Failed to parse WebSocket message: {}", e);
+                        }
+                        // Handle outgoing messages from application
+                        Some(message) = outgoing_rx.recv() => {
+                            match serde_json::to_string(&message) {
+                                Ok(json_str) => {
+                                    if let Err(e) = sender.send(Message::Text(json_str.into())).await {
+                                        error!("Failed to send message to client: {}", e);
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to serialize outgoing message: {}", e);
+                                }
                             }
                         }
-                    }
-                    Ok(Message::Binary(data)) => {
-                        debug!("Received binary data: {} bytes", data.len());
-                        // TODO: Handle binary messages if needed
-                    }
-                    Ok(Message::Ping(data)) => {
-                        if let Err(e) = sender.send(Message::Pong(data)).await {
-                            error!("Failed to send pong: {}", e);
+                        // Handle incoming messages from client
+                        Some(msg) = receiver.next() => {
+                            match msg {
+                                Ok(Message::Text(text)) => {
+                                    match serde_json::from_str::<WsMessage>(&text) {
+                                        Ok(ws_message) => {
+                                            if let Err(e) = transport_clone.handle_websocket_message(connection_id_clone.clone(), ws_message).await {
+                                                error!("Failed to handle message: {}", e);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to parse WebSocket message: {}", e);
+                                        }
+                                    }
+                                }
+                                Ok(Message::Binary(data)) => {
+                                    debug!("Received binary data: {} bytes", data.len());
+                                }
+                                Ok(Message::Ping(data)) => {
+                                    if let Err(e) = sender.send(Message::Pong(data)).await {
+                                        error!("Failed to send pong: {}", e);
+                                        break;
+                                    }
+                                }
+                                Ok(Message::Pong(_)) => {
+                                    debug!("Received pong from client");
+                                }
+                                Ok(Message::Close(_)) => {
+                                    info!("Client closed WebSocket connection");
+                                    break;
+                                }
+                                Err(e) => {
+                                    error!("WebSocket error: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                        else => {
                             break;
                         }
                     }
-                    Ok(Message::Pong(_)) => {
-                        debug!("Received pong from client");
-                    }
-                    Ok(Message::Close(_)) => {
-                        info!("Client closed WebSocket connection");
-                        break;
-                    }
-                    Err(e) => {
-                        error!("WebSocket error: {}", e);
-                        break;
-                    }
                 }
-            }
-        });
+            })
+        };
 
-        // Wait for either task to complete
-        tokio::select! {
-            _ = send_task => {
-                debug!("Send task completed");
-            }
-            _ = receive_task => {
-                debug!("Receive task completed");
-            }
+        // Wait for the task to complete
+        if let Err(e) = websocket_task.await {
+            error!("WebSocket task failed: {}", e);
         }
 
         // Clean up connection
-        let mut connections = self.connections.write().await;
-        connections.retain(|conn| !Arc::ptr_eq(conn, &socket));
+        let mut connections = self.active_connections.write().await;
+        connections.retain(|conn_id| *conn_id != connection_id);
         info!("WebSocket connection closed");
     }
 
     pub fn controller(&self) -> Arc<AdaptiveStreamController> {
         self.controller.clone()
+    }
+
+    /// Handle WebSocket message for a specific connection
+    async fn handle_websocket_message(&self, connection_id: String, message: WsMessage) -> PjsResult<()> {
+        debug!("Handling WebSocket message for connection {}: {:?}", connection_id, message);
+        
+        match message {
+            WsMessage::FrameAck { session_id, frame_id, processing_time_ms } => {
+                self.controller.handle_frame_ack(&session_id, frame_id, processing_time_ms).await?;
+            }
+            WsMessage::StreamInit { session_id: _, data, options } => {
+                let _session_id = self.controller.create_session(data, options).await?;
+                info!("Created new streaming session for connection {}", connection_id);
+            }
+            WsMessage::Ping { timestamp: _ } => {
+                // Pong is handled automatically by the WebSocket implementation
+                debug!("Received ping from connection {}", connection_id);
+            }
+            _ => {
+                warn!("Unhandled message type from connection {}", connection_id);
+            }
+        }
+        
+        Ok(())
     }
 }
 
@@ -145,7 +184,7 @@ impl Default for AxumWebSocketTransport {
 
 #[async_trait]
 impl WebSocketTransport for AxumWebSocketTransport {
-    type Connection = WebSocket;
+    type Connection = String; // Use connection ID instead of WebSocket
 
     async fn start_stream(
         &self,
@@ -160,7 +199,7 @@ impl WebSocketTransport for AxumWebSocketTransport {
 
     async fn send_frame(
         &self,
-        connection: Arc<Self::Connection>,
+        _connection: Arc<Self::Connection>,
         message: WsMessage,
     ) -> PjsResult<()> {
         let json_str = serde_json::to_string(&message)

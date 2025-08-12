@@ -3,6 +3,8 @@
 //! Shows how PJS protocol can optimize bandwidth usage through intelligent
 //! compression strategies based on JSON schema analysis.
 
+#![allow(clippy::uninlined_format_args)]
+
 use pjson_rs::{
     CompressionStrategy, SchemaAnalyzer, SchemaCompressor,
     Priority, StreamFrame, StreamingCompressor,
@@ -73,21 +75,25 @@ fn demo_basic_schema_analysis() -> Result<(), Box<dyn std::error::Error>> {
     let strategy = analyzer.analyze(&sample_data)?;
     
     println!("📊 Analyzed data structure:");
-    println!("   - Products: {} items", sample_data["products"].as_array().unwrap().len());
-    println!("   - Detected strategy: {:?}", strategy);
+    let products_len = sample_data["products"].as_array().unwrap().len();
+    println!("   - Products: {products_len} items");
+    println!("   - Detected strategy: {strategy:?}");
     
     match strategy {
         CompressionStrategy::Dictionary { ref dictionary } => {
-            println!("   - Dictionary size: {} entries", dictionary.len());
+            let dict_len = dictionary.len();
+            println!("   - Dictionary size: {dict_len} entries");
             for (string, index) in dictionary.iter().take(3) {
-                println!("     '{}' → {}", string, index);
+                println!("     '{string}' → {index}");
             }
         }
         CompressionStrategy::Hybrid { ref string_dict, ref numeric_deltas } => {
-            println!("   - String dictionary: {} entries", string_dict.len());
-            println!("   - Numeric deltas: {} fields", numeric_deltas.len());
+            let string_dict_len = string_dict.len();
+            println!("   - String dictionary: {string_dict_len} entries");
+            let numeric_deltas_len = numeric_deltas.len();
+            println!("   - Numeric deltas: {numeric_deltas_len} fields");
         }
-        _ => println!("   - Strategy: {:?}", strategy),
+        _ => println!("   - Strategy: {strategy:?}"),
     }
 
     let original_size = serde_json::to_string(&sample_data)?.len();
@@ -299,7 +305,7 @@ fn demo_realworld_patterns() -> Result<(), Box<dyn std::error::Error>> {
     println!("📡 API Response Analysis:");
     println!("   - Original size: {} bytes", original_size);
     println!("   - Users count: {}", api_response["data"]["users"].as_array().unwrap().len());
-    println!("   - Detected strategy: {:?}", strategy);
+    println!("   - Detected strategy: {strategy:?}");
     println!("   - Optimized strategy: {:?}", optimized_strategy);
 
     println!("\n🎯 Compression Results:");

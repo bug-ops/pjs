@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
@@ -24,13 +24,12 @@ use crate::{
         handlers::{CommandHandler, QueryHandler},
         commands::*,
         queries::*,
-        ApplicationResult,
     },
     domain::{
         value_objects::{SessionId, StreamId, Priority},
         aggregates::stream_session::SessionConfig,
         entities::Frame,
-        services::connection_manager::{ConnectionManager, ConnectionState},
+        services::connection_manager::ConnectionManager,
     },
 };
 
@@ -41,8 +40,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -59,8 +61,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -117,8 +122,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -155,8 +163,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -209,8 +220,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -239,8 +253,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -270,8 +287,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -312,8 +332,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -349,8 +372,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -380,14 +406,44 @@ async fn system_health() -> Json<serde_json::Value> {
 }
 
 /// Frame streaming implementation
-pub struct FrameStream<CH, QH> {
+pub struct FrameStream<CH, QH> 
+where
+    CH: CommandHandler<CreateSessionCommand, SessionId> + 
+         CommandHandler<CreateStreamCommand, StreamId> +
+         CommandHandler<StartStreamCommand, ()> +
+         CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
+         Clone + Send + Sync + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse> +
+         QueryHandler<GetSessionHealthQuery, HealthResponse> +
+         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
+         Clone + Send + Sync + 'static,
+{
     session_service: Arc<SessionService<CH, QH>>,
     session_id: SessionId,
     priority_threshold: Priority,
     current_frame: usize,
 }
 
-impl<CH, QH> FrameStream<CH, QH> {
+impl<CH, QH> FrameStream<CH, QH> 
+where
+    CH: CommandHandler<CreateSessionCommand, SessionId> + 
+         CommandHandler<CreateStreamCommand, StreamId> +
+         CommandHandler<StartStreamCommand, ()> +
+         CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
+         Clone + Send + Sync + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse> +
+         QueryHandler<GetSessionHealthQuery, HealthResponse> +
+         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
+         Clone + Send + Sync + 'static,
+{
     pub fn new(
         session_service: Arc<SessionService<CH, QH>>,
         session_id: SessionId,
@@ -407,8 +463,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -439,7 +498,7 @@ fn create_json_response<S>(stream: S) -> Result<Response, PjsError>
 where
     S: Stream<Item = Result<String, PjsError>> + Send + 'static,
 {
-    let body = hyper::body::Body::from_stream(stream);
+    let body = axum::body::Body::from_stream(stream);
     
     Response::builder()
         .status(StatusCode::OK)
@@ -454,7 +513,7 @@ fn create_ndjson_response<S>(stream: S) -> Result<Response, PjsError>
 where
     S: Stream<Item = Result<String, PjsError>> + Send + 'static,
 {
-    let body = hyper::body::Body::from_stream(stream);
+    let body = axum::body::Body::from_stream(stream);
     
     Response::builder()
         .status(StatusCode::OK)
@@ -471,12 +530,12 @@ where
 {
     let sse_stream = stream.map(|item| {
         match item {
-            Ok(data) => Ok(format!("data: {}\n\n", data)),
-            Err(e) => Ok(format!("event: error\ndata: {}\n\n", e)),
+            Ok(data) => Ok::<String, std::convert::Infallible>(format!("data: {data}\n\n")),
+            Err(e) => Ok::<String, std::convert::Infallible>(format!("event: error\ndata: {e}\n\n")),
         }
     });
     
-    let body = hyper::body::Body::from_stream(sse_stream);
+    let body = axum::body::Body::from_stream(sse_stream);
     
     Response::builder()
         .status(StatusCode::OK)
@@ -495,8 +554,11 @@ where
     CH: CommandHandler<CreateSessionCommand, SessionId> + 
          CommandHandler<CreateStreamCommand, StreamId> +
          CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
          CommandHandler<CompleteStreamCommand, ()> +
+         CommandHandler<CloseSessionCommand, ()> +
+         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
+         CommandHandler<AdjustPriorityThresholdCommand, ()> +
          Clone + Send + Sync + 'static,
     QH: QueryHandler<GetSessionQuery, SessionResponse> +
          QueryHandler<GetSessionHealthQuery, HealthResponse> +
@@ -557,6 +619,6 @@ mod tests {
         let health_data: serde_json::Value = response.0;
         
         assert_eq!(health_data["status"], "healthy");
-        assert!(health_data["features"].as_array().unwrap().len() > 0);
+        assert!(!health_data["features"].as_array().unwrap().is_empty());
     }
 }

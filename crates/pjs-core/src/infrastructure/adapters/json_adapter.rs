@@ -134,7 +134,7 @@ impl JsonAdapter {
                         let new_path = if current_path.is_empty() {
                             key.clone()
                         } else {
-                            format!("{}.{}", current_path, key)
+                            format!("{current_path}.{key}")
                         };
                         Self::extract_paths_recursive(value, new_path, paths);
                     }
@@ -146,9 +146,9 @@ impl JsonAdapter {
                 } else {
                     for (index, value) in arr.iter().enumerate() {
                         let new_path = if current_path.is_empty() {
-                            format!("[{}]", index)
+                            format!("[{index}]")
                         } else {
-                            format!("{}[{}]", current_path, index)
+                            format!("{current_path}[{index}]")
                         };
                         Self::extract_paths_recursive(value, new_path, paths);
                     }

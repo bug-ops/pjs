@@ -2,10 +2,9 @@
 
 use axum::{
     http::{header, HeaderMap, StatusCode},
-    response::{Response, IntoResponse},
+    response::Response,
 };
-use futures::{Stream, StreamExt};
-use hyper::body::Body;
+use futures::Stream;
 use serde_json::Value as JsonValue;
 use std::{
     pin::Pin,
@@ -355,7 +354,7 @@ pub fn create_streaming_response<S>(
 where
     S: Stream<Item = Result<String, StreamError>> + Send + 'static,
 {
-    let body = Body::from_stream(stream);
+    let body = axum::body::Body::from_stream(stream);
     
     let mut response = Response::builder()
         .status(StatusCode::OK)
@@ -398,6 +397,8 @@ mod tests {
     
     #[tokio::test]
     async fn test_adaptive_stream() {
+        use futures::StreamExt;
+        
         // Create mock frame stream
         let frames = vec![
             // Would create actual Frame objects here

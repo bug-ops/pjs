@@ -3,6 +3,8 @@
 //! This example shows how the zero-copy parser can parse JSON with minimal
 //! memory allocations, providing better performance for large documents.
 
+#![allow(clippy::uninlined_format_args)]
+
 use pjson_rs::parser::{
     ZeroCopyParser, LazyParser, LazyJsonValue,
     SimdZeroCopyParser, SimdZeroCopyConfig,
@@ -45,7 +47,7 @@ fn demo_basic_zero_copy() -> Result<(), Box<dyn std::error::Error>> {
     match result {
         LazyJsonValue::StringBorrowed(bytes) => {
             let text = std::str::from_utf8(bytes)?;
-            println!("✓ Parsed string: {}", text);
+            println!("✓ Parsed string: {text}");
             
             let memory = result.memory_usage();
             println!("  Memory efficiency: {:.1}% (allocated: {}, referenced: {})",
@@ -66,7 +68,7 @@ fn demo_basic_zero_copy() -> Result<(), Box<dyn std::error::Error>> {
     match result {
         LazyJsonValue::NumberSlice(bytes) => {
             let text = std::str::from_utf8(bytes)?;
-            println!("✓ Parsed number: {}", text);
+            println!("✓ Parsed number: {text}");
             
             let memory = result.memory_usage();
             println!("  Memory efficiency: {:.1}%", memory.efficiency() * 100.0);
@@ -226,7 +228,7 @@ fn demo_large_json_performance() -> Result<(), Box<dyn std::error::Error>> {
     // Calculate throughput
     let throughput_mb_s = (json_bytes.len() as f64) / (1024.0 * 1024.0) / 
         zero_copy_time.as_secs_f64();
-    println!("  Throughput: {:.1} MB/s", throughput_mb_s);
+    println!("  Throughput: {throughput_mb_s:.1} MB/s");
     
     println!();
     Ok(())

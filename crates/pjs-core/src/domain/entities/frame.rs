@@ -350,7 +350,7 @@ mod tests {
             "total": 0
         });
 
-        let frame = Frame::skeleton(stream_id, 1, skeleton_data.clone());
+        let frame = Frame::skeleton(stream_id, 1, skeleton_data.clone().into());
 
         assert_eq!(frame.frame_type(), &FrameType::Skeleton);
         assert_eq!(frame.priority(), Priority::CRITICAL);
@@ -390,7 +390,7 @@ mod tests {
     fn test_frame_with_metadata() {
         let stream_id = StreamId::new();
         let skeleton_data = serde_json::json!({});
-        let frame = Frame::skeleton(stream_id, 1, skeleton_data)
+        let frame = Frame::skeleton(stream_id, 1, skeleton_data.into())
             .with_metadata("source".to_string(), "api".to_string())
             .with_metadata("version".to_string(), "1.0".to_string());
 

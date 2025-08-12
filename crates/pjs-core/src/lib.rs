@@ -58,7 +58,7 @@ pub use compression::{
 pub use stream::{
     CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
     ProcessResult, StreamConfig, StreamFrame, StreamProcessor, StreamStats,
-    StreamingCompressor, StreamingDecompressor,
+    StreamingCompressor, StreamingDecompressor, PriorityStreamer,
 };
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};

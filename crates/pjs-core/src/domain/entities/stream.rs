@@ -453,7 +453,7 @@ mod tests {
             "total": 2
         });
 
-        let stream = Stream::new(session_id, source_data.clone(), StreamConfig::default());
+        let stream = Stream::new(session_id, source_data.clone().into(), StreamConfig::default());
 
         assert_eq!(stream.session_id(), session_id);
         assert_eq!(stream.state(), &StreamState::Preparing);
@@ -466,7 +466,7 @@ mod tests {
     fn test_stream_state_transitions() {
         let session_id = SessionId::new();
         let source_data = serde_json::json!({});
-        let mut stream = Stream::new(session_id, source_data, StreamConfig::default());
+        let mut stream = Stream::new(session_id, source_data.into(), StreamConfig::default());
 
         // Start streaming
         assert!(stream.start_streaming().is_ok());
@@ -483,7 +483,7 @@ mod tests {
     fn test_invalid_state_transitions() {
         let session_id = SessionId::new();
         let source_data = serde_json::json!({});
-        let mut stream = Stream::new(session_id, source_data, StreamConfig::default());
+        let mut stream = Stream::new(session_id, source_data.into(), StreamConfig::default());
 
         // Cannot complete from preparing state
         assert!(stream.complete().is_err());
@@ -502,7 +502,7 @@ mod tests {
         let source_data = serde_json::json!({
             "test": "data"
         });
-        let mut stream = Stream::new(session_id, source_data, StreamConfig::default());
+        let mut stream = Stream::new(session_id, source_data.into(), StreamConfig::default());
 
         // Cannot create frames before streaming
         assert!(stream.create_skeleton_frame().is_err());
@@ -524,7 +524,7 @@ mod tests {
     fn test_stream_metadata() {
         let session_id = SessionId::new();
         let source_data = serde_json::json!({});
-        let mut stream = Stream::new(session_id, source_data, StreamConfig::default());
+        let mut stream = Stream::new(session_id, source_data.into(), StreamConfig::default());
 
         stream.add_metadata("source".to_string(), "api".to_string());
         stream.add_metadata("version".to_string(), "1.0".to_string());

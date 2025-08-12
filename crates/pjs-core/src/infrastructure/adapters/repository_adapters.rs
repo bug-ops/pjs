@@ -7,33 +7,39 @@ use crate::domain::{
     DomainResult, DomainError,
     entities::{Frame, Stream, stream::StreamState},
     aggregates::StreamSession,
-    value_objects::{SessionId, StreamId, Priority, JsonPath},
+    value_objects::{SessionId, StreamId, JsonPath, Priority},
     ports::repositories::*,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::SystemTime,
 };
-use tokio::sync::RwLock as TokioRwLock;
+use tokio::sync::RwLock;
+
+/// Type alias for complex frame index map
+type FrameIndexMap = Arc<RwLock<HashMap<JsonPath, Vec<(StreamId, usize)>>>>;
+
+/// Type alias for complex cache data map  
+type CacheDataMap = Arc<RwLock<HashMap<String, (Vec<u8>, Option<SystemTime>)>>>;
 
 /// In-memory implementation of StreamSessionRepository
 /// 
 /// This implementation provides full ACID transaction support
 /// and is suitable for testing and development.
 pub struct InMemoryStreamSessionRepository {
-    sessions: Arc<TokioRwLock<HashMap<SessionId, (StreamSession, u64)>>>, // (session, version)
-    health_snapshots: Arc<TokioRwLock<HashMap<SessionId, SessionHealthSnapshot>>>,
+    sessions: Arc<RwLock<HashMap<SessionId, (StreamSession, u64)>>>, // (session, version)
+    health_snapshots: Arc<RwLock<HashMap<SessionId, SessionHealthSnapshot>>>,
     next_version: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl InMemoryStreamSessionRepository {
     pub fn new() -> Self {
         Self {
-            sessions: Arc::new(TokioRwLock::new(HashMap::new())),
-            health_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            health_snapshots: Arc::new(RwLock::new(HashMap::new())),
             next_version: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
     }
@@ -62,8 +68,7 @@ impl StreamSessionRepository for InMemoryStreamSessionRepository {
             if let Some((_existing_session, current_version)) = sessions.get(&session_id) {
                 if *current_version != expected {
                     return Err(DomainError::ConcurrencyConflict(format!(
-                        "Session version mismatch: expected {}, got {}",
-                        expected, current_version
+                        "Session version mismatch: expected {expected}, got {current_version}"
                     )));
                 }
             }
@@ -167,7 +172,7 @@ impl StreamSessionRepository for InMemoryStreamSessionRepository {
                 };
                 Ok(snapshot)
             } else {
-                Err(DomainError::NotFound(format!("Session {} not found", session_id)))
+                Err(DomainError::NotFound(format!("Session {session_id} not found")))
             }
         }
     }
@@ -231,7 +236,7 @@ impl InMemoryStreamSessionRepository {
 
 /// Transaction implementation for in-memory repository
 pub struct InMemorySessionTransaction {
-    sessions: Arc<TokioRwLock<HashMap<SessionId, (StreamSession, u64)>>>,
+    sessions: Arc<RwLock<HashMap<SessionId, (StreamSession, u64)>>>,
     next_version: Arc<std::sync::atomic::AtomicU64>,
     pending_changes: Vec<TransactionOperation>,
     committed: bool,
@@ -245,7 +250,7 @@ enum TransactionOperation {
 
 impl InMemorySessionTransaction {
     fn new(
-        sessions: Arc<TokioRwLock<HashMap<SessionId, (StreamSession, u64)>>>,
+        sessions: Arc<RwLock<HashMap<SessionId, (StreamSession, u64)>>>,
         next_version: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         Self {
@@ -316,7 +321,7 @@ impl SessionTransaction for InMemorySessionTransaction {
 /// In-memory implementation of FrameRepository
 pub struct InMemoryFrameRepository {
     frames: Arc<RwLock<HashMap<StreamId, Vec<Frame>>>>,
-    frame_indices: Arc<RwLock<HashMap<JsonPath, Vec<(StreamId, usize)>>>>, // path -> (stream_id, frame_index)
+    frame_indices: FrameIndexMap, // path -> (stream_id, frame_index)
 }
 
 impl InMemoryFrameRepository {
@@ -327,15 +332,14 @@ impl InMemoryFrameRepository {
         }
     }
 
-    fn build_frame_index(&self, stream_id: StreamId, _frame: &Frame, frame_index: usize) {
+    async fn build_frame_index(&self, stream_id: StreamId, _frame: &Frame, frame_index: usize) {
         // This is a simplified indexing - in reality would parse JSON paths from frame content
-        if let Ok(mut indices) = self.frame_indices.write() {
-            // Example: index by frame type or priority
-            if let Ok(priority_path) = JsonPath::new("$.priority") {
-                indices.entry(priority_path)
-                    .or_insert_with(Vec::new)
-                    .push((stream_id, frame_index));
-            }
+        let mut indices = self.frame_indices.write().await;
+        // Example: index by frame type or priority
+        if let Ok(priority_path) = JsonPath::new("$.priority") {
+            indices.entry(priority_path)
+                .or_insert_with(Vec::new)
+                .push((stream_id, frame_index));
         }
     }
 }
@@ -344,15 +348,17 @@ impl InMemoryFrameRepository {
 impl FrameRepository for InMemoryFrameRepository {
     async fn store_frame(&self, frame: Frame) -> DomainResult<()> {
         let stream_id = frame.stream_id();
-        if let Ok(mut frames) = self.frames.write() {
+        let frame_index = {
+            let mut frames = self.frames.write().await;
             let stream_frames = frames.entry(stream_id).or_insert_with(Vec::new);
             let frame_index = stream_frames.len();
-            
-            // Build indices for fast querying
-            self.build_frame_index(stream_id, &frame, frame_index);
-            
-            stream_frames.push(frame);
-        }
+            stream_frames.push(frame.clone());
+            frame_index
+        };
+        
+        // Build indices for fast querying (outside the lock)
+        self.build_frame_index(stream_id, &frame, frame_index).await;
+        
         Ok(())
     }
 
@@ -369,7 +375,8 @@ impl FrameRepository for InMemoryFrameRepository {
         priority_filter: Option<Priority>,
         pagination: Pagination,
     ) -> DomainResult<FrameQueryResult> {
-        if let Ok(frames) = self.frames.read() {
+        let frames = self.frames.read().await;
+        {
             if let Some(stream_frames) = frames.get(&stream_id) {
                 // Apply priority filter
                 let filtered_frames: Vec<Frame> = stream_frames.iter()
@@ -419,8 +426,6 @@ impl FrameRepository for InMemoryFrameRepository {
                     lowest_priority: None,
                 })
             }
-        } else {
-            Err(DomainError::Io("Cannot acquire frames lock".to_string()))
         }
     }
 
@@ -430,14 +435,16 @@ impl FrameRepository for InMemoryFrameRepository {
         path: JsonPath,
     ) -> DomainResult<Vec<Frame>> {
         // Use frame indices for fast path-based lookup
-        if let Ok(indices) = self.frame_indices.read() {
+        let indices = self.frame_indices.read().await;
+        {
             if let Some(frame_locations) = indices.get(&path) {
                 let relevant_locations: Vec<usize> = frame_locations.iter()
                     .filter(|(sid, _)| *sid == stream_id)
                     .map(|(_, index)| *index)
                     .collect();
 
-                if let Ok(frames) = self.frames.read() {
+                let frames = self.frames.read().await;
+        {
                     if let Some(stream_frames) = frames.get(&stream_id) {
                         let result_frames: Vec<Frame> = relevant_locations.iter()
                             .filter_map(|&index| stream_frames.get(index).cloned())
@@ -454,7 +461,8 @@ impl FrameRepository for InMemoryFrameRepository {
     async fn cleanup_old_frames(&self, older_than: DateTime<Utc>) -> DomainResult<u64> {
         let mut cleaned_count = 0u64;
         
-        if let Ok(mut frames) = self.frames.write() {
+        {
+            let mut frames = self.frames.write().await;
             for stream_frames in frames.values_mut() {
                 let original_len = stream_frames.len();
                 stream_frames.retain(|frame| {
@@ -468,7 +476,8 @@ impl FrameRepository for InMemoryFrameRepository {
     }
 
     async fn get_frame_priority_distribution(&self, stream_id: StreamId) -> DomainResult<PriorityDistribution> {
-        if let Ok(frames) = self.frames.read() {
+        let frames = self.frames.read().await;
+        {
             if let Some(stream_frames) = frames.get(&stream_id) {
                 let mut distribution = PriorityDistribution::default();
                 
@@ -488,15 +497,13 @@ impl FrameRepository for InMemoryFrameRepository {
             } else {
                 Ok(PriorityDistribution::default())
             }
-        } else {
-            Err(DomainError::Io("Cannot acquire frames lock".to_string()))
         }
     }
 }
 
 /// Simple in-memory cache implementation
 pub struct InMemoryCache {
-    data: Arc<RwLock<HashMap<String, (serde_json::Value, Option<SystemTime>)>>>,
+    data: CacheDataMap,
     stats: Arc<RwLock<CacheStatistics>>,
 }
 
@@ -508,8 +515,9 @@ impl InMemoryCache {
         }
     }
 
-    fn update_stats(&self, hit: bool) {
-        if let Ok(mut stats) = self.stats.write() {
+    async fn update_stats(&self, hit: bool) {
+        let mut stats = self.stats.write().await;
+        {
             if hit {
                 let total_requests = (stats.hit_rate + stats.miss_rate) * 100.0;
                 let hits = stats.hit_rate * total_requests / 100.0 + 1.0;
@@ -529,76 +537,68 @@ impl InMemoryCache {
 
 #[async_trait]
 impl CacheRepository for InMemoryCache {
-    async fn get<T>(&self, key: &str) -> DomainResult<Option<T>>
-    where
-        T: Send + Sync + 'static + serde::de::DeserializeOwned,
-    {
-        if let Ok(data) = self.data.read() {
-            if let Some((value, expiry)) = data.get(key) {
-                // Check expiration
-                if let Some(exp_time) = expiry {
-                    if SystemTime::now() > *exp_time {
-                        self.update_stats(false);
-                        return Ok(None);
-                    }
+    async fn get_bytes(&self, key: &str) -> DomainResult<Option<Vec<u8>>> {
+        let data = self.data.read().await;
+        if let Some((value, expiry)) = data.get(key) {
+            // Check expiration
+            if let Some(exp_time) = expiry {
+                if SystemTime::now() > *exp_time {
+                    drop(data); // Release lock before async call
+                    self.update_stats(false).await;
+                    return Ok(None);
                 }
-
-                // Deserialize value
-                match serde_json::from_value::<T>(value.clone()) {
-                    Ok(result) => {
-                        self.update_stats(true);
-                        Ok(Some(result))
-                    },
-                    Err(e) => {
-                        self.update_stats(false);
-                        Err(DomainError::Io(format!("Deserialization failed: {}", e)))
-                    }
-                }
-            } else {
-                self.update_stats(false);
-                Ok(None)
             }
+
+            let value = value.clone();
+            drop(data); // Release lock before async call
+            self.update_stats(true).await;
+            Ok(Some(value))
         } else {
-            Err(DomainError::Io("Cannot acquire cache lock".to_string()))
+            drop(data); // Release lock before async call
+            self.update_stats(false).await;
+            Ok(None)
         }
     }
 
-    async fn set<T>(&self, key: &str, value: T, ttl: Option<std::time::Duration>) -> DomainResult<()>
-    where
-        T: Send + Sync + 'static + serde::Serialize,
-    {
-        let serialized = serde_json::to_value(value)
-            .map_err(|e| DomainError::Io(format!("Serialization failed: {}", e)))?;
-
+    async fn set_bytes(&self, key: &str, value: Vec<u8>, ttl: Option<std::time::Duration>) -> DomainResult<()> {
         let expiry = ttl.map(|duration| SystemTime::now() + duration);
 
-        if let Ok(mut data) = self.data.write() {
-            data.insert(key.to_string(), (serialized, expiry));
-            
-            if let Ok(mut stats) = self.stats.write() {
-                stats.total_keys = data.len() as u64;
-                stats.memory_usage_bytes += key.len() as u64 + 100; // Rough estimate
-            }
+        let (data_len, key_len, value_len) = {
+            let mut data = self.data.write().await;
+            data.insert(key.to_string(), (value.clone(), expiry));
+            (data.len() as u64, key.len() as u64, value.len() as u64)
+        };
+        
+        // Update stats outside the data lock
+        {
+            let mut stats = self.stats.write().await;
+            stats.total_keys = data_len;
+            stats.memory_usage_bytes += key_len + value_len;
         }
 
         Ok(())
     }
 
     async fn remove(&self, key: &str) -> DomainResult<()> {
-        if let Ok(mut data) = self.data.write() {
+        let data_len = {
+            let mut data = self.data.write().await;
             data.remove(key);
-            
-            if let Ok(mut stats) = self.stats.write() {
-                stats.total_keys = data.len() as u64;
-                stats.eviction_count += 1;
-            }
+            data.len() as u64
+        };
+        
+        // Update stats outside the data lock  
+        {
+            let mut stats = self.stats.write().await;
+            stats.total_keys = data_len;
+            stats.eviction_count += 1;
         }
         
         Ok(())
     }
 
     async fn clear_prefix(&self, prefix: &str) -> DomainResult<()> {
-        if let Ok(mut data) = self.data.write() {
+        let data_len = {
+            let mut data = self.data.write().await;
             let keys_to_remove: Vec<String> = data.keys()
                 .filter(|key| key.starts_with(prefix))
                 .cloned()
@@ -608,20 +608,21 @@ impl CacheRepository for InMemoryCache {
                 data.remove(&key);
             }
             
-            if let Ok(mut stats) = self.stats.write() {
-                stats.total_keys = data.len() as u64;
-                stats.eviction_count += 1;
-            }
+            data.len() as u64
+        };
+        
+        // Update stats outside the data lock
+        {
+            let mut stats = self.stats.write().await;
+            stats.total_keys = data_len;
+            stats.eviction_count += 1;
         }
         
         Ok(())
     }
 
     async fn get_stats(&self) -> DomainResult<CacheStatistics> {
-        if let Ok(stats) = self.stats.read() {
-            Ok(stats.clone())
-        } else {
-            Err(DomainError::Io("Cannot acquire stats lock".to_string()))
-        }
+        let stats = self.stats.read().await;
+        Ok(stats.clone())
     }
 }

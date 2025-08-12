@@ -42,6 +42,9 @@ tokio = { workspace = true, features = ["full"] }
 chrono.workspace = true
 uuid.workspace = true
 
+# Cryptographic hashing
+sha2 = "0.10"
+
 # HTTP server integration (optional)
 axum = { workspace = true, optional = true, features = ["ws"] }
 tower = { workspace = true, optional = true }

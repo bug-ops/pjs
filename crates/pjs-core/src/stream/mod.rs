@@ -5,7 +5,7 @@
 
 pub mod compression_integration;
 // TODO: Reconcile with legacy priority and reconstruction modules
-// pub mod priority;
+pub mod priority;
 // pub mod reconstruction;
 
 use crate::domain::{Priority, DomainResult};
@@ -13,7 +13,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 /// Stream frame with priority and metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StreamFrame {
     /// JSON data payload
     pub data: JsonValue,
@@ -134,6 +134,7 @@ pub use compression_integration::{
     CompressedFrame, StreamingCompressor, StreamingDecompressor,
     CompressionStats, DecompressionStats, DecompressionMetadata,
 };
+pub use priority::PriorityStreamer;
 
 #[cfg(test)]
 mod tests {

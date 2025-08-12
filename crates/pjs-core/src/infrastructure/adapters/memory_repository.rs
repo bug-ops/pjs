@@ -285,7 +285,7 @@ mod tests {
         // Create and store stream
         let stream = Stream::new(
             session_id,
-            serde_json::json!({"test": "data"}),
+            serde_json::json!({"test": "data"}).into(),
             StreamConfig::default(),
         );
         let stream_id = stream.id();
@@ -323,7 +323,7 @@ mod tests {
         // Create stream  
         let stream = Stream::new(
             session_id,
-            serde_json::json!({"test": "data"}),
+            serde_json::json!({"test": "data"}).into(),
             StreamConfig::default(),
         );
         repo.store().store_stream(stream).await.unwrap();
@@ -348,7 +348,7 @@ mod tests {
         let mut tasks = JoinSet::new();
         
         // Spawn multiple tasks to test concurrent access
-        for i in 0..10 {
+        for _i in 0..10 {
             let repo_clone = repo.clone();
             tasks.spawn(async move {
                 let mut session = StreamSession::new(SessionConfig::default());

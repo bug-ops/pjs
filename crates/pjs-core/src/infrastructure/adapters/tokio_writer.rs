@@ -125,7 +125,7 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> StreamWriter for TokioStream
     async fn flush(&mut self) -> DomainResult<()> {
         let mut writer = self.writer.lock().await;
         writer.flush().await
-            .map_err(|e| DomainError::Io(format!("Flush failed: {}", e)))
+            .map_err(|e| DomainError::Io(format!("Flush failed: {e}")))
     }
 
     fn capacity(&self) -> Option<usize> {
@@ -147,13 +147,13 @@ impl<W: AsyncWrite + Unpin + Send> TokioStreamWriter<W> {
     fn serialize_frame(&self, frame: &Frame) -> DomainResult<Vec<u8>> {
         // Simple JSON serialization - could be optimized with binary formats
         serde_json::to_vec(frame)
-            .map_err(|e| DomainError::Io(format!("Serialization failed: {}", e)))
+            .map_err(|e| DomainError::Io(format!("Serialization failed: {e}")))
     }
 
     async fn write_bytes(&self, bytes: &[u8]) -> DomainResult<()> {
         let mut writer = self.writer.lock().await;
         writer.write_all(bytes).await
-            .map_err(|e| DomainError::Io(format!("Write failed: {}", e)))
+            .map_err(|e| DomainError::Io(format!("Write failed: {e}")))
     }
 
     async fn update_metrics(&self, bytes_written: usize, duration: Duration, error: bool) {
@@ -220,7 +220,7 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> TokioFrameWriter<W> {
                         Ok(false)
                     },
                     BackpressureStrategy::Error => {
-                        return Err(DomainError::Io("Buffer full".to_string()));
+                        Err(DomainError::Io("Buffer full".to_string()))
                     }
                 }
             } else {
@@ -294,9 +294,7 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> TokioFrameWriter<W> {
             let mut queue = self.priority_queue.lock().await;
             while let Some((frame, _priority)) = queue.pop() {
                 // Use base writer to actually send the frame
-                if let Err(e) = self.base_writer.write_frame(frame).await {
-                    return Err(e);
-                }
+                self.base_writer.write_frame(frame).await?
             }
         }
         Ok(())
