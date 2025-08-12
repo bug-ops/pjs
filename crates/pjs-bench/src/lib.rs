@@ -73,6 +73,23 @@ pub mod fallback {
         data: Bytes,
     }
 
+    impl StreamFrame {
+        /// Create new stream frame
+        pub fn new(data: Bytes) -> Self {
+            Self { data }
+        }
+
+        /// Get the frame data
+        pub fn data(&self) -> &Bytes {
+            &self.data
+        }
+
+        /// Get the frame size in bytes
+        pub fn size(&self) -> usize {
+            self.data.len()
+        }
+    }
+
     #[derive(Debug)]
     pub struct PriorityStreamer {
         config: StreamerConfig,
@@ -87,14 +104,14 @@ pub mod fallback {
             // Use config to determine frame size
             let chunk_size = self.config.chunk_size();
             if data.len() <= chunk_size {
-                vec![StreamFrame { data: data.clone() }]
+                vec![StreamFrame::new(data.clone())]
             } else {
                 // Split into multiple frames based on config
                 let mut frames = Vec::new();
                 for chunk in data.chunks(chunk_size) {
-                    frames.push(StreamFrame { 
-                        data: Bytes::copy_from_slice(chunk)
-                    });
+                    frames.push(StreamFrame::new(
+                        Bytes::copy_from_slice(chunk)
+                    ));
                 }
                 frames
             }
@@ -277,5 +294,31 @@ mod tests {
 
         let ratio = metrics2.efficiency_ratio(&metrics1);
         assert!(ratio > 1.0); // metrics2 should be better
+    }
+
+    #[test]
+    fn test_stream_frame() {
+        use bytes::Bytes;
+
+        let data = Bytes::from("test data");
+        let frame = super::fallback::StreamFrame::new(data.clone());
+
+        assert_eq!(frame.data(), &data);
+        assert_eq!(frame.size(), data.len());
+    }
+
+    #[test]
+    fn test_priority_streamer() {
+        use bytes::Bytes;
+
+        let config = super::fallback::StreamerConfig::new();
+        let streamer = super::fallback::PriorityStreamer::new(config);
+
+        let test_data = Bytes::from("test streaming data");
+        let frames = streamer.create_priority_frames(&test_data);
+
+        assert!(!frames.is_empty());
+        assert_eq!(frames[0].data(), &test_data);
+        assert_eq!(frames[0].size(), test_data.len());
     }
 }
