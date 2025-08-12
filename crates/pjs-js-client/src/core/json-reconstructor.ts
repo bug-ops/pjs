@@ -118,7 +118,7 @@ export class JsonReconstructor {
       }
       
       if (this.config.debug) {
-        console.log(`[PJS] Applied ${patch.operation} patch:`, {
+        console.log('[PJS] Applied patch operation:', patch.operation, {
           path: patch.path,
           operationCount: this.operationCount,
           hasValue: patch.value !== undefined
