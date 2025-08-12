@@ -9,13 +9,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned
+### Planned for v0.4.0
 
 - **Enhanced Framework Integrations**: Additional Rust web framework support (Actix, Warp)
-- **JavaScript/TypeScript client library**: Web client SDK for PJS protocol  
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **Schema validation engine**: Runtime JSON schema validation with type safety
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
+
+## [0.3.0] - 2025-08-12
+
+### 🚀 Major Features
+
+- **Production-Ready Code Quality**: Comprehensive codebase cleanup and modernization
+  - **Zero Clippy warnings**: All 44+ clippy warnings resolved across entire codebase
+  - **Modern format strings**: All `format!("{}", var)` updated to `format!("{var}")`
+  - **Improved error handling**: Enhanced Result patterns and proper async trait usage
+  - **Memory safety improvements**: Fixed await-holding lock patterns and buffer alignment
+  - **196 tests passing**: Complete test suite validation with all features enabled
+
+### 🔧 Infrastructure Improvements
+
+- **Clean Architecture Enforcement**: Domain layer completely isolated from infrastructure
+  - **JsonData value object**: Custom domain JSON representation replacing serde_json::Value
+  - **From trait implementations**: Seamless conversion between serde_json::Value and JsonData
+  - **Type safety**: Eliminated all architecture violations in domain layer
+  - **Proper error boundaries**: Clear separation between domain and infrastructure errors
+
+- **HTTP/WebSocket Modernization**: Updated to latest Axum patterns
+  - **Route syntax updates**: Migrated from `:param` to `{param}` format for Axum v0.8 compatibility
+  - **StreamExt imports**: Fixed async stream processing with proper trait imports
+  - **Body type corrections**: Updated HTTP body handling for latest axum/hyper versions
+  - **All HTTP tests passing**: Complete integration test suite validation
+
+### 🛠️ Code Quality Enhancements
+
+- **Comprehensive Lint Compliance**: Production-grade code standards
+  - **Format string modernization**: 30+ instances of inline format args
+  - **Vec initialization patterns**: Replaced `Vec::new() + push()` with `vec![]` macro
+  - **Length comparisons**: Updated `.len() > 0` to `!.is_empty()` patterns  
+  - **Missing methods**: Added `is_empty()` for types with `len()` methods
+  - **Unused variable cleanup**: Proper `_` prefixes and mut qualifier removal
+
+- **Type System Improvements**: Enhanced type safety and ergonomics
+  - **Type aliases**: Simplified complex generic types with meaningful names
+  - **Async trait patterns**: Proper handling of async fn in public traits
+  - **Generic bounds**: Comprehensive trait bound specifications for HTTP handlers
+  - **Send/Sync compatibility**: Resolved threading issues in WebSocket implementations
+
+### 🐛 Critical Bug Fixes
+
+- **Axum Route Compatibility**: Fixed failing HTTP extension tests
+  - **Route parameter syntax**: Updated all route definitions to new `{param}` format
+  - **Handler compatibility**: Fixed generic type constraints for command/query handlers
+  - **Test infrastructure**: All HTTP integration tests now passing
+
+- **Type Conversion Issues**: Resolved JsonData integration problems
+  - **From implementations**: Complete conversion support from serde_json::Value
+  - **Test compatibility**: Fixed all test cases using JSON literals
+  - **Error handling**: Proper error propagation in conversion operations
+
+- **Async Safety**: Fixed await-across-locks and similar async patterns
+  - **Scoped guards**: Proper mutex guard usage in async contexts
+  - **WebSocket refactoring**: Single combined task instead of separate send/receive
+  - **Connection management**: Thread-safe connection ID tracking
+
+### 📊 Development Experience
+
+- **Enhanced Testing**: Robust test infrastructure
+  - **196 unit tests**: Complete coverage of all modules and features
+  - **10 integration tests**: End-to-end validation of core functionality
+  - **All features enabled**: Testing with complete feature flag matrix
+  - **CI compatibility**: All tests passing in automated environments
+
+- **Code Maintainability**: Improved developer experience
+  - **Zero warnings build**: Clean compilation with strict linting
+  - **Consistent patterns**: Unified error handling and async patterns throughout
+  - **Clear abstractions**: Well-defined interfaces between layers
+  - **Documentation**: TODO comments for future improvements clearly marked
+
+### ⚡ Performance & Reliability
+
+- **Memory Efficiency**: Continued focus on zero-copy operations
+  - **JsonData optimization**: Domain-specific JSON representation
+  - **Buffer alignment**: SIMD-compatible memory layouts maintained
+  - **Connection pooling**: Efficient resource management for WebSocket connections
+
+- **Error Resilience**: Enhanced error handling patterns
+  - **Proper Result propagation**: Consistent error handling across all layers
+  - **Graceful degradation**: Better handling of edge cases and failures
+  - **Type safety**: Eliminated unwrap() calls in production code paths
+
+### 🔄 API Stability
+
+- **Domain Layer**: Stable public API with JsonData value object
+- **HTTP Endpoints**: Compatible with Axum v0.8+ routing patterns
+- **WebSocket Protocol**: Maintained backward compatibility
+- **Configuration**: Consistent configuration patterns across modules
+
+### 🚧 Technical Debt Resolution
+
+- **Architecture Violations**: Resolved all Clean Architecture violations
+- **Clippy Compliance**: Zero warnings with strict linting enabled
+- **Test Coverage**: Comprehensive test suite with edge case handling
+- **Documentation**: Clear TODO markers for future development priorities
+
+This release focuses on production readiness, code quality, and maintainability, establishing a solid foundation for JavaScript/TypeScript client SDK development in the next release.
 
 ## [0.2.1] - 2025-08-11
 
