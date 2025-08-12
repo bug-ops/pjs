@@ -289,41 +289,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 ```
 
-### Client Usage (HTTP/SSE)
+### JavaScript/TypeScript Client Library
 
-```javascript
-// Create session
-const sessionResponse = await fetch('/pjs/sessions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        max_concurrent_streams: 5,
-        timeout_seconds: 3600
+Use the official PJS client library for seamless integration:
+
+```bash
+npm install @pjs/client
+```
+
+#### HTTP Streaming
+
+```typescript
+import { PjsClient, createHttpTransport } from '@pjs/client';
+
+// Create client with HTTP transport
+const client = new PjsClient({
+    transport: createHttpTransport({
+        baseUrl: 'http://localhost:3000',
+        format: 'sse' // or 'json', 'ndjson'
     })
 });
-const { session_id } = await sessionResponse.json();
 
-// Start streaming
-await fetch(`/pjs/stream/${session_id}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        data: { 
-            store: { name: "Demo Store", products: [...] }
+// Stream data with priority-based delivery
+await client.stream({
+    data: { 
+        users: [/* large array */],
+        dashboard: { /* complex object */ }
+    },
+    onFrame: (frame) => {
+        // Frames arrive in priority order
+        if (frame.priority >= 90) {
+            updateUI(frame.data); // Critical data first
         }
+    }
+});
+```
+
+#### WebSocket Real-Time Streaming
+
+```typescript
+import { PjsClient, createWebSocketTransport } from '@pjs/client';
+
+const client = new PjsClient({
+    transport: createWebSocketTransport({
+        url: 'ws://localhost:3001/ws'
     })
 });
 
-// Receive real-time updates via Server-Sent Events
-const eventSource = new EventSource(`/pjs/stream/${session_id}/sse`);
-eventSource.onmessage = (event) => {
-    const frame = JSON.parse(event.data);
-    if (frame.priority >= 90) {
-        renderCriticalData(frame);  // Instant rendering
-    } else {
-        renderProgressively(frame); // Progressive enhancement
+// Real-time streaming with priority handling
+await client.connect();
+
+client.onFrame((frame) => {
+    console.log(`Priority ${frame.priority}:`, frame.data);
+    
+    // Handle based on priority
+    switch (frame.priority) {
+        case 'critical':
+            showImmediate(frame.data);
+            break;
+        case 'high':
+            queueForNextFrame(frame.data);
+            break;
+        default:
+            processInBackground(frame.data);
     }
-};
+});
 ```
 
 ### WebSocket Streaming
@@ -380,17 +410,33 @@ async fn main() -> ApplicationResult<()> {
 
 ### Demo Servers
 
-Start the interactive demo to see PJS in action:
+Start the interactive demos to see PJS in action:
 
 ```bash
-# WebSocket streaming server
-cargo run --bin websocket-streaming-server
+# WebSocket streaming server with priority-based delivery
+cargo run --bin websocket_streaming --manifest-path crates/pjs-demo/Cargo.toml
 
-# Interactive demo with HTML interface  
-cargo run --bin interactive-demo-server
+# Interactive demo with HTML interface and real-time visualization
+cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 
-# Simple demo server
-cargo run --bin simple-demo-server
+# Simple demo server with basic streaming
+cargo run --bin simple_demo --manifest-path crates/pjs-demo/Cargo.toml
+
+# Performance comparison demo (PJS vs traditional JSON)
+cargo run --bin performance_comparison --manifest-path crates/pjs-demo/Cargo.toml
+```
+
+Or run root-level examples:
+
+```bash
+# Complete Axum HTTP server
+cargo run --example axum_server
+
+# Advanced streaming demo server  
+cargo run --example streaming_demo_server
+
+# Simple usage patterns
+cargo run --example simple_usage
 ```
 
 Then visit `http://127.0.0.1:3000` to see priority-based streaming in action.
@@ -448,19 +494,32 @@ Intelligent frame processing:
 ```plain
 pjs/
 ├── crates/
-│   ├── pjs-core/        # Core protocol, domain logic, and HTTP integration
-│   ├── pjs-demo/        # Interactive demo servers with WebSocket streaming
-│   │   ├── servers/     # Demo server implementations
-│   │   ├── clients/     # WebSocket client demos  
-│   │   ├── data/        # Sample data generators
-│   │   └── static/      # HTML interfaces
-│   ├── pjs-client/      # Client implementations (planned)
-│   ├── pjs-server/      # Server framework extensions (planned)
-│   ├── pjs-transport/   # Advanced transport layers (planned)
-│   ├── pjs-gpu/        # GPU acceleration (planned)
-│   └── pjs-bench/      # Benchmarking suite (planned)
-└── examples/
-    └── axum_server.rs  # Complete working HTTP server demo
+│   ├── pjs-core/           # Core protocol, domain logic, and HTTP integration
+│   │   ├── src/
+│   │   │   ├── application/    # CQRS handlers, services, DTOs
+│   │   │   ├── domain/         # Value objects, entities, aggregates
+│   │   │   ├── infrastructure/ # HTTP, WebSocket, repositories, adapters
+│   │   │   ├── parser/         # SIMD, zero-copy, buffer pools
+│   │   │   ├── stream/         # Priority streaming, reconstruction
+│   │   │   └── compression/    # Schema-based compression
+│   │   ├── examples/           # Standalone demos (zero-copy, compression)
+│   │   └── tests/              # Integration tests
+│   ├── pjs-demo/           # Interactive demo servers with WebSocket streaming
+│   │   └── src/
+│   │       ├── servers/        # Demo server implementations
+│   │       ├── clients/        # WebSocket client demos  
+│   │       ├── data/           # Sample data generators (analytics, ecommerce)
+│   │       └── static/         # HTML interfaces
+│   ├── pjs-js-client/      # JavaScript/TypeScript client library ✅ IMPLEMENTED
+│   │   ├── src/            # TypeScript source code with transport layers
+│   │   ├── tests/          # Jest test suite with full coverage
+│   │   └── package.json    # NPM configuration and dependencies
+│   └── pjs-bench/          # Benchmarking suite
+│       └── benches/        # Criterion.rs performance benchmarks
+└── examples/               # Root-level usage examples
+    ├── axum_server.rs      # Complete HTTP server demo
+    ├── simple_usage.rs     # Basic usage patterns  
+    └── streaming_demo_server.rs # Advanced streaming demo
 ```
 
 ### Current Implementation Status
@@ -471,8 +530,17 @@ pjs/
 - **Phase 4**: ✅ Transport layer (100% complete)
 - **Phase 5**: ✅ Production features (100% complete)
 - **Phase 6**: ✅ Real-Time Streaming (100% complete)
-- **Phase 7**: ✅ Code Quality & Production Readiness (100% complete)
-- **Overall**: ~95% of core functionality implemented
+- **Phase 7**: ✅ JavaScript/TypeScript Client SDK (100% complete)
+- **Phase 8**: ✅ Code Quality & Production Readiness (100% complete)
+- **Overall**: ~98% of core functionality implemented
+
+### Implemented Components
+
+- **✅ pjs-core**: Complete Rust implementation with Clean Architecture
+- **✅ pjs-demo**: Interactive demo servers with real-time WebSocket streaming  
+- **✅ pjs-js-client**: Full TypeScript/JavaScript client library with transport layers
+- **✅ pjs-bench**: Comprehensive benchmarking suite with performance validation
+- **✅ Examples**: Multiple working examples from simple to advanced usage
 
 ## API Examples
 
@@ -576,6 +644,44 @@ cargo build --features "http-client,prometheus-metrics"
 - `prometheus-metrics`: Enable Prometheus metrics collection
 - `simd-auto`: Auto-detect best SIMD support (default)
 - `compression`: Enable compression middleware
+
+## Framework Integration
+
+### Universal Integration Layer
+
+PJS is designed to work with any Rust web framework through a simple trait-based approach:
+
+```rust
+use pjson_rs::infrastructure::adapters::StreamingAdapter;
+
+// Implement for your framework of choice
+impl StreamingAdapter for YourFramework {
+    async fn create_response(&self, stream: PjsStream) -> YourResponse {
+        // Convert PJS stream to your framework's response format
+        stream.into_response()
+    }
+}
+```
+
+### Currently Supported
+
+- **✅ Axum**: Full native integration with middleware stack
+- **🔧 Any Framework**: Universal adapter pattern for easy integration
+- **📋 Planned**: Helper macros for popular frameworks (Actix, Warp, Tide)
+
+### Integration Examples
+
+```rust
+// Axum (native support)
+use pjson_rs::infrastructure::http::axum_adapter::create_pjs_router;
+let app = create_pjs_router().with_state(app_state);
+
+// Custom framework integration
+use pjson_rs::infrastructure::adapters::UniversalAdapter;
+let adapter = UniversalAdapter::new()
+    .with_serializer(your_serializer)
+    .with_transport(your_transport);
+```
 
 ## Production Features
 
@@ -705,7 +811,8 @@ The server will show:
 - [x] Connection lifecycle management ✅
 - [x] WebSocket real-time streaming ✅
 - [x] Performance benchmarks vs alternatives ✅
-- [ ] JavaScript/TypeScript client library
+- [x] JavaScript/TypeScript client library ✅
+- [ ] Universal framework integration layer
 - [ ] Schema validation engine  
 - [ ] Custom priority strategies
 
