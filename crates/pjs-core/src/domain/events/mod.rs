@@ -143,6 +143,73 @@ impl Default for PriorityDistribution {
     }
 }
 
+impl PriorityDistribution {
+    /// Create new empty distribution
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get total frames count
+    pub fn total_frames(&self) -> u64 {
+        self.critical_frames + self.high_frames + self.medium_frames + self.low_frames + self.background_frames
+    }
+
+    /// Convert to percentages (0.0-1.0)
+    pub fn as_percentages(&self) -> PriorityPercentages {
+        let total = self.total_frames() as f64;
+        if total == 0.0 {
+            return PriorityPercentages::default();
+        }
+
+        PriorityPercentages {
+            critical: self.critical_frames as f64 / total,
+            high: self.high_frames as f64 / total,
+            medium: self.medium_frames as f64 / total,
+            low: self.low_frames as f64 / total,
+            background: self.background_frames as f64 / total,
+        }
+    }
+
+    /// Convert from count-based version 
+    pub fn from_counts(
+        critical_count: u64,
+        high_count: u64,
+        medium_count: u64,
+        low_count: u64,
+        background_count: u64,
+    ) -> Self {
+        Self {
+            critical_frames: critical_count,
+            high_frames: high_count,
+            medium_frames: medium_count,
+            low_frames: low_count,
+            background_frames: background_count,
+        }
+    }
+}
+
+/// Priority distribution as percentages (for demos and visualization)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PriorityPercentages {
+    pub critical: f64,    // 0-1 percentage
+    pub high: f64,
+    pub medium: f64,
+    pub low: f64,
+    pub background: f64,
+}
+
+impl Default for PriorityPercentages {
+    fn default() -> Self {
+        Self {
+            critical: 0.0,
+            high: 0.0,
+            medium: 0.0,
+            low: 0.0,
+            background: 0.0,
+        }
+    }
+}
+
 impl DomainEvent {
     /// Get the session ID associated with this event
     pub fn session_id(&self) -> SessionId {

@@ -26,12 +26,13 @@
 //! cargo bench comparison
 //! ```
 
-pub use pjson_rs::{Error, Frame, Parser, Priority, Result, StreamConfig, StreamFrame, StreamProcessor};
+pub use pjson_rs::{Error, Frame, Parser, Priority, Result, StreamConfig, StreamFrame, StreamProcessor, JsonReconstructor};
 
 // Fallback implementations for benchmarking when streaming features aren't available
 pub mod fallback {
     use bytes::Bytes;
     use serde_json::Value;
+    use crate::Priority;
 
     #[derive(Debug, Clone)]
     pub struct StreamerConfig {
@@ -61,13 +62,6 @@ pub mod fallback {
         }
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub enum Priority {
-        Critical,
-        High,
-        Medium,
-        Low,
-    }
 
     #[derive(Debug, Clone)]
     pub struct StreamFrame {
@@ -102,29 +96,6 @@ pub mod fallback {
         }
     }
 
-    #[derive(Debug)]
-    pub struct JsonReconstructor {
-        state: Option<Value>,
-    }
-
-    impl JsonReconstructor {
-        pub fn new() -> Self {
-            Self { state: None }
-        }
-
-        pub fn process_frame(&mut self, frame: StreamFrame) -> Result<(), String> {
-            let json_str = String::from_utf8(frame.data.to_vec())
-                .map_err(|e| format!("UTF-8 error: {}", e))?;
-            let value: Value =
-                serde_json::from_str(&json_str).map_err(|e| format!("JSON error: {}", e))?;
-            self.state = Some(value);
-            Ok(())
-        }
-
-        pub fn current_state(&self) -> Option<&Value> {
-            self.state.as_ref()
-        }
-    }
 }
 
 pub use fallback::*;

@@ -10,7 +10,7 @@ use crate::{
         priority_dto::{ToDto, FromDto},
     },
     domain::{
-        events::{DomainEvent, PerformanceMetrics, PriorityDistribution, EventId},
+        events::{DomainEvent, PerformanceMetrics, EventId},
         value_objects::{SessionId, StreamId},
         DomainError,
     },
@@ -136,14 +136,8 @@ pub struct PerformanceMetricsDto {
 }
 
 /// Serializable representation of priority distribution
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PriorityDistributionDto {
-    pub critical_frames: u64,
-    pub high_frames: u64,
-    pub medium_frames: u64,
-    pub low_frames: u64,
-    pub background_frames: u64,
-}
+/// This is just an alias to the main PriorityDistribution from domain events
+pub type PriorityDistributionDto = crate::domain::events::PriorityDistribution;
 
 /// Serializable representation of event ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -428,29 +422,7 @@ impl TryFrom<PerformanceMetricsDto> for PerformanceMetrics {
     }
 }
 
-impl From<PriorityDistribution> for PriorityDistributionDto {
-    fn from(dist: PriorityDistribution) -> Self {
-        Self {
-            critical_frames: dist.critical_frames,
-            high_frames: dist.high_frames,
-            medium_frames: dist.medium_frames,
-            low_frames: dist.low_frames,
-            background_frames: dist.background_frames,
-        }
-    }
-}
-
-impl From<PriorityDistributionDto> for PriorityDistribution {
-    fn from(dto: PriorityDistributionDto) -> Self {
-        Self {
-            critical_frames: dto.critical_frames,
-            high_frames: dto.high_frames,
-            medium_frames: dto.medium_frames,
-            low_frames: dto.low_frames,
-            background_frames: dto.background_frames,
-        }
-    }
-}
+// No conversion needed - PriorityDistributionDto is now an alias
 
 impl From<EventId> for EventIdDto {
     fn from(event_id: EventId) -> Self {
@@ -496,7 +468,7 @@ mod tests {
             frames_per_second: 60.0,
             bytes_per_second: 1024.0,
             average_frame_size: 512.0,
-            priority_distribution: PriorityDistribution::default(),
+            priority_distribution: PriorityDistributionDto::default(),
             latency_ms: Some(100),
         };
 

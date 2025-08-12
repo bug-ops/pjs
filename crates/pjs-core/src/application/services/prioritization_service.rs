@@ -428,14 +428,8 @@ pub struct PriorityAdjustment {
     pub urgency: AdjustmentUrgency,
 }
 
-/// Urgency level for priority adjustments
-#[derive(Debug, Clone, PartialEq)]
-pub enum AdjustmentUrgency {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
+// Use shared AdjustmentUrgency type
+use crate::application::shared::AdjustmentUrgency;
 
 #[cfg(test)]
 mod tests {

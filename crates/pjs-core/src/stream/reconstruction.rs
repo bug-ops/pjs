@@ -4,7 +4,7 @@
 //! skeleton + patch stream frames, enabling progressive data loading.
 
 use crate::Result;
-use crate::stream::{JsonPatch, JsonPath, PatchOperation, PathSegment, StreamFrame};
+use crate::stream::priority::{JsonPatch, JsonPath, PatchOperation, PathSegment, PriorityStreamFrame};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 
@@ -15,7 +15,7 @@ pub struct JsonReconstructor {
     /// Current state of JSON being reconstructed
     current_state: JsonValue,
     /// Queue of received frames waiting to be processed
-    frame_queue: VecDeque<StreamFrame>,
+    frame_queue: VecDeque<PriorityStreamFrame>,
     /// Whether reconstruction is complete
     is_complete: bool,
     /// Statistics about reconstruction process
@@ -51,7 +51,7 @@ impl JsonReconstructor {
     }
 
     /// Add a frame to the reconstruction queue
-    pub fn add_frame(&mut self, frame: StreamFrame) {
+    pub fn add_frame(&mut self, frame: PriorityStreamFrame) {
         if self.stats.start_time.is_none() {
             self.stats.start_time = Some(std::time::Instant::now());
         }
@@ -80,11 +80,11 @@ impl JsonReconstructor {
     }
 
     /// Process a single frame
-    fn process_frame(&mut self, frame: StreamFrame) -> Result<ProcessResult> {
+    fn process_frame(&mut self, frame: PriorityStreamFrame) -> Result<ProcessResult> {
         self.stats.frames_processed += 1;
 
         match frame {
-            StreamFrame::Skeleton {
+            PriorityStreamFrame::Skeleton {
                 data,
                 priority: _,
                 complete: _,
@@ -94,7 +94,7 @@ impl JsonReconstructor {
                 Ok(ProcessResult::SkeletonApplied)
             }
 
-            StreamFrame::Patch { patches, priority } => {
+            PriorityStreamFrame::Patch { patches, priority } => {
                 self.stats.patch_frames += 1;
                 let mut applied_paths = Vec::new();
 
@@ -112,7 +112,7 @@ impl JsonReconstructor {
                 })
             }
 
-            StreamFrame::Complete { checksum: _ } => {
+            PriorityStreamFrame::Complete { checksum: _ } => {
                 self.is_complete = true;
                 self.stats.end_time = Some(std::time::Instant::now());
                 Ok(ProcessResult::ReconstructionComplete)
@@ -434,9 +434,9 @@ mod tests {
             "active": false
         });
 
-        let frame = StreamFrame::Skeleton {
+        let frame = PriorityStreamFrame::Skeleton {
             data: skeleton.clone(),
-            priority: Priority::Critical,
+            priority: Priority::CRITICAL,
             complete: false,
         };
 
@@ -461,22 +461,22 @@ mod tests {
         reconstructor.current_state = skeleton;
 
         // Create patch to set name
-        let path = JsonPath::from_segments(SmallVec::from_vec(vec![
+        let path = JsonPath::from_segments(vec![
             PathSegment::Root,
             PathSegment::Key("name".to_string()),
-        ]));
+        ]);
 
         let patch = JsonPatch {
             path,
             operation: PatchOperation::Set {
                 value: json!("John Doe"),
             },
-            priority: Priority::High,
+            priority: Priority::HIGH,
         };
 
-        let frame = StreamFrame::Patch {
+        let frame = PriorityStreamFrame::Patch {
             patches: vec![patch],
-            priority: Priority::High,
+            priority: Priority::HIGH,
         };
 
         reconstructor.add_frame(frame);
@@ -509,22 +509,22 @@ mod tests {
         reconstructor.current_state = skeleton;
 
         // Create patch to append items
-        let path = JsonPath::from_segments(SmallVec::from_vec(vec![
+        let path = JsonPath::from_segments(vec![
             PathSegment::Root,
             PathSegment::Key("items".to_string()),
-        ]));
+        ]);
 
         let patch = JsonPatch {
             path,
             operation: PatchOperation::Append {
                 values: vec![json!("item1"), json!("item2")],
             },
-            priority: Priority::Medium,
+            priority: Priority::MEDIUM,
         };
 
-        let frame = StreamFrame::Patch {
+        let frame = PriorityStreamFrame::Patch {
             patches: vec![patch],
-            priority: Priority::Medium,
+            priority: Priority::MEDIUM,
         };
 
         reconstructor.add_frame(frame);
@@ -541,7 +541,7 @@ mod tests {
     fn test_completion_tracking() {
         let mut reconstructor = JsonReconstructor::new();
 
-        let complete_frame = StreamFrame::Complete { checksum: None };
+        let complete_frame = PriorityStreamFrame::Complete { checksum: None };
         reconstructor.add_frame(complete_frame);
 
         let result = reconstructor.process_next_frame().unwrap();
@@ -559,12 +559,12 @@ mod tests {
 
         // Add some frames but don't process
         let skeleton = json!({"test": null});
-        reconstructor.add_frame(StreamFrame::Skeleton {
+        reconstructor.add_frame(PriorityStreamFrame::Skeleton {
             data: skeleton,
-            priority: Priority::Critical,
+            priority: Priority::CRITICAL,
             complete: false,
         });
-        reconstructor.add_frame(StreamFrame::Complete { checksum: None });
+        reconstructor.add_frame(PriorityStreamFrame::Complete { checksum: None });
 
         // Process one frame
         reconstructor.process_next_frame().unwrap();

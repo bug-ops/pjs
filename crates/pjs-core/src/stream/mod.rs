@@ -4,9 +4,8 @@
 //! and compression integration.
 
 pub mod compression_integration;
-// TODO: Reconcile with legacy priority and reconstruction modules
 pub mod priority;
-// pub mod reconstruction;
+pub mod reconstruction;
 
 use crate::domain::{Priority, DomainResult};
 use serde_json::Value as JsonValue;
@@ -22,6 +21,7 @@ pub struct StreamFrame {
     /// Additional metadata for processing
     pub metadata: HashMap<String, String>,
 }
+
 
 /// Stream processing result
 #[derive(Debug, Clone)]
@@ -134,7 +134,8 @@ pub use compression_integration::{
     CompressedFrame, StreamingCompressor, StreamingDecompressor,
     CompressionStats, DecompressionStats, DecompressionMetadata,
 };
-pub use priority::PriorityStreamer;
+pub use priority::{PriorityStreamer, PriorityStreamFrame};
+pub use reconstruction::JsonReconstructor;
 
 #[cfg(test)]
 mod tests {

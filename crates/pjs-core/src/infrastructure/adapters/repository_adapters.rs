@@ -484,12 +484,12 @@ impl FrameRepository for InMemoryFrameRepository {
                 for frame in stream_frames {
                     let priority = frame.priority().unwrap_or(Priority::LOW.value());
                     match priority {
-                            90..=255 => distribution.critical_count += 1,
-                            70..=89 => distribution.high_count += 1,
-                            40..=69 => distribution.medium_count += 1,
-                            20..=39 => distribution.low_count += 1,
-                            1..=19 => distribution.background_count += 1,
-                            _ => distribution.background_count += 1,
+                            90..=255 => distribution.critical_frames += 1,
+                            70..=89 => distribution.high_frames += 1,
+                            40..=69 => distribution.medium_frames += 1,
+                            20..=39 => distribution.low_frames += 1,
+                            1..=19 => distribution.background_frames += 1,
+                            _ => distribution.background_frames += 1,
                         }
                 }
                 

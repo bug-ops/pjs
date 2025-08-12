@@ -42,6 +42,9 @@ pub use domain::{
     Stream, StreamId, StreamSession,
 };
 
+// Events exports  
+pub use domain::events::{PriorityDistribution, PriorityPercentages};
+
 // Application layer exports
 pub use application::{
     ApplicationError, ApplicationResult, commands,
@@ -59,7 +62,7 @@ pub use compression::{
 pub use stream::{
     CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
     ProcessResult, StreamConfig, StreamFrame, StreamProcessor, StreamStats,
-    StreamingCompressor, StreamingDecompressor, PriorityStreamer,
+    StreamingCompressor, StreamingDecompressor, PriorityStreamer, JsonReconstructor,
 };
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
@@ -90,8 +93,10 @@ pub mod prelude {
         FrameHeader,
         JsonPath,
         // TODO: Re-add when legacy modules are reconciled
-        // JsonReconstructor,
+        JsonReconstructor,
         Priority,
+        PriorityDistribution,
+        PriorityPercentages,
         // PriorityStreamer,
         ProcessResult,
         QueryHandler,
