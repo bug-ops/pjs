@@ -452,7 +452,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         aggregates::{StreamSession, stream_session::SessionConfig},
-        value_objects::SessionId,
+        value_objects::{SessionId, StreamId},
     };
     use std::collections::HashMap;
 
@@ -497,6 +497,53 @@ mod tests {
         }
     }
 
+    struct MockStreamStore;
+
+    #[async_trait]
+    impl StreamStore for MockStreamStore {
+        async fn store_stream(&self, _stream: crate::domain::entities::Stream) -> crate::domain::DomainResult<()> {
+            Ok(())
+        }
+
+        async fn get_stream(&self, _stream_id: StreamId) -> crate::domain::DomainResult<Option<crate::domain::entities::Stream>> {
+            Ok(None)
+        }
+
+        async fn delete_stream(&self, _stream_id: StreamId) -> crate::domain::DomainResult<()> {
+            Ok(())
+        }
+
+        async fn list_streams_for_session(&self, _session_id: SessionId) -> crate::domain::DomainResult<Vec<crate::domain::entities::Stream>> {
+            Ok(vec![])
+        }
+    }
+
+    struct MockEventStore;
+
+    impl MockEventStore {
+        fn new() -> Self {
+            Self
+        }
+    }
+
+    impl EventStore for MockEventStore {
+        fn append_events(&mut self, _events: Vec<crate::domain::events::DomainEvent>) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn get_events_for_session(&self, _session_id: SessionId) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
+            Ok(vec![])
+        }
+
+        fn get_events_for_stream(&self, _stream_id: StreamId) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
+            Ok(vec![])
+        }
+
+        fn get_events_since(&self, _since: chrono::DateTime<chrono::Utc>) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
+            Ok(vec![])
+        }
+    }
+
     #[tokio::test]
     async fn test_get_session_query() {
         let repository = Arc::new(MockRepository::new());
@@ -532,5 +579,114 @@ mod tests {
             ApplicationError::NotFound(_) => {}
             _ => panic!("Expected NotFound error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_active_sessions_query() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository.clone());
+
+        // Add multiple sessions
+        for i in 0..5 {
+            let mut session = StreamSession::new(SessionConfig::default());
+            if i < 3 {
+                let _ = session.activate();
+            }
+            repository.add_session(session);
+        }
+
+        // Query active sessions
+        let query = GetActiveSessionsQuery {
+            offset: None,
+            limit: None,
+        };
+        let result = handler.handle(query).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 5);
+        assert_eq!(response.total_count, 5);
+    }
+
+    #[tokio::test]
+    async fn test_get_active_sessions_with_pagination() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository.clone());
+
+        // Add 10 sessions
+        for _ in 0..10 {
+            let mut session = StreamSession::new(SessionConfig::default());
+            let _ = session.activate();
+            repository.add_session(session);
+        }
+
+        // Query with pagination
+        let query = GetActiveSessionsQuery {
+            offset: Some(3),
+            limit: Some(4),
+        };
+        let result = handler.handle(query).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 4);
+        assert_eq!(response.total_count, 10);
+    }
+
+    #[tokio::test]
+    async fn test_get_session_health_query() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository.clone());
+
+        // Create and add a session
+        let mut session = StreamSession::new(SessionConfig::default());
+        let _ = session.activate();
+        let session_id = session.id();
+        repository.add_session(session);
+
+        // Query session health
+        let query = GetSessionHealthQuery { session_id: session_id.into() };
+        let result = handler.handle(query).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert!(response.health.is_healthy);
+    }
+
+    #[tokio::test] 
+    async fn test_session_handler_creation() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository.clone());
+        
+        // Test that handlers can be created successfully
+        assert!(std::ptr::eq(handler.repository.as_ref(), repository.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn test_stream_handler_creation() {
+        let session_repository = Arc::new(MockRepository::new());
+        let stream_store = Arc::new(MockStreamStore);
+        let handler = StreamQueryHandler::new(session_repository.clone(), stream_store.clone());
+
+        // Test that handlers can be created successfully
+        assert!(std::ptr::eq(handler.session_repository.as_ref(), session_repository.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn test_event_handler_creation() {
+        let event_store = Arc::new(MockEventStore::new());
+        let handler = EventQueryHandler::new(event_store.clone());
+
+        // Test that handlers can be created successfully
+        assert!(std::ptr::eq(handler.event_store.as_ref(), event_store.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn test_system_handler_creation() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SystemQueryHandler::new(repository.clone());
+
+        // Test that handlers can be created successfully
+        assert!(std::ptr::eq(handler.repository.as_ref(), repository.as_ref()));
     }
 }

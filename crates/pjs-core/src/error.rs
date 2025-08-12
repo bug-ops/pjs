@@ -87,6 +87,19 @@ impl Error {
         Self::InvalidFrame(message.into())
     }
 
+    /// Create a schema validation error
+    pub fn schema_validation(message: impl Into<String>) -> Self {
+        Self::SchemaValidation(message.into())
+    }
+
+    /// Create a semantic type mismatch error
+    pub fn semantic_type_mismatch(expected: impl Into<String>, actual: impl Into<String>) -> Self {
+        Self::SemanticTypeMismatch {
+            expected: expected.into(),
+            actual: actual.into(),
+        }
+    }
+
     /// Create a buffer error
     pub fn buffer(message: impl Into<String>) -> Self {
         Self::Buffer(message.into())
@@ -97,9 +110,70 @@ impl Error {
         Self::Memory(message.into())
     }
 
+    /// Create a connection failed error
+    pub fn connection_failed(message: impl Into<String>) -> Self {
+        Self::ConnectionFailed(message.into())
+    }
+
+    /// Create a client error
+    pub fn client_error(message: impl Into<String>) -> Self {
+        Self::ClientError(message.into())
+    }
+
+    /// Create an invalid session error
+    pub fn invalid_session(message: impl Into<String>) -> Self {
+        Self::InvalidSession(message.into())
+    }
+
+    /// Create an invalid URL error
+    pub fn invalid_url(message: impl Into<String>) -> Self {
+        Self::InvalidUrl(message.into())
+    }
+
+    /// Create a serialization error
+    pub fn serialization(message: impl Into<String>) -> Self {
+        Self::Serialization(message.into())
+    }
+
+    /// Create a UTF-8 error
+    pub fn utf8(message: impl Into<String>) -> Self {
+        Self::Utf8(message.into())
+    }
+
     /// Create a generic error
     pub fn other(message: impl Into<String>) -> Self {
         Self::Other(message.into())
+    }
+
+    /// Check if the error is related to JSON parsing
+    pub fn is_json_error(&self) -> bool {
+        matches!(self, Self::InvalidJson { .. } | Self::Serialization(_))
+    }
+
+    /// Check if the error is a network-related error
+    pub fn is_network_error(&self) -> bool {
+        matches!(self, Self::ConnectionFailed(_) | Self::Io(_))
+    }
+
+    /// Check if the error is a validation error
+    pub fn is_validation_error(&self) -> bool {
+        matches!(
+            self,
+            Self::SchemaValidation(_) | Self::SemanticTypeMismatch { .. } | Self::InvalidFrame(_)
+        )
+    }
+
+    /// Get error category as string
+    pub fn category(&self) -> &'static str {
+        match self {
+            Self::InvalidJson { .. } | Self::Serialization(_) => "json",
+            Self::InvalidFrame(_) | Self::SchemaValidation(_) | Self::SemanticTypeMismatch { .. } => "validation",
+            Self::Buffer(_) | Self::Memory(_) => "memory",
+            Self::Io(_) | Self::ConnectionFailed(_) => "network",
+            Self::ClientError(_) | Self::InvalidSession(_) | Self::InvalidUrl(_) => "client",
+            Self::Utf8(_) => "encoding",
+            Self::Other(_) => "other",
+        }
     }
 }
 
@@ -112,5 +186,180 @@ impl From<std::io::Error> for Error {
 impl From<std::str::Utf8Error> for Error {
     fn from(err: std::str::Utf8Error) -> Self {
         Error::Utf8(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::Serialization(err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_creation_constructors() {
+        let json_err = Error::invalid_json(42, "unexpected token");
+        if let Error::InvalidJson { position, message } = json_err {
+            assert_eq!(position, 42);
+            assert_eq!(message, "unexpected token");
+        } else {
+            panic!("Expected InvalidJson error");
+        }
+
+        let frame_err = Error::invalid_frame("malformed frame");
+        assert!(matches!(frame_err, Error::InvalidFrame(_)));
+
+        let schema_err = Error::schema_validation("required field missing");
+        assert!(matches!(schema_err, Error::SchemaValidation(_)));
+
+        let type_err = Error::semantic_type_mismatch("string", "number");
+        if let Error::SemanticTypeMismatch { expected, actual } = type_err {
+            assert_eq!(expected, "string");
+            assert_eq!(actual, "number");
+        } else {
+            panic!("Expected SemanticTypeMismatch error");
+        }
+    }
+
+    #[test]
+    fn test_all_error_constructors() {
+        assert!(matches!(Error::buffer("overflow"), Error::Buffer(_)));
+        assert!(matches!(Error::memory("allocation failed"), Error::Memory(_)));
+        assert!(matches!(Error::connection_failed("timeout"), Error::ConnectionFailed(_)));
+        assert!(matches!(Error::client_error("bad request"), Error::ClientError(_)));
+        assert!(matches!(Error::invalid_session("expired"), Error::InvalidSession(_)));
+        assert!(matches!(Error::invalid_url("malformed"), Error::InvalidUrl(_)));
+        assert!(matches!(Error::serialization("json error"), Error::Serialization(_)));
+        assert!(matches!(Error::utf8("invalid utf8"), Error::Utf8(_)));
+        assert!(matches!(Error::other("unknown"), Error::Other(_)));
+    }
+
+    #[test]
+    fn test_error_classification() {
+        let json_err = Error::invalid_json(0, "test");
+        assert!(json_err.is_json_error());
+        assert!(!json_err.is_network_error());
+        assert!(!json_err.is_validation_error());
+
+        let serialization_err = Error::serialization("test");
+        assert!(serialization_err.is_json_error());
+
+        let network_err = Error::connection_failed("test");
+        assert!(network_err.is_network_error());
+        assert!(!network_err.is_json_error());
+
+        let io_err = Error::Io("test".to_string());
+        assert!(io_err.is_network_error());
+
+        let validation_err = Error::schema_validation("test");
+        assert!(validation_err.is_validation_error());
+        assert!(!validation_err.is_json_error());
+
+        let frame_err = Error::invalid_frame("test");
+        assert!(frame_err.is_validation_error());
+
+        let type_err = Error::semantic_type_mismatch("a", "b");
+        assert!(type_err.is_validation_error());
+    }
+
+    #[test]
+    fn test_error_categories() {
+        assert_eq!(Error::invalid_json(0, "test").category(), "json");
+        assert_eq!(Error::serialization("test").category(), "json");
+        assert_eq!(Error::invalid_frame("test").category(), "validation");
+        assert_eq!(Error::schema_validation("test").category(), "validation");
+        assert_eq!(Error::semantic_type_mismatch("a", "b").category(), "validation");
+        assert_eq!(Error::buffer("test").category(), "memory");
+        assert_eq!(Error::memory("test").category(), "memory");
+        assert_eq!(Error::Io("test".to_string()).category(), "network");
+        assert_eq!(Error::connection_failed("test").category(), "network");
+        assert_eq!(Error::client_error("test").category(), "client");
+        assert_eq!(Error::invalid_session("test").category(), "client");
+        assert_eq!(Error::invalid_url("test").category(), "client");
+        assert_eq!(Error::utf8("test").category(), "encoding");
+        assert_eq!(Error::other("test").category(), "other");
+    }
+
+    #[test]
+    fn test_error_display() {
+        let json_err = Error::invalid_json(42, "unexpected token");
+        assert_eq!(
+            json_err.to_string(),
+            "Invalid JSON syntax at position 42: unexpected token"
+        );
+
+        let type_err = Error::semantic_type_mismatch("string", "number");
+        assert_eq!(
+            type_err.to_string(),
+            "Semantic type mismatch: expected string, got number"
+        );
+
+        let frame_err = Error::invalid_frame("malformed");
+        assert_eq!(frame_err.to_string(), "Invalid frame format: malformed");
+    }
+
+    #[test]
+    fn test_from_std_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let pjs_err = Error::from(io_err);
+        
+        assert!(matches!(pjs_err, Error::Io(_)));
+        assert!(pjs_err.is_network_error());
+        assert_eq!(pjs_err.category(), "network");
+    }
+
+    #[test]
+    fn test_from_utf8_error() {
+        let invalid_utf8 = &[0xFF, 0xFE];
+        let utf8_err = std::str::from_utf8(invalid_utf8).unwrap_err();
+        let pjs_err = Error::from(utf8_err);
+        
+        assert!(matches!(pjs_err, Error::Utf8(_)));
+        assert_eq!(pjs_err.category(), "encoding");
+    }
+
+    #[test]
+    fn test_from_serde_json_error() {
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err();
+        let pjs_err = Error::from(json_err);
+        
+        assert!(matches!(pjs_err, Error::Serialization(_)));
+        assert!(pjs_err.is_json_error());
+        assert_eq!(pjs_err.category(), "json");
+    }
+
+    #[test]
+    fn test_error_debug_format() {
+        let err = Error::invalid_json(10, "syntax error");
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("InvalidJson"));
+        assert!(debug_str.contains("10"));
+        assert!(debug_str.contains("syntax error"));
+    }
+
+    #[test]
+    fn test_error_clone() {
+        let original = Error::semantic_type_mismatch("expected", "actual");
+        let cloned = original.clone();
+        
+        assert_eq!(original.category(), cloned.category());
+        assert_eq!(original.to_string(), cloned.to_string());
+    }
+
+    #[test]
+    fn test_result_type_alias() {
+        fn returns_result() -> Result<i32> {
+            Ok(42)
+        }
+        
+        fn returns_error() -> Result<i32> {
+            Err(Error::other("test error"))
+        }
+        
+        assert_eq!(returns_result().unwrap(), 42);
+        assert!(returns_error().is_err());
     }
 }
