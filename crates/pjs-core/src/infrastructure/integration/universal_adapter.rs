@@ -5,7 +5,7 @@
 //
 // REQUIRES: nightly Rust for `impl Trait` in associated types
 
-use super::{StreamingAdapter, UniversalRequest, UniversalResponse, IntegrationResult, StreamingFormat};
+use super::streaming_adapter::{StreamingAdapter, UniversalRequest, UniversalResponse, IntegrationError, IntegrationResult, StreamingFormat, ResponseBody, streaming_helpers};
 use crate::domain::value_objects::{SessionId, JsonData};
 use crate::stream::StreamFrame;
 use std::future::Future;
@@ -118,7 +118,7 @@ where
     fn from_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
         // Universal adapter cannot convert framework-specific requests generically
         // This should only be used with concrete adapter implementations
-        Err(super::IntegrationError::UnsupportedFramework(
+        Err(IntegrationError::UnsupportedFramework(
             "Generic UniversalAdapter cannot convert requests - use concrete adapter implementation".to_string()
         ))
     }
@@ -126,7 +126,7 @@ where
     fn to_response(&self, _response: UniversalResponse) -> IntegrationResult<Self::Response> {
         // Universal adapter cannot convert responses to framework-specific types generically  
         // This should only be used with concrete adapter implementations
-        Err(super::IntegrationError::UnsupportedFramework(
+        Err(IntegrationError::UnsupportedFramework(
             "Generic UniversalAdapter cannot convert responses - use concrete adapter implementation".to_string()
         ))
     }
@@ -166,7 +166,7 @@ where
                     UniversalResponse {
                         status_code: 200,
                         headers: super::object_pool::get_cow_hashmap().take(), // Use pooled HashMap
-                        body: super::ResponseBody::ServerSentEvents(ndjson_lines),
+                        body: ResponseBody::ServerSentEvents(ndjson_lines),
                         content_type: Cow::Borrowed(format.content_type()),
                     }
                 }
@@ -186,7 +186,7 @@ where
                     UniversalResponse {
                         status_code: 200,
                         headers: super::object_pool::get_cow_hashmap().take(), // Use pooled HashMap
-                        body: super::ResponseBody::Binary(binary_data),
+                        body: ResponseBody::Binary(binary_data),
                         content_type: Cow::Borrowed(format.content_type()),
                     }
                 }
@@ -203,7 +203,7 @@ where
     ) -> Self::SseResponseFuture<'a> {
         // Direct async block - zero-cost abstraction with compile-time optimization
         async move {
-            super::streaming_helpers::default_sse_response(self, session_id, frames).await
+            streaming_helpers::default_sse_response(self, session_id, frames).await
         }
     }
 
@@ -214,7 +214,7 @@ where
     ) -> Self::JsonResponseFuture<'a> {
         // Direct async block for optimal performance
         async move {
-            super::streaming_helpers::default_json_response(self, data, streaming).await
+            streaming_helpers::default_json_response(self, data, streaming).await
         }
     }
 
@@ -225,7 +225,7 @@ where
     ) -> Self::MiddlewareFuture<'a> {
         // Zero-cost middleware application
         async move {
-            super::streaming_helpers::default_middleware(self, request, response).await
+            streaming_helpers::default_middleware(self, request, response).await
         }
     }
 
@@ -238,9 +238,11 @@ where
     }
 
     fn framework_name(&self) -> &'static str {
-        // TODO: This should return the actual framework name
-        // For now, we'll use a static string
-        "universal"
+        // Convert Cow to &'static str safely
+        match &self.config.framework_name {
+            Cow::Borrowed(s) => s,
+            Cow::Owned(_) => "universal", // fallback for owned strings
+        }
     }
 }
 
