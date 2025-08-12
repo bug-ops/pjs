@@ -282,10 +282,10 @@ pub struct GlobalPoolStats {
 
 /// Get comprehensive statistics for all global pools
 pub fn get_global_pool_stats() -> GlobalPoolStats {
-    let cow_hashmap = GLOBAL_POOLS.cow_hashmap.stats();
-    let string_hashmap = GLOBAL_POOLS.string_hashmap.stats();
-    let byte_vec = GLOBAL_POOLS.byte_vec.stats();
-    let string_vec = GLOBAL_POOLS.string_vec.stats();
+    let cow_hashmap = CLEANING_COW_HASHMAP.stats();
+    let string_hashmap = CLEANING_STRING_HASHMAP.stats();
+    let byte_vec = CLEANING_BYTE_VEC.stats();
+    let string_vec = CLEANING_STRING_VEC.stats();
 
     let total_created = cow_hashmap.objects_created + string_hashmap.objects_created 
         + byte_vec.objects_created + string_vec.objects_created;

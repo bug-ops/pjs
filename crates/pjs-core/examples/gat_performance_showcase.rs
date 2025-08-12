@@ -364,7 +364,7 @@ mod tests {
         
         let result = adapter.create_streaming_response(session_id, frames, StreamingFormat::Json).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "gat streaming");
+        assert_eq!(result.unwrap(), "zero-cost gat streaming");
     }
     
     #[tokio::test]
