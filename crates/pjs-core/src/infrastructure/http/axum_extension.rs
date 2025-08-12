@@ -87,7 +87,7 @@ impl PjsExtension {
     {
         axum::Router::new()
             .route("/stream", axum::routing::post(handle_stream_request))
-            .route("/stream/:stream_id/sse", axum::routing::get(handle_sse_stream))
+            .route("/stream/{stream_id}/sse", axum::routing::get(handle_sse_stream))
             .route("/health", axum::routing::get(handle_pjs_health))
             .layer(Extension(self.config.clone()))
             .layer(Extension(self.streamer.clone()))

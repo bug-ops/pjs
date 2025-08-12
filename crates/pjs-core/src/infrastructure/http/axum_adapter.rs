@@ -136,13 +136,13 @@ where
     Router::new()
         // Session management
         .route("/pjs/sessions", post(create_session::<CH, QH>))
-        .route("/pjs/sessions/:session_id", get(get_session::<CH, QH>))
-        .route("/pjs/sessions/:session_id/health", get(session_health::<CH, QH>))
+        .route("/pjs/sessions/{session_id}", get(get_session::<CH, QH>))
+        .route("/pjs/sessions/{session_id}/health", get(session_health::<CH, QH>))
         
         // Streaming endpoints
-        .route("/pjs/stream/:session_id", post(start_stream::<CH, QH>))
-        .route("/pjs/stream/:session_id/frames", get(stream_frames::<CH, QH>))
-        .route("/pjs/stream/:session_id/sse", get(stream_server_sent_events::<CH, QH>))
+        .route("/pjs/stream/{session_id}", post(start_stream::<CH, QH>))
+        .route("/pjs/stream/{session_id}/frames", get(stream_frames::<CH, QH>))
+        .route("/pjs/stream/{session_id}/sse", get(stream_server_sent_events::<CH, QH>))
         
         // System endpoints
         .route("/pjs/health", get(system_health))
