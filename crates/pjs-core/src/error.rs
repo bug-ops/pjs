@@ -313,8 +313,11 @@ mod tests {
 
     #[test]
     fn test_from_utf8_error() {
-        let invalid_utf8 = &[0xFF, 0xFE];
-        let utf8_err = std::str::from_utf8(invalid_utf8).unwrap_err();
+        // Create invalid UTF-8 dynamically to avoid compiler warning
+        let mut invalid_utf8 = vec![0xF0, 0x28, 0x8C, 0xBC]; // Invalid UTF-8 sequence
+        invalid_utf8[1] = 0x28; // Make it definitely invalid
+        
+        let utf8_err = std::str::from_utf8(&invalid_utf8).unwrap_err();
         let pjs_err = Error::from(utf8_err);
         
         assert!(matches!(pjs_err, Error::Utf8(_)));
