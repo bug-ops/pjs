@@ -9,7 +9,7 @@ pub mod framework_helpers;
 pub mod simd_acceleration;
 pub mod object_pool;
 
-pub use streaming_adapter::{StreamingAdapter, StreamingAdapterExt, StreamingFormat};
+pub use streaming_adapter::{StreamingAdapter, StreamingAdapterExt, StreamingFormat, streaming_helpers};
 pub use universal_adapter::{UniversalAdapter, AdapterConfig};
 pub use framework_helpers::*;
 pub use simd_acceleration::{SimdFrameSerializer, SimdJsonProcessor, SimdStreamProcessor, SimdConfig};

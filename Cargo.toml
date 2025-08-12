@@ -13,7 +13,7 @@ rust-version = "1.88"
 publish = false
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bug-ops/pjs"
-description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming library"
+description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming library (requires nightly Rust)"
 keywords = ["json", "streaming", "simd", "performance", "protocol"]
 categories = ["encoding", "network-programming", "parser-implementations"]
 

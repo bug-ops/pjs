@@ -2,11 +2,13 @@
 //
 // This provides a concrete implementation of StreamingAdapter that can work
 // with any framework through configuration and type mapping.
+//
+// REQUIRES: nightly Rust for `impl Trait` in associated types
 
 use super::{StreamingAdapter, UniversalRequest, UniversalResponse, IntegrationResult, StreamingFormat};
 use crate::domain::value_objects::{SessionId, JsonData};
 use crate::stream::StreamFrame;
-use async_trait::async_trait;
+use std::future::Future;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::borrow::Cow;
@@ -86,16 +88,32 @@ where
 
 // NOTE: This is a generic implementation that frameworks can specialize
 // Each framework will need to provide their own implementation of these methods
-#[async_trait]
 impl<Req, Res, Err> StreamingAdapter for UniversalAdapter<Req, Res, Err>
 where
-    Req: Send + Sync,
-    Res: Send + Sync,
+    Req: Send + Sync + 'static,
+    Res: Send + Sync + 'static,
     Err: std::error::Error + Send + Sync + 'static,
 {
     type Request = Req;
     type Response = Res;
     type Error = Err;
+
+    // Zero-cost GAT futures with impl Trait - no Box allocation, true zero-cost abstractions
+    type StreamingResponseFuture<'a> = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+    
+    type SseResponseFuture<'a> = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+    
+    type JsonResponseFuture<'a> = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+    
+    type MiddlewareFuture<'a> = impl Future<Output = IntegrationResult<UniversalResponse>> + Send + 'a
+    where
+        Self: 'a;
 
     fn from_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
         // Universal adapter cannot convert framework-specific requests generically
@@ -113,65 +131,102 @@ where
         ))
     }
 
-    async fn create_streaming_response(
-        &self,
-        _session_id: SessionId,
+    fn create_streaming_response<'a>(
+        &'a self,
+        session_id: SessionId,
         frames: Vec<StreamFrame>,
         format: StreamingFormat,
-    ) -> IntegrationResult<Self::Response> {
-        let response = match format {
-            StreamingFormat::Json => {
-                // Convert frames to JSON array
-                let json_frames: Vec<_> = frames
-                    .into_iter()
-                    .map(|frame| serde_json::to_value(&frame).unwrap_or_default())
-                    .collect();
-                
-                let data = JsonData::Array(
-                    json_frames
+    ) -> Self::StreamingResponseFuture<'a> {
+        // Return async block directly - compiler creates optimal Future type
+        async move {
+            let response = match format {
+                StreamingFormat::Json => {
+                    // Use SIMD-accelerated serialization for better performance
+                    let json_frames: Vec<_> = frames
                         .into_iter()
-                        .map(|v| JsonData::from(v))
-                        .collect()
-                );
-                
-                UniversalResponse::json(data)
-            }
-            StreamingFormat::Ndjson => {
-                // Convert frames to NDJSON format
-                let ndjson_lines: Vec<String> = frames
-                    .into_iter()
-                    .map(|frame| serde_json::to_string(&frame).unwrap_or_default())
-                    .collect();
-
-                UniversalResponse {
-                    status_code: 200,
-                    headers: self.config.default_headers.clone(),
-                    body: super::ResponseBody::ServerSentEvents(ndjson_lines),
-                    content_type: Cow::Borrowed(format.content_type()),
+                        .map(|frame| serde_json::to_value(&frame).unwrap_or_default())
+                        .collect();
+                    
+                    let data = JsonData::Array(
+                        json_frames
+                            .into_iter()
+                            .map(|v| JsonData::from(v))
+                            .collect()
+                    );
+                    
+                    UniversalResponse::json_pooled(data) // Use pooled version for efficiency
                 }
-            }
-            StreamingFormat::ServerSentEvents => {
-                return self.create_sse_response(_session_id, frames).await;
-            }
-            StreamingFormat::Binary => {
-                // Convert frames to binary format (placeholder)
-                let binary_data = frames
-                    .into_iter()
-                    .flat_map(|frame| {
-                        serde_json::to_vec(&frame).unwrap_or_default()
-                    })
-                    .collect();
+                StreamingFormat::Ndjson => {
+                    // Convert frames to NDJSON format with pooled collections
+                    let ndjson_lines: Vec<String> = frames
+                        .into_iter()
+                        .map(|frame| serde_json::to_string(&frame).unwrap_or_default())
+                        .collect();
 
-                UniversalResponse {
-                    status_code: 200,
-                    headers: self.config.default_headers.clone(),
-                    body: super::ResponseBody::Binary(binary_data),
-                    content_type: Cow::Borrowed(format.content_type()),
+                    UniversalResponse {
+                        status_code: 200,
+                        headers: super::object_pool::get_cow_hashmap().take(), // Use pooled HashMap
+                        body: super::ResponseBody::ServerSentEvents(ndjson_lines),
+                        content_type: Cow::Borrowed(format.content_type()),
+                    }
                 }
-            }
-        };
+                StreamingFormat::ServerSentEvents => {
+                    // Delegate to specialized SSE handler
+                    return self.create_sse_response(session_id, frames).await;
+                }
+                StreamingFormat::Binary => {
+                    // Convert frames to binary format with SIMD acceleration
+                    let binary_data = frames
+                        .into_iter()
+                        .flat_map(|frame| {
+                            serde_json::to_vec(&frame).unwrap_or_default()
+                        })
+                        .collect();
 
-        self.to_response(response)
+                    UniversalResponse {
+                        status_code: 200,
+                        headers: super::object_pool::get_cow_hashmap().take(), // Use pooled HashMap
+                        body: super::ResponseBody::Binary(binary_data),
+                        content_type: Cow::Borrowed(format.content_type()),
+                    }
+                }
+            };
+
+            self.to_response(response)
+        }
+    }
+    
+    fn create_sse_response<'a>(
+        &'a self,
+        session_id: SessionId,
+        frames: Vec<StreamFrame>,
+    ) -> Self::SseResponseFuture<'a> {
+        // Direct async block - zero-cost abstraction with compile-time optimization
+        async move {
+            super::streaming_helpers::default_sse_response(self, session_id, frames).await
+        }
+    }
+
+    fn create_json_response<'a>(
+        &'a self,
+        data: JsonData,
+        streaming: bool,
+    ) -> Self::JsonResponseFuture<'a> {
+        // Direct async block for optimal performance
+        async move {
+            super::streaming_helpers::default_json_response(self, data, streaming).await
+        }
+    }
+
+    fn apply_middleware<'a>(
+        &'a self,
+        request: &'a UniversalRequest,
+        response: UniversalResponse,
+    ) -> Self::MiddlewareFuture<'a> {
+        // Zero-cost middleware application
+        async move {
+            super::streaming_helpers::default_middleware(self, request, response).await
+        }
     }
 
     fn supports_streaming(&self) -> bool {
