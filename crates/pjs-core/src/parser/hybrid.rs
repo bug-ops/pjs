@@ -5,6 +5,8 @@
 
 use crate::{Error, Result, SemanticMeta, Frame, FrameFlags};
 use crate::semantic::{SemanticType, ProcessingStrategy};
+use crate::security::SecurityValidator;
+use crate::config::SecurityConfig;
 use serde_json::{self, Value};
 use std::time::Instant;
 
@@ -59,6 +61,8 @@ pub struct HybridParser {
     simd_parser: Option<SimdBackend>,
     /// Backend selection thresholds
     thresholds: BackendThresholds,
+    /// Security validator for input validation
+    validator: SecurityValidator,
 }
 
 /// Thresholds for backend selection
@@ -88,6 +92,18 @@ impl HybridParser {
             serde_parser: SerdeBackend,
             simd_parser: None, // Will be enabled later
             thresholds: BackendThresholds::default(),
+            validator: SecurityValidator::default(),
+        }
+    }
+
+    /// Create new hybrid parser with custom security configuration
+    pub fn with_security_config(security_config: SecurityConfig) -> Self {
+        Self {
+            metrics: ParserMetrics::default(),
+            serde_parser: SerdeBackend,
+            simd_parser: None,
+            thresholds: BackendThresholds::default(),
+            validator: SecurityValidator::new(security_config),
         }
     }
 
@@ -243,6 +259,9 @@ impl HybridParser {
 
     /// Validation-only parsing
     fn validate_only(&self, input: &[u8]) -> Result<()> {
+        // Security validation first
+        self.validator.validate_input_size(input.len())?;
+        
         // Quick JSON validation without full parsing
         serde_json::from_slice::<serde_json::Value>(input)
             .map(|_| ())

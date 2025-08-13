@@ -6,6 +6,8 @@
 use crate::{
     domain::{DomainResult, DomainError},
     parser::ValueType,
+    security::SecurityValidator,
+    config::SecurityConfig,
 };
 use std::{
     marker::PhantomData,
@@ -38,7 +40,7 @@ pub struct ZeroCopyParser<'a> {
     input: &'a [u8],
     position: usize,
     depth: usize,
-    max_depth: usize,
+    validator: SecurityValidator,
     _phantom: PhantomData<&'a ()>,
 }
 
@@ -49,18 +51,18 @@ impl<'a> ZeroCopyParser<'a> {
             input: &[],
             position: 0,
             depth: 0,
-            max_depth: 64, // Prevent stack overflow
+            validator: SecurityValidator::default(),
             _phantom: PhantomData,
         }
     }
 
-    /// Create parser with custom max depth
-    pub fn with_max_depth(max_depth: usize) -> Self {
+    /// Create parser with custom security configuration
+    pub fn with_security_config(security_config: SecurityConfig) -> Self {
         Self {
             input: &[],
             position: 0,
             depth: 0,
-            max_depth,
+            validator: SecurityValidator::new(security_config),
             _phantom: PhantomData,
         }
     }
@@ -129,9 +131,8 @@ impl<'a> ZeroCopyParser<'a> {
 
     /// Parse object value lazily
     fn parse_object(&mut self) -> DomainResult<LazyJsonValue<'a>> {
-        if self.depth >= self.max_depth {
-            return Err(DomainError::InvalidInput("Maximum nesting depth exceeded".to_string()));
-        }
+        self.validator.validate_json_depth(self.depth + 1)
+            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
 
         if self.position >= self.input.len() || self.input[self.position] != b'{' {
             return Err(DomainError::InvalidInput("Expected '{'".to_string()));
@@ -177,9 +178,8 @@ impl<'a> ZeroCopyParser<'a> {
 
     /// Parse array value lazily
     fn parse_array(&mut self) -> DomainResult<LazyJsonValue<'a>> {
-        if self.depth >= self.max_depth {
-            return Err(DomainError::InvalidInput("Maximum nesting depth exceeded".to_string()));
-        }
+        self.validator.validate_json_depth(self.depth + 1)
+            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
 
         if self.position >= self.input.len() || self.input[self.position] != b'[' {
             return Err(DomainError::InvalidInput("Expected '['".to_string()));
@@ -360,6 +360,10 @@ impl<'a> LazyParser<'a> for ZeroCopyParser<'a> {
     type Error = DomainError;
 
     fn parse_lazy(&mut self, input: &'a [u8]) -> Result<Self::Output, Self::Error> {
+        // Validate input size first
+        self.validator.validate_input_size(input.len())
+            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
+            
         self.input = input;
         self.position = 0;
         self.depth = 0;

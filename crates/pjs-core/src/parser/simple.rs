@@ -5,6 +5,8 @@
 
 use crate::semantic::{SemanticMeta, SemanticType};
 use crate::{Error, Frame, Result};
+use crate::security::SecurityValidator;
+use crate::config::SecurityConfig;
 use bytes::Bytes;
 use serde_json::{self, Map, Value};
 use smallvec::SmallVec;
@@ -12,6 +14,7 @@ use smallvec::SmallVec;
 /// Simple parser based on serde_json
 pub struct SimpleParser {
     config: ParseConfig,
+    validator: SecurityValidator,
 }
 
 /// Parser configuration
@@ -43,24 +46,30 @@ impl SimpleParser {
     pub fn new() -> Self {
         Self {
             config: ParseConfig::default(),
+            validator: SecurityValidator::default(),
         }
     }
 
     /// Create parser with custom config
     pub fn with_config(config: ParseConfig) -> Self {
-        Self { config }
+        Self { 
+            config,
+            validator: SecurityValidator::default(),
+        }
+    }
+
+    /// Create parser with custom security config
+    pub fn with_security_config(config: ParseConfig, security_config: SecurityConfig) -> Self {
+        Self {
+            config,
+            validator: SecurityValidator::new(security_config),
+        }
     }
 
     /// Parse JSON bytes into PJS Frame
     pub fn parse(&self, input: &[u8]) -> Result<Frame> {
-        // Basic size check
-        if input.len() > self.config.max_size_mb * 1024 * 1024 {
-            let input_mb = input.len() / (1024 * 1024);
-            let max_mb = self.config.max_size_mb;
-            return Err(Error::buffer(format!(
-                "Input too large: {input_mb} MB, max: {max_mb} MB"
-            )));
-        }
+        // Security validation
+        self.validator.validate_input_size(input.len())?;
 
         // Parse with serde_json
         let value: Value = serde_json::from_slice(input)

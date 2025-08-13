@@ -141,7 +141,7 @@ impl<'a> SimdZeroCopyParser<'a> {
     /// Parse without SIMD acceleration (fallback to pure zero-copy)
     fn parse_without_simd(&mut self, input: &'a [u8]) -> DomainResult<LazyJsonValue<'a>> {
         // Use the zero-copy parser directly
-        let mut zero_copy_parser = crate::parser::zero_copy::ZeroCopyParser::with_max_depth(self.max_depth);
+        let mut zero_copy_parser = crate::parser::zero_copy::ZeroCopyParser::new();
         zero_copy_parser.parse_lazy(input)
     }
 
