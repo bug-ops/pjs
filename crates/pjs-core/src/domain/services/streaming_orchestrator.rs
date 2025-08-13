@@ -141,7 +141,7 @@ impl StreamingOrchestrator {
         let mut priority_groups: HashMap<u8, Vec<Frame>> = HashMap::new();
         for frame in frames {
             let priority = frame.priority();
-            priority_groups.entry(priority.value()).or_insert_with(Vec::new).push(frame);
+            priority_groups.entry(priority.value()).or_default().push(frame);
         }
 
         // Stream in priority order (highest first)

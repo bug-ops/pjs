@@ -162,11 +162,10 @@ impl StreamingCompressor {
         // Extract dictionary mappings
         for (key, value) in &compressed_data.compression_metadata {
             if key.starts_with("dict_") {
-                if let Ok(index) = key.strip_prefix("dict_").unwrap().parse::<u16>() {
-                    if let Some(string_val) = value.as_str() {
+                if let Ok(index) = key.strip_prefix("dict_").unwrap().parse::<u16>()
+                    && let Some(string_val) = value.as_str() {
                         dictionary_map.insert(index, string_val.to_string());
                     }
-                }
             } else if key.starts_with("base_") {
                 let path = key.strip_prefix("base_").unwrap();
                 if let Some(num) = value.as_f64() {
@@ -326,11 +325,10 @@ impl StreamingDecompressor {
             }
             JsonValue::Number(n) => {
                 // Check if this is a dictionary index
-                if let Some(index) = n.as_u64() {
-                    if let Some(string_val) = self.active_dictionary.get(&(index as u16)) {
+                if let Some(index) = n.as_u64()
+                    && let Some(string_val) = self.active_dictionary.get(&(index as u16)) {
                         return Ok(JsonValue::String(string_val.clone()));
                     }
-                }
                 Ok(data.clone())
             }
             _ => Ok(data.clone()),

@@ -26,16 +26,22 @@
 //! cargo bench comparison
 //! ```
 
-pub use pjson_rs::{Error, Frame, Parser, Priority, Result, StreamConfig, StreamFrame, StreamProcessor};
+pub use pjson_rs::{Error, Frame, Parser, Priority, Result, StreamConfig, StreamFrame, StreamProcessor, JsonReconstructor};
 
 // Fallback implementations for benchmarking when streaming features aren't available
 pub mod fallback {
     use bytes::Bytes;
-    use serde_json::Value;
+    use crate::Priority;
 
     #[derive(Debug, Clone)]
     pub struct StreamerConfig {
         chunk_size: usize,
+    }
+
+    impl Default for StreamerConfig {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl StreamerConfig {
@@ -61,17 +67,27 @@ pub mod fallback {
         }
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub enum Priority {
-        Critical,
-        High,
-        Medium,
-        Low,
-    }
 
     #[derive(Debug, Clone)]
     pub struct StreamFrame {
         data: Bytes,
+    }
+
+    impl StreamFrame {
+        /// Create new stream frame
+        pub fn new(data: Bytes) -> Self {
+            Self { data }
+        }
+
+        /// Get the frame data
+        pub fn data(&self) -> &Bytes {
+            &self.data
+        }
+
+        /// Get the frame size in bytes
+        pub fn size(&self) -> usize {
+            self.data.len()
+        }
     }
 
     #[derive(Debug)]
@@ -88,43 +104,20 @@ pub mod fallback {
             // Use config to determine frame size
             let chunk_size = self.config.chunk_size();
             if data.len() <= chunk_size {
-                vec![StreamFrame { data: data.clone() }]
+                vec![StreamFrame::new(data.clone())]
             } else {
                 // Split into multiple frames based on config
                 let mut frames = Vec::new();
                 for chunk in data.chunks(chunk_size) {
-                    frames.push(StreamFrame { 
-                        data: Bytes::copy_from_slice(chunk)
-                    });
+                    frames.push(StreamFrame::new(
+                        Bytes::copy_from_slice(chunk)
+                    ));
                 }
                 frames
             }
         }
     }
 
-    #[derive(Debug)]
-    pub struct JsonReconstructor {
-        state: Option<Value>,
-    }
-
-    impl JsonReconstructor {
-        pub fn new() -> Self {
-            Self { state: None }
-        }
-
-        pub fn process_frame(&mut self, frame: StreamFrame) -> Result<(), String> {
-            let json_str = String::from_utf8(frame.data.to_vec())
-                .map_err(|e| format!("UTF-8 error: {}", e))?;
-            let value: Value =
-                serde_json::from_str(&json_str).map_err(|e| format!("JSON error: {}", e))?;
-            self.state = Some(value);
-            Ok(())
-        }
-
-        pub fn current_state(&self) -> Option<&Value> {
-            self.state.as_ref()
-        }
-    }
 }
 
 pub use fallback::*;
@@ -194,7 +187,7 @@ impl BenchSuite {
             "products": products,
             "total": products,
             "filters": {
-                "categories": (0..10).map(|i| format!("Category {}", i)).collect::<Vec<_>>()
+                "categories": (0..10).map(|i| format!("Category {i}")).collect::<Vec<_>>()
             }
         })
         .to_string()
@@ -301,5 +294,31 @@ mod tests {
 
         let ratio = metrics2.efficiency_ratio(&metrics1);
         assert!(ratio > 1.0); // metrics2 should be better
+    }
+
+    #[test]
+    fn test_stream_frame() {
+        use bytes::Bytes;
+
+        let data = Bytes::from("test data");
+        let frame = super::fallback::StreamFrame::new(data.clone());
+
+        assert_eq!(frame.data(), &data);
+        assert_eq!(frame.size(), data.len());
+    }
+
+    #[test]
+    fn test_priority_streamer() {
+        use bytes::Bytes;
+
+        let config = super::fallback::StreamerConfig::new();
+        let streamer = super::fallback::PriorityStreamer::new(config);
+
+        let test_data = Bytes::from("test streaming data");
+        let frames = streamer.create_priority_frames(&test_data);
+
+        assert!(!frames.is_empty());
+        assert_eq!(frames[0].data(), &test_data);
+        assert_eq!(frames[0].size(), test_data.len());
     }
 }

@@ -132,7 +132,7 @@ impl StreamStore for InMemoryStreamStore {
             let mut session_streams = self.session_streams.write();
             session_streams
                 .entry(session_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(stream_id);
         }
         

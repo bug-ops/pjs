@@ -226,23 +226,21 @@ impl MetricsCollector for InMemoryMetricsCollector {
         }
         
         // Record timing for specific session or stream
-        if let Some(session_id_str) = tags.get("session_id") {
-            if let Ok(session_id) = SessionId::from_string(session_id_str) {
+        if let Some(session_id_str) = tags.get("session_id")
+            && let Ok(session_id) = SessionId::from_string(session_id_str) {
                 let mut session_metrics = self.session_metrics.write();
                 if let Some(session_metric) = session_metrics.get_mut(&session_id) {
                     session_metric.last_activity = Instant::now();
                 }
             }
-        }
         
-        if let Some(stream_id_str) = tags.get("stream_id") {
-            if let Ok(stream_id) = StreamId::from_string(stream_id_str) {
+        if let Some(stream_id_str) = tags.get("stream_id")
+            && let Ok(stream_id) = StreamId::from_string(stream_id_str) {
                 let mut stream_metrics = self.stream_metrics.write();
                 if let Some(stream_metric) = stream_metrics.get_mut(&stream_id) {
                     stream_metric.processing_times.push(duration);
                 }
             }
-        }
         
         Ok(())
     }
@@ -375,6 +373,13 @@ pub struct PrometheusMetricsCollector {
     counters: Arc<RwLock<HashMap<String, prometheus::CounterVec>>>,
     gauges: Arc<RwLock<HashMap<String, prometheus::GaugeVec>>>,
     histograms: Arc<RwLock<HashMap<String, prometheus::HistogramVec>>>,
+}
+
+#[cfg(feature = "prometheus-metrics")]
+impl Default for PrometheusMetricsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(feature = "prometheus-metrics")]

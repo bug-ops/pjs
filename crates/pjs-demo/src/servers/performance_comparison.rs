@@ -119,15 +119,8 @@ pub struct DataCharacteristics {
     priority_distribution: PriorityDistribution,
 }
 
-/// Priority level distribution
-#[derive(Debug, Serialize)]
-pub struct PriorityDistribution {
-    critical: f64,    // 0-1 percentage
-    high: f64,
-    medium: f64,
-    low: f64,
-    background: f64,
-}
+// Use the canonical PriorityPercentages from pjson_rs
+pub use pjson_rs::PriorityPercentages as PriorityDistribution;
 
 /// Performance comparison server
 #[tokio::main]

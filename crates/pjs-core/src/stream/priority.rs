@@ -7,18 +7,9 @@
 //! - Incremental reconstruction
 
 use crate::Result;
+use crate::domain::value_objects::Priority;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::VecDeque;
-
-/// Priority levels for JSON fields and structures
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
-pub enum Priority {
-    Critical = 100,  // ID fields, status, essential metadata
-    High = 80,       // Names, titles, key identifiers
-    Medium = 50,     // Regular content, descriptions
-    Low = 20,        // Analytics, detailed metadata
-    Background = 10, // Large arrays, reviews, logs
-}
 
 /// JSON Path for addressing specific nodes in the JSON structure
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -52,7 +43,7 @@ pub enum PatchOperation {
 
 /// Streaming frame containing skeleton or patch data
 #[derive(Debug, Clone, serde::Serialize)]
-pub enum StreamFrame {
+pub enum PriorityStreamFrame {
     Skeleton {
         data: JsonValue,
         priority: Priority,
@@ -84,7 +75,7 @@ impl Default for StreamerConfig {
         Self {
             detect_semantics: true,
             max_patch_size: 100,
-            priority_threshold: Priority::Low,
+            priority_threshold: Priority::LOW,
         }
     }
 }
@@ -106,9 +97,9 @@ impl PriorityStreamer {
 
         // Generate skeleton
         let skeleton = self.generate_skeleton(json);
-        plan.frames.push_back(StreamFrame::Skeleton {
+        plan.frames.push_back(PriorityStreamFrame::Skeleton {
             data: skeleton,
-            priority: Priority::Critical,
+            priority: Priority::CRITICAL,
             complete: false,
         });
 
@@ -119,12 +110,12 @@ impl PriorityStreamer {
         // Group patches by priority
         patches.sort_by(|a, b| b.priority.cmp(&a.priority));
 
-        let mut current_priority = Priority::Critical;
+        let mut current_priority = Priority::CRITICAL;
         let mut current_batch = Vec::new();
 
         for patch in patches {
             if patch.priority != current_priority && !current_batch.is_empty() {
-                plan.frames.push_back(StreamFrame::Patch {
+                plan.frames.push_back(PriorityStreamFrame::Patch {
                     patches: current_batch,
                     priority: current_priority,
                 });
@@ -134,7 +125,7 @@ impl PriorityStreamer {
             current_batch.push(patch);
 
             if current_batch.len() >= self.config.max_patch_size {
-                plan.frames.push_back(StreamFrame::Patch {
+                plan.frames.push_back(PriorityStreamFrame::Patch {
                     patches: current_batch,
                     priority: current_priority,
                 });
@@ -144,7 +135,7 @@ impl PriorityStreamer {
 
         // Add remaining patches
         if !current_batch.is_empty() {
-            plan.frames.push_back(StreamFrame::Patch {
+            plan.frames.push_back(PriorityStreamFrame::Patch {
                 patches: current_batch,
                 priority: current_priority,
             });
@@ -152,7 +143,7 @@ impl PriorityStreamer {
 
         // Add completion frame
         plan.frames
-            .push_back(StreamFrame::Complete { checksum: None });
+            .push_back(PriorityStreamFrame::Complete { checksum: None });
 
         Ok(plan)
     }
@@ -243,29 +234,29 @@ impl PriorityStreamer {
     fn calculate_field_priority(&self, _path: &JsonPath, key: &str, value: &JsonValue) -> Priority {
         // Critical fields
         if matches!(key, "id" | "uuid" | "status" | "type" | "kind") {
-            return Priority::Critical;
+            return Priority::CRITICAL;
         }
 
         // High priority fields
         if matches!(key, "name" | "title" | "label" | "email" | "username") {
-            return Priority::High;
+            return Priority::HIGH;
         }
 
         // Low priority patterns
         if key.contains("analytics") || key.contains("stats") || key.contains("meta") {
-            return Priority::Low;
+            return Priority::LOW;
         }
 
         if matches!(key, "reviews" | "comments" | "logs" | "history") {
-            return Priority::Background;
+            return Priority::BACKGROUND;
         }
 
         // Content-based priority
         match value {
-            JsonValue::Array(arr) if arr.len() > 100 => Priority::Background,
-            JsonValue::Object(obj) if obj.contains_key("timestamp") => Priority::Medium,
-            JsonValue::String(s) if s.len() > 1000 => Priority::Low,
-            _ => Priority::Medium,
+            JsonValue::Array(arr) if arr.len() > 100 => Priority::BACKGROUND,
+            JsonValue::Object(obj) if obj.contains_key("timestamp") => Priority::MEDIUM,
+            JsonValue::String(s) if s.len() > 1000 => Priority::LOW,
+            _ => Priority::MEDIUM,
         }
     }
 
@@ -273,27 +264,33 @@ impl PriorityStreamer {
     fn calculate_array_priority(&self, path: &JsonPath, elements: &[JsonValue]) -> Priority {
         // Large arrays get background priority
         if elements.len() > 50 {
-            return Priority::Background;
+            return Priority::BACKGROUND;
         }
 
         // Arrays in certain paths get different priorities
         if let Some(last_key) = path.last_key() {
             if matches!(last_key.as_str(), "reviews" | "comments" | "logs") {
-                return Priority::Background;
+                return Priority::BACKGROUND;
             }
             if matches!(last_key.as_str(), "items" | "data" | "results") {
-                return Priority::Medium;
+                return Priority::MEDIUM;
             }
         }
 
-        Priority::Medium
+        Priority::MEDIUM
     }
 }
 
 /// Plan for streaming JSON with priority ordering
 #[derive(Debug)]
 pub struct StreamingPlan {
-    pub frames: VecDeque<StreamFrame>,
+    pub frames: VecDeque<PriorityStreamFrame>,
+}
+
+impl Default for StreamingPlan {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StreamingPlan {
@@ -304,7 +301,7 @@ impl StreamingPlan {
     }
 
     /// Get next frame to send
-    pub fn next_frame(&mut self) -> Option<StreamFrame> {
+    pub fn next_frame(&mut self) -> Option<PriorityStreamFrame> {
         self.frames.pop_front()
     }
 
@@ -319,7 +316,7 @@ impl StreamingPlan {
     }
 
     /// Get iterator over frames
-    pub fn frames(&self) -> impl Iterator<Item = &StreamFrame> {
+    pub fn frames(&self) -> impl Iterator<Item = &PriorityStreamFrame> {
         self.frames.iter()
     }
 }
@@ -425,10 +422,10 @@ mod tests {
 
     #[test]
     fn test_priority_comparison() {
-        assert!(Priority::Critical > Priority::High);
-        assert!(Priority::High > Priority::Medium);
-        assert!(Priority::Medium > Priority::Low);
-        assert!(Priority::Low > Priority::Background);
+        assert!(Priority::CRITICAL > Priority::HIGH);
+        assert!(Priority::HIGH > Priority::MEDIUM);
+        assert!(Priority::MEDIUM > Priority::LOW);
+        assert!(Priority::LOW > Priority::BACKGROUND);
     }
 
     #[test]
@@ -459,17 +456,17 @@ mod tests {
 
         assert_eq!(
             streamer.calculate_field_priority(&path, "id", &json!(123)),
-            Priority::Critical
+            Priority::CRITICAL
         );
 
         assert_eq!(
             streamer.calculate_field_priority(&path, "name", &json!("John")),
-            Priority::High
+            Priority::HIGH
         );
 
         assert_eq!(
             streamer.calculate_field_priority(&path, "reviews", &json!([])),
-            Priority::Background
+            Priority::BACKGROUND
         );
     }
 

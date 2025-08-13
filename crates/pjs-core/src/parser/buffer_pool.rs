@@ -107,8 +107,8 @@ impl BufferPool {
         let mut pools = self.pools.lock()
             .map_err(|_| DomainError::InternalError("Failed to acquire pool lock".to_string()))?;
 
-        if let Some(bucket) = pools.get_mut(&size) {
-            if let Some(mut buffer) = bucket.buffers.pop() {
+        if let Some(bucket) = pools.get_mut(&size)
+            && let Some(mut buffer) = bucket.buffers.pop() {
                 buffer.last_used = Instant::now();
                 bucket.last_access = Instant::now();
                 
@@ -118,7 +118,6 @@ impl BufferPool {
                 
                 return Ok(PooledBuffer::new(buffer, Arc::clone(&self.pools), size));
             }
-        }
 
         // No buffer available, create new one
         if self.config.track_stats {
@@ -308,11 +307,11 @@ impl AlignedBuffer {
         } else {
             // For high alignment requirements, check if we're reasonably aligned
             // Many allocators provide at least 16-byte alignment by default
-            let min_acceptable = std::cmp::min(self.alignment, 16);
-            min_acceptable
+            
+            std::cmp::min(self.alignment, 16)
         };
         
-        ptr % effective_alignment == 0
+        ptr.is_multiple_of(effective_alignment)
     }
 }
 
@@ -466,7 +465,7 @@ static GLOBAL_BUFFER_POOL: std::sync::OnceLock<BufferPool> = std::sync::OnceLock
 
 /// Get global buffer pool instance
 pub fn global_buffer_pool() -> &'static BufferPool {
-    GLOBAL_BUFFER_POOL.get_or_init(|| BufferPool::new())
+    GLOBAL_BUFFER_POOL.get_or_init(BufferPool::new)
 }
 
 /// Initialize global buffer pool with custom configuration

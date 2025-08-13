@@ -144,8 +144,7 @@ async fn pjs_streaming_endpoint(
     // Check if client wants streaming
     let wants_streaming = headers.get("Accept")
         .and_then(|h| h.to_str().ok())
-        .map(|accept| accept.contains("text/event-stream") || accept.contains("application/x-pjs-stream"))
-        .unwrap_or(false);
+        .is_some_and(|accept| accept.contains("text/event-stream") || accept.contains("application/x-pjs-stream"));
 
     if wants_streaming {
         // Minimal network latency for skeleton
@@ -245,7 +244,7 @@ async fn performance_comparison(
         pjs_time_ms: pjs_ms,
         improvement_factor: improvement,
         data_size_bytes: data_size,
-        network_simulation: format!("{:?}", network_type),
+        network_simulation: format!("{network_type:?}"),
         metadata,
     };
 

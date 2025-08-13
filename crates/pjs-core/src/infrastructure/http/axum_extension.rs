@@ -291,8 +291,8 @@ pub trait PjsResponseExt {
 impl PjsResponseExt for Json<JsonValue> {
     fn pjs_stream(self, request: &axum::extract::Request) -> impl IntoResponse {
         // Check if PJS streaming was requested
-        if let Some(pjs_request) = request.extensions().get::<PjsStreamingRequest>() {
-            if pjs_request.enabled {
+        if let Some(pjs_request) = request.extensions().get::<PjsStreamingRequest>()
+            && pjs_request.enabled {
                 // Convert to streaming response
                 // This is a simplified implementation
                 return (
@@ -304,7 +304,6 @@ impl PjsResponseExt for Json<JsonValue> {
                     self.0.to_string()
                 ).into_response();
             }
-        }
         
         // Return regular JSON response
         self.into_response()

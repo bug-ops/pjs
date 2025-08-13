@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming"
+description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming (requires nightly Rust)"
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
@@ -95,7 +95,7 @@ http-client = ["dep:reqwest"]
 prometheus-metrics = ["dep:prometheus"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["axum", "tower", "tower-http", "hyper", "futures"]
+normal = ["axum", "tower", "tower-http", "hyper", "futures", "sha2"]
 
 [[example]]
 name = "simple_priority_demo"

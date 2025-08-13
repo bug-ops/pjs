@@ -60,7 +60,7 @@ fn generate_demo_data(size: &str) -> Value {
             json!({
                 "id": i + 1,
                 "name": format!("Product {}", i + 1),
-                "price": 29.99 + (i as f64 * 5.0),
+                "price": 29.99 + (f64::from(i) * 5.0),
                 "category": format!("Category {}", (i % 3) + 1),
                 "in_stock": i % 4 != 0,
                 "description": format!("Product {} description with some details", i + 1)

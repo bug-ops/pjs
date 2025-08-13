@@ -96,7 +96,7 @@ impl ScanResult {
         // Heuristic: starts with '[', has many numbers, few strings
         self.structural_chars
             .first()
-            .map_or(false, |&c| c as u8 == b'[')
+            .is_some_and(|&c| c as u8 == b'[')
             && self.number_bounds.len() > 4
             && self.string_bounds.len() < 2
     }
@@ -106,7 +106,7 @@ impl ScanResult {
         // Heuristic: starts with '[', has balanced objects and strings
         self.structural_chars
             .first()
-            .map_or(false, |&c| c as u8 == b'[')
+            .is_some_and(|&c| c as u8 == b'[')
             && self.count_object_starts() > 2
             && self.string_bounds.len() > self.number_bounds.len()
     }

@@ -477,4 +477,320 @@ mod tests {
 
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_session_service_creation() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler.clone(), query_handler.clone());
+
+        assert!(std::ptr::eq(service.command_handler.as_ref(), command_handler.as_ref()));
+        assert!(std::ptr::eq(service.query_handler.as_ref(), query_handler.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn test_create_and_start_stream() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler, query_handler);
+
+        // First create a session
+        let session_id = service
+            .create_and_activate_session(
+                SessionConfig::default(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Sync sessions between handlers
+        let command_sessions = service.command_handler.sessions.lock().unwrap().clone();
+        *service.query_handler.sessions.lock().unwrap() = command_sessions;
+
+        // Then create and start a stream
+        let stream_data = serde_json::json!({"test": "data"});
+        let result = service
+            .create_and_start_stream(session_id, stream_data, None)
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_session_with_health() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler, query_handler);
+
+        // Create a session first
+        let session_id = service
+            .create_and_activate_session(
+                SessionConfig::default(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Sync sessions between handlers
+        let command_sessions = service.command_handler.sessions.lock().unwrap().clone();
+        *service.query_handler.sessions.lock().unwrap() = command_sessions;
+
+        // Get session with health
+        let result = service.get_session_with_health(session_id).await;
+
+        assert!(result.is_ok());
+        let session_with_health = result.unwrap();
+        assert_eq!(session_with_health.session.id(), session_id);
+        assert!(session_with_health.health.is_healthy);
+    }
+
+    #[tokio::test]
+    async fn test_get_session_with_health_not_found() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler, query_handler);
+
+        let non_existent_session_id = SessionId::new();
+        let result = service.get_session_with_health(non_existent_session_id).await;
+
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), ApplicationError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_get_sessions_overview() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler, query_handler);
+
+        // Create multiple sessions
+        let mut session_ids = Vec::new();
+        for _ in 0..3 {
+            let session_id = service
+                .create_and_activate_session(
+                    SessionConfig::default(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            session_ids.push(session_id);
+        }
+
+        // Sync sessions between handlers
+        let command_sessions = service.command_handler.sessions.lock().unwrap().clone();
+        *service.query_handler.sessions.lock().unwrap() = command_sessions;
+
+        // Get overview
+        let result = service.get_sessions_overview(None).await;
+
+        assert!(result.is_ok());
+        let overview = result.unwrap();
+        assert_eq!(overview.sessions.len(), 3);
+        assert_eq!(overview.total_count, 3);
+        assert_eq!(overview.healthy_count, 3); // All sessions should be healthy by default
+    }
+
+    #[tokio::test]
+    async fn test_get_sessions_overview_with_limit() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler, query_handler);
+
+        // Create 5 sessions
+        for _ in 0..5 {
+            let _ = service
+                .create_and_activate_session(
+                    SessionConfig::default(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        // Sync sessions between handlers
+        let command_sessions = service.command_handler.sessions.lock().unwrap().clone();
+        *service.query_handler.sessions.lock().unwrap() = command_sessions;
+
+        // Get overview with limit
+        let result = service.get_sessions_overview(Some(2)).await;
+
+        assert!(result.is_ok());
+        let overview = result.unwrap();
+        assert_eq!(overview.sessions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_complete_stream_and_maybe_close_session() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler, query_handler);
+
+        // Create session and stream
+        let session_id = service
+            .create_and_activate_session(
+                SessionConfig::default(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Sync sessions between handlers
+        let command_sessions = service.command_handler.sessions.lock().unwrap().clone();
+        *service.query_handler.sessions.lock().unwrap() = command_sessions.clone();
+
+        let stream_id = service
+            .create_and_start_stream(session_id, serde_json::json!({"test": "data"}), None)
+            .await
+            .unwrap();
+
+        // Sync sessions again after stream creation
+        let command_sessions = service.command_handler.sessions.lock().unwrap().clone();
+        *service.query_handler.sessions.lock().unwrap() = command_sessions;
+
+        // Complete stream
+        let result = service
+            .complete_stream_and_maybe_close_session(session_id, stream_id)
+            .await;
+
+        assert!(result.is_ok());
+        let completion_result = result.unwrap();
+        assert_eq!(completion_result.stream_id, stream_id);
+        // Test basic functionality - verify the operation completed successfully
+        // The stream completion process worked regardless of the final session state
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_session() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler, query_handler);
+
+        // Create session with multiple streams
+        let session_id = service
+            .create_and_activate_session(
+                SessionConfig::default(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Sync sessions between handlers
+        let command_sessions = service.command_handler.sessions.lock().unwrap().clone();
+        *service.query_handler.sessions.lock().unwrap() = command_sessions.clone();
+
+        // Create multiple streams
+        let stream1_id = service
+            .create_and_start_stream(session_id, serde_json::json!({"stream": 1}), None)
+            .await
+            .unwrap();
+
+        let stream2_id = service
+            .create_and_start_stream(session_id, serde_json::json!({"stream": 2}), None)
+            .await
+            .unwrap();
+
+        // Sync sessions again after stream creation
+        let command_sessions = service.command_handler.sessions.lock().unwrap().clone();
+        *service.query_handler.sessions.lock().unwrap() = command_sessions;
+
+        // Graceful shutdown
+        let result = service.graceful_shutdown_session(session_id).await;
+
+        assert!(result.is_ok());
+        let shutdown_result = result.unwrap();
+        assert_eq!(shutdown_result.session_id, session_id);
+        assert!(shutdown_result.session_closed);
+        assert_eq!(shutdown_result.completed_streams.len(), 2);
+        assert_eq!(shutdown_result.failed_streams.len(), 0);
+        assert!(shutdown_result.completed_streams.contains(&stream1_id));
+        assert!(shutdown_result.completed_streams.contains(&stream2_id));
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_session_not_found() {
+        let command_handler = Arc::new(MockCommandHandler::new());
+        let query_handler = Arc::new(MockQueryHandler::new());
+        let service = SessionService::new(command_handler, query_handler);
+
+        let non_existent_session_id = SessionId::new();
+        let result = service.graceful_shutdown_session(non_existent_session_id).await;
+
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), ApplicationError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_session_with_health_structure() {
+        let session = StreamSession::new(SessionConfig::default());
+        let health = session.health_check();
+        
+        let session_with_health = SessionWithHealth {
+            session: session.clone(),
+            health: health.clone(),
+        };
+
+        assert_eq!(session_with_health.session.id(), session.id());
+        assert_eq!(session_with_health.health.is_healthy, health.is_healthy);
+    }
+
+    #[tokio::test]
+    async fn test_session_completion_result_structure() {
+        let stream_id = StreamId::new();
+        let result = SessionCompletionResult {
+            stream_id,
+            session_closed: true,
+            remaining_active_streams: 0,
+        };
+
+        assert_eq!(result.stream_id, stream_id);
+        assert!(result.session_closed);
+        assert_eq!(result.remaining_active_streams, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sessions_overview_structure() {
+        let sessions = vec![StreamSession::new(SessionConfig::default())];
+        let overview = SessionsOverview {
+            sessions: sessions.clone(),
+            total_count: 1,
+            healthy_count: 1,
+            total_streams: 0,
+            total_frames: 0,
+            total_bytes: 0,
+        };
+
+        assert_eq!(overview.sessions.len(), 1);
+        assert_eq!(overview.total_count, 1);
+        assert_eq!(overview.healthy_count, 1);
+        assert_eq!(overview.total_streams, 0);
+    }
+
+    #[tokio::test]
+    async fn test_session_shutdown_result_structure() {
+        let session_id = SessionId::new();
+        let stream_id = StreamId::new();
+        let result = SessionShutdownResult {
+            session_id,
+            session_closed: true,
+            completed_streams: vec![stream_id],
+            failed_streams: vec![],
+        };
+
+        assert_eq!(result.session_id, session_id);
+        assert!(result.session_closed);
+        assert_eq!(result.completed_streams.len(), 1);
+        assert_eq!(result.failed_streams.len(), 0);
+    }
 }

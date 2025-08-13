@@ -89,6 +89,12 @@ pub struct StreamResponse {
     config: StreamConfig,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         Self {
@@ -142,14 +148,14 @@ async fn main() -> ApplicationResult<()> {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3001")
         .await
-        .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Failed to bind to address: {}", e))))?;
+        .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Failed to bind to address: {e}"))))?;
 
     info!("WebSocket streaming server running on http://127.0.0.1:3001");
     info!("WebSocket endpoint: ws://127.0.0.1:3001/ws/{{session_id}}");
 
     axum::serve(listener, app)
         .await
-        .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Server error: {}", e))))?;
+        .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Server error: {e}"))))?;
 
     Ok(())
 }
@@ -176,7 +182,7 @@ async fn create_stream(
 
     let response = StreamResponse {
         session_id: session_id.to_string(),
-        websocket_url: format!("ws://127.0.0.1:3001/ws/{}", session_id),
+        websocket_url: format!("ws://127.0.0.1:3001/ws/{session_id}"),
         config,
     };
 
@@ -259,7 +265,7 @@ async fn stream_data(
     // Send frames in priority order
     for (index, frame) in frames.iter().enumerate() {
         // Apply compression if enabled
-        let compressed_data = if should_compress(&frame) {
+        let compressed_data = if should_compress(frame) {
             match state.compressor.compress(&frame.data) {
                 Ok(compressed) => compressed.data,
                 Err(e) => {
@@ -277,13 +283,13 @@ async fn stream_data(
             "@session_id": session_id.to_string(),
             "@frame_index": index,
             "@priority": frame.priority.value(),
-            "@compressed": should_compress(&frame),
+            "@compressed": should_compress(frame),
             "@timestamp": chrono::Utc::now(),
             "data": compressed_data
         });
 
         let message_text = serde_json::to_string(&message_data)
-            .map_err(|e| format!("Failed to serialize frame: {}", e))?;
+            .map_err(|e| format!("Failed to serialize frame: {e}"))?;
 
         // Send frame
         if let Err(e) = sender.send(Message::Text(message_text.clone().into())).await {

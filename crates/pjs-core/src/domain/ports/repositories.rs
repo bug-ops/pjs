@@ -323,27 +323,8 @@ pub struct FrameQueryResult {
     pub lowest_priority: Option<Priority>,
 }
 
-/// Priority distribution statistics
-#[derive(Debug, Clone, PartialEq)]
-pub struct PriorityDistribution {
-    pub critical_count: u64,
-    pub high_count: u64,
-    pub medium_count: u64,
-    pub low_count: u64,
-    pub background_count: u64,
-}
-
-impl Default for PriorityDistribution {
-    fn default() -> Self {
-        Self {
-            critical_count: 0,
-            high_count: 0,
-            medium_count: 0,
-            low_count: 0,
-            background_count: 0,
-        }
-    }
-}
+// Use the canonical PriorityDistribution from events
+pub use crate::domain::events::PriorityDistribution;
 
 /// Cache performance statistics
 #[derive(Debug, Clone)]

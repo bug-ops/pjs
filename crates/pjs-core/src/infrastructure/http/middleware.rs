@@ -91,19 +91,16 @@ where
             let start_time = Instant::now();
             
             // Check request size
-            if let Some(content_length) = request.headers().get(header::CONTENT_LENGTH) {
-                if let Ok(length_str) = content_length.to_str() {
-                    if let Ok(length) = length_str.parse::<usize>() {
-                        if length > config.max_request_size {
+            if let Some(content_length) = request.headers().get(header::CONTENT_LENGTH)
+                && let Ok(length_str) = content_length.to_str()
+                    && let Ok(length) = length_str.parse::<usize>()
+                        && length > config.max_request_size {
                             return Ok(Response::builder()
                                 .status(StatusCode::PAYLOAD_TOO_LARGE)
                                 .body("Request too large".into())
                                 .map_err(|_| Response::new("Failed to build error response".into()))
                                 .unwrap_or_else(|err_response| err_response));
                         }
-                    }
-                }
-            }
             
             // Process request
             let mut response = inner.call(request).await?;

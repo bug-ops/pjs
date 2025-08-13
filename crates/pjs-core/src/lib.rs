@@ -4,29 +4,18 @@
 //! This crate provides high-performance JSON parsing with SIMD optimizations,
 //! zero-copy operations, and semantic type hints for automatic optimization.
 
+#![feature(impl_trait_in_assoc_type)]
 #![warn(rust_2018_idioms)]
 #![deny(unsafe_op_in_unsafe_fn)]
-// Temporarily allow missing docs while in development
-#![allow(missing_docs)]
-// Allow some non-critical clippy warnings for development
-#![allow(clippy::clone_on_copy)]
-#![allow(clippy::derivable_impls)]
-#![allow(clippy::unwrap_or_default)]
+// Allow some non-critical clippy warnings for production code
 #![allow(clippy::manual_div_ceil)]
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::explicit_auto_deref)]
-#![allow(clippy::unnecessary_map_or)]
-#![allow(clippy::while_let_on_iterator)]
-#![allow(clippy::let_and_return)]
-#![allow(clippy::redundant_closure)]
-#![allow(clippy::new_without_default)]
-#![allow(clippy::map_clone)]
 #![allow(clippy::only_used_in_recursion)]
-// Allow dead code for fields and methods that will be used in the future
+// Allow dead code for fields and methods that will be used in future features
 #![allow(dead_code)]
 
 pub mod application;
 pub mod compression;
+pub mod config;
 pub mod domain;
 pub mod error;
 pub mod frame;
@@ -41,6 +30,9 @@ pub use domain::{
     Stream, StreamId, StreamSession,
 };
 
+// Events exports  
+pub use domain::events::{PriorityDistribution, PriorityPercentages};
+
 // Application layer exports
 pub use application::{
     ApplicationError, ApplicationResult, commands,
@@ -49,16 +41,19 @@ pub use application::{
     services::{SessionService, StreamingService},
 };
 
+// Configuration exports
+pub use config::{ParserConfig, PjsConfig, SimdConfig, StreamingConfig};
+
 // Compression exports
 pub use compression::{
-    CompressedData, CompressionStrategy, SchemaAnalyzer, SchemaCompressor,
+    CompressedData, CompressionConfig, CompressionStrategy, SchemaAnalyzer, SchemaCompressor,
 };
 
 // Streaming exports
 pub use stream::{
     CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
     ProcessResult, StreamConfig, StreamFrame, StreamProcessor, StreamStats,
-    StreamingCompressor, StreamingDecompressor, PriorityStreamer,
+    StreamingCompressor, StreamingDecompressor, PriorityStreamer, JsonReconstructor,
 };
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
@@ -89,8 +84,10 @@ pub mod prelude {
         FrameHeader,
         JsonPath,
         // TODO: Re-add when legacy modules are reconciled
-        // JsonReconstructor,
+        JsonReconstructor,
         Priority,
+        PriorityDistribution,
+        PriorityPercentages,
         // PriorityStreamer,
         ProcessResult,
         QueryHandler,

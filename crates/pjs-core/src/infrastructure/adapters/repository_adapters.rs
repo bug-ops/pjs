@@ -35,6 +35,12 @@ pub struct InMemoryStreamSessionRepository {
     next_version: Arc<std::sync::atomic::AtomicU64>,
 }
 
+impl Default for InMemoryStreamSessionRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InMemoryStreamSessionRepository {
     pub fn new() -> Self {
         Self {
@@ -64,15 +70,13 @@ impl StreamSessionRepository for InMemoryStreamSessionRepository {
         let session_id = session.id();
         
         // Check optimistic concurrency control
-        if let Some(expected) = expected_version {
-            if let Some((_existing_session, current_version)) = sessions.get(&session_id) {
-                if *current_version != expected {
+        if let Some(expected) = expected_version
+            && let Some((_existing_session, current_version)) = sessions.get(&session_id)
+                && *current_version != expected {
                     return Err(DomainError::ConcurrencyConflict(format!(
                         "Session version mismatch: expected {expected}, got {current_version}"
                     )));
                 }
-            }
-        }
 
         let new_version = self.next_version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         sessions.insert(session_id, (session, new_version));
@@ -194,32 +198,28 @@ impl InMemoryStreamSessionRepository {
         }
 
         // Apply time filters
-        if let Some(after) = criteria.created_after {
-            if session.created_at() <= after {
+        if let Some(after) = criteria.created_after
+            && session.created_at() <= after {
                 return false;
             }
-        }
 
-        if let Some(before) = criteria.created_before {
-            if session.created_at() >= before {
+        if let Some(before) = criteria.created_before
+            && session.created_at() >= before {
                 return false;
             }
-        }
 
         // Apply stream count filters
         let stream_count = session.streams().len();
         
-        if let Some(min_count) = criteria.min_stream_count {
-            if stream_count < min_count {
+        if let Some(min_count) = criteria.min_stream_count
+            && stream_count < min_count {
                 return false;
             }
-        }
 
-        if let Some(max_count) = criteria.max_stream_count {
-            if stream_count > max_count {
+        if let Some(max_count) = criteria.max_stream_count
+            && stream_count > max_count {
                 return false;
             }
-        }
 
         // Apply active streams filter
         if let Some(has_active) = criteria.has_active_streams {
@@ -322,6 +322,12 @@ impl SessionTransaction for InMemorySessionTransaction {
 pub struct InMemoryFrameRepository {
     frames: Arc<RwLock<HashMap<StreamId, Vec<Frame>>>>,
     frame_indices: FrameIndexMap, // path -> (stream_id, frame_index)
+}
+
+impl Default for InMemoryFrameRepository {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InMemoryFrameRepository {
@@ -484,12 +490,12 @@ impl FrameRepository for InMemoryFrameRepository {
                 for frame in stream_frames {
                     let priority = frame.priority().unwrap_or(Priority::LOW.value());
                     match priority {
-                            90..=255 => distribution.critical_count += 1,
-                            70..=89 => distribution.high_count += 1,
-                            40..=69 => distribution.medium_count += 1,
-                            20..=39 => distribution.low_count += 1,
-                            1..=19 => distribution.background_count += 1,
-                            _ => distribution.background_count += 1,
+                            90..=255 => distribution.critical_frames += 1,
+                            70..=89 => distribution.high_frames += 1,
+                            40..=69 => distribution.medium_frames += 1,
+                            20..=39 => distribution.low_frames += 1,
+                            1..=19 => distribution.background_frames += 1,
+                            _ => distribution.background_frames += 1,
                         }
                 }
                 
@@ -505,6 +511,12 @@ impl FrameRepository for InMemoryFrameRepository {
 pub struct InMemoryCache {
     data: CacheDataMap,
     stats: Arc<RwLock<CacheStatistics>>,
+}
+
+impl Default for InMemoryCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InMemoryCache {
@@ -541,13 +553,12 @@ impl CacheRepository for InMemoryCache {
         let data = self.data.read().await;
         if let Some((value, expiry)) = data.get(key) {
             // Check expiration
-            if let Some(exp_time) = expiry {
-                if SystemTime::now() > *exp_time {
+            if let Some(exp_time) = expiry
+                && SystemTime::now() > *exp_time {
                     drop(data); // Release lock before async call
                     self.update_stats(false).await;
                     return Ok(None);
                 }
-            }
 
             let value = value.clone();
             drop(data); // Release lock before async call

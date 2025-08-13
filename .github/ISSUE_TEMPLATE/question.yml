@@ -1,0 +1,137 @@
+name: Question/Support
+description: Ask a question or request support for PJS
+title: "[Question]: "
+labels: ["question", "support"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for your interest in PJS! Please provide as much detail as possible to help us assist you effectively.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Question Category
+      description: What type of question is this?
+      options:
+        - Getting Started / Setup
+        - Implementation Help
+        - Performance Optimization
+        - Best Practices
+        - Architecture / Design
+        - Integration with Other Tools
+        - Documentation Clarification
+        - Feature Request Discussion
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: PJS Version
+      description: What version of PJS are you using or planning to use?
+      placeholder: "e.g., 0.3.0, latest"
+    validations:
+      required: false
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to know?
+      placeholder: "Please describe your question in detail"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Please provide context about your use case
+      placeholder: |
+        - What are you trying to achieve?
+        - What type of data are you working with?
+        - What is your performance/latency requirements?
+        - Are you building a web app, mobile app, or server?
+    validations:
+      required: false
+
+  - type: textarea
+    id: current-approach
+    attributes:
+      label: Current Approach
+      description: What have you tried so far?
+      placeholder: "Describe what you've already attempted or researched"
+    validations:
+      required: false
+
+  - type: textarea
+    id: code-sample
+    attributes:
+      label: Code Sample (if applicable)
+      description: Share any relevant code you're working with
+      render: rust
+      placeholder: |
+        ```rust
+        // Your code here (if relevant)
+        ```
+
+  - type: dropdown
+    id: urgency
+    attributes:
+      label: Urgency
+      description: How urgent is this question?
+      options:
+        - Low (General curiosity)
+        - Medium (Planning/researching)
+        - High (Actively implementing)
+        - Critical (Blocking production issue)
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: Information about your development environment (if relevant)
+      placeholder: |
+        - Operating System:
+        - Rust version:
+        - Target platform:
+        - Data size range:
+        - Network conditions:
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: research
+    attributes:
+      label: Research Done
+      description: Please check what you've already looked at
+      options:
+        - label: I have read the README and documentation
+        - label: I have checked existing issues and discussions
+        - label: I have looked at the examples in the repository
+        - label: I have reviewed the specification (SPECIFICATION.md)
+        - label: I have tried the demo applications
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Information
+      description: Any other details that might be helpful
+      placeholder: "Add any other context or information here"
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution Interest
+      description: Are you interested in contributing to SJSP?
+      options:
+        - label: I'm interested in contributing code
+        - label: I'm interested in contributing documentation
+        - label: I'm interested in providing feedback
+        - label: I might be interested in sponsoring development
