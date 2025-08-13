@@ -26,12 +26,15 @@
 //! cargo bench comparison
 //! ```
 
-pub use pjson_rs::{Error, Frame, Parser, Priority, Result, StreamConfig, StreamFrame, StreamProcessor, JsonReconstructor};
+pub use pjson_rs::{
+    Error, Frame, JsonReconstructor, Parser, Priority, Result, StreamConfig, StreamFrame,
+    StreamProcessor,
+};
 
 // Fallback implementations for benchmarking when streaming features aren't available
 pub mod fallback {
-    use bytes::Bytes;
     use crate::Priority;
+    use bytes::Bytes;
 
     #[derive(Debug, Clone)]
     pub struct StreamerConfig {
@@ -66,7 +69,6 @@ pub mod fallback {
             self
         }
     }
-
 
     #[derive(Debug, Clone)]
     pub struct StreamFrame {
@@ -109,15 +111,12 @@ pub mod fallback {
                 // Split into multiple frames based on config
                 let mut frames = Vec::new();
                 for chunk in data.chunks(chunk_size) {
-                    frames.push(StreamFrame::new(
-                        Bytes::copy_from_slice(chunk)
-                    ));
+                    frames.push(StreamFrame::new(Bytes::copy_from_slice(chunk)));
                 }
                 frames
             }
         }
     }
-
 }
 
 pub use fallback::*;

@@ -61,6 +61,9 @@ tracing-subscriber = "0.3"
 typed-arena = "2.0"
 url = "2.5"
 uuid = "1.18"
+tikv-jemallocator = "0.6"
+tikv-jemalloc-ctl = "0.6"
+mimalloc = "0.1"
 
 [profile.release]
 opt-level = 3

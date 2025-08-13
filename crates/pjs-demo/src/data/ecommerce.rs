@@ -1,27 +1,69 @@
 //! E-commerce dataset generation for PJS demonstrations
 
 use super::DatasetSize;
-use serde_json::{json, Value};
 use rand::Rng;
+use serde_json::{Value, json};
 
 const PRODUCT_NAMES: &[&str] = &[
-    "MacBook Pro", "iPhone", "AirPods", "iPad", "Apple Watch",
-    "Dell XPS", "Surface Pro", "ThinkPad", "Galaxy S24", "Pixel 8",
-    "Gaming Chair", "Mechanical Keyboard", "4K Monitor", "Webcam", "Headphones",
-    "Coffee Maker", "Bluetooth Speaker", "Smart TV", "Tablet Stand", "Phone Case",
+    "MacBook Pro",
+    "iPhone",
+    "AirPods",
+    "iPad",
+    "Apple Watch",
+    "Dell XPS",
+    "Surface Pro",
+    "ThinkPad",
+    "Galaxy S24",
+    "Pixel 8",
+    "Gaming Chair",
+    "Mechanical Keyboard",
+    "4K Monitor",
+    "Webcam",
+    "Headphones",
+    "Coffee Maker",
+    "Bluetooth Speaker",
+    "Smart TV",
+    "Tablet Stand",
+    "Phone Case",
 ];
 
 const CATEGORIES: &[&str] = &[
-    "Electronics", "Computers", "Mobile", "Audio", "Gaming",
-    "Home & Garden", "Sports", "Books", "Clothing", "Accessories",
+    "Electronics",
+    "Computers",
+    "Mobile",
+    "Audio",
+    "Gaming",
+    "Home & Garden",
+    "Sports",
+    "Books",
+    "Clothing",
+    "Accessories",
 ];
 
 const BRANDS: &[&str] = &[
-    "Apple", "Samsung", "Google", "Microsoft", "Dell", "HP", "Lenovo", "Sony", "LG", "ASUS",
+    "Apple",
+    "Samsung",
+    "Google",
+    "Microsoft",
+    "Dell",
+    "HP",
+    "Lenovo",
+    "Sony",
+    "LG",
+    "ASUS",
 ];
 
 const COLORS: &[&str] = &[
-    "Black", "White", "Silver", "Space Gray", "Gold", "Blue", "Red", "Green", "Purple", "Rose Gold",
+    "Black",
+    "White",
+    "Silver",
+    "Space Gray",
+    "Gold",
+    "Blue",
+    "Red",
+    "Green",
+    "Purple",
+    "Rose Gold",
 ];
 
 /// Generate comprehensive e-commerce dataset
@@ -29,18 +71,17 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
     let product_count = size.item_count(super::DatasetType::ECommerce);
     // TODO: Update to use rand::rng() instead of deprecated rand::rng()
     let mut rng = rand::rng();
-    
+
     // Generate products with varying complexity based on size
     let products: Vec<Value> = (0..product_count)
         .map(|i| {
             let base_price = 50.0 + (i as f64 * 23.7) % 2000.0;
             let discount_percent = if i % 7 == 0 { rng.random_range(5..30) } else { 0 };
             let final_price = base_price * f64::from(100 - discount_percent) / 100.0;
-            
             let mut product = json!({
                 "id": 1000 + i,
                 "name": format!("{} - {}", 
-                    PRODUCT_NAMES[i % PRODUCT_NAMES.len()], 
+                    PRODUCT_NAMES[i % PRODUCT_NAMES.len()],
                     if i > PRODUCT_NAMES.len() { format!("Model {}", i / PRODUCT_NAMES.len()) } else { "Pro".to_string() }
                 ),
                 "sku": format!("SKU-{:06}", 1000 + i),
@@ -57,8 +98,8 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
                     "quantity": if i % 8 == 0 { 0 } else { rng.random_range(1..100) },
                     "warehouse": format!("WH-{}", (i % 5) + 1),
                     "estimated_delivery": if i % 8 == 0 { 
-                        Value::Null 
-                    } else { 
+                        Value::Null
+                    } else {
                         json!(format!("2024-01-{:02}", ((i % 28) + 1).min(28)))
                     }
                 },
@@ -100,14 +141,14 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
                 }),
                 _ => json!({
                     "dimensions": format!("{}x{}x{}cm", 
-                        rng.random_range(10..50), 
-                        rng.random_range(10..50), 
+                        rng.random_range(10..50),
+                        rng.random_range(10..50),
                         rng.random_range(5..30)
                     ),
                     "weight": format!("{:.1}kg", f64::from(rng.random_range(100..5000)) / 1000.0),
                     "material": "Premium Materials",
                     "warranty": format!("{} year{}", 
-                        rng.random_range(1..4), 
+                        rng.random_range(1..4),
                         if rng.random_range(1..4) > 1 { "s" } else { "" }
                     )
                 })
@@ -122,7 +163,6 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
                     DatasetSize::Huge => rng.random_range(3..8),
                     _ => 0,
                 };
-                
                 let reviews: Vec<Value> = (0..review_count).map(|j| {
                     let rating = rng.random_range(1..6);
                     json!({
@@ -141,7 +181,7 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
                         ),
                         "comment": generate_review_comment(rating),
                         "date": format!("2024-01-{:02}T{:02}:{:02}:00Z", 
-                            rng.random_range(1..29), 
+                            rng.random_range(1..29),
                             rng.random_range(0..24),
                             rng.random_range(0..60)
                         ),
@@ -149,7 +189,6 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
                         "helpful_votes": rng.random_range(0..50)
                     })
                 }).collect();
-                
                 product["reviews"] = json!(reviews);
             }
 
@@ -173,19 +212,24 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
     });
 
     // Generate categories with counts
-    let categories_with_counts: Vec<Value> = CATEGORIES.iter().enumerate().map(|(i, &category)| {
-        let count = products.iter()
-            .filter(|p| p["category"].as_str() == Some(category))
-            .count();
-        
-        json!({
-            "id": i + 1,
-            "name": category,
-            "product_count": count,
-            "featured": i < 4, // First 4 categories are featured
-            "icon": format!("icon-{}", category.to_lowercase().replace(' ', "-"))
+    let categories_with_counts: Vec<Value> = CATEGORIES
+        .iter()
+        .enumerate()
+        .map(|(i, &category)| {
+            let count = products
+                .iter()
+                .filter(|p| p["category"].as_str() == Some(category))
+                .count();
+
+            json!({
+                "id": i + 1,
+                "name": category,
+                "product_count": count,
+                "featured": i < 4, // First 4 categories are featured
+                "icon": format!("icon-{}", category.to_lowercase().replace(' ', "-"))
+            })
         })
-    }).collect();
+        .collect();
 
     // Generate inventory summary
     let inventory = json!({
@@ -255,7 +299,7 @@ fn generate_review_comment(rating: i32) -> String {
         "Amazing features and great build quality.",
         "Love it! Will definitely buy again.",
     ];
-    
+
     let neutral_comments = [
         "Good product overall, meets expectations.",
         "Decent quality for the price point.",
@@ -263,7 +307,7 @@ fn generate_review_comment(rating: i32) -> String {
         "Reasonable purchase, decent value.",
         "Okay product, does the job.",
     ];
-    
+
     let negative_comments = [
         "Not worth the price, quality issues.",
         "Disappointing experience, poor build quality.",
@@ -271,10 +315,10 @@ fn generate_review_comment(rating: i32) -> String {
         "Expected better for this price range.",
         "Would not recommend, several problems.",
     ];
-    
+
     // TODO: Update to use rand::rng() instead of deprecated rand::rng()
     let mut rng = rand::rng();
-    
+
     match rating {
         5 | 4 => positive_comments[rng.random_range(0..positive_comments.len())].to_string(),
         3 => neutral_comments[rng.random_range(0..neutral_comments.len())].to_string(),

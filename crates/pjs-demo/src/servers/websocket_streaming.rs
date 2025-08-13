@@ -4,20 +4,19 @@
 //! with priority-based frame delivery and compression support.
 
 use axum::{
+    Json, Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
     response::Html,
     routing::{get, post},
-    Json, Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use pjson_rs::{
-    compression::SchemaCompressor,
+    ApplicationError, ApplicationResult, DomainError, DomainResult, compression::SchemaCompressor,
     domain::value_objects::SessionId,
-    ApplicationResult, ApplicationError, DomainResult, DomainError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -141,14 +140,23 @@ async fn main() -> ApplicationResult<()> {
     let app = Router::new()
         .route("/", get(index_page))
         .route("/stream", post(create_stream))
-        .route("/ws", get(|ws: WebSocketUpgrade, state: State<AppState>| async { ws.on_upgrade(move |socket| handle_websocket(socket, state.0)) }))
+        .route(
+            "/ws",
+            get(|ws: WebSocketUpgrade, state: State<AppState>| async {
+                ws.on_upgrade(move |socket| handle_websocket(socket, state.0))
+            }),
+        )
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3001")
         .await
-        .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Failed to bind to address: {e}"))))?;
+        .map_err(|e| {
+            ApplicationError::from(DomainError::Logic(format!(
+                "Failed to bind to address: {e}"
+            )))
+        })?;
 
     info!("WebSocket streaming server running on http://127.0.0.1:3001");
     info!("WebSocket endpoint: ws://127.0.0.1:3001/ws/{{session_id}}");
@@ -189,12 +197,14 @@ async fn create_stream(
     Ok(Json(response))
 }
 
-
 /// Handle WebSocket connection
 async fn handle_websocket(socket: WebSocket, state: AppState) {
     let session_id = SessionId::new();
 
-    info!("WebSocket connection established for session: {}", session_id);
+    info!(
+        "WebSocket connection established for session: {}",
+        session_id
+    );
 
     let (mut sender, mut receiver) = socket.split();
 
@@ -203,7 +213,10 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
     let streaming_session_id = session_id;
     let streaming_task = tokio::spawn(async move {
         if let Err(e) = stream_data(&mut sender, streaming_state, streaming_session_id).await {
-            error!("Streaming error for session {}: {}", streaming_session_id, e);
+            error!(
+                "Streaming error for session {}: {}",
+                streaming_session_id, e
+            );
         }
     });
 
@@ -292,7 +305,10 @@ async fn stream_data(
             .map_err(|e| format!("Failed to serialize frame: {e}"))?;
 
         // Send frame
-        if let Err(e) = sender.send(Message::Text(message_text.clone().into())).await {
+        if let Err(e) = sender
+            .send(Message::Text(message_text.clone().into()))
+            .await
+        {
             error!("Failed to send frame: {}", e);
             break;
         }
@@ -331,19 +347,27 @@ async fn stream_data(
 fn create_demo_frames(data: &JsonValue) -> DomainResult<Vec<pjson_rs::stream::StreamFrame>> {
     use pjson_rs::domain::Priority;
     use std::collections::HashMap;
-    
+
     let mut frames = Vec::new();
-    
+
     if let JsonValue::Object(obj) = data {
         for (key, value) in obj {
             let priority = match key.as_str() {
-                "title" | "last_updated" => Priority::new(255).unwrap_or_else(|_| Priority::new(128).unwrap()), // Critical
-                "critical_metrics" => Priority::new(200).unwrap_or_else(|_| Priority::new(128).unwrap()),        // High
-                "user_activity" => Priority::new(150).unwrap_or_else(|_| Priority::new(128).unwrap()),          // Medium-high
-                "system_stats" => Priority::new(100).unwrap_or_else(|_| Priority::new(128).unwrap()),           // Medium
-                _ => Priority::new(50).unwrap_or_else(|_| Priority::new(128).unwrap()),                         // Low
+                "title" | "last_updated" => {
+                    Priority::new(255).unwrap_or_else(|_| Priority::new(128).unwrap())
+                } // Critical
+                "critical_metrics" => {
+                    Priority::new(200).unwrap_or_else(|_| Priority::new(128).unwrap())
+                } // High
+                "user_activity" => {
+                    Priority::new(150).unwrap_or_else(|_| Priority::new(128).unwrap())
+                } // Medium-high
+                "system_stats" => {
+                    Priority::new(100).unwrap_or_else(|_| Priority::new(128).unwrap())
+                } // Medium
+                _ => Priority::new(50).unwrap_or_else(|_| Priority::new(128).unwrap()), // Low
             };
-            
+
             let frame = pjson_rs::stream::StreamFrame {
                 data: value.clone(),
                 priority,
@@ -354,27 +378,27 @@ fn create_demo_frames(data: &JsonValue) -> DomainResult<Vec<pjson_rs::stream::St
                     meta
                 },
             };
-            
+
             frames.push(frame);
         }
     }
-    
+
     // Sort by priority (highest first)
     frames.sort_by(|a, b| b.priority.value().cmp(&a.priority.value()));
-    
+
     Ok(frames)
 }
 
 /// Check if frame should be compressed
 fn should_compress(frame: &pjson_rs::stream::StreamFrame) -> bool {
     // Compress frames with lower priority or larger payloads
-    frame.priority.value() < 128 || 
-    serde_json::to_string(&frame.data).unwrap_or_default().len() > 1000
+    frame.priority.value() < 128
+        || serde_json::to_string(&frame.data).unwrap_or_default().len() > 1000
 }
 
 /// Generate sample data for streaming demonstration
 fn generate_sample_streaming_data() -> JsonValue {
-    use pjs_demo::data::{analytics, ecommerce, social, DatasetSize};
+    use pjs_demo::data::{DatasetSize, analytics, ecommerce, social};
 
     serde_json::json!({
         "dashboard": {

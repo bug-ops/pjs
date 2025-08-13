@@ -1,19 +1,19 @@
 //! Simple PJS demo server without complex data generators
-//! 
+//!
 //! This is a minimal working version that demonstrates PJS concepts
 //! without the technical debt from complex infrastructure.
 
 use axum::{
+    Router,
     extract::Query,
     response::{Html, Json},
     routing::get,
-    Router,
 };
 use clap::Parser;
 // TODO: Re-enable PriorityStreamer usage after fixing infrastructure compilation
 // use pjson_rs::PriorityStreamer;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{net::SocketAddr, time::Duration};
 use tokio::time::sleep;
 use tracing::info;
@@ -79,15 +79,15 @@ fn generate_demo_data(size: &str) -> Value {
 async fn traditional_endpoint(Query(params): Query<DemoRequest>) -> Json<Value> {
     let size = params.size.as_deref().unwrap_or("medium");
     let latency = params.latency.unwrap_or(100);
-    
+
     // Simulate network latency
     sleep(Duration::from_millis(latency)).await;
-    
+
     let data = generate_demo_data(size);
-    
+
     // Simulate processing time
     sleep(Duration::from_millis(50)).await;
-    
+
     Json(json!({
         "approach": "traditional",
         "data": data,
@@ -102,10 +102,10 @@ async fn traditional_endpoint(Query(params): Query<DemoRequest>) -> Json<Value> 
 async fn pjs_endpoint(Query(params): Query<DemoRequest>) -> Json<Value> {
     let _size = params.size.as_deref().unwrap_or("medium");
     let latency = params.latency.unwrap_or(100);
-    
+
     // PJS: Minimal latency for skeleton
     sleep(Duration::from_millis(latency / 10)).await;
-    
+
     // Generate skeleton first
     let skeleton = json!({
         "store": {
@@ -121,7 +121,7 @@ async fn pjs_endpoint(Query(params): Query<DemoRequest>) -> Json<Value> {
             "approach": "pjs_optimized"
         }
     });
-    
+
     Json(skeleton)
 }
 
@@ -129,21 +129,21 @@ async fn pjs_endpoint(Query(params): Query<DemoRequest>) -> Json<Value> {
 async fn performance_comparison(Query(params): Query<DemoRequest>) -> Json<ComparisonResult> {
     let size = params.size.as_deref().unwrap_or("medium");
     let latency = params.latency.unwrap_or(100);
-    
+
     let data = generate_demo_data(size);
     // TODO: Handle unwrap() - add proper error handling for JSON serialization
     let data_size = serde_json::to_string(&data).unwrap().len();
-    
+
     // Simulate traditional approach
     let traditional_start = std::time::Instant::now();
     sleep(Duration::from_millis(latency + 50)).await;
     let traditional_time = traditional_start.elapsed();
-    
+
     // Simulate PJS skeleton approach
     let pjs_start = std::time::Instant::now();
     sleep(Duration::from_millis(latency / 10 + 5)).await; // Much faster
     let pjs_time = pjs_start.elapsed();
-    
+
     let traditional_ms = traditional_time.as_millis() as u64;
     let pjs_ms = pjs_time.as_millis() as u64;
     let improvement = if pjs_ms > 0 {
@@ -151,7 +151,7 @@ async fn performance_comparison(Query(params): Query<DemoRequest>) -> Json<Compa
     } else {
         1.0
     };
-    
+
     Json(ComparisonResult {
         traditional_time_ms: traditional_ms,
         pjs_time_ms: pjs_ms,
@@ -162,7 +162,8 @@ async fn performance_comparison(Query(params): Query<DemoRequest>) -> Json<Compa
 
 /// Simple demo page
 async fn demo_page() -> Html<&'static str> {
-    Html(r#"
+    Html(
+        r#"
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -319,7 +320,8 @@ async fn demo_page() -> Html<&'static str> {
     </script>
 </body>
 </html>
-    "#)
+    "#,
+    )
 }
 
 /// API info endpoint
@@ -330,13 +332,13 @@ async fn api_info() -> Json<Value> {
         "endpoints": {
             "/": "Interactive demo page",
             "/traditional": "Traditional JSON endpoint",
-            "/pjs": "PJS optimized endpoint", 
+            "/pjs": "PJS optimized endpoint",
             "/performance": "Performance comparison",
             "/api/info": "API information"
         },
         "features": [
             "Simple performance comparison",
-            "Network latency simulation", 
+            "Network latency simulation",
             "Interactive web interface",
             "Clean demonstration of PJS benefits"
         ]
@@ -346,9 +348,9 @@ async fn api_info() -> Json<Value> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
+
     tracing_subscriber::fmt().init();
-    
+
     let app = Router::new()
         .route("/", get(demo_page))
         .route("/traditional", get(traditional_endpoint))
@@ -357,7 +359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/info", get(api_info));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
-    
+
     println!();
     println!("🚀 PJS Simple Demo Server");
     println!("=========================");
