@@ -4,25 +4,18 @@
 //! capabilities to existing Axum applications without requiring major refactoring.
 
 use axum::{
+    Extension, Json,
     extract::{Path, Query, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
-    Extension, Json,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use crate::{
-    Priority,
-    PriorityStreamer,
-};
+use crate::{Priority, PriorityStreamer};
 
 /// Configuration for PJS extension
 #[derive(Debug, Clone)]
@@ -66,28 +59,28 @@ impl PjsExtension {
     }
 
     /// Add PJS capabilities to an existing Axum router
-    pub fn extend_router<S>(self, router: axum::Router<S>) -> axum::Router<S> 
+    pub fn extend_router<S>(self, router: axum::Router<S>) -> axum::Router<S>
     where
-        S: Clone + Send + Sync + 'static
+        S: Clone + Send + Sync + 'static,
     {
         let pjs_routes = self.create_pjs_routes();
-        
-        router
-            .nest(&self.config.route_prefix, pjs_routes)
-            .layer(axum::middleware::from_fn_with_state(
-                Arc::new(self), 
-                pjs_middleware::<S>
-            ))
+
+        router.nest(&self.config.route_prefix, pjs_routes).layer(
+            axum::middleware::from_fn_with_state(Arc::new(self), pjs_middleware::<S>),
+        )
     }
 
     /// Create PJS-specific routes
     fn create_pjs_routes<S>(&self) -> axum::Router<S>
     where
-        S: Clone + Send + Sync + 'static
+        S: Clone + Send + Sync + 'static,
     {
         axum::Router::new()
             .route("/stream", axum::routing::post(handle_stream_request))
-            .route("/stream/{stream_id}/sse", axum::routing::get(handle_sse_stream))
+            .route(
+                "/stream/{stream_id}/sse",
+                axum::routing::get(handle_sse_stream),
+            )
             .route("/health", axum::routing::get(handle_pjs_health))
             .layer(Extension(self.config.clone()))
             .layer(Extension(self.streamer.clone()))
@@ -103,23 +96,25 @@ async fn pjs_middleware<S>(
     next: Next,
 ) -> Result<Response, StatusCode>
 where
-    S: Clone + Send + Sync + 'static
+    S: Clone + Send + Sync + 'static,
 {
     // Check if client requested PJS streaming
     let wants_pjs = headers
         .get(header::ACCEPT)
         .and_then(|h| h.to_str().ok())
         .map(|accept| {
-            accept.contains("application/pjs-stream") ||
-            accept.contains("text/event-stream") ||
-            headers.contains_key("x-pjs-stream")
+            accept.contains("application/pjs-stream")
+                || accept.contains("text/event-stream")
+                || headers.contains_key("x-pjs-stream")
         })
         .unwrap_or(false);
 
     let mut request = request;
     if wants_pjs {
         // Add PJS metadata to request
-        request.extensions_mut().insert(PjsStreamingRequest { enabled: true });
+        request
+            .extensions_mut()
+            .insert(PjsStreamingRequest { enabled: true });
     }
 
     Ok(next.run(request).await)
@@ -160,28 +155,27 @@ async fn handle_stream_request(
     Json(request): Json<StreamRequest>,
 ) -> Result<impl IntoResponse, StreamError> {
     let stream_id = uuid::Uuid::new_v4().to_string();
-    
+
     // Create streaming plan
     let plan = streamer
         .analyze(&request.data)
         .map_err(|e| StreamError::AnalysisError(e.to_string()))?;
 
-    let format = request.format
-        .unwrap_or_else(|| {
-            headers
-                .get(header::ACCEPT)
-                .and_then(|h| h.to_str().ok())
-                .map(|accept| {
-                    if accept.contains("text/event-stream") {
-                        "sse".to_string()
-                    } else if accept.contains("application/x-ndjson") {
-                        "ndjson".to_string()
-                    } else {
-                        "json".to_string()
-                    }
-                })
-                .unwrap_or_else(|| "json".to_string())
-        });
+    let format = request.format.unwrap_or_else(|| {
+        headers
+            .get(header::ACCEPT)
+            .and_then(|h| h.to_str().ok())
+            .map(|accept| {
+                if accept.contains("text/event-stream") {
+                    "sse".to_string()
+                } else if accept.contains("application/x-ndjson") {
+                    "ndjson".to_string()
+                } else {
+                    "json".to_string()
+                }
+            })
+            .unwrap_or_else(|| "json".to_string())
+    });
 
     let response = StreamResponse {
         stream_id: stream_id.clone(),
@@ -191,11 +185,14 @@ async fn handle_stream_request(
 
     // Store stream for later retrieval
     // In production, this would use a proper store
-    
+
     Ok((
         StatusCode::CREATED,
-        [(header::LOCATION, format!("{}/stream/{}", config.route_prefix, stream_id))],
-        Json(response)
+        [(
+            header::LOCATION,
+            format!("{}/stream/{}", config.route_prefix, stream_id),
+        )],
+        Json(response),
     ))
 }
 
@@ -224,11 +221,10 @@ async fn handle_sse_stream(
 
     // Collect frames to avoid lifetime issues
     let frames: Vec<_> = plan.frames().cloned().collect();
-    let stream = futures::stream::iter(frames)
-        .map(|frame| {
-            let data = serde_json::to_string(&frame).unwrap_or_default();
-            Ok::<_, StreamError>(format!("data: {data}\n\n"))
-        });
+    let stream = futures::stream::iter(frames).map(|frame| {
+        let data = serde_json::to_string(&frame).unwrap_or_default();
+        Ok::<_, StreamError>(format!("data: {data}\n\n"))
+    });
 
     let response = axum::response::Response::builder()
         .status(StatusCode::OK)
@@ -250,7 +246,7 @@ async fn handle_pjs_health() -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "capabilities": [
             "priority-streaming",
-            "sse-support", 
+            "sse-support",
             "ndjson-support",
             "auto-detection"
         ]
@@ -262,10 +258,10 @@ async fn handle_pjs_health() -> Json<serde_json::Value> {
 pub enum StreamError {
     #[error("Analysis error: {0}")]
     AnalysisError(String),
-    
+
     #[error("Response error: {0}")]
     ResponseError(String),
-    
+
     #[error("Stream not found: {0}")]
     StreamNotFound(String),
 }
@@ -292,19 +288,21 @@ impl PjsResponseExt for Json<JsonValue> {
     fn pjs_stream(self, request: &axum::extract::Request) -> impl IntoResponse {
         // Check if PJS streaming was requested
         if let Some(pjs_request) = request.extensions().get::<PjsStreamingRequest>()
-            && pjs_request.enabled {
-                // Convert to streaming response
-                // This is a simplified implementation
-                return (
-                    StatusCode::OK,
-                    [
-                        (header::CONTENT_TYPE, "application/pjs-stream"),
-                        (header::CACHE_CONTROL, "no-cache"),
-                    ],
-                    self.0.to_string()
-                ).into_response();
-            }
-        
+            && pjs_request.enabled
+        {
+            // Convert to streaming response
+            // This is a simplified implementation
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "application/pjs-stream"),
+                    (header::CACHE_CONTROL, "no-cache"),
+                ],
+                self.0.to_string(),
+            )
+                .into_response();
+        }
+
         // Return regular JSON response
         self.into_response()
     }
@@ -324,7 +322,7 @@ macro_rules! pjs_endpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -342,10 +340,9 @@ mod tests {
         // Create router with PJS extension
         let config = PjsConfig::default();
         let pjs_extension = PjsExtension::new(config);
-        
-        let app = Router::new()
-            .route("/api/users", get(api_route));
-            
+
+        let app = Router::new().route("/api/users", get(api_route));
+
         let app = pjs_extension.extend_router(app);
 
         // Test that PJS routes are available
@@ -355,7 +352,7 @@ mod tests {
                     .uri("/pjs/health")
                     .body(axum::body::Body::empty())
                     // TODO: Handle unwrap() - add proper error handling for request building in tests
-                    .unwrap()
+                    .unwrap(),
             )
             .await
             // TODO: Handle unwrap() - add proper error handling for response in tests
@@ -368,7 +365,7 @@ mod tests {
     async fn test_auto_detection_middleware() {
         let config = PjsConfig::default();
         let _pjs_extension = Arc::new(PjsExtension::new(config));
-        
+
         let _headers = HeaderMap::new();
         let request = axum::http::Request::builder()
             .header("Accept", "text/event-stream")

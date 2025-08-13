@@ -453,7 +453,11 @@ mod tests {
             "total": 2
         });
 
-        let stream = Stream::new(session_id, source_data.clone().into(), StreamConfig::default());
+        let stream = Stream::new(
+            session_id,
+            source_data.clone().into(),
+            StreamConfig::default(),
+        );
 
         assert_eq!(stream.session_id(), session_id);
         assert_eq!(stream.state(), &StreamState::Preparing);

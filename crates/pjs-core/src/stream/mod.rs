@@ -7,7 +7,7 @@ pub mod compression_integration;
 pub mod priority;
 pub mod reconstruction;
 
-use crate::domain::{Priority, DomainResult};
+use crate::domain::{DomainResult, Priority};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -21,7 +21,6 @@ pub struct StreamFrame {
     /// Additional metadata for processing
     pub metadata: HashMap<String, String>,
 }
-
 
 /// Stream processing result
 #[derive(Debug, Clone)]
@@ -82,14 +81,15 @@ impl StreamProcessor {
     pub fn process_frame(&mut self, frame: StreamFrame) -> DomainResult<ProcessResult> {
         // Check frame size
         let frame_size = serde_json::to_string(&frame.data)
-            .map_err(|e| crate::domain::DomainError::Logic(format!("JSON serialization failed: {e}")))?
+            .map_err(|e| {
+                crate::domain::DomainError::Logic(format!("JSON serialization failed: {e}"))
+            })?
             .len();
-            
+
         if frame_size > self.config.max_frame_size {
             return Ok(ProcessResult::Error(format!(
-                "Frame size {} exceeds maximum {}", 
-                frame_size, 
-                self.config.max_frame_size
+                "Frame size {} exceeds maximum {}",
+                frame_size, self.config.max_frame_size
             )));
         }
 
@@ -125,16 +125,16 @@ impl StreamProcessor {
 #[derive(Debug, Clone)]
 pub struct StreamStats {
     pub processed_frames: usize,
-    pub buffered_frames: usize, 
+    pub buffered_frames: usize,
     pub buffer_utilization: f32,
 }
 
 // Re-export key types
 pub use compression_integration::{
-    CompressedFrame, StreamingCompressor, StreamingDecompressor,
-    CompressionStats, DecompressionStats, DecompressionMetadata,
+    CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
+    StreamingCompressor, StreamingDecompressor,
 };
-pub use priority::{PriorityStreamer, PriorityStreamFrame};
+pub use priority::{PriorityStreamFrame, PriorityStreamer};
 pub use reconstruction::JsonReconstructor;
 
 #[cfg(test)]
@@ -201,7 +201,7 @@ mod tests {
             metadata: HashMap::new(),
         };
         let result2 = processor.process_frame(frame2).unwrap();
-        
+
         match result2 {
             ProcessResult::Complete(frames) => {
                 assert_eq!(frames.len(), 2);

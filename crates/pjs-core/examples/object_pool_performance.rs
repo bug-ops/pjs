@@ -4,7 +4,7 @@
 // for frequently allocated data structures like HashMap and Vec.
 
 use pjson_rs::infrastructure::integration::object_pool::{
-    get_cow_hashmap, get_byte_vec, get_global_pool_stats,
+    get_byte_vec, get_cow_hashmap, get_global_pool_stats,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ fn main() {
     println!("==============================\n");
 
     benchmark_hashmap_allocation();
-    benchmark_vec_allocation(); 
+    benchmark_vec_allocation();
     print_pool_statistics();
 }
 
@@ -47,7 +47,7 @@ fn benchmark_hashmap_allocation() {
 
     println!("Standard allocation: {:?}", standard_duration);
     println!("Pooled allocation:   {:?}", pooled_duration);
-    
+
     let improvement = standard_duration.as_nanos() as f64 / pooled_duration.as_nanos() as f64;
     println!("Performance improvement: {:.2}x faster\n", improvement);
 }
@@ -78,7 +78,7 @@ fn benchmark_vec_allocation() {
 
     println!("Standard allocation: {:?}", standard_duration);
     println!("Pooled allocation:   {:?}", pooled_duration);
-    
+
     let improvement = standard_duration.as_nanos() as f64 / pooled_duration.as_nanos() as f64;
     println!("Performance improvement: {:.2}x faster\n", improvement);
 }
@@ -86,20 +86,25 @@ fn benchmark_vec_allocation() {
 fn print_pool_statistics() {
     println!("📈 Pool Statistics");
     println!("------------------");
-    
+
     let stats = get_global_pool_stats();
-    
+
     println!("Total objects created: {}", stats.total_objects_created);
     println!("Total objects reused:  {}", stats.total_objects_reused);
-    println!("Reuse ratio:          {:.1}%", stats.total_reuse_ratio * 100.0);
-    
+    println!(
+        "Reuse ratio:          {:.1}%",
+        stats.total_reuse_ratio * 100.0
+    );
+
     println!("\nPer-pool statistics:");
-    println!("• COW HashMap - Created: {}, Reused: {}", 
-             stats.cow_hashmap.objects_created, 
-             stats.cow_hashmap.objects_reused);
-    println!("• Byte Vec    - Created: {}, Reused: {}", 
-             stats.byte_vec.objects_created, 
-             stats.byte_vec.objects_reused);
+    println!(
+        "• COW HashMap - Created: {}, Reused: {}",
+        stats.cow_hashmap.objects_created, stats.cow_hashmap.objects_reused
+    );
+    println!(
+        "• Byte Vec    - Created: {}, Reused: {}",
+        stats.byte_vec.objects_created, stats.byte_vec.objects_reused
+    );
 }
 
 #[cfg(test)]
@@ -121,11 +126,11 @@ mod tests {
         let _map2 = get_cow_hashmap();
         drop(_map1);
         drop(_map2);
-        
+
         // Get fresh objects which should reuse pooled instances
         let _map3 = get_cow_hashmap();
         let _map4 = get_cow_hashmap();
-        
+
         let stats = get_global_pool_stats();
         // Should have some reuse happening
         assert!(stats.total_objects_created > 0 || stats.total_objects_reused > 0);

@@ -5,18 +5,18 @@
 
 use crate::domain::{
     DomainResult,
-    entities::Frame,
     aggregates::StreamSession,
-    value_objects::{SessionId, StreamId, Priority},
-    ports::gat::{StreamRepositoryGat, EventPublisherGat},
+    entities::Frame,
     events::DomainEvent,
+    ports::gat::{EventPublisherGat, StreamRepositoryGat},
+    value_objects::{Priority, SessionId, StreamId},
 };
+use chrono::Utc;
 use std::{
     future::Future,
     sync::Arc,
     time::{Duration, Instant},
 };
-use chrono::Utc;
 use tracing::{debug, info, warn};
 
 /// Statistics for streaming operations
@@ -30,7 +30,7 @@ pub struct StreamingStats {
 }
 
 /// GAT-based streaming orchestrator with zero-cost abstractions
-pub struct GatStreamingOrchestrator<R, P> 
+pub struct GatStreamingOrchestrator<R, P>
 where
     R: StreamRepositoryGat,
     P: EventPublisherGat,
@@ -78,11 +78,12 @@ where
     }
 
     /// Create with default configuration
-    pub fn with_default_config(
-        session_repository: Arc<R>,
-        event_publisher: Arc<P>,
-    ) -> Self {
-        Self::new(session_repository, event_publisher, OrchestratorConfig::default())
+    pub fn with_default_config(session_repository: Arc<R>, event_publisher: Arc<P>) -> Self {
+        Self::new(
+            session_repository,
+            event_publisher,
+            OrchestratorConfig::default(),
+        )
     }
 
     /// Stream frames with priority-based processing - GAT version with zero allocation
@@ -98,28 +99,37 @@ where
     {
         async move {
             let start_time = Instant::now();
-            info!("Starting GAT-based streaming for session {} stream {}", session_id, stream_id);
+            info!(
+                "Starting GAT-based streaming for session {} stream {}",
+                session_id, stream_id
+            );
 
             // 1. Validate session exists (zero-cost GAT future)
-            let session = self.session_repository
+            let session = self
+                .session_repository
                 .find_session(session_id)
                 .await?
                 .ok_or_else(|| {
-                    crate::domain::DomainError::SessionNotFound(
-                        format!("Session {} not found", session_id)
-                    )
+                    crate::domain::DomainError::SessionNotFound(format!(
+                        "Session {} not found",
+                        session_id
+                    ))
                 })?;
 
-            debug!("Session {} found with {} streams", session_id, session.streams().len());
+            debug!(
+                "Session {} found with {} streams",
+                session_id,
+                session.streams().len()
+            );
 
             // 2. Process frames with priority optimization
             let stats = self.process_frames_optimized(frames, &session).await?;
 
             // 3. Publish completion event (zero-cost GAT future)
-            let completion_event = DomainEvent::StreamCompleted { 
-                session_id, 
-                stream_id, 
-                timestamp: Utc::now()
+            let completion_event = DomainEvent::StreamCompleted {
+                session_id,
+                stream_id,
+                timestamp: Utc::now(),
             };
 
             self.event_publisher.publish(completion_event).await?;
@@ -147,7 +157,7 @@ where
     {
         async move {
             let start_time = Instant::now();
-            
+
             if streams.len() > self.config.max_concurrent_streams {
                 warn!(
                     "Limiting concurrent streams from {} to {}",
@@ -173,9 +183,13 @@ where
             for task in tasks {
                 results.push(task.await?);
             }
-            
+
             let total_time = start_time.elapsed();
-            info!("Processed {} streams concurrently in {:?}", results.len(), total_time);
+            info!(
+                "Processed {} streams concurrently in {:?}",
+                results.len(),
+                total_time
+            );
 
             Ok(results)
         }
@@ -207,10 +221,11 @@ where
         // Process frames in batches
         for batch in frames.chunks(batch_size) {
             let batch_start = Instant::now();
-            
+
             for frame in batch {
                 // Apply priority boost if needed
-                let effective_priority = if frame.priority() >= self.config.priority_boost_threshold {
+                let effective_priority = if frame.priority() >= self.config.priority_boost_threshold
+                {
                     Priority::CRITICAL
                 } else {
                     frame.priority()
@@ -230,7 +245,11 @@ where
             let batch_time = batch_start.elapsed();
             stats.processing_time += batch_time;
 
-            debug!("Processed batch of {} frames in {:?}", batch.len(), batch_time);
+            debug!(
+                "Processed batch of {} frames in {:?}",
+                batch.len(),
+                batch_time
+            );
         }
 
         Ok(stats)
@@ -251,7 +270,7 @@ where
     {
         async move {
             let start_time = Instant::now();
-            
+
             // Test repository connection with zero-cost GAT future
             let active_sessions = self.session_repository.find_active_sessions().await?;
             let repository_latency = start_time.elapsed();
@@ -271,12 +290,14 @@ where
                 repository_latency,
                 event_publisher_latency,
                 total_latency: start_time.elapsed(),
-                status: if repository_latency < Duration::from_millis(100) 
-                    && event_publisher_latency < Duration::from_millis(50) {
+                status: if repository_latency < Duration::from_millis(100)
+                    && event_publisher_latency < Duration::from_millis(50)
+                {
                     "healthy"
                 } else {
                     "degraded"
-                }.to_string(),
+                }
+                .to_string(),
             })
         }
     }
@@ -332,13 +353,10 @@ mod tests {
     use super::*;
     use crate::domain::{
         entities::Frame,
-        value_objects::{JsonPath, Priority, JsonData, StreamId},
         events::DomainEvent,
+        value_objects::{JsonData, StreamId},
     };
-    use std::{
-        sync::{Arc, Mutex},
-        time::Instant,
-    };
+    use std::sync::{Arc, Mutex};
     use tokio::sync::RwLock;
 
     /// Mock GAT repository for testing
@@ -359,29 +377,30 @@ mod tests {
     }
 
     impl StreamRepositoryGat for MockGatRepository {
-        type FindSessionFuture<'a> = impl Future<Output = DomainResult<Option<StreamSession>>> + Send + 'a
+        type FindSessionFuture<'a>
+            = impl Future<Output = DomainResult<Option<StreamSession>>> + Send + 'a
         where
             Self: 'a;
 
-        type SaveSessionFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type SaveSessionFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type RemoveSessionFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type RemoveSessionFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type FindActiveSessionsFuture<'a> = impl Future<Output = DomainResult<Vec<StreamSession>>> + Send + 'a
+        type FindActiveSessionsFuture<'a>
+            = impl Future<Output = DomainResult<Vec<StreamSession>>> + Send + 'a
         where
             Self: 'a;
 
         fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
             async move {
                 let sessions = self.sessions.read().await;
-                Ok(sessions
-                    .iter()
-                    .find(|s| s.id() == session_id)
-                    .cloned())
+                Ok(sessions.iter().find(|s| s.id() == session_id).cloned())
             }
         }
 
@@ -403,11 +422,7 @@ mod tests {
         fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
             async move {
                 let sessions = self.sessions.read().await;
-                Ok(sessions
-                    .iter()
-                    .filter(|s| s.is_active())
-                    .cloned()
-                    .collect())
+                Ok(sessions.iter().filter(|s| s.is_active()).cloned().collect())
             }
         }
     }
@@ -430,11 +445,13 @@ mod tests {
     }
 
     impl EventPublisherGat for MockGatEventPublisher {
-        type PublishFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type PublishFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type PublishBatchFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type PublishBatchFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
@@ -457,11 +474,12 @@ mod tests {
     async fn test_gat_orchestrator_streaming() {
         let repository = Arc::new(MockGatRepository::new());
         let publisher = Arc::new(MockGatEventPublisher::new());
-        
+
         let stream_id = StreamId::new();
-        
+
         // Add test session
-        let session = StreamSession::new(crate::domain::aggregates::stream_session::SessionConfig::default());
+        let session =
+            StreamSession::new(crate::domain::aggregates::stream_session::SessionConfig::default());
         let session_id = session.id(); // Get the actual session ID
         repository.add_session(session).await;
 
@@ -469,16 +487,8 @@ mod tests {
 
         // Create test frames
         let frames = vec![
-            Frame::skeleton(
-                stream_id,
-                1,
-                JsonData::String("test1".to_string()),
-            ),
-            Frame::skeleton(
-                stream_id,
-                2,
-                JsonData::String("test2".to_string()),
-            ),
+            Frame::skeleton(stream_id, 1, JsonData::String("test1".to_string())),
+            Frame::skeleton(stream_id, 2, JsonData::String("test2".to_string())),
         ];
 
         // Test GAT-based streaming
@@ -507,8 +517,10 @@ mod tests {
         let mut streams = Vec::new();
         for i in 0..3 {
             let stream_id = StreamId::new();
-            
-            let session = StreamSession::new(crate::domain::aggregates::stream_session::SessionConfig::default());
+
+            let session = StreamSession::new(
+                crate::domain::aggregates::stream_session::SessionConfig::default(),
+            );
             let session_id = session.id(); // Get the actual session ID
             repository.add_session(session).await;
 
@@ -522,7 +534,10 @@ mod tests {
         }
 
         // Test concurrent processing with GAT futures
-        let results = orchestrator.process_concurrent_streams(streams).await.unwrap();
+        let results = orchestrator
+            .process_concurrent_streams(streams)
+            .await
+            .unwrap();
 
         assert_eq!(results.len(), 3);
         for stats in results {

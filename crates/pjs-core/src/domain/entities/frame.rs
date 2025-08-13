@@ -41,7 +41,7 @@ impl std::hash::Hash for Frame {
         self.sequence.hash(state);
         self.timestamp.hash(state);
         self.payload.hash(state);
-        
+
         // For HashMap, sort keys for consistent hashing
         let mut pairs: Vec<_> = self.metadata.iter().collect();
         pairs.sort_by_key(|(k, _)| *k);
@@ -78,21 +78,28 @@ impl Frame {
 
         // Create JsonData payload directly instead of using serde_json
         let mut payload_obj = HashMap::with_capacity(1);
-        let patches_array: Vec<JsonData> = patches.into_iter().map(|patch| {
-            let mut patch_obj = HashMap::with_capacity(3);
-            patch_obj.insert("path".into(), JsonData::String(patch.path.to_string()));
-            patch_obj.insert("operation".into(), JsonData::String(
-                match patch.operation {
-                    PatchOperation::Set => "set",
-                    PatchOperation::Append => "append", 
-                    PatchOperation::Merge => "merge",
-                    PatchOperation::Delete => "delete",
-                }.into()
-            ));
-            patch_obj.insert("value".into(), patch.value);
-            JsonData::Object(patch_obj)
-        }).collect();
-        
+        let patches_array: Vec<JsonData> = patches
+            .into_iter()
+            .map(|patch| {
+                let mut patch_obj = HashMap::with_capacity(3);
+                patch_obj.insert("path".into(), JsonData::String(patch.path.to_string()));
+                patch_obj.insert(
+                    "operation".into(),
+                    JsonData::String(
+                        match patch.operation {
+                            PatchOperation::Set => "set",
+                            PatchOperation::Append => "append",
+                            PatchOperation::Merge => "merge",
+                            PatchOperation::Delete => "delete",
+                        }
+                        .into(),
+                    ),
+                );
+                patch_obj.insert("value".into(), patch.value);
+                JsonData::Object(patch_obj)
+            })
+            .collect();
+
         payload_obj.insert("patches".into(), JsonData::Array(patches_array));
         let payload = JsonData::Object(payload_obj);
 

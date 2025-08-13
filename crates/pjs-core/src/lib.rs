@@ -28,22 +28,34 @@ pub mod stream;
 
 // Domain layer exports
 pub use domain::{
-    DomainError, DomainEvent, DomainResult, Frame as DomainFrame, JsonPath, Priority, SessionId,
-    Stream, StreamId, StreamSession,
+    DomainError,
+    DomainEvent,
+    DomainResult,
+    Frame as DomainFrame,
+    JsonPath,
+    Priority,
+    SessionId,
+    Stream,
+    StreamId,
+    StreamSession,
     // GAT-based domain ports (zero-cost async abstractions)
     ports::{
-        FrameSourceGat, FrameSinkGat, StreamRepositoryGat, StreamStoreGat, EventPublisherGat,
-        FrameSinkGatExt
+        EventPublisherGat, FrameSinkGat, FrameSinkGatExt, FrameSourceGat, StreamRepositoryGat,
+        StreamStoreGat,
     },
-    services::{GatStreamingOrchestrator, GatOrchestratorFactory, OrchestratorConfig, HealthStatus},
+    services::{
+        GatOrchestratorFactory, GatStreamingOrchestrator, HealthStatus, OrchestratorConfig,
+    },
 };
 
-// Events exports  
+// Events exports
 pub use domain::events::{PriorityDistribution, PriorityPercentages};
 
 // Application layer exports (some temporarily disabled for GAT migration)
 pub use application::{
-    ApplicationError, ApplicationResult, commands,
+    ApplicationError,
+    ApplicationResult,
+    commands,
     // handlers::{CommandHandler, QueryHandler}, // TODO: migrate to GAT
     queries,
     // services::{SessionService, StreamingService}, // TODO: migrate to GAT
@@ -51,36 +63,39 @@ pub use application::{
 
 // Configuration exports
 pub use config::{
-    ParserConfig, PjsConfig, SimdConfig, StreamingConfig,
-    SecurityConfig,
-    security::{JsonLimits, BufferLimits, NetworkLimits, SessionLimits, RateLimitingConfig},
+    ParserConfig, PjsConfig, SecurityConfig, SimdConfig, StreamingConfig,
+    security::{BufferLimits, JsonLimits, NetworkLimits, RateLimitingConfig, SessionLimits},
 };
 
 // Compression exports
 pub use compression::{
     CompressedData, CompressionConfig, CompressionStrategy, SchemaAnalyzer, SchemaCompressor,
-    secure::{SecureCompressor, SecureCompressedData, SecureDecompressionContext, DecompressionContextStats},
+    secure::{
+        DecompressionContextStats, SecureCompressedData, SecureCompressor,
+        SecureDecompressionContext,
+    },
 };
 
 // Streaming exports
-pub use stream::{
-    CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
-    ProcessResult, StreamConfig, StreamFrame, StreamProcessor, StreamStats,
-    StreamingCompressor, StreamingDecompressor, PriorityStreamer, JsonReconstructor,
-};
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
-pub use memory::{ArenaJsonParser, JsonArena, CombinedArenaStats};
-pub use parser::{ParseConfig, ParseStats, Parser, SimpleParser, SonicParser, ZeroCopyParser, LazyParser};
-pub use security::{
-    SecurityValidator, DepthTracker,
-    WebSocketRateLimiter, RateLimitConfig, RateLimitError, RateLimitGuard, RateLimitStats,
-    CompressionBombDetector, CompressionBombConfig, CompressionBombProtector,
-    CompressionStats as BombCompressionStats
-};
-pub use semantic::{SemanticMeta, SemanticType};
 #[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
 pub use infrastructure::websocket::SecureWebSocketHandler;
+pub use memory::{ArenaJsonParser, CombinedArenaStats, JsonArena};
+pub use parser::{
+    LazyParser, ParseConfig, ParseStats, Parser, SimpleParser, SonicParser, ZeroCopyParser,
+};
+pub use security::{
+    CompressionBombConfig, CompressionBombDetector, CompressionBombProtector,
+    CompressionStats as BombCompressionStats, DepthTracker, RateLimitConfig, RateLimitError,
+    RateLimitGuard, RateLimitStats, SecurityValidator, WebSocketRateLimiter,
+};
+pub use semantic::{SemanticMeta, SemanticType};
+pub use stream::{
+    CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
+    JsonReconstructor, PriorityStreamer, ProcessResult, StreamConfig, StreamFrame, StreamProcessor,
+    StreamStats, StreamingCompressor, StreamingDecompressor,
+};
 // Legacy stream exports (will be deprecated)
 // pub use stream::{
 //     JsonPath as StreamJsonPath, JsonReconstructor, Priority as StreamPriority, PriorityStreamer,

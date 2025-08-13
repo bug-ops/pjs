@@ -179,4 +179,3 @@ pub struct SystemStatsResponse {
     pub bytes_per_second: f64,
     pub uptime_seconds: u64,
 }
-

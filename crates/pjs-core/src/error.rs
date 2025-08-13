@@ -181,7 +181,9 @@ impl Error {
     pub fn category(&self) -> &'static str {
         match self {
             Self::InvalidJson { .. } | Self::Serialization(_) => "json",
-            Self::InvalidFrame(_) | Self::SchemaValidation(_) | Self::SemanticTypeMismatch { .. } => "validation",
+            Self::InvalidFrame(_)
+            | Self::SchemaValidation(_)
+            | Self::SemanticTypeMismatch { .. } => "validation",
             Self::Buffer(_) | Self::Memory(_) => "memory",
             Self::Io(_) | Self::ConnectionFailed(_) => "network",
             Self::ClientError(_) | Self::InvalidSession(_) | Self::InvalidUrl(_) => "client",
@@ -242,12 +244,30 @@ mod tests {
     #[test]
     fn test_all_error_constructors() {
         assert!(matches!(Error::buffer("overflow"), Error::Buffer(_)));
-        assert!(matches!(Error::memory("allocation failed"), Error::Memory(_)));
-        assert!(matches!(Error::connection_failed("timeout"), Error::ConnectionFailed(_)));
-        assert!(matches!(Error::client_error("bad request"), Error::ClientError(_)));
-        assert!(matches!(Error::invalid_session("expired"), Error::InvalidSession(_)));
-        assert!(matches!(Error::invalid_url("malformed"), Error::InvalidUrl(_)));
-        assert!(matches!(Error::serialization("json error"), Error::Serialization(_)));
+        assert!(matches!(
+            Error::memory("allocation failed"),
+            Error::Memory(_)
+        ));
+        assert!(matches!(
+            Error::connection_failed("timeout"),
+            Error::ConnectionFailed(_)
+        ));
+        assert!(matches!(
+            Error::client_error("bad request"),
+            Error::ClientError(_)
+        ));
+        assert!(matches!(
+            Error::invalid_session("expired"),
+            Error::InvalidSession(_)
+        ));
+        assert!(matches!(
+            Error::invalid_url("malformed"),
+            Error::InvalidUrl(_)
+        ));
+        assert!(matches!(
+            Error::serialization("json error"),
+            Error::Serialization(_)
+        ));
         assert!(matches!(Error::utf8("invalid utf8"), Error::Utf8(_)));
         assert!(matches!(Error::other("unknown"), Error::Other(_)));
     }
@@ -286,7 +306,10 @@ mod tests {
         assert_eq!(Error::serialization("test").category(), "json");
         assert_eq!(Error::invalid_frame("test").category(), "validation");
         assert_eq!(Error::schema_validation("test").category(), "validation");
-        assert_eq!(Error::semantic_type_mismatch("a", "b").category(), "validation");
+        assert_eq!(
+            Error::semantic_type_mismatch("a", "b").category(),
+            "validation"
+        );
         assert_eq!(Error::buffer("test").category(), "memory");
         assert_eq!(Error::memory("test").category(), "memory");
         assert_eq!(Error::Io("test".to_string()).category(), "network");
@@ -320,7 +343,7 @@ mod tests {
     fn test_from_std_io_error() {
         let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
         let pjs_err = Error::from(io_err);
-        
+
         assert!(matches!(pjs_err, Error::Io(_)));
         assert!(pjs_err.is_network_error());
         assert_eq!(pjs_err.category(), "network");
@@ -331,10 +354,10 @@ mod tests {
         // Create invalid UTF-8 dynamically to avoid compiler warning
         let mut invalid_utf8 = vec![0xF0, 0x28, 0x8C, 0xBC]; // Invalid UTF-8 sequence
         invalid_utf8[1] = 0x28; // Make it definitely invalid
-        
+
         let utf8_err = std::str::from_utf8(&invalid_utf8).unwrap_err();
         let pjs_err = Error::from(utf8_err);
-        
+
         assert!(matches!(pjs_err, Error::Utf8(_)));
         assert_eq!(pjs_err.category(), "encoding");
     }
@@ -343,7 +366,7 @@ mod tests {
     fn test_from_serde_json_error() {
         let json_err = serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err();
         let pjs_err = Error::from(json_err);
-        
+
         assert!(matches!(pjs_err, Error::Serialization(_)));
         assert!(pjs_err.is_json_error());
         assert_eq!(pjs_err.category(), "json");
@@ -362,7 +385,7 @@ mod tests {
     fn test_error_clone() {
         let original = Error::semantic_type_mismatch("expected", "actual");
         let cloned = original.clone();
-        
+
         assert_eq!(original.category(), cloned.category());
         assert_eq!(original.to_string(), cloned.to_string());
     }
@@ -372,11 +395,11 @@ mod tests {
         fn returns_result() -> Result<i32> {
             Ok(42)
         }
-        
+
         fn returns_error() -> Result<i32> {
             Err(Error::other("test error"))
         }
-        
+
         assert_eq!(returns_result().unwrap(), 42);
         assert!(returns_error().is_err());
     }

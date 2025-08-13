@@ -3,11 +3,8 @@
 //! Arena allocators provide excellent performance for scenarios where many objects
 //! are allocated together and freed all at once, which is perfect for JSON parsing.
 
+use std::{cell::RefCell, collections::HashMap};
 use typed_arena::Arena;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-};
 
 /// Arena-backed string pool for zero-copy string operations
 pub struct StringArena {
@@ -47,8 +44,8 @@ impl StringArena {
     pub fn memory_usage(&self) -> ArenaStats {
         // typed_arena doesn't expose internal stats, so we estimate
         ArenaStats {
-            chunks_allocated: 1, // Simplified
-            total_bytes: 0,      // Would need arena introspection
+            chunks_allocated: 1,  // Simplified
+            total_bytes: 0,       // Would need arena introspection
             strings_allocated: 0, // Would need counting
         }
     }
@@ -212,7 +209,7 @@ mod tests {
         let arena = StringArena::new();
         let s1 = arena.alloc_str("hello".to_string());
         let s2 = arena.alloc_str("world".to_string());
-        
+
         assert_eq!(s1, "hello");
         assert_eq!(s2, "world");
     }
@@ -221,10 +218,10 @@ mod tests {
     fn test_value_arena_counting() {
         let arena = ValueArena::new();
         assert_eq!(arena.allocated_count(), 0);
-        
+
         arena.alloc(42);
         assert_eq!(arena.allocated_count(), 1);
-        
+
         arena.alloc_extend([1, 2, 3]);
         assert_eq!(arena.allocated_count(), 4);
     }
@@ -233,7 +230,7 @@ mod tests {
     fn test_json_arena_stats() {
         let arena = JsonArena::new();
         let stats = arena.stats();
-        
+
         // Initial stats should show zero allocations
         assert_eq!(stats.objects_allocated, 0);
         assert_eq!(stats.arrays_allocated, 0);
@@ -244,7 +241,7 @@ mod tests {
     fn test_arena_parser() {
         let mut parser = ArenaJsonParser::new();
         let result = parser.parse(r#"{"key": "value"}"#);
-        
+
         assert!(result.is_ok());
         let value = result.unwrap();
         assert!(value.is_object());
@@ -253,14 +250,14 @@ mod tests {
     #[test]
     fn test_arena_reset() {
         let mut arena = JsonArena::new();
-        
+
         // Allocate some values
         arena.values.alloc(serde_json::Value::Null);
         arena.objects.alloc(serde_json::Map::new());
-        
+
         let initial_stats = arena.stats();
         assert!(initial_stats.values_allocated > 0);
-        
+
         // Reset should clear everything
         arena.reset();
         let reset_stats = arena.stats();

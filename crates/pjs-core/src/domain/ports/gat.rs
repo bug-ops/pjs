@@ -5,11 +5,11 @@
 //! API contract. These implementations use true zero-cost futures.
 
 use crate::domain::{
-    DomainResult, 
-    entities::{Frame, Stream},
+    DomainResult,
     aggregates::StreamSession,
-    value_objects::{SessionId, StreamId},
+    entities::{Frame, Stream},
     events::DomainEvent,
+    value_objects::{SessionId, StreamId},
 };
 use std::future::Future;
 
@@ -182,20 +182,38 @@ pub trait MetricsCollectorGat: Send + Sync {
         Self: 'a;
 
     /// Increment a counter metric
-    fn increment_counter(&self, name: &str, value: u64, tags: std::collections::HashMap<String, String>) -> Self::IncrementCounterFuture<'_>;
+    fn increment_counter(
+        &self,
+        name: &str,
+        value: u64,
+        tags: std::collections::HashMap<String, String>,
+    ) -> Self::IncrementCounterFuture<'_>;
 
     /// Set a gauge metric value
-    fn set_gauge(&self, name: &str, value: f64, tags: std::collections::HashMap<String, String>) -> Self::SetGaugeFuture<'_>;
+    fn set_gauge(
+        &self,
+        name: &str,
+        value: f64,
+        tags: std::collections::HashMap<String, String>,
+    ) -> Self::SetGaugeFuture<'_>;
 
     /// Record timing information
-    fn record_timing(&self, name: &str, duration: std::time::Duration, tags: std::collections::HashMap<String, String>) -> Self::RecordTimingFuture<'_>;
+    fn record_timing(
+        &self,
+        name: &str,
+        duration: std::time::Duration,
+        tags: std::collections::HashMap<String, String>,
+    ) -> Self::RecordTimingFuture<'_>;
 }
 
 /// Helper trait for implementing common frame sink operations
 pub trait FrameSinkGatExt: FrameSinkGat + Sized {
     /// Send multiple frames with default implementation using send_frame
-    fn send_frames_default(&mut self, frames: Vec<Frame>) -> impl Future<Output = DomainResult<()>> + Send + '_ 
-    where 
+    fn send_frames_default(
+        &mut self,
+        frames: Vec<Frame>,
+    ) -> impl Future<Output = DomainResult<()>> + Send + '_
+    where
         Self: 'static,
     {
         async move {
@@ -216,7 +234,7 @@ impl<T: FrameSinkGat> FrameSinkGatExt for T {}
 mod tests {
     use super::*;
     use crate::domain::entities::Frame;
-    use crate::domain::value_objects::{Priority, JsonPath, JsonData, StreamId};
+    use crate::domain::value_objects::{JsonData, Priority, StreamId};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -244,19 +262,23 @@ mod tests {
     }
 
     impl FrameSinkGat for MockFrameSinkGat {
-        type SendFrameFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type SendFrameFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type SendFramesFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type SendFramesFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type FlushFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type FlushFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type CloseFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type CloseFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
@@ -289,7 +311,7 @@ mod tests {
     #[tokio::test]
     async fn test_gat_frame_sink() {
         let mut sink = MockFrameSinkGat::new();
-        
+
         let test_frame = Frame::skeleton(
             StreamId::new(),
             1,
@@ -298,7 +320,7 @@ mod tests {
 
         // Test sending single frame
         sink.send_frame(test_frame.clone()).await.unwrap();
-        
+
         let frames = sink.get_frames().await;
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].priority(), Priority::CRITICAL); // skeleton frames are critical
@@ -313,14 +335,14 @@ mod tests {
         // Test flush and close
         sink.flush().await.unwrap();
         sink.close().await.unwrap();
-        
+
         assert!(sink.is_closed().await);
     }
 
     #[tokio::test]
     async fn test_gat_extension_trait() {
         let mut sink = MockFrameSinkGat::new();
-        
+
         let test_frame = Frame::skeleton(
             StreamId::new(),
             1,

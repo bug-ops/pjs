@@ -4,17 +4,14 @@
 //! with zero-copy parsing techniques to achieve maximum performance.
 
 use crate::{
-    domain::{DomainResult, DomainError},
+    domain::{DomainError, DomainResult},
     parser::{
-        buffer_pool::{BufferPool, PooledBuffer, BufferSize},
-        zero_copy::{LazyParser, LazyJsonValue, MemoryUsage},
         ValueType,
+        buffer_pool::{BufferPool, BufferSize, PooledBuffer},
+        zero_copy::{LazyJsonValue, LazyParser, MemoryUsage},
     },
 };
-use std::{
-    marker::PhantomData,
-    sync::Arc,
-};
+use std::{marker::PhantomData, sync::Arc};
 
 /// SIMD-accelerated zero-copy parser
 pub struct SimdZeroCopyParser<'a> {
@@ -97,7 +94,7 @@ impl<'a> SimdZeroCopyParser<'a> {
     /// Parse JSON with SIMD acceleration and zero-copy optimization
     pub fn parse_simd(&mut self, input: &'a [u8]) -> DomainResult<SimdParseResult<'a>> {
         let start_time = std::time::Instant::now();
-        
+
         self.input = input;
         self.position = 0;
         self.depth = 0;
@@ -126,7 +123,7 @@ impl<'a> SimdZeroCopyParser<'a> {
     fn parse_with_simd(&mut self, input: &'a [u8]) -> DomainResult<LazyJsonValue<'a>> {
         // First, use sonic-rs to validate and get structural information
         let sonic_result = self.sonic_preprocess(input)?;
-        
+
         // Then do zero-copy extraction based on sonic's findings
         match sonic_result.value_type {
             ValueType::Object => self.parse_simd_object(input, &sonic_result),
@@ -149,7 +146,7 @@ impl<'a> SimdZeroCopyParser<'a> {
     fn sonic_preprocess(&self, input: &[u8]) -> DomainResult<SonicStructuralInfo> {
         // This is a simplified version - actual implementation would use sonic-rs
         // to get structural information about the JSON
-        
+
         if input.is_empty() {
             return Err(DomainError::InvalidInput("Empty input".to_string()));
         }
@@ -173,8 +170,10 @@ impl<'a> SimdZeroCopyParser<'a> {
             b'-' | b'0'..=b'9' => ValueType::Number,
             _ => {
                 let ch = input[pos] as char;
-                return Err(DomainError::InvalidInput(format!("Invalid JSON start character: {ch}")));
-            },
+                return Err(DomainError::InvalidInput(format!(
+                    "Invalid JSON start character: {ch}"
+                )));
+            }
         };
 
         Ok(SonicStructuralInfo {
@@ -187,29 +186,41 @@ impl<'a> SimdZeroCopyParser<'a> {
     }
 
     /// Parse object with SIMD acceleration
-    fn parse_simd_object(&mut self, input: &'a [u8], info: &SonicStructuralInfo) -> DomainResult<LazyJsonValue<'a>> {
+    fn parse_simd_object(
+        &mut self,
+        input: &'a [u8],
+        info: &SonicStructuralInfo,
+    ) -> DomainResult<LazyJsonValue<'a>> {
         // For objects, we still return a slice but use SIMD for validation
         if info.is_simd_friendly {
             // Use SIMD for fast validation of structure
             self.simd_validate_object_structure(input)?;
         }
-        
+
         // Return zero-copy slice
         Ok(LazyJsonValue::ObjectSlice(input))
     }
 
     /// Parse array with SIMD acceleration
-    fn parse_simd_array(&mut self, input: &'a [u8], info: &SonicStructuralInfo) -> DomainResult<LazyJsonValue<'a>> {
+    fn parse_simd_array(
+        &mut self,
+        input: &'a [u8],
+        info: &SonicStructuralInfo,
+    ) -> DomainResult<LazyJsonValue<'a>> {
         if info.is_simd_friendly {
             // Use SIMD for fast validation of array structure
             self.simd_validate_array_structure(input)?;
         }
-        
+
         Ok(LazyJsonValue::ArraySlice(input))
     }
 
     /// Parse string with SIMD acceleration
-    fn parse_simd_string(&mut self, input: &'a [u8], info: &SonicStructuralInfo) -> DomainResult<LazyJsonValue<'a>> {
+    fn parse_simd_string(
+        &mut self,
+        input: &'a [u8],
+        info: &SonicStructuralInfo,
+    ) -> DomainResult<LazyJsonValue<'a>> {
         if !info.has_escapes {
             // No escapes - pure zero copy
             let start = info.start_pos + 1; // Skip opening quote
@@ -223,17 +234,25 @@ impl<'a> SimdZeroCopyParser<'a> {
     }
 
     /// Parse number with SIMD acceleration
-    fn parse_simd_number(&mut self, input: &'a [u8], _info: &SonicStructuralInfo) -> DomainResult<LazyJsonValue<'a>> {
+    fn parse_simd_number(
+        &mut self,
+        input: &'a [u8],
+        _info: &SonicStructuralInfo,
+    ) -> DomainResult<LazyJsonValue<'a>> {
         // SIMD validation of number format
         if self.simd_enabled {
             self.simd_validate_number(input)?;
         }
-        
+
         Ok(LazyJsonValue::NumberSlice(input))
     }
 
     /// Parse boolean with SIMD acceleration
-    fn parse_simd_boolean(&mut self, input: &'a [u8], _info: &SonicStructuralInfo) -> DomainResult<LazyJsonValue<'a>> {
+    fn parse_simd_boolean(
+        &mut self,
+        input: &'a [u8],
+        _info: &SonicStructuralInfo,
+    ) -> DomainResult<LazyJsonValue<'a>> {
         // SIMD comparison for "true" or "false"
         if self.simd_enabled {
             if input == b"true" {
@@ -241,7 +260,9 @@ impl<'a> SimdZeroCopyParser<'a> {
             } else if input == b"false" {
                 return Ok(LazyJsonValue::Boolean(false));
             } else {
-                return Err(DomainError::InvalidInput("Invalid boolean value".to_string()));
+                return Err(DomainError::InvalidInput(
+                    "Invalid boolean value".to_string(),
+                ));
             }
         }
 
@@ -249,7 +270,9 @@ impl<'a> SimdZeroCopyParser<'a> {
         match input {
             b"true" => Ok(LazyJsonValue::Boolean(true)),
             b"false" => Ok(LazyJsonValue::Boolean(false)),
-            _ => Err(DomainError::InvalidInput("Invalid boolean value".to_string())),
+            _ => Err(DomainError::InvalidInput(
+                "Invalid boolean value".to_string(),
+            )),
         }
     }
 
@@ -260,11 +283,13 @@ impl<'a> SimdZeroCopyParser<'a> {
         // Real implementation would use SIMD to validate JSON structure
         let open_count = input.iter().filter(|&&c| c == b'{').count();
         let close_count = input.iter().filter(|&&c| c == b'}').count();
-        
+
         if open_count == close_count && open_count > 0 {
             Ok(())
         } else {
-            Err(DomainError::InvalidInput("Unmatched braces in object".to_string()))
+            Err(DomainError::InvalidInput(
+                "Unmatched braces in object".to_string(),
+            ))
         }
     }
 
@@ -272,18 +297,20 @@ impl<'a> SimdZeroCopyParser<'a> {
         // Simplified: just check that we have matching brackets
         let open_count = input.iter().filter(|&&c| c == b'[').count();
         let close_count = input.iter().filter(|&&c| c == b']').count();
-        
+
         if open_count == close_count && open_count > 0 {
             Ok(())
         } else {
-            Err(DomainError::InvalidInput("Unmatched brackets in array".to_string()))
+            Err(DomainError::InvalidInput(
+                "Unmatched brackets in array".to_string(),
+            ))
         }
     }
 
     fn simd_validate_number(&self, input: &[u8]) -> DomainResult<()> {
         // Simplified number validation using SIMD concepts
         // Real implementation would use SIMD instructions for fast validation
-        
+
         if input.is_empty() {
             return Err(DomainError::InvalidInput("Empty number".to_string()));
         }
@@ -296,18 +323,21 @@ impl<'a> SimdZeroCopyParser<'a> {
         if is_valid {
             Ok(())
         } else {
-            Err(DomainError::InvalidInput("Invalid number format".to_string()))
+            Err(DomainError::InvalidInput(
+                "Invalid number format".to_string(),
+            ))
         }
     }
 
     fn simd_unescape_string(&self, input: &[u8]) -> DomainResult<String> {
         // Simplified SIMD-style string unescaping
         // Real implementation would use vector instructions for processing escapes
-        
+
         let mut result = Vec::with_capacity(input.len());
         let mut i = 1; // Skip opening quote
-        
-        while i < input.len() - 1 { // Stop before closing quote
+
+        while i < input.len() - 1 {
+            // Stop before closing quote
             if input[i] == b'\\' && i + 1 < input.len() - 1 {
                 match input[i + 1] {
                     b'n' => result.push(b'\n'),
@@ -353,12 +383,13 @@ impl<'a> SimdZeroCopyParser<'a> {
 
     /// Get buffer from pool for intermediate processing
     pub fn get_buffer(&mut self, min_size: usize) -> DomainResult<&mut PooledBuffer> {
-        if self.current_buffer.is_none() || 
-           self.current_buffer.as_ref().unwrap().capacity() < min_size {
+        if self.current_buffer.is_none()
+            || self.current_buffer.as_ref().unwrap().capacity() < min_size
+        {
             let size = BufferSize::for_capacity(min_size);
             self.current_buffer = Some(self.buffer_pool.get_buffer(size)?);
         }
-        
+
         Ok(self.current_buffer.as_mut().unwrap())
     }
 
@@ -425,7 +456,7 @@ impl SimdZeroCopyConfig {
             max_depth: 128,
             enable_simd: true,
             buffer_pool_config: Some(crate::parser::buffer_pool::PoolConfig::simd_optimized()),
-            simd_threshold: 128, // Lower threshold for more SIMD usage
+            simd_threshold: 128,       // Lower threshold for more SIMD usage
             track_memory_usage: false, // Disable for maximum speed
         }
     }
@@ -490,7 +521,7 @@ mod tests {
     fn test_simple_parsing() {
         let mut parser = SimdZeroCopyParser::new();
         let input = br#""hello world""#;
-        
+
         let result = parser.parse_simd(input).unwrap();
         match result.value {
             LazyJsonValue::StringBorrowed(s) => {
@@ -504,7 +535,7 @@ mod tests {
     fn test_number_parsing() {
         let mut parser = SimdZeroCopyParser::new();
         let input = b"123.456";
-        
+
         let result = parser.parse_simd(input).unwrap();
         match result.value {
             LazyJsonValue::NumberSlice(n) => {
@@ -517,10 +548,10 @@ mod tests {
     #[test]
     fn test_boolean_parsing() {
         let mut parser = SimdZeroCopyParser::new();
-        
+
         let result = parser.parse_simd(b"true").unwrap();
         assert_eq!(result.value, LazyJsonValue::Boolean(true));
-        
+
         parser.reset();
         let result = parser.parse_simd(b"false").unwrap();
         assert_eq!(result.value, LazyJsonValue::Boolean(false));
@@ -530,7 +561,7 @@ mod tests {
     fn test_object_parsing() {
         let mut parser = SimdZeroCopyParser::new();
         let input = br#"{"key": "value", "number": 42}"#;
-        
+
         let result = parser.parse_simd(input).unwrap();
         match result.value {
             LazyJsonValue::ObjectSlice(obj) => {
@@ -544,7 +575,7 @@ mod tests {
     fn test_memory_usage_tracking() {
         let mut parser = SimdZeroCopyParser::new();
         let input = br#""test string""#;
-        
+
         let result = parser.parse_simd(input).unwrap();
         assert_eq!(result.memory_usage.allocated_bytes, 0); // Zero-copy string
         assert!(result.memory_usage.referenced_bytes > 0);
@@ -555,7 +586,7 @@ mod tests {
         let mut parser = SimdZeroCopyParser::new();
         let buffer = parser.get_buffer(1024).unwrap();
         assert!(buffer.capacity() >= 1024);
-        
+
         parser.release_buffer();
         assert!(parser.current_buffer.is_none());
     }

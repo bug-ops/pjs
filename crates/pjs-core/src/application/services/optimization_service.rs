@@ -3,10 +3,7 @@
 //! This service focuses on applying different optimization strategies
 //! based on specific streaming use cases and requirements.
 
-use crate::{
-    application::ApplicationResult,
-    domain::value_objects::Priority,
-};
+use crate::{application::ApplicationResult, domain::value_objects::Priority};
 
 /// Service for optimization strategies and use case handling
 #[derive(Debug)]
@@ -75,7 +72,10 @@ impl OptimizationService {
     }
 
     /// Get optimization strategy for a specific use case
-    pub fn get_strategy_for_use_case(&self, use_case: &StreamingUseCase) -> ApplicationResult<OptimizationStrategy> {
+    pub fn get_strategy_for_use_case(
+        &self,
+        use_case: &StreamingUseCase,
+    ) -> ApplicationResult<OptimizationStrategy> {
         match use_case {
             StreamingUseCase::RealTimeDashboard => Ok(Self::create_realtime_dashboard_strategy()),
             StreamingUseCase::BulkDataTransfer => Ok(Self::create_bulk_transfer_strategy()),
@@ -84,12 +84,11 @@ impl OptimizationService {
             StreamingUseCase::IoTDevice => Ok(Self::create_iot_device_strategy()),
             StreamingUseCase::LiveStreaming => Ok(Self::create_live_streaming_strategy()),
             StreamingUseCase::Custom(name) => {
-                self.custom_strategies
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| crate::application::ApplicationError::Logic(
-                        format!("Custom strategy '{name}' not found")
+                self.custom_strategies.get(name).cloned().ok_or_else(|| {
+                    crate::application::ApplicationError::Logic(format!(
+                        "Custom strategy '{name}' not found"
                     ))
+                })
             }
         }
     }
@@ -197,7 +196,9 @@ impl OptimizationService {
         }
 
         // Analyze throughput performance
-        if performance_report.throughput_analysis.average_mbps < current_strategy.target_throughput_mbps * 0.7 {
+        if performance_report.throughput_analysis.average_mbps
+            < current_strategy.target_throughput_mbps * 0.7
+        {
             recommendations.push(StrategyAdjustmentRecommendation {
                 adjustment_type: AdjustmentType::BatchSizeIncrease,
                 description: "Increase batch size to improve throughput".to_string(),
@@ -241,7 +242,8 @@ impl OptimizationService {
             batch_size: 5,
             compression_enabled: false, // Avoid compression latency
             adaptive_quality: true,
-            description: "Optimized for real-time dashboard updates with minimal latency".to_string(),
+            description: "Optimized for real-time dashboard updates with minimal latency"
+                .to_string(),
             target_latency_ms: 100.0,
             target_throughput_mbps: 5.0,
         }
@@ -292,8 +294,9 @@ impl OptimizationService {
             max_frame_size: 4 * 1024, // 4KB for constrained devices
             batch_size: 2,
             compression_enabled: true, // Critical for bandwidth savings
-            adaptive_quality: false, // Consistent behavior
-            description: "Optimized for IoT devices with power and bandwidth constraints".to_string(),
+            adaptive_quality: false,   // Consistent behavior
+            description: "Optimized for IoT devices with power and bandwidth constraints"
+                .to_string(),
             target_latency_ms: 500.0,
             target_throughput_mbps: 1.0,
         }
@@ -327,7 +330,11 @@ impl OptimizationService {
 
     // Private calculation methods
 
-    fn calculate_efficiency_score(&self, frames: &[crate::domain::entities::Frame], strategy: &OptimizationStrategy) -> f64 {
+    fn calculate_efficiency_score(
+        &self,
+        frames: &[crate::domain::entities::Frame],
+        strategy: &OptimizationStrategy,
+    ) -> f64 {
         if frames.is_empty() {
             return 0.0;
         }
@@ -341,7 +348,7 @@ impl OptimizationService {
             // Score based on how close the frame priority is to target
             let priority_diff = (priority.value() as i32 - target_priority as i32).abs() as f64;
             let priority_score = 1.0 - (priority_diff / 255.0).min(1.0);
-            
+
             // Score based on frame size efficiency
             let size_score = if frame.estimated_size() <= strategy.max_frame_size {
                 1.0
@@ -355,7 +362,11 @@ impl OptimizationService {
         (efficiency_sum / frames.len() as f64).min(1.0)
     }
 
-    fn estimate_latency_improvement(&self, strategy: &OptimizationStrategy, context: &crate::application::services::prioritization_service::PerformanceContext) -> f64 {
+    fn estimate_latency_improvement(
+        &self,
+        strategy: &OptimizationStrategy,
+        context: &crate::application::services::prioritization_service::PerformanceContext,
+    ) -> f64 {
         // Estimate improvement based on strategy parameters
         let mut improvement = 0.0;
 
@@ -379,7 +390,11 @@ impl OptimizationService {
         improvement.min(1.0)
     }
 
-    fn estimate_throughput_improvement(&self, strategy: &OptimizationStrategy, context: &crate::application::services::prioritization_service::PerformanceContext) -> f64 {
+    fn estimate_throughput_improvement(
+        &self,
+        strategy: &OptimizationStrategy,
+        context: &crate::application::services::prioritization_service::PerformanceContext,
+    ) -> f64 {
         let mut improvement = 0.0;
 
         // Larger batch sizes improve throughput
@@ -403,7 +418,11 @@ impl OptimizationService {
         improvement.min(1.0)
     }
 
-    fn calculate_resource_utilization(&self, strategy: &OptimizationStrategy, context: &crate::application::services::prioritization_service::PerformanceContext) -> f64 {
+    fn calculate_resource_utilization(
+        &self,
+        strategy: &OptimizationStrategy,
+        context: &crate::application::services::prioritization_service::PerformanceContext,
+    ) -> f64 {
         let mut utilization = context.cpu_usage;
 
         // Compression increases CPU usage
@@ -423,7 +442,11 @@ impl OptimizationService {
         utilization.clamp(0.0, 1.0)
     }
 
-    fn calculate_quality_score(&self, frames: &[crate::domain::entities::Frame], strategy: &OptimizationStrategy) -> f64 {
+    fn calculate_quality_score(
+        &self,
+        frames: &[crate::domain::entities::Frame],
+        strategy: &OptimizationStrategy,
+    ) -> f64 {
         if frames.is_empty() {
             return 0.0;
         }
@@ -440,9 +463,9 @@ impl OptimizationService {
 
             // Reward frames with appropriate priority
             let priority = frame.priority();
-                if priority.value() >= strategy.priority_threshold.value() {
-                    frame_quality *= 1.1;
-                }
+            if priority.value() >= strategy.priority_threshold.value() {
+                frame_quality *= 1.1;
+            }
 
             quality_sum += frame_quality;
         }
@@ -496,42 +519,50 @@ mod tests {
     }
 
     #[test]
-    fn test_realtime_dashboard_strategy() {
+    fn test_strategy_selection_based_on_use_case() {
         let service = OptimizationService::new();
-        let strategy = service.get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard).unwrap();
-        
-        assert_eq!(strategy.priority_threshold, Priority::HIGH);
-        assert_eq!(strategy.max_frame_size, 16 * 1024);
-        assert!(!strategy.compression_enabled); // Low latency priority
-    }
 
-    #[test]
-    fn test_mobile_app_strategy() {
-        let service = OptimizationService::new();
-        let strategy = service.get_strategy_for_use_case(&StreamingUseCase::MobileApp).unwrap();
-        
-        assert_eq!(strategy.max_frame_size, 8 * 1024);
-        assert!(strategy.compression_enabled); // Important for mobile
-        assert_eq!(strategy.batch_size, 3);
+        // Test real-time dashboard strategy selection
+        let dashboard_strategy = service
+            .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+            .unwrap();
+        assert_eq!(dashboard_strategy.priority_threshold, Priority::HIGH);
+        assert_eq!(dashboard_strategy.batch_size, 5);
+        assert!(dashboard_strategy.adaptive_quality);
+
+        // Test mobile app strategy selection
+        let mobile_strategy = service
+            .get_strategy_for_use_case(&StreamingUseCase::MobileApp)
+            .unwrap();
+        assert_eq!(mobile_strategy.priority_threshold, Priority::HIGH);
+        assert!(mobile_strategy.compression_enabled);
+        assert_eq!(mobile_strategy.max_frame_size, 8 * 1024);
     }
 
     #[test]
     fn test_custom_strategy_registration() {
         let mut service = OptimizationService::new();
+
         let custom_strategy = OptimizationStrategy {
             priority_threshold: Priority::CRITICAL,
-            max_frame_size: 1024,
-            batch_size: 1,
+            max_frame_size: 8 * 1024,
+            batch_size: 3,
             compression_enabled: false,
             adaptive_quality: false,
-            description: "Ultra low latency".to_string(),
-            target_latency_ms: 10.0,
-            target_throughput_mbps: 1.0,
+            description: "Ultra low-latency gaming strategy".to_string(),
+            target_latency_ms: 50.0,
+            target_throughput_mbps: 30.0,
         };
 
-        service.register_custom_strategy("ultra_low_latency".to_string(), custom_strategy).unwrap();
-        
-        let retrieved = service.get_strategy_for_use_case(&StreamingUseCase::Custom("ultra_low_latency".to_string())).unwrap();
-        assert_eq!(retrieved.target_latency_ms, 10.0);
+        service
+            .register_custom_strategy("ultra_gaming".to_string(), custom_strategy.clone())
+            .unwrap();
+
+        let retrieved = service
+            .get_strategy_for_use_case(&StreamingUseCase::Custom("ultra_gaming".to_string()))
+            .unwrap();
+        assert_eq!(retrieved.priority_threshold, Priority::CRITICAL);
+        assert_eq!(retrieved.max_frame_size, 8 * 1024);
+        assert_eq!(retrieved.target_latency_ms, 50.0);
     }
 }

@@ -5,13 +5,16 @@
 //
 // REQUIRES: nightly Rust for `impl Trait` in associated types
 
-use super::streaming_adapter::{StreamingAdapter, UniversalRequest, UniversalResponse, IntegrationError, IntegrationResult, StreamingFormat, ResponseBody, streaming_helpers};
-use crate::domain::value_objects::{SessionId, JsonData};
+use super::streaming_adapter::{
+    IntegrationError, IntegrationResult, ResponseBody, StreamingAdapter, StreamingFormat,
+    UniversalRequest, UniversalResponse, streaming_helpers,
+};
+use crate::domain::value_objects::{JsonData, SessionId};
 use crate::stream::StreamFrame;
-use std::future::Future;
-use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::future::Future;
+use std::marker::PhantomData;
 
 /// Configuration for the universal adapter
 #[derive(Debug, Clone)]
@@ -72,8 +75,14 @@ where
     }
 
     /// Add a default header
-    pub fn add_default_header(&mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) {
-        self.config.default_headers.insert(name.into(), value.into());
+    pub fn add_default_header(
+        &mut self,
+        name: impl Into<Cow<'static, str>>,
+        value: impl Into<Cow<'static, str>>,
+    ) {
+        self.config
+            .default_headers
+            .insert(name.into(), value.into());
     }
 }
 
@@ -99,19 +108,23 @@ where
     type Error = Err;
 
     // Zero-cost GAT futures with impl Trait - no Box allocation, true zero-cost abstractions
-    type StreamingResponseFuture<'a> = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
+    type StreamingResponseFuture<'a>
+        = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
-    
-    type SseResponseFuture<'a> = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
+
+    type SseResponseFuture<'a>
+        = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
-    
-    type JsonResponseFuture<'a> = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
+
+    type JsonResponseFuture<'a>
+        = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
-    
-    type MiddlewareFuture<'a> = impl Future<Output = IntegrationResult<UniversalResponse>> + Send + 'a
+
+    type MiddlewareFuture<'a>
+        = impl Future<Output = IntegrationResult<UniversalResponse>> + Send + 'a
     where
         Self: 'a;
 
@@ -124,7 +137,7 @@ where
     }
 
     fn to_response(&self, _response: UniversalResponse) -> IntegrationResult<Self::Response> {
-        // Universal adapter cannot convert responses to framework-specific types generically  
+        // Universal adapter cannot convert responses to framework-specific types generically
         // This should only be used with concrete adapter implementations
         Err(IntegrationError::UnsupportedFramework(
             "Generic UniversalAdapter cannot convert responses - use concrete adapter implementation".to_string()
@@ -146,14 +159,10 @@ where
                         .into_iter()
                         .map(|frame| serde_json::to_value(&frame).unwrap_or_default())
                         .collect();
-                    
-                    let data = JsonData::Array(
-                        json_frames
-                            .into_iter()
-                            .map(JsonData::from)
-                            .collect()
-                    );
-                    
+
+                    let data =
+                        JsonData::Array(json_frames.into_iter().map(JsonData::from).collect());
+
                     UniversalResponse::json_pooled(data) // Use pooled version for efficiency
                 }
                 StreamingFormat::Ndjson => {
@@ -178,9 +187,7 @@ where
                     // Convert frames to binary format with SIMD acceleration
                     let binary_data = frames
                         .into_iter()
-                        .flat_map(|frame| {
-                            serde_json::to_vec(&frame).unwrap_or_default()
-                        })
+                        .flat_map(|frame| serde_json::to_vec(&frame).unwrap_or_default())
                         .collect();
 
                     UniversalResponse {
@@ -195,16 +202,14 @@ where
             self.to_response(response)
         }
     }
-    
+
     fn create_sse_response<'a>(
         &'a self,
         session_id: SessionId,
         frames: Vec<StreamFrame>,
     ) -> Self::SseResponseFuture<'a> {
         // Direct async block - zero-cost abstraction with compile-time optimization
-        async move {
-            streaming_helpers::default_sse_response(self, session_id, frames).await
-        }
+        async move { streaming_helpers::default_sse_response(self, session_id, frames).await }
     }
 
     fn create_json_response<'a>(
@@ -213,9 +218,7 @@ where
         streaming: bool,
     ) -> Self::JsonResponseFuture<'a> {
         // Direct async block for optimal performance
-        async move {
-            streaming_helpers::default_json_response(self, data, streaming).await
-        }
+        async move { streaming_helpers::default_json_response(self, data, streaming).await }
     }
 
     fn apply_middleware<'a>(
@@ -224,9 +227,7 @@ where
         response: UniversalResponse,
     ) -> Self::MiddlewareFuture<'a> {
         // Zero-cost middleware application
-        async move {
-            streaming_helpers::default_middleware(self, request, response).await
-        }
+        async move { streaming_helpers::default_middleware(self, request, response).await }
     }
 
     fn supports_streaming(&self) -> bool {
@@ -283,8 +284,14 @@ impl UniversalAdapterBuilder {
     }
 
     /// Add a default header
-    pub fn default_header(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) -> Self {
-        self.config.default_headers.insert(name.into(), value.into());
+    pub fn default_header(
+        mut self,
+        name: impl Into<Cow<'static, str>>,
+        value: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        self.config
+            .default_headers
+            .insert(name.into(), value.into());
         self
     }
 
@@ -330,7 +337,7 @@ mod tests {
     #[test]
     fn test_universal_adapter_capabilities() {
         let adapter: UniversalAdapter<(), (), std::io::Error> = UniversalAdapter::new();
-        
+
         assert!(adapter.supports_streaming());
         assert!(adapter.supports_sse());
         assert_eq!(adapter.framework_name(), "universal");

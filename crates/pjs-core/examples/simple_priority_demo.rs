@@ -4,7 +4,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use pjson_rs::{Priority, StreamFrame, StreamProcessor, StreamConfig};
+use pjson_rs::{Priority, StreamConfig, StreamFrame, StreamProcessor};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,7 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    println!("📊 Original JSON size: {} bytes", 
+    println!(
+        "📊 Original JSON size: {} bytes",
         serde_json::to_string(&sample_data)?.len()
     );
 
@@ -84,13 +85,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let frames = vec![skeleton_frame, data_frame, logs_frame];
 
-    println!("\n🔄 Processing {} frames in priority order...\n", frames.len());
+    println!(
+        "\n🔄 Processing {} frames in priority order...\n",
+        frames.len()
+    );
 
     // Process frames in priority order
     for (i, frame) in frames.into_iter().enumerate() {
         println!("📦 Frame {}: Priority {}", i + 1, frame.priority.value());
-        println!("   📄 Data keys: {:?}", 
-            frame.data.as_object()
+        println!(
+            "   📄 Data keys: {:?}",
+            frame
+                .data
+                .as_object()
                 .and_then(|obj| obj.get("dashboard"))
                 .and_then(|dash| dash.as_object())
                 .map(|dash| dash.keys().collect::<Vec<_>>())
@@ -99,22 +106,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Process the frame
         match processor.process_frame(frame) {
-            Ok(result) => {
-                match result {
-                    pjson_rs::stream::ProcessResult::Processed(processed_frame) => {
-                        println!("   ✅ Processed successfully - Priority: {}", 
-                            processed_frame.priority.value());
-                        println!("   🖥️  Client can render this data immediately");
-                    },
-                    pjson_rs::stream::ProcessResult::Complete(_) => {
-                        println!("   🎯 Stream processing completed");
-                    },
-                    pjson_rs::stream::ProcessResult::Incomplete => {
-                        println!("   ⏳ Frame processing incomplete, waiting for more data");
-                    },
-                    pjson_rs::stream::ProcessResult::Error(e) => {
-                        println!("   ❌ Processing error: {e}");
-                    },
+            Ok(result) => match result {
+                pjson_rs::stream::ProcessResult::Processed(processed_frame) => {
+                    println!(
+                        "   ✅ Processed successfully - Priority: {}",
+                        processed_frame.priority.value()
+                    );
+                    println!("   🖥️  Client can render this data immediately");
+                }
+                pjson_rs::stream::ProcessResult::Complete(_) => {
+                    println!("   🎯 Stream processing completed");
+                }
+                pjson_rs::stream::ProcessResult::Incomplete => {
+                    println!("   ⏳ Frame processing incomplete, waiting for more data");
+                }
+                pjson_rs::stream::ProcessResult::Error(e) => {
+                    println!("   ❌ Processing error: {e}");
                 }
             },
             Err(e) => {

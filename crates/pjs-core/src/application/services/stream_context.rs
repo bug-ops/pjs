@@ -11,35 +11,35 @@ use serde::{Deserialize, Serialize};
 pub struct StreamConfig {
     /// Maximum bandwidth allocation in Mbps
     pub max_bandwidth_mbps: f64,
-    
+
     /// Latency threshold for priority adjustment in milliseconds
     pub latency_threshold_ms: f64,
-    
+
     /// Maximum acceptable error rate (0.0-1.0)
     pub max_error_rate: f64,
-    
+
     /// CPU usage threshold for throttling (0.0-1.0)
     pub cpu_usage_threshold: f64,
-    
+
     /// Memory usage threshold for throttling (0.0-100.0)
     pub memory_usage_threshold_percent: f64,
-    
+
     /// Maximum concurrent connections per session
     pub max_connection_count: usize,
-    
+
     /// Default priority strategy
     pub default_prioritization_strategy: PrioritizationStrategy,
-    
+
     /// Enable adaptive priority adjustment
     pub enable_adaptive_priority: bool,
-    
+
     /// Buffer size configuration
     pub buffer_size_kb: usize,
-    
+
     /// Compression settings
     pub enable_compression: bool,
     pub compression_level: u8,
-    
+
     /// Timeout configurations
     pub session_timeout_seconds: u64,
     pub frame_timeout_ms: u64,
@@ -60,7 +60,7 @@ impl Default for StreamConfig {
             enable_compression: true,
             compression_level: 6,
             session_timeout_seconds: 3600, // 1 hour
-            frame_timeout_ms: 30000, // 30 seconds
+            frame_timeout_ms: 30000,       // 30 seconds
         }
     }
 }
@@ -71,40 +71,40 @@ impl Default for StreamConfig {
 pub struct StreamSession {
     /// Current average latency in milliseconds
     pub current_latency_ms: f64,
-    
+
     /// Current bandwidth utilization in Mbps
     pub current_bandwidth_mbps: f64,
-    
+
     /// Current error rate (0.0-1.0)
     pub current_error_rate: f64,
-    
+
     /// Current CPU usage (0.0-1.0)
     pub current_cpu_usage: f64,
-    
+
     /// Current memory usage percentage (0.0-100.0)
     pub current_memory_usage_percent: f64,
-    
+
     /// Current active connection count
     pub active_connection_count: usize,
-    
+
     /// Number of frames processed in this session
     pub frames_processed: u64,
-    
+
     /// Total bytes transferred in this session
     pub bytes_transferred: u64,
-    
+
     /// Session start time
     pub session_start_time: std::time::Instant,
-    
+
     /// Last update time for metrics
     pub last_metrics_update: std::time::Instant,
-    
+
     /// Current priority override (if any)
     pub priority_override: Option<crate::domain::value_objects::Priority>,
-    
+
     /// Performance trend (improving/degrading/stable)
     pub performance_trend: PerformanceTrend,
-    
+
     /// Adaptive adjustments made during this session
     pub adaptive_adjustments: Vec<AdaptiveAdjustment>,
 }
@@ -172,31 +172,43 @@ impl<'a> StreamContext<'a> {
     pub fn new(config: &'a StreamConfig, session: &'a StreamSession) -> Self {
         Self { config, session }
     }
-    
+
     /// Check if current metrics exceed configured thresholds
     pub fn is_threshold_exceeded(&self) -> bool {
         self.session.current_latency_ms > self.config.latency_threshold_ms
             || self.session.current_error_rate > self.config.max_error_rate
             || self.session.current_cpu_usage > self.config.cpu_usage_threshold
-            || self.session.current_memory_usage_percent > self.config.memory_usage_threshold_percent
+            || self.session.current_memory_usage_percent
+                > self.config.memory_usage_threshold_percent
     }
-    
+
     /// Calculate performance score (0.0 = poor, 1.0 = excellent)
     pub fn performance_score(&self) -> f64 {
-        let latency_score = (self.config.latency_threshold_ms - self.session.current_latency_ms.min(self.config.latency_threshold_ms))
+        let latency_score = (self.config.latency_threshold_ms
+            - self
+                .session
+                .current_latency_ms
+                .min(self.config.latency_threshold_ms))
             / self.config.latency_threshold_ms;
-        let error_score = 1.0 - (self.session.current_error_rate / self.config.max_error_rate).min(1.0);
-        let cpu_score = 1.0 - (self.session.current_cpu_usage / self.config.cpu_usage_threshold).min(1.0);
-        let memory_score = 1.0 - (self.session.current_memory_usage_percent / self.config.memory_usage_threshold_percent).min(1.0);
-        
+        let error_score =
+            1.0 - (self.session.current_error_rate / self.config.max_error_rate).min(1.0);
+        let cpu_score =
+            1.0 - (self.session.current_cpu_usage / self.config.cpu_usage_threshold).min(1.0);
+        let memory_score = 1.0
+            - (self.session.current_memory_usage_percent
+                / self.config.memory_usage_threshold_percent)
+                .min(1.0);
+
         (latency_score + error_score + cpu_score + memory_score) / 4.0
     }
-    
+
     /// Get session duration
     pub fn session_duration(&self) -> std::time::Duration {
-        self.session.last_metrics_update.duration_since(self.session.session_start_time)
+        self.session
+            .last_metrics_update
+            .duration_since(self.session.session_start_time)
     }
-    
+
     /// Check if session should timeout
     pub fn should_timeout(&self) -> bool {
         self.session_duration().as_secs() > self.config.session_timeout_seconds
@@ -206,7 +218,9 @@ impl<'a> StreamContext<'a> {
 /// Utility functions for migration from old PerformanceContext
 impl StreamSession {
     /// Create from legacy PerformanceContext
-    pub fn from_performance_context(ctx: &super::prioritization_service::PerformanceContext) -> Self {
+    pub fn from_performance_context(
+        ctx: &super::prioritization_service::PerformanceContext,
+    ) -> Self {
         let mut session = Self::default();
         session.current_latency_ms = ctx.average_latency_ms;
         session.current_bandwidth_mbps = ctx.available_bandwidth_mbps;
@@ -216,7 +230,7 @@ impl StreamSession {
         session.active_connection_count = ctx.connection_count;
         session
     }
-    
+
     /// Convert to legacy PerformanceContext for backward compatibility
     pub fn to_performance_context(&self) -> super::prioritization_service::PerformanceContext {
         super::prioritization_service::PerformanceContext {
@@ -254,11 +268,11 @@ mod tests {
     fn test_stream_context_threshold_check() {
         let config = StreamConfig::default();
         let mut session = StreamSession::default();
-        
+
         // Normal operation - no thresholds exceeded
         let context = StreamContext::new(&config, &session);
         assert!(!context.is_threshold_exceeded());
-        
+
         // Exceed latency threshold
         session.current_latency_ms = 600.0; // > 500.0 threshold
         let context = StreamContext::new(&config, &session);
@@ -269,10 +283,10 @@ mod tests {
     fn test_performance_score_calculation() {
         let config = StreamConfig::default();
         let session = StreamSession::default(); // Good defaults
-        
+
         let context = StreamContext::new(&config, &session);
         let score = context.performance_score();
-        
+
         // Should be a good score with default values
         assert!(score > 0.5);
         assert!(score <= 1.0);
@@ -288,31 +302,37 @@ mod tests {
             memory_usage_percent: 75.0,
             connection_count: 5,
         };
-        
+
         let session = StreamSession::from_performance_context(&perf_ctx);
-        
+
         assert_eq!(session.current_latency_ms, 200.0);
         assert_eq!(session.current_bandwidth_mbps, 50.0);
         assert_eq!(session.current_error_rate, 0.02);
         assert_eq!(session.current_cpu_usage, 0.7);
         assert_eq!(session.current_memory_usage_percent, 75.0);
         assert_eq!(session.active_connection_count, 5);
-        
+
         // Test round-trip conversion
         let converted_back = session.to_performance_context();
-        assert_eq!(converted_back.average_latency_ms, perf_ctx.average_latency_ms);
-        assert_eq!(converted_back.available_bandwidth_mbps, perf_ctx.available_bandwidth_mbps);
+        assert_eq!(
+            converted_back.average_latency_ms,
+            perf_ctx.average_latency_ms
+        );
+        assert_eq!(
+            converted_back.available_bandwidth_mbps,
+            perf_ctx.available_bandwidth_mbps
+        );
     }
 
     #[test]
     fn test_timeout_detection() {
         let mut config = StreamConfig::default();
         config.session_timeout_seconds = 1; // 1 second timeout
-        
+
         let mut session = StreamSession::default();
         session.session_start_time = std::time::Instant::now() - std::time::Duration::from_secs(2);
         session.last_metrics_update = std::time::Instant::now();
-        
+
         let context = StreamContext::new(&config, &session);
         assert!(context.should_timeout());
     }

@@ -7,10 +7,10 @@ use std::{collections::HashMap, future::Future, sync::Arc};
 
 use crate::domain::{
     DomainResult,
-    value_objects::{SessionId, StreamId},
     aggregates::StreamSession,
     entities::Stream,
     ports::{StreamRepositoryGat, StreamStoreGat},
+    value_objects::{SessionId, StreamId},
 };
 
 /// GAT-based in-memory implementation of StreamRepositoryGat
@@ -25,17 +25,17 @@ impl GatInMemoryStreamRepository {
             sessions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-    
+
     /// Get number of stored sessions
     pub fn session_count(&self) -> usize {
         self.sessions.read().len()
     }
-    
+
     /// Clear all sessions (for testing)
     pub fn clear(&self) {
         self.sessions.write().clear();
     }
-    
+
     /// Get all session IDs (for testing)
     pub fn all_session_ids(&self) -> Vec<SessionId> {
         self.sessions.read().keys().copied().collect()
@@ -49,26 +49,28 @@ impl Default for GatInMemoryStreamRepository {
 }
 
 impl StreamRepositoryGat for GatInMemoryStreamRepository {
-    type FindSessionFuture<'a> = impl Future<Output = DomainResult<Option<StreamSession>>> + Send + 'a
+    type FindSessionFuture<'a>
+        = impl Future<Output = DomainResult<Option<StreamSession>>> + Send + 'a
     where
         Self: 'a;
 
-    type SaveSessionFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+    type SaveSessionFuture<'a>
+        = impl Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
-    type RemoveSessionFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+    type RemoveSessionFuture<'a>
+        = impl Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
-    type FindActiveSessionsFuture<'a> = impl Future<Output = DomainResult<Vec<StreamSession>>> + Send + 'a
+    type FindActiveSessionsFuture<'a>
+        = impl Future<Output = DomainResult<Vec<StreamSession>>> + Send + 'a
     where
         Self: 'a;
 
     fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
-        async move {
-            Ok(self.sessions.read().get(&session_id).cloned())
-        }
+        async move { Ok(self.sessions.read().get(&session_id).cloned()) }
     }
 
     fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_> {
@@ -87,7 +89,8 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
 
     fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
         async move {
-            Ok(self.sessions
+            Ok(self
+                .sessions
                 .read()
                 .values()
                 .filter(|s| s.is_active())
@@ -109,17 +112,17 @@ impl GatInMemoryStreamStore {
             streams: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-    
+
     /// Get number of stored streams
     pub fn stream_count(&self) -> usize {
         self.streams.read().len()
     }
-    
+
     /// Clear all streams (for testing)
     pub fn clear(&self) {
         self.streams.write().clear();
     }
-    
+
     /// Get all stream IDs (for testing)
     pub fn all_stream_ids(&self) -> Vec<StreamId> {
         self.streams.read().keys().copied().collect()
@@ -133,19 +136,23 @@ impl Default for GatInMemoryStreamStore {
 }
 
 impl StreamStoreGat for GatInMemoryStreamStore {
-    type StoreStreamFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+    type StoreStreamFuture<'a>
+        = impl Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
-    type GetStreamFuture<'a> = impl Future<Output = DomainResult<Option<Stream>>> + Send + 'a
+    type GetStreamFuture<'a>
+        = impl Future<Output = DomainResult<Option<Stream>>> + Send + 'a
     where
         Self: 'a;
 
-    type DeleteStreamFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+    type DeleteStreamFuture<'a>
+        = impl Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
-    type ListStreamsFuture<'a> = impl Future<Output = DomainResult<Vec<Stream>>> + Send + 'a
+    type ListStreamsFuture<'a>
+        = impl Future<Output = DomainResult<Vec<Stream>>> + Send + 'a
     where
         Self: 'a;
 
@@ -157,9 +164,7 @@ impl StreamStoreGat for GatInMemoryStreamStore {
     }
 
     fn get_stream(&self, stream_id: StreamId) -> Self::GetStreamFuture<'_> {
-        async move {
-            Ok(self.streams.read().get(&stream_id).cloned())
-        }
+        async move { Ok(self.streams.read().get(&stream_id).cloned()) }
     }
 
     fn delete_stream(&self, stream_id: StreamId) -> Self::DeleteStreamFuture<'_> {
@@ -171,7 +176,8 @@ impl StreamStoreGat for GatInMemoryStreamStore {
 
     fn list_streams_for_session(&self, session_id: SessionId) -> Self::ListStreamsFuture<'_> {
         async move {
-            Ok(self.streams
+            Ok(self
+                .streams
                 .read()
                 .values()
                 .filter(|s| s.session_id() == session_id)
@@ -189,17 +195,17 @@ mod tests {
     #[tokio::test]
     async fn test_gat_repository_crud() {
         let repo = GatInMemoryStreamRepository::new();
-        
+
         // Test save and find
         let session = StreamSession::new(SessionConfig::default());
         let session_id = session.id();
-        
+
         repo.save_session(session.clone()).await.unwrap();
-        
+
         let found = repo.find_session(session_id).await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().id(), session_id);
-        
+
         // Test remove
         repo.remove_session(session_id).await.unwrap();
         let not_found = repo.find_session(session_id).await.unwrap();
@@ -209,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn test_gat_store_crud() {
         let store = GatInMemoryStreamStore::new();
-        
+
         // Would need to create a proper Stream for full testing
         // For now just test the interface works
         assert_eq!(store.stream_count(), 0);

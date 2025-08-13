@@ -5,8 +5,8 @@
 
 pub mod secure;
 
-use crate::domain::{DomainResult, DomainError};
-use serde_json::{json, Value as JsonValue};
+use crate::domain::{DomainError, DomainResult};
+use serde_json::{Value as JsonValue, json};
 use std::collections::HashMap;
 
 /// Configuration constants for compression algorithms
@@ -174,9 +174,10 @@ impl SchemaAnalyzer {
             let structure_key = format!("array_structure:{path}");
             let field_names: Vec<&str> = first.keys().map(|k| k.as_str()).collect();
             let pattern = field_names.join(",");
-            
+
             // Count how many objects share this structure
-            let matching_count = arr.iter()
+            let matching_count = arr
+                .iter()
                 .filter_map(|v| v.as_object())
                 .filter(|obj| {
                     let obj_fields: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
@@ -214,7 +215,8 @@ impl SchemaAnalyzer {
                         total_size: value_key.len() * count as usize,
                         compression_potential: (count as f32 - 1.0) / count as f32,
                     };
-                    self.patterns.insert(format!("array_value:{path}:{value_key}"), info);
+                    self.patterns
+                        .insert(format!("array_value:{path}:{value_key}"), info);
                 }
             }
         }
@@ -231,21 +233,31 @@ impl SchemaAnalyzer {
         if s.len() > 10 {
             // Check for URL patterns
             if s.starts_with("http://") || s.starts_with("https://") {
-                let prefix = if s.starts_with("https://") { "https://" } else { "http://" };
-                self.patterns.entry(format!("url_prefix:{prefix}")).or_insert(PatternInfo {
-                    frequency: 0,
-                    total_size: 0,
-                    compression_potential: 0.0,
-                }).frequency += 1;
+                let prefix = if s.starts_with("https://") {
+                    "https://"
+                } else {
+                    "http://"
+                };
+                self.patterns
+                    .entry(format!("url_prefix:{prefix}"))
+                    .or_insert(PatternInfo {
+                        frequency: 0,
+                        total_size: 0,
+                        compression_potential: 0.0,
+                    })
+                    .frequency += 1;
             }
 
             // Check for ID patterns (UUID-like)
             if s.len() == 36 && s.chars().filter(|&c| c == '-').count() == 4 {
-                self.patterns.entry("uuid_pattern".to_string()).or_insert(PatternInfo {
-                    frequency: 0,
-                    total_size: 36,
-                    compression_potential: self.config.uuid_compression_potential,
-                }).frequency += 1;
+                self.patterns
+                    .entry("uuid_pattern".to_string())
+                    .or_insert(PatternInfo {
+                        frequency: 0,
+                        total_size: 36,
+                        compression_potential: self.config.uuid_compression_potential,
+                    })
+                    .frequency += 1;
             }
         }
     }
@@ -272,9 +284,11 @@ impl SchemaAnalyzer {
         // Analyze string repetition potential
         let mut string_dict = HashMap::new();
         let mut dict_index = 0u16;
-        
+
         for (string, count) in &self.string_repetitions {
-            if *count > self.config.min_frequency_count && string.len() > self.config.min_string_length {
+            if *count > self.config.min_frequency_count
+                && string.len() > self.config.min_string_length
+            {
                 string_dict_score += (*count as f32 - 1.0) * string.len() as f32;
                 string_dict.insert(string.clone(), dict_index);
                 dict_index += 1;
@@ -283,25 +297,29 @@ impl SchemaAnalyzer {
 
         // Analyze numeric delta potential
         let mut numeric_deltas = HashMap::new();
-        
+
         for (path, stats) in &mut self.numeric_fields {
             if stats.values.len() > 2 {
                 // Calculate variance to determine delta effectiveness
-                stats.values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                
-                let deltas: Vec<f64> = stats.values.windows(2)
+                stats
+                    .values
+                    .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+                let deltas: Vec<f64> = stats
+                    .values
+                    .windows(2)
                     .map(|window| window[1] - window[0])
                     .collect();
-                
+
                 if !deltas.is_empty() {
                     let avg_delta = deltas.iter().sum::<f64>() / deltas.len() as f64;
-                    let delta_variance = deltas.iter()
-                        .map(|d| (d - avg_delta).powi(2))
-                        .sum::<f64>() / deltas.len() as f64;
-                    
+                    let delta_variance =
+                        deltas.iter().map(|d| (d - avg_delta).powi(2)).sum::<f64>()
+                            / deltas.len() as f64;
+
                     // Low variance suggests good delta compression potential
                     stats.delta_potential = 1.0 / (1.0 + delta_variance as f32);
-                    
+
                     if stats.delta_potential > self.config.min_delta_potential {
                         delta_score += stats.delta_potential * stats.values.len() as f32;
                         numeric_deltas.insert(path.clone(), stats.base_value);
@@ -311,24 +329,29 @@ impl SchemaAnalyzer {
         }
 
         // Choose strategy based on scores
-        match (string_dict_score > self.config.string_dict_threshold, delta_score > self.config.delta_threshold) {
+        match (
+            string_dict_score > self.config.string_dict_threshold,
+            delta_score > self.config.delta_threshold,
+        ) {
             (true, true) => Ok(CompressionStrategy::Hybrid {
                 string_dict,
                 numeric_deltas,
             }),
-            (true, false) => Ok(CompressionStrategy::Dictionary { 
-                dictionary: string_dict 
+            (true, false) => Ok(CompressionStrategy::Dictionary {
+                dictionary: string_dict,
             }),
-            (false, true) => Ok(CompressionStrategy::Delta { 
-                base_values: numeric_deltas 
+            (false, true) => Ok(CompressionStrategy::Delta {
+                base_values: numeric_deltas,
             }),
             (false, false) => {
                 // Check for run-length potential
-                let run_length_score = self.patterns.values()
+                let run_length_score = self
+                    .patterns
+                    .values()
                     .filter(|p| p.compression_potential > self.config.min_compression_potential)
                     .map(|p| p.frequency as f32 * p.compression_potential)
                     .sum::<f32>();
-                
+
                 if run_length_score > self.config.run_length_threshold {
                     Ok(CompressionStrategy::RunLength)
                 } else {
@@ -389,34 +412,39 @@ impl SchemaCompressor {
             CompressionStrategy::None => Ok(CompressedData {
                 strategy: self.strategy.clone(),
                 compressed_size: serde_json::to_string(data)
-                    .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
+                    .map_err(|e| {
+                        DomainError::CompressionError(format!("JSON serialization failed: {e}"))
+                    })?
                     .len(),
                 data: data.clone(),
                 compression_metadata: HashMap::new(),
             }),
-            
+
             CompressionStrategy::Dictionary { dictionary } => {
                 self.compress_with_dictionary(data, dictionary)
             }
-            
+
             CompressionStrategy::Delta { base_values } => {
                 self.compress_with_delta(data, base_values)
             }
-            
-            CompressionStrategy::RunLength => {
-                self.compress_with_run_length(data)
-            }
-            
-            CompressionStrategy::Hybrid { string_dict, numeric_deltas } => {
-                self.compress_hybrid(data, string_dict, numeric_deltas)
-            }
+
+            CompressionStrategy::RunLength => self.compress_with_run_length(data),
+
+            CompressionStrategy::Hybrid {
+                string_dict,
+                numeric_deltas,
+            } => self.compress_hybrid(data, string_dict, numeric_deltas),
         }
     }
 
     /// Dictionary-based compression
-    fn compress_with_dictionary(&self, data: &JsonValue, dictionary: &HashMap<String, u16>) -> DomainResult<CompressedData> {
+    fn compress_with_dictionary(
+        &self,
+        data: &JsonValue,
+        dictionary: &HashMap<String, u16>,
+    ) -> DomainResult<CompressedData> {
         let mut metadata = HashMap::new();
-        
+
         // Store dictionary for decompression
         for (string, index) in dictionary {
             metadata.insert(format!("dict_{index}"), JsonValue::String(string.clone()));
@@ -437,12 +465,19 @@ impl SchemaCompressor {
     }
 
     /// Delta compression for numeric sequences
-    fn compress_with_delta(&self, data: &JsonValue, base_values: &HashMap<String, f64>) -> DomainResult<CompressedData> {
+    fn compress_with_delta(
+        &self,
+        data: &JsonValue,
+        base_values: &HashMap<String, f64>,
+    ) -> DomainResult<CompressedData> {
         let mut metadata = HashMap::new();
-        
+
         // Store base values
         for (path, base) in base_values {
-            metadata.insert(format!("base_{path}"), JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()));
+            metadata.insert(
+                format!("base_{path}"),
+                JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()),
+            );
         }
 
         // Apply delta compression
@@ -480,10 +515,7 @@ impl SchemaCompressor {
             JsonValue::Object(obj) => {
                 let mut compressed_obj = serde_json::Map::new();
                 for (key, value) in obj {
-                    compressed_obj.insert(
-                        key.clone(),
-                        self.apply_run_length_encoding(value)?
-                    );
+                    compressed_obj.insert(key.clone(), self.apply_run_length_encoding(value)?);
                 }
                 Ok(JsonValue::Object(compressed_obj))
             }
@@ -510,7 +542,7 @@ impl SchemaCompressor {
                                 compressed_runs.push(value);
                             }
                         }
-                        
+
                         // Start new run
                         current_value = Some(item.clone());
                         run_count = 1;
@@ -533,7 +565,8 @@ impl SchemaCompressor {
             }
             JsonValue::Array(arr) => {
                 // Array too small for run-length encoding, process recursively
-                let compressed_arr: Result<Vec<_>, _> = arr.iter()
+                let compressed_arr: Result<Vec<_>, _> = arr
+                    .iter()
                     .map(|item| self.apply_run_length_encoding(item))
                     .collect();
                 Ok(JsonValue::Array(compressed_arr?))
@@ -543,23 +576,31 @@ impl SchemaCompressor {
     }
 
     /// Hybrid compression combining multiple strategies
-    fn compress_hybrid(&self, data: &JsonValue, string_dict: &HashMap<String, u16>, numeric_deltas: &HashMap<String, f64>) -> DomainResult<CompressedData> {
+    fn compress_hybrid(
+        &self,
+        data: &JsonValue,
+        string_dict: &HashMap<String, u16>,
+        numeric_deltas: &HashMap<String, f64>,
+    ) -> DomainResult<CompressedData> {
         let mut metadata = HashMap::new();
-        
+
         // Add dictionary metadata
         for (string, index) in string_dict {
             metadata.insert(format!("dict_{index}"), JsonValue::String(string.clone()));
         }
-        
+
         // Add delta base values
         for (path, base) in numeric_deltas {
-            metadata.insert(format!("base_{path}"), JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()));
+            metadata.insert(
+                format!("base_{path}"),
+                JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()),
+            );
         }
 
         // Apply both compression strategies
         let dict_compressed = self.replace_strings_with_indices(data, string_dict)?;
         let final_compressed = self.apply_delta_compression(&dict_compressed, numeric_deltas)?;
-        
+
         let compressed_size = serde_json::to_string(&final_compressed)
             .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
             .len();
@@ -574,20 +615,25 @@ impl SchemaCompressor {
 
     /// Replace strings with dictionary indices
     #[allow(clippy::only_used_in_recursion)]
-    fn replace_strings_with_indices(&self, data: &JsonValue, dictionary: &HashMap<String, u16>) -> DomainResult<JsonValue> {
+    fn replace_strings_with_indices(
+        &self,
+        data: &JsonValue,
+        dictionary: &HashMap<String, u16>,
+    ) -> DomainResult<JsonValue> {
         match data {
             JsonValue::Object(obj) => {
                 let mut compressed_obj = serde_json::Map::new();
                 for (key, value) in obj {
                     compressed_obj.insert(
                         key.clone(),
-                        self.replace_strings_with_indices(value, dictionary)?
+                        self.replace_strings_with_indices(value, dictionary)?,
                     );
                 }
                 Ok(JsonValue::Object(compressed_obj))
             }
             JsonValue::Array(arr) => {
-                let compressed_arr: Result<Vec<_>, _> = arr.iter()
+                let compressed_arr: Result<Vec<_>, _> = arr
+                    .iter()
                     .map(|item| self.replace_strings_with_indices(item, dictionary))
                     .collect();
                 Ok(JsonValue::Array(compressed_arr?))
@@ -604,12 +650,21 @@ impl SchemaCompressor {
     }
 
     /// Apply delta compression to numeric sequences in arrays
-    fn apply_delta_compression(&self, data: &JsonValue, base_values: &HashMap<String, f64>) -> DomainResult<JsonValue> {
+    fn apply_delta_compression(
+        &self,
+        data: &JsonValue,
+        base_values: &HashMap<String, f64>,
+    ) -> DomainResult<JsonValue> {
         self.apply_delta_recursive(data, "", base_values)
     }
 
     /// Recursively apply delta compression to JSON structure
-    fn apply_delta_recursive(&self, data: &JsonValue, path: &str, base_values: &HashMap<String, f64>) -> DomainResult<JsonValue> {
+    fn apply_delta_recursive(
+        &self,
+        data: &JsonValue,
+        path: &str,
+        base_values: &HashMap<String, f64>,
+    ) -> DomainResult<JsonValue> {
         match data {
             JsonValue::Object(obj) => {
                 let mut compressed_obj = serde_json::Map::new();
@@ -621,7 +676,7 @@ impl SchemaCompressor {
                     };
                     compressed_obj.insert(
                         key.clone(),
-                        self.apply_delta_recursive(value, &field_path, base_values)?
+                        self.apply_delta_recursive(value, &field_path, base_values)?,
                     );
                 }
                 Ok(JsonValue::Object(compressed_obj))
@@ -632,7 +687,9 @@ impl SchemaCompressor {
                     self.compress_numeric_array_with_delta(arr, path, base_values)
                 } else {
                     // Process array elements recursively
-                    let compressed_arr: Result<Vec<_>, _> = arr.iter().enumerate()
+                    let compressed_arr: Result<Vec<_>, _> = arr
+                        .iter()
+                        .enumerate()
                         .map(|(idx, item)| {
                             let item_path = format!("{path}[{idx}]");
                             self.apply_delta_recursive(item, &item_path, base_values)
@@ -643,7 +700,9 @@ impl SchemaCompressor {
             }
             JsonValue::Array(arr) => {
                 // Array too small for delta compression, process recursively
-                let compressed_arr: Result<Vec<_>, _> = arr.iter().enumerate()
+                let compressed_arr: Result<Vec<_>, _> = arr
+                    .iter()
+                    .enumerate()
                     .map(|(idx, item)| {
                         let item_path = format!("{path}[{idx}]");
                         self.apply_delta_recursive(item, &item_path, base_values)
@@ -666,22 +725,23 @@ impl SchemaCompressor {
     }
 
     /// Apply delta compression to numeric array
-    fn compress_numeric_array_with_delta(&self, arr: &[JsonValue], path: &str, base_values: &HashMap<String, f64>) -> DomainResult<JsonValue> {
+    fn compress_numeric_array_with_delta(
+        &self,
+        arr: &[JsonValue],
+        path: &str,
+        base_values: &HashMap<String, f64>,
+    ) -> DomainResult<JsonValue> {
         let mut compressed_array = Vec::new();
-        
+
         // Extract numeric values
-        let numbers: Vec<f64> = arr.iter()
-            .filter_map(|v| v.as_f64())
-            .collect();
+        let numbers: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
 
         if numbers.is_empty() {
             return Ok(JsonValue::Array(arr.to_vec()));
         }
 
         // Use base value from analysis or first element as base
-        let base_value = base_values.get(path)
-            .copied()
-            .unwrap_or(numbers[0]);
+        let base_value = base_values.get(path).copied().unwrap_or(numbers[0]);
 
         // Add metadata for base value
         compressed_array.push(json!({
@@ -690,18 +750,12 @@ impl SchemaCompressor {
         }));
 
         // Calculate deltas from base value
-        let deltas: Vec<f64> = numbers.iter()
-            .map(|&num| num - base_value)
-            .collect();
+        let deltas: Vec<f64> = numbers.iter().map(|&num| num - base_value).collect();
 
         // Check if delta compression is beneficial
-        let original_precision = numbers.iter()
-            .map(|n| format!("{n}").len())
-            .sum::<usize>();
-        
-        let delta_precision = deltas.iter()
-            .map(|d| format!("{d}").len())
-            .sum::<usize>();
+        let original_precision = numbers.iter().map(|n| format!("{n}").len()).sum::<usize>();
+
+        let delta_precision = deltas.iter().map(|d| format!("{d}").len()).sum::<usize>();
 
         if delta_precision < original_precision {
             // Delta compression is beneficial
@@ -759,7 +813,7 @@ mod tests {
     #[test]
     fn test_schema_analyzer_dictionary_potential() {
         let mut analyzer = SchemaAnalyzer::new();
-        
+
         let data = json!({
             "users": [
                 {"name": "John Doe", "role": "admin", "status": "active", "department": "engineering"},
@@ -774,7 +828,7 @@ mod tests {
         });
 
         let strategy = analyzer.analyze(&data).unwrap();
-        
+
         // Should detect repeating strings like "admin", "active"
         match strategy {
             CompressionStrategy::Dictionary { .. } | CompressionStrategy::Hybrid { .. } => {
@@ -787,7 +841,7 @@ mod tests {
     #[test]
     fn test_schema_compressor_basic() {
         let compressor = SchemaCompressor::new();
-        
+
         let data = json!({
             "message": "hello world",
             "count": 42
@@ -795,7 +849,7 @@ mod tests {
 
         let original_size = serde_json::to_string(&data).unwrap().len();
         let compressed = compressor.compress(&data).unwrap();
-        
+
         assert!(compressed.compressed_size > 0);
         assert!(compressed.compression_ratio(original_size) <= 1.0);
     }
@@ -805,19 +859,18 @@ mod tests {
         let mut dictionary = HashMap::new();
         dictionary.insert("active".to_string(), 0);
         dictionary.insert("admin".to_string(), 1);
-        
-        let compressor = SchemaCompressor::with_strategy(
-            CompressionStrategy::Dictionary { dictionary }
-        );
-        
+
+        let compressor =
+            SchemaCompressor::with_strategy(CompressionStrategy::Dictionary { dictionary });
+
         let data = json!({
             "status": "active",
-            "role": "admin", 
+            "role": "admin",
             "description": "active admin user"
         });
 
         let result = compressor.compress(&data).unwrap();
-        
+
         // Verify compression metadata contains dictionary
         assert!(result.compression_metadata.contains_key("dict_0"));
         assert!(result.compression_metadata.contains_key("dict_1"));
@@ -826,32 +879,32 @@ mod tests {
     #[test]
     fn test_compression_strategy_selection() {
         let mut analyzer = SchemaAnalyzer::new();
-        
+
         // Test data with no clear patterns
         let simple_data = json!({
             "unique_field_1": "unique_value_1",
             "unique_field_2": "unique_value_2"
         });
-        
+
         let strategy = analyzer.analyze(&simple_data).unwrap();
         assert_eq!(strategy, CompressionStrategy::None);
     }
 
-    #[test] 
+    #[test]
     fn test_numeric_delta_analysis() {
         let mut analyzer = SchemaAnalyzer::new();
-        
+
         let data = json!({
             "measurements": [
                 {"time": 100, "value": 10.0},
-                {"time": 101, "value": 10.5},  
+                {"time": 101, "value": 10.5},
                 {"time": 102, "value": 11.0},
                 {"time": 103, "value": 11.5}
             ]
         });
 
         let _strategy = analyzer.analyze(&data).unwrap();
-        
+
         // Should detect incremental numeric patterns
         assert!(!analyzer.numeric_fields.is_empty());
     }
@@ -859,20 +912,20 @@ mod tests {
     #[test]
     fn test_run_length_encoding() {
         let compressor = SchemaCompressor::with_strategy(CompressionStrategy::RunLength);
-        
+
         let data = json!({
             "repeated_values": [1, 1, 1, 2, 2, 3, 3, 3, 3]
         });
 
         let result = compressor.compress(&data).unwrap();
-        
+
         // Should compress repeated sequences
         assert!(result.compressed_size > 0);
-        
+
         // Verify RLE format in the compressed data
         let compressed_array = &result.data["repeated_values"];
         assert!(compressed_array.is_array());
-        
+
         // Should contain RLE objects
         let array = compressed_array.as_array().unwrap();
         let has_rle = array.iter().any(|v| v.get("rle_value").is_some());
@@ -883,24 +936,23 @@ mod tests {
     fn test_delta_compression() {
         let mut base_values = HashMap::new();
         base_values.insert("sequence".to_string(), 100.0);
-        
-        let compressor = SchemaCompressor::with_strategy(
-            CompressionStrategy::Delta { base_values }
-        );
-        
+
+        let compressor =
+            SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+
         let data = json!({
             "sequence": [100.0, 101.0, 102.0, 103.0, 104.0]
         });
 
         let result = compressor.compress(&data).unwrap();
-        
+
         // Should apply delta compression
         assert!(result.compressed_size > 0);
-        
+
         // Verify delta format in the compressed data
         let compressed_array = &result.data["sequence"];
         assert!(compressed_array.is_array());
-        
+
         // Should contain delta metadata
         let array = compressed_array.as_array().unwrap();
         let has_delta_base = array.iter().any(|v| v.get("delta_base").is_some());

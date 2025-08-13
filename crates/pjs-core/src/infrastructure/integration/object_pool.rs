@@ -3,11 +3,11 @@
 // This module provides thread-safe object pools for frequently allocated
 // data structures like HashMap and Vec to minimize garbage collection overhead.
 
-use std::collections::HashMap;
-use std::borrow::Cow;
-use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
 use crossbeam::queue::ArrayQueue;
+use once_cell::sync::Lazy;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Thread-safe object pool for reusable data structures
 pub struct ObjectPool<T> {
@@ -58,7 +58,9 @@ impl<T> ObjectPool<T> {
             let obj = (self.factory)();
             if let Ok(mut stats) = self.stats.lock() {
                 stats.objects_created += 1;
-                stats.peak_usage = stats.peak_usage.max(stats.objects_created - stats.current_pool_size);
+                stats.peak_usage = stats
+                    .peak_usage
+                    .max(stats.objects_created - stats.current_pool_size);
             }
             obj
         };
@@ -73,10 +75,11 @@ impl<T> ObjectPool<T> {
     fn return_object(&self, obj: T) {
         // Try to return to pool
         if self.objects.push(obj).is_ok()
-            && let Ok(mut stats) = self.stats.lock() {
-                stats.objects_returned += 1;
-                stats.current_pool_size += 1;
-            }
+            && let Ok(mut stats) = self.stats.lock()
+        {
+            stats.objects_returned += 1;
+            stats.current_pool_size += 1;
+        }
         // If pool is full, object is dropped (let GC handle it)
     }
 
@@ -88,7 +91,10 @@ impl<T> ObjectPool<T> {
 
     /// Get current pool statistics
     pub fn stats(&self) -> PoolStats {
-        self.stats.lock().map(|guard| guard.clone()).unwrap_or_default()
+        self.stats
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -130,12 +136,16 @@ pub struct PooledObject<'a, T> {
 impl<'a, T> PooledObject<'a, T> {
     /// Get a reference to the pooled object
     pub fn get(&self) -> &T {
-        self.object.as_ref().expect("PooledObject accessed after take")
+        self.object
+            .as_ref()
+            .expect("PooledObject accessed after take")
     }
 
     /// Get a mutable reference to the pooled object
     pub fn get_mut(&mut self) -> &mut T {
-        self.object.as_mut().expect("PooledObject accessed after take")
+        self.object
+            .as_mut()
+            .expect("PooledObject accessed after take")
     }
 
     /// Take ownership of the object (prevents return to pool)
@@ -204,7 +214,6 @@ impl GlobalPools {
 /// Global singleton pools
 static GLOBAL_POOLS: Lazy<GlobalPools> = Lazy::new(GlobalPools::new);
 
-
 /// Wrapper that ensures cleaning happens
 pub struct CleaningPooledObject<T: 'static> {
     inner: PooledObject<'static, T>,
@@ -234,13 +243,13 @@ impl<T: 'static> std::ops::DerefMut for CleaningPooledObject<T> {
 }
 
 /// Global cleaning pools - direct ObjectPool instances
-static CLEANING_COW_HASHMAP: Lazy<ObjectPool<HashMap<Cow<'static, str>, Cow<'static, str>>>> = 
+static CLEANING_COW_HASHMAP: Lazy<ObjectPool<HashMap<Cow<'static, str>, Cow<'static, str>>>> =
     Lazy::new(|| ObjectPool::new(50, || HashMap::with_capacity(8)));
-static CLEANING_STRING_HASHMAP: Lazy<ObjectPool<HashMap<String, String>>> = 
+static CLEANING_STRING_HASHMAP: Lazy<ObjectPool<HashMap<String, String>>> =
     Lazy::new(|| ObjectPool::new(50, || HashMap::with_capacity(8)));
-static CLEANING_BYTE_VEC: Lazy<ObjectPool<Vec<u8>>> = 
+static CLEANING_BYTE_VEC: Lazy<ObjectPool<Vec<u8>>> =
     Lazy::new(|| ObjectPool::new(100, || Vec::with_capacity(1024)));
-static CLEANING_STRING_VEC: Lazy<ObjectPool<Vec<String>>> = 
+static CLEANING_STRING_VEC: Lazy<ObjectPool<Vec<String>>> =
     Lazy::new(|| ObjectPool::new(50, || Vec::with_capacity(16)));
 
 /// Convenience functions for global cleaning pools
@@ -287,11 +296,15 @@ pub fn get_global_pool_stats() -> GlobalPoolStats {
     let byte_vec = CLEANING_BYTE_VEC.stats();
     let string_vec = CLEANING_STRING_VEC.stats();
 
-    let total_created = cow_hashmap.objects_created + string_hashmap.objects_created 
-        + byte_vec.objects_created + string_vec.objects_created;
-    let total_reused = cow_hashmap.objects_reused + string_hashmap.objects_reused 
-        + byte_vec.objects_reused + string_vec.objects_reused;
-    
+    let total_created = cow_hashmap.objects_created
+        + string_hashmap.objects_created
+        + byte_vec.objects_created
+        + string_vec.objects_created;
+    let total_reused = cow_hashmap.objects_reused
+        + string_hashmap.objects_reused
+        + byte_vec.objects_reused
+        + string_vec.objects_reused;
+
     let total_reuse_ratio = if total_created + total_reused > 0 {
         total_reused as f64 / (total_created + total_reused) as f64
     } else {
@@ -312,8 +325,8 @@ pub fn get_global_pool_stats() -> GlobalPoolStats {
 /// Optimized response building with pooled objects
 pub mod pooled_builders {
     use super::*;
-    use crate::infrastructure::integration::{UniversalResponse, ResponseBody};
     use crate::domain::value_objects::JsonData;
+    use crate::infrastructure::integration::{ResponseBody, UniversalResponse};
 
     /// Response builder that uses pooled HashMap
     pub struct PooledResponseBuilder {
@@ -339,7 +352,11 @@ pub mod pooled_builders {
         }
 
         /// Add header
-        pub fn header(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) -> Self {
+        pub fn header(
+            mut self,
+            name: impl Into<Cow<'static, str>>,
+            value: impl Into<Cow<'static, str>>,
+        ) -> Self {
             self.headers.insert(name.into(), value.into());
             self
         }
@@ -354,7 +371,7 @@ pub mod pooled_builders {
         pub fn json(self, data: JsonData) -> UniversalResponse {
             // Take ownership of headers to avoid cloning
             let headers = self.headers.take();
-            
+
             UniversalResponse {
                 status_code: self.status_code,
                 headers,
@@ -366,7 +383,7 @@ pub mod pooled_builders {
         /// Build response with binary data using pooled Vec
         pub fn binary(self, data: Vec<u8>) -> UniversalResponse {
             let headers = self.headers.take();
-            
+
             UniversalResponse {
                 status_code: self.status_code,
                 headers,
@@ -408,7 +425,11 @@ pub mod pooled_builders {
         }
 
         /// Add custom header
-        pub fn header(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) -> Self {
+        pub fn header(
+            mut self,
+            name: impl Into<Cow<'static, str>>,
+            value: impl Into<Cow<'static, str>>,
+        ) -> Self {
             self.headers.insert(name.into(), value.into());
             self
         }
@@ -436,35 +457,35 @@ pub mod pooled_builders {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ResponseBody;
     use super::*;
     use crate::domain::value_objects::JsonData;
-    use super::super::ResponseBody;
 
     #[test]
     fn test_object_pool_basic_operations() {
         let pool = ObjectPool::new(5, || HashMap::<String, String>::with_capacity(4));
-        
+
         // Get object from pool
         let mut obj1 = pool.get();
         obj1.insert("test".to_string(), "value".to_string());
-        
+
         // Get another object
         let obj2 = pool.get();
-        
+
         // Check stats
         let stats = pool.stats();
         assert_eq!(stats.objects_created, 2);
         assert_eq!(stats.objects_reused, 0);
-        
+
         // Drop objects (return to pool)
         drop(obj1);
         drop(obj2);
-        
+
         // Get object again (should be reused)
         let _obj3 = pool.get();
         // Note: obj3 might not be empty because we're using a basic pool
         // The cleaning happens in CleaningPooledObject, not in basic ObjectPool
-        
+
         let stats = pool.stats();
         assert_eq!(stats.objects_reused, 1);
     }
@@ -473,7 +494,7 @@ mod tests {
     fn test_pooled_object_deref() {
         let pool = ObjectPool::new(5, || vec![1, 2, 3]);
         let obj = pool.get();
-        
+
         // Test Deref
         assert_eq!(obj.len(), 3);
         assert_eq!(obj[0], 1);
@@ -483,10 +504,10 @@ mod tests {
     fn test_pooled_object_take() {
         let pool = ObjectPool::new(5, || vec![1, 2, 3]);
         let obj = pool.get();
-        
+
         let taken = obj.take();
         assert_eq!(taken, vec![1, 2, 3]);
-        
+
         // Object should not be returned to pool
         let stats = pool.stats();
         assert_eq!(stats.objects_returned, 0);
@@ -497,11 +518,11 @@ mod tests {
         let mut headers = get_cow_hashmap();
         headers.insert(Cow::Borrowed("test"), Cow::Borrowed("value"));
         drop(headers);
-        
+
         let mut bytes = get_byte_vec();
         bytes.extend_from_slice(b"test data");
         drop(bytes);
-        
+
         let stats = get_global_pool_stats();
         // Note: Stats might be 0 initially because we're using different pools
         // This test validates that the stats function works, not specific values
@@ -515,9 +536,12 @@ mod tests {
             .header("X-Test", "test-value")
             .content_type("application/json")
             .json(JsonData::String("test".to_string()));
-        
+
         assert_eq!(response.status_code, 201);
-        assert_eq!(response.headers.get("X-Test"), Some(&Cow::Borrowed("test-value")));
+        assert_eq!(
+            response.headers.get("X-Test"),
+            Some(&Cow::Borrowed("test-value"))
+        );
     }
 
     #[test]
@@ -527,10 +551,10 @@ mod tests {
             .event("second event")
             .header("X-Custom", "custom-value")
             .build();
-        
+
         assert_eq!(response.status_code, 200);
         assert_eq!(response.content_type, "text/event-stream");
-        
+
         if let ResponseBody::ServerSentEvents(events) = response.body {
             assert_eq!(events.len(), 2);
             assert!(events[0].contains("first event"));
@@ -543,15 +567,15 @@ mod tests {
     #[test]
     fn test_pool_capacity_limits() {
         let pool = ObjectPool::new(2, Vec::<i32>::new);
-        
+
         let obj1 = pool.get();
         let obj2 = pool.get();
         let obj3 = pool.get(); // This should create new object
-        
+
         drop(obj1);
         drop(obj2);
         drop(obj3); // Pool is full, so this should be dropped
-        
+
         let stats = pool.stats();
         assert_eq!(stats.objects_created, 3);
         assert_eq!(stats.objects_returned, 2); // Only 2 can fit in pool
@@ -561,10 +585,10 @@ mod tests {
     fn test_concurrent_pool_access() {
         use std::sync::Arc;
         use std::thread;
-        
+
         let pool = Arc::new(ObjectPool::new(10, Vec::<i32>::new));
         let mut handles = vec![];
-        
+
         for _ in 0..5 {
             let pool_clone = Arc::clone(&pool);
             let handle = thread::spawn(move || {
@@ -575,11 +599,11 @@ mod tests {
             });
             handles.push(handle);
         }
-        
+
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         let stats = pool.stats();
         assert!(stats.objects_created <= 10); // Should reuse objects
         assert!(stats.objects_reused > 0 || stats.objects_created == 5);

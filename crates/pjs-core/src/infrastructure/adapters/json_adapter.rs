@@ -17,14 +17,12 @@ impl JsonAdapter {
             JsonData::Null => SerdeValue::Null,
             JsonData::Bool(b) => SerdeValue::Bool(*b),
             JsonData::Integer(i) => SerdeValue::Number(serde_json::Number::from(*i)),
-            JsonData::Float(f) => SerdeValue::Number(serde_json::Number::from_f64(*f).unwrap_or_else(|| {
-                serde_json::Number::from(0)
-            })),
+            JsonData::Float(f) => SerdeValue::Number(
+                serde_json::Number::from_f64(*f).unwrap_or_else(|| serde_json::Number::from(0)),
+            ),
             JsonData::String(s) => SerdeValue::String(s.clone()),
             JsonData::Array(arr) => {
-                let values: Vec<SerdeValue> = arr.iter()
-                    .map(Self::to_serde_value)
-                    .collect();
+                let values: Vec<SerdeValue> = arr.iter().map(Self::to_serde_value).collect();
                 SerdeValue::Array(values)
             }
             JsonData::Object(obj) => {
@@ -53,9 +51,7 @@ impl JsonAdapter {
             }
             SerdeValue::String(s) => JsonData::String(s.clone()),
             SerdeValue::Array(arr) => {
-                let values: Vec<JsonData> = arr.iter()
-                    .map(Self::from_serde_value)
-                    .collect();
+                let values: Vec<JsonData> = arr.iter().map(Self::from_serde_value).collect();
                 JsonData::Array(values)
             }
             SerdeValue::Object(obj) => {
@@ -171,7 +167,7 @@ mod tests {
         let json_data = JsonData::string("hello");
         let serde_value = JsonAdapter::to_serde_value(&json_data);
         let converted_back = JsonAdapter::from_serde_value(&serde_value);
-        
+
         assert_eq!(json_data, converted_back);
     }
 
@@ -181,11 +177,11 @@ mod tests {
         obj.insert("name".to_string(), JsonData::string("John"));
         obj.insert("age".to_string(), JsonData::integer(30));
         obj.insert("active".to_string(), JsonData::bool(true));
-        
+
         let json_data = JsonData::object(obj);
         let serde_value = JsonAdapter::to_serde_value(&json_data);
         let converted_back = JsonAdapter::from_serde_value(&serde_value);
-        
+
         assert_eq!(json_data, converted_back);
     }
 
@@ -193,7 +189,7 @@ mod tests {
     fn test_json_string_parsing() {
         let json_str = r#"{"name":"John","age":30,"active":true}"#;
         let parsed = JsonAdapter::parse_json_string(json_str).unwrap();
-        
+
         assert_eq!(parsed.get_path("name").unwrap().as_str(), Some("John"));
         assert_eq!(parsed.get_path("age").unwrap().as_f64(), Some(30.0));
         assert_eq!(parsed.get_path("active").unwrap().as_bool(), Some(true));
@@ -204,10 +200,10 @@ mod tests {
         let mut obj = HashMap::new();
         obj.insert("name".to_string(), JsonData::string("John"));
         obj.insert("age".to_string(), JsonData::integer(30));
-        
+
         let json_data = JsonData::object(obj);
         let json_str = JsonAdapter::to_json_string(&json_data).unwrap();
-        
+
         assert!(json_str.contains("John"));
         assert!(json_str.contains("30"));
     }
@@ -217,16 +213,13 @@ mod tests {
         let mut left = HashMap::new();
         left.insert("name".to_string(), JsonData::string("John"));
         left.insert("age".to_string(), JsonData::integer(25));
-        
+
         let mut right = HashMap::new();
         right.insert("age".to_string(), JsonData::integer(30));
         right.insert("city".to_string(), JsonData::string("NYC"));
-        
-        let merged = JsonAdapter::merge(
-            JsonData::object(left),
-            JsonData::object(right)
-        );
-        
+
+        let merged = JsonAdapter::merge(JsonData::object(left), JsonData::object(right));
+
         assert_eq!(merged.get_path("name").unwrap().as_str(), Some("John"));
         assert_eq!(merged.get_path("age").unwrap().as_i64(), Some(30)); // Right wins
         assert_eq!(merged.get_path("city").unwrap().as_str(), Some("NYC"));
@@ -237,19 +230,19 @@ mod tests {
         let mut user = HashMap::new();
         user.insert("name".to_string(), JsonData::string("John"));
         user.insert("age".to_string(), JsonData::integer(30));
-        
+
         let mut profile = HashMap::new();
         profile.insert("bio".to_string(), JsonData::string("Developer"));
         user.insert("profile".to_string(), JsonData::object(profile));
-        
+
         let root = JsonData::object(
             [("user".to_string(), JsonData::object(user))]
-            .into_iter()
-            .collect()
+                .into_iter()
+                .collect(),
         );
-        
+
         let paths = JsonAdapter::extract_leaf_paths(&root);
-        
+
         assert!(paths.contains(&"user.name".to_string()));
         assert!(paths.contains(&"user.age".to_string()));
         assert!(paths.contains(&"user.profile.bio".to_string()));
@@ -260,7 +253,7 @@ mod tests {
         // Valid structures
         assert!(JsonAdapter::validate_pjs_structure(&JsonData::object(HashMap::new())).is_ok());
         assert!(JsonAdapter::validate_pjs_structure(&JsonData::array(vec![])).is_ok());
-        
+
         // Invalid structures
         assert!(JsonAdapter::validate_pjs_structure(&JsonData::string("test")).is_err());
         assert!(JsonAdapter::validate_pjs_structure(&JsonData::integer(42)).is_err());

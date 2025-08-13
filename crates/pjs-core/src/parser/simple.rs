@@ -3,10 +3,10 @@
 //! This parser uses serde_json as the foundation and focuses on PJS's
 //! unique features: semantic analysis, chunking, and streaming.
 
+use crate::config::SecurityConfig;
+use crate::security::SecurityValidator;
 use crate::semantic::{SemanticMeta, SemanticType};
 use crate::{Error, Frame, Result};
-use crate::security::SecurityValidator;
-use crate::config::SecurityConfig;
 use bytes::Bytes;
 use serde_json::{self, Map, Value};
 use smallvec::SmallVec;
@@ -52,7 +52,7 @@ impl SimpleParser {
 
     /// Create parser with custom config
     pub fn with_config(config: ParseConfig) -> Self {
-        Self { 
+        Self {
             config,
             validator: SecurityValidator::default(),
         }
@@ -171,7 +171,8 @@ impl SimpleParser {
                 .filter(|k| {
                     // TODO: Handle unwrap() - add proper error handling for object field access
                     *k != timestamp_field && self.looks_like_numeric_value(obj.get(*k).unwrap())
-                }).cloned()
+                })
+                .cloned()
                 .collect();
 
             if !value_fields.is_empty() {
@@ -184,22 +185,23 @@ impl SimpleParser {
         }
 
         // Matrix/image data detection
-        if obj.contains_key("data") && obj.contains_key("shape")
+        if obj.contains_key("data")
+            && obj.contains_key("shape")
             && let (Some(Value::Array(_)), Some(Value::Array(shape))) =
                 (obj.get("data"), obj.get("shape"))
-            {
-                let dimensions: SmallVec<[usize; 4]> = shape
-                    .iter()
-                    .filter_map(|v| v.as_u64().map(|n| n as usize))
-                    .collect();
+        {
+            let dimensions: SmallVec<[usize; 4]> = shape
+                .iter()
+                .filter_map(|v| v.as_u64().map(|n| n as usize))
+                .collect();
 
-                if !dimensions.is_empty() {
-                    return SemanticType::Matrix {
-                        dimensions,
-                        dtype: crate::semantic::NumericDType::F64, // Default
-                    };
-                }
+            if !dimensions.is_empty() {
+                return SemanticType::Matrix {
+                    dimensions,
+                    dtype: crate::semantic::NumericDType::F64, // Default
+                };
             }
+        }
 
         SemanticType::Generic
     }

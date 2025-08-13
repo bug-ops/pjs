@@ -5,16 +5,16 @@
 //!
 //! TODO: Remove serde derives once domain events are refactored to use DTOs
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
-use serde::{Deserialize, Serialize};
 
 /// Unique identifier for streaming sessions
-/// 
-/// This is a pure domain object. Serialization should be handled 
+///
+/// This is a pure domain object. Serialization should be handled
 /// in the application layer via DTOs, but serde is temporarily kept
 /// for compatibility with domain events.
-/// 
+///
 /// TODO: Remove Serialize, Deserialize derives once domain events use DTOs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(Uuid);
@@ -89,5 +89,4 @@ mod tests {
         let id = SessionId::from_string(uuid_str).unwrap();
         assert_eq!(id.as_str(), uuid_str);
     }
-
 }

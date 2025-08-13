@@ -1,6 +1,6 @@
 //! Infrastructure adapters implementing domain ports
 //!
-//! These adapters bridge the gap between domain abstractions and 
+//! These adapters bridge the gap between domain abstractions and
 //! concrete infrastructure implementations, following the Ports & Adapters pattern.
 
 pub mod event_publisher;

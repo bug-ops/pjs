@@ -9,9 +9,9 @@
 
 // New specialized services following SRP
 pub mod event_service;
-pub mod prioritization_service;
-pub mod performance_analysis_service;  
 pub mod optimization_service;
+pub mod performance_analysis_service;
+pub mod prioritization_service;
 pub mod stream_context;
 // pub mod stream_orchestrator; // TODO: migrate to GAT
 
@@ -21,8 +21,8 @@ pub mod stream_context;
 
 // Re-exports for new architecture
 pub use event_service::EventService;
-pub use prioritization_service::{PrioritizationService, PerformanceContext};
-pub use performance_analysis_service::{PerformanceAnalysisService, PerformanceAnalysisReport};
 pub use optimization_service::{OptimizationService, StreamingUseCase};
-pub use stream_context::{StreamConfig, StreamSession, StreamContext};
+pub use performance_analysis_service::{PerformanceAnalysisReport, PerformanceAnalysisService};
+pub use prioritization_service::{PerformanceContext, PrioritizationService};
+pub use stream_context::{StreamConfig, StreamContext, StreamSession};
 // pub use stream_orchestrator::{StreamOrchestrator, StreamOrchestratorFactory}; // TODO: migrate to GAT

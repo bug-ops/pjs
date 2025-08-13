@@ -27,9 +27,7 @@ fn convert_serde_to_domain(value: &SerdeValue) -> JsonData {
         }
         SerdeValue::String(s) => JsonData::String(s.clone()),
         SerdeValue::Array(arr) => {
-            let values: Vec<JsonData> = arr.iter()
-                .map(convert_serde_to_domain)
-                .collect();
+            let values: Vec<JsonData> = arr.iter().map(convert_serde_to_domain).collect();
             JsonData::Array(values)
         }
         SerdeValue::Object(obj) => {
@@ -249,7 +247,7 @@ impl StreamSession {
 
         // Convert serde_json::Value to domain JsonData
         let domain_data = convert_serde_to_domain(&source_data);
-        
+
         let stream = Stream::new(
             self.id,
             domain_data,
@@ -434,6 +432,58 @@ impl StreamSession {
                 self.state
             ))),
         }
+    }
+
+    /// Force close expired session with proper cleanup
+    pub fn force_close_expired(&mut self) -> DomainResult<bool> {
+        if !self.is_expired() {
+            return Ok(false);
+        }
+
+        // Force close regardless of current state
+        let old_state = self.state.clone();
+        self.state = SessionState::Failed;
+        self.completed_at = Some(Utc::now());
+        self.update_timestamp();
+
+        // Force cancel all streams with timeout reason
+        for stream in self.streams.values_mut() {
+            let _ = stream.cancel(); // Best effort cleanup
+        }
+
+        // Clear stream collections for memory cleanup
+        self.streams.clear();
+
+        // Emit timeout event
+        self.add_event(DomainEvent::SessionTimedOut {
+            session_id: self.id,
+            original_state: old_state,
+            timeout_duration: self.config.session_timeout_seconds,
+            timestamp: Utc::now(),
+        });
+
+        Ok(true)
+    }
+
+    /// Extend session timeout (if allowed)
+    pub fn extend_timeout(&mut self, additional_seconds: u64) -> DomainResult<()> {
+        if self.is_expired() {
+            return Err(DomainError::InvalidStateTransition(
+                "Cannot extend timeout for expired session".to_string(),
+            ));
+        }
+
+        self.expires_at = self.expires_at + chrono::Duration::seconds(additional_seconds as i64);
+        self.update_timestamp();
+
+        self.add_event(DomainEvent::SessionTimeoutExtended {
+            session_id: self.id,
+            additional_seconds,
+            new_expires_at: self.expires_at,
+            timestamp: Utc::now(),
+        });
+
+        Ok(())
     }
 
     /// Set client information

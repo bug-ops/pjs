@@ -4,7 +4,7 @@
 // significantly improving performance for large-scale data serialization.
 
 use crate::stream::StreamFrame;
-use bytes::{BytesMut, BufMut};
+use bytes::{BufMut, BytesMut};
 use sonic_rs::{JsonValueTrait, LazyValue};
 
 /// High-performance SIMD-accelerated serializer for stream frames
@@ -34,15 +34,15 @@ impl SimdFrameSerializer {
     /// Serialize a single frame using SIMD acceleration
     pub fn serialize_frame(&mut self, frame: &StreamFrame) -> Result<&[u8], sonic_rs::Error> {
         self.buffer.clear();
-        
+
         // Use sonic-rs for SIMD-accelerated serialization
         let serialized = sonic_rs::to_vec(frame)?;
         self.buffer.extend_from_slice(&serialized);
-        
+
         self.stats.frames_processed += 1;
         self.stats.bytes_written += self.buffer.len();
         self.stats.simd_operations += 1;
-        
+
         Ok(&self.buffer)
     }
 
@@ -51,36 +51,39 @@ impl SimdFrameSerializer {
         // Estimate capacity for better performance
         let estimated_size = frames.len() * 256; // ~256 bytes per frame estimate
         let mut output = BytesMut::with_capacity(estimated_size);
-        
+
         for frame in frames {
             let serialized = sonic_rs::to_vec(frame)?;
             output.extend_from_slice(&serialized);
             output.put_u8(b'\n'); // NDJSON separator
         }
-        
+
         self.stats.frames_processed += frames.len();
         self.stats.bytes_written += output.len();
         self.stats.simd_operations += frames.len();
-        
+
         Ok(output)
     }
 
     /// Serialize frames to Server-Sent Events format with SIMD
-    pub fn serialize_sse_batch(&mut self, frames: &[StreamFrame]) -> Result<BytesMut, sonic_rs::Error> {
+    pub fn serialize_sse_batch(
+        &mut self,
+        frames: &[StreamFrame],
+    ) -> Result<BytesMut, sonic_rs::Error> {
         let estimated_size = frames.len() * 300; // SSE overhead + JSON
         let mut output = BytesMut::with_capacity(estimated_size);
-        
+
         for frame in frames {
             output.extend_from_slice(b"data: ");
             let serialized = sonic_rs::to_vec(frame)?;
             output.extend_from_slice(&serialized);
             output.extend_from_slice(b"\n\n");
         }
-        
+
         self.stats.frames_processed += frames.len();
         self.stats.bytes_written += output.len();
         self.stats.simd_operations += frames.len();
-        
+
         Ok(output)
     }
 
@@ -109,18 +112,20 @@ impl SimdJsonProcessor {
     /// Parse and extract specific fields using SIMD with zero-copy where possible
     pub fn extract_priority_field(input: &[u8]) -> Result<Option<u8>, sonic_rs::Error> {
         let doc = sonic_rs::from_slice::<LazyValue<'_>>(input)?;
-        
+
         if let Some(priority_value) = doc.get("priority")
-            && let Some(priority) = priority_value.as_u64() {
-                return Ok(Some(priority as u8));
-            }
-        
+            && let Some(priority) = priority_value.as_u64()
+        {
+            return Ok(Some(priority as u8));
+        }
+
         Ok(None)
     }
 
     /// Batch validate multiple JSON documents
     pub fn validate_batch(inputs: &[&[u8]]) -> Vec<Result<(), sonic_rs::Error>> {
-        inputs.iter()
+        inputs
+            .iter()
             .map(|input| Self::validate_json(input))
             .collect()
     }
@@ -141,7 +146,7 @@ impl SimdStreamBuffer {
     pub fn with_capacity(capacity: usize) -> Self {
         // Ensure capacity is aligned for SIMD operations
         let aligned_capacity = (capacity + 63) & !63; // Align to 64 bytes for AVX-512
-        
+
         Self {
             data: BytesMut::with_capacity(aligned_capacity),
             position: 0,
@@ -152,13 +157,13 @@ impl SimdStreamBuffer {
     /// Write a frame to buffer using SIMD serialization
     pub fn write_frame(&mut self, frame: &StreamFrame) -> Result<usize, sonic_rs::Error> {
         let start_pos = self.data.len();
-        
+
         // Ensure we have enough space
         self.ensure_capacity(512); // Reserve space for frame
-        
+
         let serialized = sonic_rs::to_vec(frame)?;
         self.data.extend_from_slice(&serialized);
-        
+
         let bytes_written = self.data.len() - start_pos;
         Ok(bytes_written)
     }
@@ -166,16 +171,16 @@ impl SimdStreamBuffer {
     /// Write multiple frames efficiently
     pub fn write_frames(&mut self, frames: &[StreamFrame]) -> Result<usize, sonic_rs::Error> {
         let start_len = self.data.len();
-        
+
         // Pre-allocate space for all frames
         self.ensure_capacity(frames.len() * 256);
-        
+
         for frame in frames {
             let serialized = sonic_rs::to_vec(frame)?;
             self.data.extend_from_slice(&serialized);
             self.data.put_u8(b'\n');
         }
-        
+
         Ok(self.data.len() - start_len)
     }
 
@@ -244,19 +249,28 @@ impl SimdStreamProcessor {
     }
 
     /// Process frames to JSON format with SIMD acceleration
-    pub fn process_to_json(&mut self, frames: &[StreamFrame]) -> Result<bytes::Bytes, sonic_rs::Error> {
+    pub fn process_to_json(
+        &mut self,
+        frames: &[StreamFrame],
+    ) -> Result<bytes::Bytes, sonic_rs::Error> {
         let result = self.serializer.serialize_batch(frames)?;
         Ok(result.freeze())
     }
 
     /// Process frames to Server-Sent Events format
-    pub fn process_to_sse(&mut self, frames: &[StreamFrame]) -> Result<bytes::Bytes, sonic_rs::Error> {
+    pub fn process_to_sse(
+        &mut self,
+        frames: &[StreamFrame],
+    ) -> Result<bytes::Bytes, sonic_rs::Error> {
         let result = self.serializer.serialize_sse_batch(frames)?;
         Ok(result.freeze())
     }
 
     /// Process frames to NDJSON with buffered approach
-    pub fn process_to_ndjson(&mut self, frames: &[StreamFrame]) -> Result<bytes::Bytes, sonic_rs::Error> {
+    pub fn process_to_ndjson(
+        &mut self,
+        frames: &[StreamFrame],
+    ) -> Result<bytes::Bytes, sonic_rs::Error> {
         self.buffer.clear();
         self.buffer.write_frames(frames)?;
         let data = self.buffer.as_slice().to_vec();
@@ -282,7 +296,7 @@ mod tests {
     #[test]
     fn test_simd_frame_serialization() {
         let mut serializer = SimdFrameSerializer::with_capacity(1024);
-        
+
         let frame = StreamFrame {
             data: serde_json::json!({"test": "data", "priority": "high"}),
             priority: Priority::HIGH,
@@ -291,10 +305,10 @@ mod tests {
 
         let result = serializer.serialize_frame(&frame);
         assert!(result.is_ok());
-        
+
         let serialized = result.unwrap();
         assert!(!serialized.is_empty());
-        
+
         // Verify we can deserialize back
         let parsed: serde_json::Value = sonic_rs::from_slice(serialized).unwrap();
         assert_eq!(parsed["data"]["test"], "data");
@@ -303,7 +317,7 @@ mod tests {
     #[test]
     fn test_batch_serialization() {
         let mut serializer = SimdFrameSerializer::with_capacity(2048);
-        
+
         let frames = vec![
             StreamFrame {
                 data: serde_json::json!({"id": 1}),
@@ -319,10 +333,10 @@ mod tests {
 
         let result = serializer.serialize_batch(&frames);
         assert!(result.is_ok());
-        
+
         let serialized = result.unwrap();
         assert!(!serialized.is_empty());
-        
+
         // Should contain both frames separated by newlines
         let content = String::from_utf8(serialized.to_vec()).unwrap();
         assert!(content.contains("\"id\":1"));
@@ -333,7 +347,7 @@ mod tests {
     fn test_simd_json_validation() {
         let valid_json = br#"{"test": "value", "number": 42}"#;
         let invalid_json = br#"{"test": "value", "number": 42"#;
-        
+
         assert!(SimdJsonProcessor::validate_json(valid_json).is_ok());
         assert!(SimdJsonProcessor::validate_json(invalid_json).is_err());
     }
@@ -342,10 +356,10 @@ mod tests {
     fn test_priority_extraction() {
         let json_with_priority = br#"{"data": "test", "priority": 5}"#;
         let json_without_priority = br#"{"data": "test"}"#;
-        
+
         let result1 = SimdJsonProcessor::extract_priority_field(json_with_priority).unwrap();
         assert_eq!(result1, Some(5));
-        
+
         let result2 = SimdJsonProcessor::extract_priority_field(json_without_priority).unwrap();
         assert_eq!(result2, None);
     }
@@ -353,7 +367,7 @@ mod tests {
     #[test]
     fn test_simd_stream_buffer() {
         let mut buffer = SimdStreamBuffer::with_capacity(1024);
-        
+
         let frame = StreamFrame {
             data: serde_json::json!({"buffer_test": true}),
             priority: Priority::HIGH,
@@ -362,10 +376,10 @@ mod tests {
 
         let bytes_written = buffer.write_frame(&frame).unwrap();
         assert!(bytes_written > 0);
-        
+
         let content = buffer.as_slice();
         assert!(!content.is_empty());
-        
+
         // Verify content is valid JSON
         let parsed: serde_json::Value = sonic_rs::from_slice(content).unwrap();
         assert_eq!(parsed["data"]["buffer_test"], true);
@@ -378,28 +392,26 @@ mod tests {
             initial_capacity: 2048,
             collect_stats: true,
         };
-        
+
         let mut processor = SimdStreamProcessor::new(config);
-        
-        let frames = vec![
-            StreamFrame {
-                data: serde_json::json!({"processor": "test", "id": 1}),
-                priority: Priority::CRITICAL,
-                metadata: HashMap::new(),
-            },
-        ];
+
+        let frames = vec![StreamFrame {
+            data: serde_json::json!({"processor": "test", "id": 1}),
+            priority: Priority::CRITICAL,
+            metadata: HashMap::new(),
+        }];
 
         let json_result = processor.process_to_json(&frames);
         assert!(json_result.is_ok());
-        
+
         let sse_result = processor.process_to_sse(&frames);
         assert!(sse_result.is_ok());
-        
+
         // Verify SSE format
         let sse_content = String::from_utf8(sse_result.unwrap().to_vec()).unwrap();
         assert!(sse_content.starts_with("data: "));
         assert!(sse_content.ends_with("\n\n"));
-        
+
         // Check stats if enabled
         if let Some(stats) = processor.stats() {
             assert!(stats.frames_processed > 0);

@@ -5,12 +5,12 @@
 //
 // REQUIRES: nightly Rust for `impl Trait` in associated types
 
-use crate::stream::StreamFrame;
-use crate::domain::value_objects::{SessionId, JsonData};
-use super::simd_acceleration::{SimdStreamProcessor, SimdConfig};
 use super::object_pool::pooled_builders::PooledResponseBuilder;
-use std::collections::HashMap;
+use super::simd_acceleration::{SimdConfig, SimdStreamProcessor};
+use crate::domain::value_objects::{JsonData, SessionId};
+use crate::stream::StreamFrame;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::future::Future;
 
 /// Streaming format options for framework responses
@@ -49,7 +49,7 @@ impl StreamingFormat {
             Self::Json
         }
     }
-    
+
     /// Check if format supports streaming
     pub fn supports_streaming(&self) -> bool {
         matches!(self, Self::Ndjson | Self::ServerSentEvents | Self::Binary)
@@ -129,7 +129,7 @@ impl UniversalResponse {
             map.insert("status".to_string(), JsonData::Integer(status as i64));
             map
         });
-        
+
         Self {
             status_code: status,
             headers: HashMap::with_capacity(1),
@@ -139,7 +139,11 @@ impl UniversalResponse {
     }
 
     /// Add a header to the response  
-    pub fn with_header(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) -> Self {
+    pub fn with_header(
+        mut self,
+        name: impl Into<Cow<'static, str>>,
+        value: impl Into<Cow<'static, str>>,
+    ) -> Self {
         self.headers.insert(name.into(), value.into());
         self
     }
@@ -174,7 +178,11 @@ impl UniversalRequest {
     }
 
     /// Add a header
-    pub fn with_header(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<Cow<'static, str>>) -> Self {
+    pub fn with_header(
+        mut self,
+        name: impl Into<Cow<'static, str>>,
+        value: impl Into<Cow<'static, str>>,
+    ) -> Self {
         self.headers.insert(name.into(), value.into());
         self
     }
@@ -203,13 +211,16 @@ impl UniversalRequest {
 
     /// Check if request accepts a specific content type
     pub fn accepts(&self, content_type: &str) -> bool {
-        if let Some(accept) = self.get_header("accept").or_else(|| self.get_header("Accept")) {
+        if let Some(accept) = self
+            .get_header("accept")
+            .or_else(|| self.get_header("Accept"))
+        {
             accept.contains(content_type)
         } else {
             false
         }
     }
-    
+
     /// Get preferred streaming format from headers
     pub fn preferred_streaming_format(&self) -> StreamingFormat {
         if let Some(accept) = self.get_header("accept") {
@@ -225,19 +236,19 @@ impl UniversalRequest {
 pub enum IntegrationError {
     #[error("Unsupported framework: {0}")]
     UnsupportedFramework(String),
-    
+
     #[error("Request conversion failed: {0}")]
     RequestConversion(String),
-    
+
     #[error("Response conversion failed: {0}")]
     ResponseConversion(String),
-    
+
     #[error("Streaming not supported by framework")]
     StreamingNotSupported,
-    
+
     #[error("Configuration error: {0}")]
     Configuration(String),
-    
+
     #[error("SIMD processing error: {0}")]
     SimdProcessing(String),
 }
@@ -245,7 +256,7 @@ pub enum IntegrationError {
 pub type IntegrationResult<T> = Result<T, IntegrationError>;
 
 /// High-performance streaming adapter using GAT zero-cost abstractions
-/// 
+///
 /// This trait provides zero-cost abstractions for web framework integration
 /// using `impl Trait` in associated types (**requires nightly Rust**).
 ///
@@ -266,15 +277,15 @@ pub trait StreamingAdapter: Send + Sync {
     type StreamingResponseFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
-    
+
     type SseResponseFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
-    
+
     type JsonResponseFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
-    
+
     type MiddlewareFuture<'a>: Future<Output = IntegrationResult<UniversalResponse>> + Send + 'a
     where
         Self: 'a;
@@ -334,12 +345,12 @@ pub trait StreamingAdapterExt: StreamingAdapter {
     type AutoStreamFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
-    
+
     /// Error response future
     type ErrorResponseFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
-    
+
     /// Health check response future
     type HealthResponseFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
@@ -367,7 +378,7 @@ pub trait StreamingAdapterExt: StreamingAdapter {
 /// Helper functions for default implementations with zero-cost abstractions
 pub mod streaming_helpers {
     use super::*;
-    
+
     /// Default SSE response implementation with SIMD acceleration
     pub async fn default_sse_response<T: StreamingAdapter>(
         adapter: &T,
@@ -377,15 +388,17 @@ pub mod streaming_helpers {
         // Use SIMD-accelerated serialization for better performance
         let config = SimdConfig::default();
         let mut processor = SimdStreamProcessor::new(config);
-        
+
         match processor.process_to_sse(&frames) {
             Ok(sse_data) => {
                 let sse_string = String::from_utf8(sse_data.to_vec())
                     .map_err(|e| IntegrationError::ResponseConversion(e.to_string()))?;
-                
+
                 let events = vec![sse_string];
-                let response = UniversalResponse::server_sent_events(events)
-                    .with_header(Cow::Borrowed("X-PJS-Session-ID"), Cow::Owned(session_id.to_string()));
+                let response = UniversalResponse::server_sent_events(events).with_header(
+                    Cow::Borrowed("X-PJS-Session-ID"),
+                    Cow::Owned(session_id.to_string()),
+                );
 
                 adapter.to_response(response)
             }
@@ -393,17 +406,24 @@ pub mod streaming_helpers {
                 // Fallback to standard serialization
                 let events: Vec<String> = frames
                     .into_iter()
-                    .map(|frame| format!("data: {}\\n\\n", serde_json::to_string(&frame).unwrap_or_default()))
+                    .map(|frame| {
+                        format!(
+                            "data: {}\\n\\n",
+                            serde_json::to_string(&frame).unwrap_or_default()
+                        )
+                    })
                     .collect();
 
-                let response = UniversalResponse::server_sent_events(events)
-                    .with_header(Cow::Borrowed("X-PJS-Session-ID"), Cow::Owned(session_id.to_string()));
+                let response = UniversalResponse::server_sent_events(events).with_header(
+                    Cow::Borrowed("X-PJS-Session-ID"),
+                    Cow::Owned(session_id.to_string()),
+                );
 
                 adapter.to_response(response)
             }
         }
     }
-    
+
     /// Default JSON response implementation
     pub async fn default_json_response<T: StreamingAdapter>(
         adapter: &T,
@@ -424,7 +444,7 @@ pub mod streaming_helpers {
 
         adapter.to_response(response)
     }
-    
+
     /// Default middleware implementation (no-op)
     pub async fn default_middleware<T: StreamingAdapter>(
         _adapter: &T,
@@ -433,7 +453,7 @@ pub mod streaming_helpers {
     ) -> IntegrationResult<UniversalResponse> {
         Ok(response)
     }
-    
+
     /// Default error response implementation
     pub async fn default_error_response<T: StreamingAdapter>(
         adapter: &T,
@@ -443,27 +463,39 @@ pub mod streaming_helpers {
         let response = UniversalResponse::error(status, message);
         adapter.to_response(response)
     }
-    
+
     /// Default health check response implementation
     pub async fn default_health_response<T: StreamingAdapter>(
         adapter: &T,
     ) -> IntegrationResult<T::Response> {
         let health_data = JsonData::Object({
             let mut map = std::collections::HashMap::new();
-            map.insert("status".to_string(), JsonData::String("healthy".to_string()));
-            map.insert("framework".to_string(), JsonData::String(adapter.framework_name().to_string()));
-            map.insert("streaming_support".to_string(), JsonData::Bool(adapter.supports_streaming()));
-            map.insert("sse_support".to_string(), JsonData::Bool(adapter.supports_sse()));
+            map.insert(
+                "status".to_string(),
+                JsonData::String("healthy".to_string()),
+            );
+            map.insert(
+                "framework".to_string(),
+                JsonData::String(adapter.framework_name().to_string()),
+            );
+            map.insert(
+                "streaming_support".to_string(),
+                JsonData::Bool(adapter.supports_streaming()),
+            );
+            map.insert(
+                "sse_support".to_string(),
+                JsonData::Bool(adapter.supports_sse()),
+            );
             map
         });
 
         let response = PooledResponseBuilder::new()
             .header(Cow::Borrowed("X-Health-Check"), Cow::Borrowed("pjs"))
             .json(health_data);
-        
+
         adapter.to_response(response)
     }
-    
+
     /// Default auto-stream response implementation with format detection
     pub async fn default_auto_stream_response<T: StreamingAdapter>(
         adapter: &T,
@@ -478,7 +510,9 @@ pub mod streaming_helpers {
                 adapter.create_sse_response(session_id, frames).await
             }
             _ => {
-                adapter.create_streaming_response(session_id, frames, format).await
+                adapter
+                    .create_streaming_response(session_id, frames, format)
+                    .await
             }
         }
     }
@@ -491,9 +525,18 @@ mod tests {
     #[test]
     fn test_streaming_format_content_types() {
         assert_eq!(StreamingFormat::Json.content_type(), "application/json");
-        assert_eq!(StreamingFormat::Ndjson.content_type(), "application/x-ndjson");
-        assert_eq!(StreamingFormat::ServerSentEvents.content_type(), "text/event-stream");
-        assert_eq!(StreamingFormat::Binary.content_type(), "application/octet-stream");
+        assert_eq!(
+            StreamingFormat::Ndjson.content_type(),
+            "application/x-ndjson"
+        );
+        assert_eq!(
+            StreamingFormat::ServerSentEvents.content_type(),
+            "text/event-stream"
+        );
+        assert_eq!(
+            StreamingFormat::Binary.content_type(),
+            "application/octet-stream"
+        );
     }
 
     #[test]
@@ -523,14 +566,14 @@ mod tests {
         assert!(request.accepts("text/event-stream"));
         assert_eq!(request.get_query("priority"), Some(&"high".to_string()));
     }
-    
+
     #[test]
     fn test_universal_response_creation() {
         let data = JsonData::String("test".to_string());
         let response = UniversalResponse::json(data)
             .with_status(201)
             .with_header("X-Test", "value");
-            
+
         assert_eq!(response.status_code, 201);
         assert_eq!(response.content_type, "application/json");
         assert!(response.headers.contains_key("X-Test"));

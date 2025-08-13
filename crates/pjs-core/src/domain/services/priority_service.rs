@@ -75,9 +75,10 @@ impl PriorityService {
 
         // 3. Check for field name match
         if let Some(field_name) = self.extract_field_name(path)
-            && let Some(&priority) = self.field_rules.get(&field_name) {
-                return priority;
-            }
+            && let Some(&priority) = self.field_rules.get(&field_name)
+        {
+            return priority;
+        }
 
         // 4. Check for type-based rules
         let type_name = self.get_value_type_name(value);

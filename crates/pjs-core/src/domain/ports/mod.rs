@@ -6,23 +6,20 @@
 //! This module implements the Ports and Adapters pattern (Hexagonal Architecture)
 //! by defining abstract interfaces that decouple the domain from infrastructure concerns.
 
+pub mod gat;
 pub mod repositories;
 pub mod writer;
-pub mod gat;
 
 // Re-export commonly used types
+pub use gat::*;
 pub use repositories::*;
 pub use writer::*;
-pub use gat::*;
 
 // Re-export GAT traits as main interfaces
 pub use gat::{
-    EventPublisherGat as EventPublisher,
-    MetricsCollectorGat as MetricsCollector,
-    StreamRepositoryGat as StreamRepository,
+    EventPublisherGat as EventPublisher, FrameSinkGat as FrameSink, FrameSourceGat as FrameSource,
+    MetricsCollectorGat as MetricsCollector, StreamRepositoryGat as StreamRepository,
     StreamStoreGat as StreamStore,
-    FrameSourceGat as FrameSource,
-    FrameSinkGat as FrameSink,
 };
 
 // Cleaned up unused imports

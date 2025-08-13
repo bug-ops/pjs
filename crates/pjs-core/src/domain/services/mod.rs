@@ -15,6 +15,5 @@ pub use priority_service::PriorityService;
 //     StreamingStats, StreamingPerformanceMetrics
 // }; // TODO: migrate to GAT
 pub use gat_orchestrator::{
-    GatStreamingOrchestrator, GatOrchestratorFactory,
-    OrchestratorConfig, HealthStatus
+    GatOrchestratorFactory, GatStreamingOrchestrator, HealthStatus, OrchestratorConfig,
 };

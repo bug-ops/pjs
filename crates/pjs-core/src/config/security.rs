@@ -9,13 +9,13 @@ use std::time::Duration;
 pub struct SecurityConfig {
     /// JSON processing limits
     pub json: JsonLimits,
-    
+
     /// Buffer management limits
     pub buffers: BufferLimits,
-    
+
     /// Network and connection limits
     pub network: NetworkLimits,
-    
+
     /// Session management limits
     pub sessions: SessionLimits,
 }
@@ -25,16 +25,16 @@ pub struct SecurityConfig {
 pub struct JsonLimits {
     /// Maximum JSON input size in bytes
     pub max_input_size: usize,
-    
+
     /// Maximum JSON nesting depth
     pub max_depth: usize,
-    
+
     /// Maximum number of keys in a JSON object
     pub max_object_keys: usize,
-    
+
     /// Maximum array length
     pub max_array_length: usize,
-    
+
     /// Maximum string length in JSON
     pub max_string_length: usize,
 }
@@ -44,16 +44,16 @@ pub struct JsonLimits {
 pub struct BufferLimits {
     /// Maximum individual buffer size
     pub max_buffer_size: usize,
-    
+
     /// Maximum number of buffers in pool
     pub max_pool_size: usize,
-    
+
     /// Maximum total memory for all buffer pools
     pub max_total_memory: usize,
-    
+
     /// Buffer time-to-live before cleanup
     pub buffer_ttl_secs: u64,
-    
+
     /// Maximum buffers per size bucket
     pub max_buffers_per_bucket: usize,
 }
@@ -63,22 +63,22 @@ pub struct BufferLimits {
 pub struct NetworkLimits {
     /// Maximum WebSocket frame size
     pub max_websocket_frame_size: usize,
-    
+
     /// Maximum number of concurrent connections
     pub max_concurrent_connections: usize,
-    
+
     /// Connection timeout in seconds
     pub connection_timeout_secs: u64,
-    
+
     /// Maximum request rate per connection (requests per second)
     pub max_requests_per_second: u32,
-    
+
     /// Maximum payload size for HTTP requests
     pub max_http_payload_size: usize,
-    
+
     /// Rate limiting configuration
     pub rate_limiting: RateLimitingConfig,
-    
+
     /// Compression bomb protection configuration
     pub compression_bomb: CompressionBombConfig,
 }
@@ -88,19 +88,19 @@ pub struct NetworkLimits {
 pub struct RateLimitingConfig {
     /// Maximum requests per time window per IP
     pub max_requests_per_window: u32,
-    
+
     /// Time window for rate limiting in seconds
     pub window_duration_secs: u64,
-    
+
     /// Maximum concurrent connections per IP
     pub max_connections_per_ip: usize,
-    
+
     /// Maximum WebSocket messages per second per connection
     pub max_messages_per_second: u32,
-    
+
     /// Burst allowance (extra messages above rate)
     pub burst_allowance: u32,
-    
+
     /// Enable rate limiting
     pub enabled: bool,
 }
@@ -110,16 +110,16 @@ pub struct RateLimitingConfig {
 pub struct SessionLimits {
     /// Maximum session ID length
     pub max_session_id_length: usize,
-    
+
     /// Minimum session ID length
     pub min_session_id_length: usize,
-    
+
     /// Maximum streams per session
     pub max_streams_per_session: usize,
-    
+
     /// Session idle timeout in seconds
     pub session_timeout_secs: u64,
-    
+
     /// Maximum session data size
     pub max_session_data_size: usize,
 }
@@ -153,7 +153,7 @@ impl Default for BufferLimits {
             max_buffer_size: 256 * 1024 * 1024, // 256MB
             max_pool_size: 1000,
             max_total_memory: 512 * 1024 * 1024, // 512MB
-            buffer_ttl_secs: 300, // 5 minutes
+            buffer_ttl_secs: 300,                // 5 minutes
             max_buffers_per_bucket: 50,
         }
     }
@@ -192,7 +192,7 @@ impl Default for SessionLimits {
             max_session_id_length: 128,
             min_session_id_length: 8,
             max_streams_per_session: 100,
-            session_timeout_secs: 3600, // 1 hour
+            session_timeout_secs: 3600,               // 1 hour
             max_session_data_size: 100 * 1024 * 1024, // 100MB
         }
     }
@@ -213,7 +213,7 @@ impl SecurityConfig {
                 max_buffer_size: 1024 * 1024 * 1024, // 1GB
                 max_pool_size: 5000,
                 max_total_memory: 2 * 1024 * 1024 * 1024, // 2GB
-                buffer_ttl_secs: 600, // 10 minutes
+                buffer_ttl_secs: 600,                     // 10 minutes
                 max_buffers_per_bucket: 200,
             },
             network: NetworkLimits {
@@ -236,7 +236,7 @@ impl SecurityConfig {
                 max_session_id_length: 256,
                 min_session_id_length: 16,
                 max_streams_per_session: 1000,
-                session_timeout_secs: 7200, // 2 hours
+                session_timeout_secs: 7200,               // 2 hours
                 max_session_data_size: 500 * 1024 * 1024, // 500MB
             },
         }
@@ -256,7 +256,7 @@ impl SecurityConfig {
                 max_buffer_size: 10 * 1024 * 1024, // 10MB
                 max_pool_size: 100,
                 max_total_memory: 50 * 1024 * 1024, // 50MB
-                buffer_ttl_secs: 60, // 1 minute
+                buffer_ttl_secs: 60,                // 1 minute
                 max_buffers_per_bucket: 10,
             },
             network: NetworkLimits {
@@ -279,7 +279,7 @@ impl SecurityConfig {
                 max_session_id_length: 64,
                 min_session_id_length: 8,
                 max_streams_per_session: 10,
-                session_timeout_secs: 900, // 15 minutes
+                session_timeout_secs: 900,               // 15 minutes
                 max_session_data_size: 10 * 1024 * 1024, // 10MB
             },
         }
@@ -299,7 +299,7 @@ impl SecurityConfig {
                 max_buffer_size: 100 * 1024 * 1024, // 100MB
                 max_pool_size: 500,
                 max_total_memory: 200 * 1024 * 1024, // 200MB
-                buffer_ttl_secs: 120, // 2 minutes
+                buffer_ttl_secs: 120,                // 2 minutes
                 max_buffers_per_bucket: 25,
             },
             network: NetworkLimits {
@@ -322,7 +322,7 @@ impl SecurityConfig {
                 max_session_id_length: 128,
                 min_session_id_length: 8,
                 max_streams_per_session: 50,
-                session_timeout_secs: 1800, // 30 minutes
+                session_timeout_secs: 1800,              // 30 minutes
                 max_session_data_size: 50 * 1024 * 1024, // 50MB
             },
         }
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn test_default_security_config() {
         let config = SecurityConfig::default();
-        
+
         // Test reasonable defaults
         assert!(config.json.max_input_size > 0);
         assert!(config.buffers.max_buffer_size > 0);
@@ -363,18 +363,20 @@ mod tests {
     fn test_high_throughput_config() {
         let config = SecurityConfig::high_throughput();
         let default = SecurityConfig::default();
-        
+
         // High throughput should have higher limits
         assert!(config.json.max_input_size >= default.json.max_input_size);
         assert!(config.buffers.max_total_memory >= default.buffers.max_total_memory);
-        assert!(config.network.max_concurrent_connections >= default.network.max_concurrent_connections);
+        assert!(
+            config.network.max_concurrent_connections >= default.network.max_concurrent_connections
+        );
     }
 
     #[test]
     fn test_low_memory_config() {
         let config = SecurityConfig::low_memory();
         let default = SecurityConfig::default();
-        
+
         // Low memory should have lower limits
         assert!(config.json.max_input_size <= default.json.max_input_size);
         assert!(config.buffers.max_total_memory <= default.buffers.max_total_memory);
@@ -384,7 +386,7 @@ mod tests {
     #[test]
     fn test_duration_conversions() {
         let config = SecurityConfig::default();
-        
+
         assert!(config.buffer_ttl().as_secs() > 0);
         assert!(config.connection_timeout().as_secs() > 0);
         assert!(config.session_timeout().as_secs() > 0);

@@ -216,7 +216,8 @@ impl JsonData {
                     if !obj.contains_key(*part) {
                         obj.insert(part.to_string(), Self::object(HashMap::new()));
                     }
-                    current = obj.get_mut(*part)
+                    current = obj
+                        .get_mut(*part)
                         .expect("Key must exist as we just inserted it above");
                 }
                 _ => return false,
@@ -240,11 +241,12 @@ impl JsonData {
             Self::Integer(_) => 8,
             Self::Float(_) => 8,
             Self::String(s) => s.len() * 2, // UTF-16 estimation
-            Self::Array(arr) => {
-                8 + arr.iter().map(|v| v.memory_size()).sum::<usize>()
-            }
+            Self::Array(arr) => 8 + arr.iter().map(|v| v.memory_size()).sum::<usize>(),
             Self::Object(obj) => {
-                16 + obj.iter().map(|(k, v)| k.len() * 2 + v.memory_size()).sum::<usize>()
+                16 + obj
+                    .iter()
+                    .map(|(k, v)| k.len() * 2 + v.memory_size())
+                    .sum::<usize>()
             }
         }
     }
@@ -408,7 +410,10 @@ mod tests {
         assert_eq!(JsonData::null(), JsonData::Null);
         assert_eq!(JsonData::bool(true), JsonData::Bool(true));
         assert_eq!(JsonData::float(42.0), JsonData::Float(42.0));
-        assert_eq!(JsonData::string("hello"), JsonData::String("hello".to_string()));
+        assert_eq!(
+            JsonData::string("hello"),
+            JsonData::String("hello".to_string())
+        );
     }
 
     #[test]
@@ -432,15 +437,15 @@ mod tests {
     #[test]
     fn test_path_operations() {
         let mut data = JsonData::object(HashMap::new());
-        
+
         // Set nested path
         assert!(data.set_path("user.name", JsonData::string("John")));
         assert!(data.set_path("user.age", JsonData::integer(30)));
-        
+
         // Get nested path
         assert_eq!(data.get_path("user.name").unwrap().as_str(), Some("John"));
         assert_eq!(data.get_path("user.age").unwrap().as_i64(), Some(30));
-        
+
         // Non-existent path
         assert!(data.get_path("user.email").is_none());
     }
@@ -455,7 +460,7 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        
+
         assert!(data.memory_size() > 0);
     }
 
@@ -469,7 +474,7 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        
+
         let display = format!("{data}");
         assert!(display.contains("name"));
         assert!(display.contains("John"));

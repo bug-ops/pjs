@@ -4,9 +4,9 @@
 //! to progressively decompress data as frames arrive.
 
 use crate::{
-    compression::{SchemaCompressor, CompressionStrategy, CompressedData},
-    domain::{DomainResult, DomainError},
-    stream::{StreamFrame, Priority},
+    compression::{CompressedData, CompressionStrategy, SchemaCompressor},
+    domain::{DomainError, DomainResult},
+    stream::{Priority, StreamFrame},
 };
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -82,7 +82,7 @@ impl StreamingCompressor {
     /// Process and compress a stream frame based on its priority
     pub fn compress_frame(&mut self, frame: StreamFrame) -> DomainResult<CompressedFrame> {
         let compressor = self.select_compressor_for_priority(frame.priority);
-        
+
         // Calculate original size
         let original_size = serde_json::to_string(&frame.data)
             .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
@@ -90,9 +90,13 @@ impl StreamingCompressor {
 
         // Compress based on frame content and priority
         let compressed_data = compressor.compress(&frame.data)?;
-        
+
         // Update statistics
-        self.update_stats(frame.priority, original_size, compressed_data.compressed_size);
+        self.update_stats(
+            frame.priority,
+            original_size,
+            compressed_data.compressed_size,
+        );
 
         // Create decompression metadata
         let decompression_metadata = self.create_decompression_metadata(&compressed_data)?;
@@ -105,7 +109,11 @@ impl StreamingCompressor {
     }
 
     /// Analyze JSON data to optimize compression strategies
-    pub fn optimize_for_data(&mut self, skeleton: &JsonValue, sample_data: &[JsonValue]) -> DomainResult<()> {
+    pub fn optimize_for_data(
+        &mut self,
+        skeleton: &JsonValue,
+        sample_data: &[JsonValue],
+    ) -> DomainResult<()> {
         // Optimize skeleton compressor for critical structural data
         self.skeleton_compressor.analyze_and_optimize(skeleton)?;
 
@@ -113,7 +121,8 @@ impl StreamingCompressor {
         if !sample_data.is_empty() {
             // Combine samples for comprehensive analysis
             let combined_sample = JsonValue::Array(sample_data.to_vec());
-            self.content_compressor.analyze_and_optimize(&combined_sample)?;
+            self.content_compressor
+                .analyze_and_optimize(&combined_sample)?;
         }
 
         Ok(())
@@ -155,7 +164,10 @@ impl StreamingCompressor {
     }
 
     /// Create decompression metadata for client
-    fn create_decompression_metadata(&self, compressed_data: &CompressedData) -> DomainResult<DecompressionMetadata> {
+    fn create_decompression_metadata(
+        &self,
+        compressed_data: &CompressedData,
+    ) -> DomainResult<DecompressionMetadata> {
         let mut dictionary_map = HashMap::new();
         let mut delta_bases = HashMap::new();
 
@@ -163,9 +175,10 @@ impl StreamingCompressor {
         for (key, value) in &compressed_data.compression_metadata {
             if key.starts_with("dict_") {
                 if let Ok(index) = key.strip_prefix("dict_").unwrap().parse::<u16>()
-                    && let Some(string_val) = value.as_str() {
-                        dictionary_map.insert(index, string_val.to_string());
-                    }
+                    && let Some(string_val) = value.as_str()
+                {
+                    dictionary_map.insert(index, string_val.to_string());
+                }
             } else if key.starts_with("base_") {
                 let path = key.strip_prefix("base_").unwrap();
                 if let Some(num) = value.as_f64() {
@@ -244,7 +257,10 @@ impl StreamingDecompressor {
     }
 
     /// Decompress a compressed frame
-    pub fn decompress_frame(&mut self, compressed_frame: CompressedFrame) -> DomainResult<StreamFrame> {
+    pub fn decompress_frame(
+        &mut self,
+        compressed_frame: CompressedFrame,
+    ) -> DomainResult<StreamFrame> {
         let start_time = std::time::Instant::now();
 
         // Update decompression context with metadata
@@ -283,22 +299,22 @@ impl StreamingDecompressor {
     }
 
     /// Decompress data according to strategy
-    fn decompress_data(&self, compressed_data: &CompressedData, strategy: &CompressionStrategy) -> DomainResult<JsonValue> {
+    fn decompress_data(
+        &self,
+        compressed_data: &CompressedData,
+        strategy: &CompressionStrategy,
+    ) -> DomainResult<JsonValue> {
         match strategy {
             CompressionStrategy::None => Ok(compressed_data.data.clone()),
-            
+
             CompressionStrategy::Dictionary { .. } => {
                 self.decompress_dictionary(&compressed_data.data)
             }
-            
-            CompressionStrategy::Delta { .. } => {
-                self.decompress_delta(&compressed_data.data)
-            }
-            
-            CompressionStrategy::RunLength => {
-                self.decompress_run_length(&compressed_data.data)
-            }
-            
+
+            CompressionStrategy::Delta { .. } => self.decompress_delta(&compressed_data.data),
+
+            CompressionStrategy::RunLength => self.decompress_run_length(&compressed_data.data),
+
             CompressionStrategy::Hybrid { .. } => {
                 // Apply decompression in reverse order: delta first, then dictionary
                 let delta_decompressed = self.decompress_delta(&compressed_data.data)?;
@@ -318,7 +334,8 @@ impl StreamingDecompressor {
                 Ok(JsonValue::Object(decompressed))
             }
             JsonValue::Array(arr) => {
-                let decompressed: Result<Vec<_>, _> = arr.iter()
+                let decompressed: Result<Vec<_>, _> = arr
+                    .iter()
                     .map(|item| self.decompress_dictionary(item))
                     .collect();
                 Ok(JsonValue::Array(decompressed?))
@@ -326,9 +343,10 @@ impl StreamingDecompressor {
             JsonValue::Number(n) => {
                 // Check if this is a dictionary index
                 if let Some(index) = n.as_u64()
-                    && let Some(string_val) = self.active_dictionary.get(&(index as u16)) {
-                        return Ok(JsonValue::String(string_val.clone()));
-                    }
+                    && let Some(string_val) = self.active_dictionary.get(&(index as u16))
+                {
+                    return Ok(JsonValue::String(string_val.clone()));
+                }
                 Ok(data.clone())
             }
             _ => Ok(data.clone()),
@@ -351,7 +369,7 @@ impl StreamingDecompressor {
     /// Update decompression statistics
     fn update_decompression_stats(&mut self, data: &JsonValue, duration: std::time::Duration) {
         self.stats.frames_decompressed += 1;
-        
+
         if let Ok(serialized) = serde_json::to_string(data) {
             self.stats.total_decompressed_bytes += serialized.len();
         }
@@ -362,7 +380,8 @@ impl StreamingDecompressor {
         } else {
             // Calculate running average
             let total_frames = self.stats.frames_decompressed as u64;
-            let total_time = self.stats.avg_decompression_time_us * (total_frames - 1) + new_time_us;
+            let total_time =
+                self.stats.avg_decompression_time_us * (total_frames - 1) + new_time_us;
             self.stats.avg_decompression_time_us = total_time / total_frames;
         }
     }
@@ -393,7 +412,7 @@ mod tests {
     #[test]
     fn test_streaming_compressor_basic() {
         let mut compressor = StreamingCompressor::new();
-        
+
         let frame = StreamFrame {
             data: json!({
                 "message": "test message",
@@ -405,19 +424,19 @@ mod tests {
 
         let result = compressor.compress_frame(frame);
         assert!(result.is_ok());
-        
+
         let compressed = result.unwrap();
         assert_eq!(compressed.frame.priority, Priority::MEDIUM);
     }
 
     #[test]
     fn test_compression_stats() {
-        let stats = CompressionStats { 
-            total_input_bytes: 1000, 
-            total_output_bytes: 600, 
-            ..Default::default() 
+        let stats = CompressionStats {
+            total_input_bytes: 1000,
+            total_output_bytes: 600,
+            ..Default::default()
         };
-        
+
         assert_eq!(stats.overall_compression_ratio(), 0.6);
         assert_eq!(stats.bytes_saved(), 400);
         // Use approximate comparison for float precision
@@ -428,7 +447,7 @@ mod tests {
     #[test]
     fn test_streaming_decompressor_basic() {
         let mut decompressor = StreamingDecompressor::new();
-        
+
         let compressed_frame = CompressedFrame {
             frame: StreamFrame {
                 data: json!({"test": "data"}),
@@ -451,7 +470,7 @@ mod tests {
 
         let result = decompressor.decompress_frame(compressed_frame);
         assert!(result.is_ok());
-        
+
         let decompressed = result.unwrap();
         assert_eq!(decompressed.data, json!({"test": "data"}));
     }
@@ -459,8 +478,12 @@ mod tests {
     #[test]
     fn test_dictionary_decompression() {
         let mut decompressor = StreamingDecompressor::new();
-        decompressor.active_dictionary.insert(0, "hello".to_string());
-        decompressor.active_dictionary.insert(1, "world".to_string());
+        decompressor
+            .active_dictionary
+            .insert(0, "hello".to_string());
+        decompressor
+            .active_dictionary
+            .insert(1, "world".to_string());
 
         // Test with dictionary indices
         let compressed = json!({
@@ -469,10 +492,13 @@ mod tests {
         });
 
         let result = decompressor.decompress_dictionary(&compressed).unwrap();
-        assert_eq!(result, json!({
-            "greeting": "hello",
-            "target": "world"
-        }));
+        assert_eq!(
+            result,
+            json!({
+                "greeting": "hello",
+                "target": "world"
+            })
+        );
     }
 
     #[test]
