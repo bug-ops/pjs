@@ -1,65 +1,46 @@
 [package]
 name = "pjson-rs"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
 description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming (requires nightly Rust)"
-keywords.workspace = true
-categories.workspace = true
-readme.workspace = true
+keywords = { workspace = true }
+categories = { workspace = true }
+readme = { workspace = true }
 exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
 
 [dependencies]
-# Core
+async-std = { workspace = true, features = ["attributes"] }
+async-trait = { workspace = true }
+axum = { workspace = true, optional = true, features = ["ws"] }
+bitflags = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+crossbeam = { workspace = true }
+futures = { workspace = true, optional = true }
+maplit = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+priority-queue = { workspace = true }
+prometheus = { workspace = true, optional = true }
+reqwest = { workspace = true, features = ["json"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-bitflags = { workspace = true }
+sha2 = { workspace = true }
+smallvec = { workspace = true, features = ["serde", "union", "const_generics"] }
+sonic-rs = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-
-# Performance
-smallvec = { workspace = true, features = ["serde"] }
-
-# SIMD JSON parsing
-sonic-rs = { workspace = true }
-
-# Utilities
-maplit = { workspace = true }
-priority-queue = { workspace = true }
-
-# Async
-async-trait = { workspace = true }
-async-std = { workspace = true, features = ["attributes"] }
 tokio = { workspace = true, features = ["full"] }
-
-# Time and IDs
-chrono = { workspace = true, features = ["serde"] }
-uuid = { workspace = true, features = ["v4", "serde"] }
-
-# Cryptographic hashing
-sha2 = { workspace = true }
-
-# HTTP server integration (optional)
-axum = { workspace = true, optional = true, features = ["ws"] }
+tokio-tungstenite = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
-futures = { workspace = true, optional = true }
-
-# WebSocket client (optional)
-tokio-tungstenite = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
-
-# Thread-safe concurrency
-parking_lot = { workspace = true }
-
-# HTTP client and metrics (optional)
-reqwest = { workspace = true, features = ["json"], optional = true }
-prometheus = { workspace = true, optional = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -81,12 +62,7 @@ schema-validation = []
 compression = []
 
 # Infrastructure features
-http-server = [
-    "dep:axum",
-    "dep:tower",
-    "dep:tower-http",
-    "dep:futures",
-]
+http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:futures"]
 websocket-client = ["dep:tokio-tungstenite", "dep:url"]
 websocket-server = [
     "http-server",

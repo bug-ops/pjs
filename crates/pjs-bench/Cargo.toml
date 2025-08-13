@@ -12,14 +12,10 @@ categories.workspace = true
 publish.workspace = true
 
 [dependencies]
-pjson-rs = { path = "../pjs-core" }
-
-# Benchmarking
-criterion = { workspace = true, features = ["html_reports"] }
-serde_json = { workspace = true }
 bytes = { workspace = true }
-
-# Comparison with other libraries
+criterion = { workspace = true, features = ["html_reports"] }
+pjson-rs = { path = "../pjs-core" }
+serde_json = { workspace = true }
 sonic-rs = { workspace = true }
 
 [dev-dependencies]

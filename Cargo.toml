@@ -5,11 +5,11 @@ resolver = "2"
 [workspace.package]
 homepage = "https://github.com/bug-ops/pjs"
 documentation = "https://docs.rs/pjson-rs"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Andrei G. <k05h31@gmail.com>"]
 readme = "README.md"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 publish = false
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bug-ops/pjs"
@@ -18,77 +18,48 @@ keywords = ["json", "streaming", "simd", "performance", "protocol"]
 categories = ["encoding", "network-programming", "parser-implementations"]
 
 [workspace.dependencies]
-# Core dependencies
-bytes = "1.5"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1.35", features = ["full"] }
-
-# Performance
-rayon = "1.11"
-crossbeam = "0.8"
-smallvec = { version = "1.11", features = ["union", "const_generics"] }
 ahash = "0.8"
-parking_lot = "0.12"
-
-# SIMD and low-level
-bitflags = "2.9"
-memchr = "2.6"
-bytemuck = "1.14"
-sonic-rs = "0.5"
-simd-json = "0.15"
-
-# Async and network
-futures = "0.3"
 async-std = "1.12"
-socket2 = "0.6"
+async-trait = "0.1"
 axum = "0.8"
+bitflags = "2.9"
+bumpalo = "3.14"
+bytemuck = "1.14"
+bytes = "1.5"
+clap = "4.4"
+chrono = "0.4"
+criterion = "0.7"
+crossbeam = "0.8"
+fake = "4.4"
+futures = "0.3"
+hyper = "1.6"
+maplit = "1.0"
+memchr = "2.6"
+once_cell = "1.21"
+parking_lot = "0.12"
+priority-queue = "2.0"
+prometheus = "0.14"
+proptest = "1.4"
+rand = "0.9"
+rayon = "1.11"
+reqwest = "0.12"
+serde = "1.0"
+serde_json = "1.0"
+sha2 = "0.10"
+simd-json = "0.15"
+smallvec = "1.11"
+socket2 = "0.6"
+sonic-rs = "0.5"
+thiserror = "2.0"
+tokio = "1.35"
+tokio-tungstenite = "0.27"
 tower = "0.5"
 tower-http = "0.6"
-hyper = "1.6"
-# quinn = { version = "0.10", optional = true }  # Will add when needed
-
-# Memory management  
-bumpalo = "3.14"
-typed-arena = "2.0"
-
-# Testing and benchmarking
-criterion = "0.7"
-proptest = "1.4"
-
-# GPU (will be added later as separate crate dependencies)
-# cudarc = { version = "0.10", optional = true }
-# wgpu = { version = "0.18", optional = true }
-
-# Utilities
-thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-chrono = "0.4"
-uuid = "1.18"
-async-trait = "0.1"
-maplit = "1.0"
-priority-queue = "2.0"
-
-# Cryptographic hashing
-sha2 = "0.10"
-
-# HTTP client and metrics
-reqwest = "0.12"
-prometheus = "0.14"
-
-# WebSocket
-tokio-tungstenite = "0.27"
+typed-arena = "2.0"
 url = "2.5"
-
-# Random generation  
-rand = "0.9"
-
-# Data generation
-fake = "4.4"
-
-# CLI
-clap = "4.4"
+uuid = "1.18"
 
 [profile.release]
 opt-level = 3

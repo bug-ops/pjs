@@ -1,42 +1,27 @@
 [package]
 name = "pjs-demo"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
 description = "Interactive PJS streaming demonstration servers and examples"
 
 [dependencies]
-# PJS
-pjson-rs = { path = "../pjs-core" }
-
-# Web server
 axum = { workspace = true, features = ["ws"] }
-
-# Async
-tokio = { workspace = true, features = ["full"] }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
-
-# Serialization
+pjson-rs = { path = "../pjs-core" }
+rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-
-# WebSocket
+tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
-url = { workspace = true }
-
-# Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-# Time and utilities
-chrono = { workspace = true }
-rand = { workspace = true }
-
-# CLI
-clap = { workspace = true, features = ["derive"] }
+url = { workspace = true }
 
 [[bin]]
 name = "interactive-demo-server"
