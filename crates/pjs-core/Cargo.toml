@@ -1,74 +1,49 @@
 [package]
 name = "pjson-rs"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
 description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming (requires nightly Rust)"
-keywords.workspace = true
-categories.workspace = true
-readme.workspace = true
+keywords = { workspace = true }
+categories = { workspace = true }
+readme = { workspace = true }
 exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
 
 [dependencies]
-# Core
-bytes.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-bitflags.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-
-# Performance
-smallvec = { workspace = true, features = ["serde"] }
-ahash.workspace = true
-
-# SIMD JSON parsing
-sonic-rs = "0.5"
-
-# Utilities
-maplit = "1.0"
-priority-queue = "2.0"
-once_cell = "1.21"
-
-# Concurrency
-crossbeam = "0.8"
-
-# Async
-async-trait.workspace = true
 async-std = { workspace = true, features = ["attributes"] }
-tokio = { workspace = true, features = ["full"] }
-
-# Time and IDs
-chrono.workspace = true
-uuid.workspace = true
-
-# Cryptographic hashing
-sha2 = "0.10"
-
-# HTTP server integration (optional)
+async-trait = { workspace = true }
 axum = { workspace = true, optional = true, features = ["ws"] }
-tower = { workspace = true, optional = true }
-tower-http = { workspace = true, optional = true }
-hyper = { workspace = true, optional = true }
+bitflags = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+crossbeam = { workspace = true }
 futures = { workspace = true, optional = true }
-
-# WebSocket client (optional)
-tokio-tungstenite = { version = "0.27", optional = true }
-url = { version = "2.5", optional = true }
-
-# Thread-safe concurrency
-parking_lot.workspace = true
-
-# HTTP client and metrics (optional)
-reqwest = { workspace = true, optional = true }
+maplit = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+priority-queue = { workspace = true }
 prometheus = { workspace = true, optional = true }
+reqwest = { workspace = true, features = ["json"], optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+smallvec = { workspace = true, features = ["serde", "union", "const_generics"] }
+sonic-rs = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-tungstenite = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
+url = { workspace = true, optional = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
-serde_json.workspace = true
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [features]
@@ -87,13 +62,7 @@ schema-validation = []
 compression = []
 
 # Infrastructure features
-http-server = [
-    "dep:axum",
-    "dep:tower",
-    "dep:tower-http",
-    "dep:hyper",
-    "dep:futures",
-]
+http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:futures"]
 websocket-client = ["dep:tokio-tungstenite", "dep:url"]
 websocket-server = [
     "http-server",

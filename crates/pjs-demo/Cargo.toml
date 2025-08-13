@@ -1,46 +1,27 @@
 [package]
 name = "pjs-demo"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
 description = "Interactive PJS streaming demonstration servers and examples"
 
 [dependencies]
-# PJS
-pjson-rs = { path = "../pjs-core" }
-
-# Web server
 axum = { workspace = true, features = ["ws"] }
-tower.workspace = true
-tower-http.workspace = true
-hyper.workspace = true
-
-# Async
-tokio = { workspace = true, features = ["full"] }
-futures.workspace = true
-
-# Serialization
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+pjson-rs = { path = "../pjs-core" }
+rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-
-# WebSocket
-tokio-tungstenite.workspace = true
-url.workspace = true
-
-# Logging
-tracing.workspace = true
-tracing-subscriber.workspace = true
-
-# Time and utilities
-chrono.workspace = true
-uuid.workspace = true
-rand.workspace = true
-
-# CLI
-clap = { version = "4.4", features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
 
 [[bin]]
 name = "interactive-demo-server"
