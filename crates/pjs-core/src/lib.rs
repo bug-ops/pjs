@@ -20,6 +20,7 @@ pub mod domain;
 pub mod error;
 pub mod frame;
 pub mod infrastructure;
+pub mod memory;
 pub mod parser;
 pub mod security;
 pub mod semantic;
@@ -58,6 +59,7 @@ pub use stream::{
 };
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
+pub use memory::{ArenaJsonParser, JsonArena, CombinedArenaStats};
 pub use parser::{ParseConfig, ParseStats, Parser};
 pub use semantic::{SemanticMeta, SemanticType};
 // Legacy stream exports (will be deprecated)

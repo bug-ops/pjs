@@ -21,12 +21,14 @@ bitflags = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 crossbeam = { workspace = true }
+dashmap = { workspace = true }
 futures = { workspace = true, optional = true }
 maplit = { workspace = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
 priority-queue = { workspace = true }
 prometheus = { workspace = true, optional = true }
+rayon = { workspace = true }
 reqwest = { workspace = true, features = ["json"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -38,6 +40,7 @@ tracing = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
+typed-arena = { workspace = true }
 tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
 url = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4", "serde"] }

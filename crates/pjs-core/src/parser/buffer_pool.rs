@@ -8,18 +8,18 @@ use crate::{
     security::SecurityValidator,
     config::SecurityConfig,
 };
+use dashmap::DashMap;
 use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 /// Buffer pool that manages reusable byte buffers for parsing
 #[derive(Debug)]
 pub struct BufferPool {
-    pools: Arc<Mutex<HashMap<BufferSize, BufferBucket>>>,
+    pools: Arc<DashMap<BufferSize, BufferBucket>>,
     config: PoolConfig,
-    stats: Arc<Mutex<PoolStats>>,
+    stats: Arc<parking_lot::Mutex<PoolStats>>, // Keep stats under mutex as it's written less frequently
 }
 
 /// Configuration for buffer pool behavior
@@ -98,9 +98,9 @@ impl BufferPool {
     /// Create buffer pool with custom configuration
     pub fn with_config(config: PoolConfig) -> Self {
         Self {
-            pools: Arc::new(Mutex::new(HashMap::new())),
+            pools: Arc::new(DashMap::new()),
             config,
-            stats: Arc::new(Mutex::new(PoolStats::new())),
+            stats: Arc::new(parking_lot::Mutex::new(PoolStats::new())),
         }
     }
 
@@ -130,13 +130,11 @@ impl BufferPool {
             self.increment_allocations();
         }
 
-        let mut pools = self.pools.lock()
-            .map_err(|_| DomainError::InternalError("Failed to acquire pool lock".to_string()))?;
-
-        if let Some(bucket) = pools.get_mut(&size)
-            && let Some(mut buffer) = bucket.buffers.pop() {
+        // Try to get a buffer from existing bucket
+        if let Some(mut bucket_ref) = self.pools.get_mut(&size) {
+            if let Some(mut buffer) = bucket_ref.buffers.pop() {
                 buffer.last_used = Instant::now();
-                bucket.last_access = Instant::now();
+                bucket_ref.last_access = Instant::now();
                 
                 if self.config.track_stats {
                     self.increment_cache_hits();
@@ -149,6 +147,7 @@ impl BufferPool {
                     self.config.max_buffers_per_bucket
                 ));
             }
+        }
 
         // No buffer available, create new one
         if self.config.track_stats {
@@ -172,15 +171,17 @@ impl BufferPool {
 
     /// Perform cleanup of old unused buffers
     pub fn cleanup(&self) -> DomainResult<CleanupStats> {
-        let mut pools = self.pools.lock()
-            .map_err(|_| DomainError::InternalError("Failed to acquire pool lock".to_string()))?;
-
         let now = Instant::now();
         let mut freed_buffers = 0;
         let mut freed_memory = 0;
 
-        pools.retain(|_size, bucket| {
+        // DashMap doesn't have retain, so we collect keys to remove
+        let mut keys_to_remove = Vec::new();
+        
+        for mut entry in self.pools.iter_mut() {
+            let bucket = entry.value_mut();
             let old_count = bucket.buffers.len();
+            
             bucket.buffers.retain(|buffer| {
                 let age = now.duration_since(buffer.last_used);
                 if age > self.config.buffer_ttl {
@@ -190,12 +191,20 @@ impl BufferPool {
                     true
                 }
             });
+            
             freed_buffers += old_count - bucket.buffers.len();
             
-            // Keep bucket if it has buffers or was accessed recently
-            !bucket.buffers.is_empty() || 
-            now.duration_since(bucket.last_access) < self.config.buffer_ttl
-        });
+            // Mark bucket for removal if empty and not recently accessed
+            if bucket.buffers.is_empty() && 
+               now.duration_since(bucket.last_access) >= self.config.buffer_ttl {
+                keys_to_remove.push(*entry.key());
+            }
+        }
+
+        // Remove empty buckets
+        for key in keys_to_remove {
+            self.pools.remove(&key);
+        }
 
         if self.config.track_stats {
             self.increment_cleanup_count();
@@ -210,18 +219,22 @@ impl BufferPool {
 
     /// Get current pool statistics
     pub fn stats(&self) -> DomainResult<PoolStats> {
-        let stats = self.stats.lock()
-            .map_err(|_| DomainError::InternalError("Failed to acquire stats lock".to_string()))?;
+        let stats = self.stats.lock();
         Ok(stats.clone())
     }
 
     /// Get current memory usage across all pools
     pub fn current_memory_usage(&self) -> DomainResult<usize> {
-        let pools = self.pools.lock()
-            .map_err(|_| DomainError::InternalError("Failed to acquire pool lock".to_string()))?;
-
-        let usage = pools.values()
-            .map(|bucket| bucket.buffers.iter().map(|b| b.capacity).sum::<usize>())
+        use rayon::prelude::*;
+        
+        let usage = self.pools
+            .iter()
+            .par_bridge()
+            .map(|entry| {
+                entry.value().buffers.par_iter()
+                    .map(|b| b.capacity)
+                    .sum::<usize>()
+            })
             .sum();
 
         Ok(usage)
@@ -230,34 +243,29 @@ impl BufferPool {
     // Private statistics methods
     
     fn increment_allocations(&self) {
-        if let Ok(mut stats) = self.stats.lock() {
-            stats.total_allocations += 1;
-        }
+        let mut stats = self.stats.lock();
+        stats.total_allocations += 1;
     }
 
     fn increment_cache_hits(&self) {
-        if let Ok(mut stats) = self.stats.lock() {
-            stats.cache_hits += 1;
-        }
+        let mut stats = self.stats.lock();
+        stats.cache_hits += 1;
     }
 
     fn increment_cache_misses(&self) {
-        if let Ok(mut stats) = self.stats.lock() {
-            stats.cache_misses += 1;
-        }
+        let mut stats = self.stats.lock();
+        stats.cache_misses += 1;
     }
 
     fn increment_cleanup_count(&self) {
-        if let Ok(mut stats) = self.stats.lock() {
-            stats.cleanup_count += 1;
-        }
+        let mut stats = self.stats.lock();
+        stats.cleanup_count += 1;
     }
 
     fn update_current_memory_usage(&self, delta: i64) {
-        if let Ok(mut stats) = self.stats.lock() {
-            stats.current_memory_usage = (stats.current_memory_usage as i64 + delta).max(0) as usize;
-            stats.peak_memory_usage = stats.peak_memory_usage.max(stats.current_memory_usage);
-        }
+        let mut stats = self.stats.lock();
+        stats.current_memory_usage = (stats.current_memory_usage as i64 + delta).max(0) as usize;
+        stats.peak_memory_usage = stats.peak_memory_usage.max(stats.current_memory_usage);
     }
 }
 
@@ -354,7 +362,7 @@ impl AlignedBuffer {
 /// RAII wrapper for pooled buffer that returns buffer to pool on drop
 pub struct PooledBuffer {
     buffer: Option<AlignedBuffer>,
-    pool: Arc<Mutex<HashMap<BufferSize, BufferBucket>>>,
+    pool: Arc<DashMap<BufferSize, BufferBucket>>,
     size: BufferSize,
     max_buffers_per_bucket: usize,
 }
@@ -362,7 +370,7 @@ pub struct PooledBuffer {
 impl PooledBuffer {
     fn new(
         buffer: AlignedBuffer,
-        pool: Arc<Mutex<HashMap<BufferSize, BufferBucket>>>,
+        pool: Arc<DashMap<BufferSize, BufferBucket>>,
         size: BufferSize,
         max_buffers_per_bucket: usize,
     ) -> Self {
@@ -402,18 +410,17 @@ impl Drop for PooledBuffer {
         if let Some(mut buffer) = self.buffer.take() {
             buffer.clear(); // Clear contents before returning to pool
             
-            if let Ok(mut pools) = self.pool.lock() {
-                let bucket = pools.entry(self.size).or_insert_with(|| BufferBucket {
-                    buffers: Vec::new(),
-                    size: self.size,
-                    last_access: Instant::now(),
-                });
-                
-                // Only return to pool if we haven't exceeded the per-bucket limit
-                if bucket.buffers.len() < self.max_buffers_per_bucket {
-                    bucket.buffers.push(buffer);
-                    bucket.last_access = Instant::now();
-                }
+            // Get or create bucket for this buffer size
+            let mut bucket_ref = self.pool.entry(self.size).or_insert_with(|| BufferBucket {
+                buffers: Vec::new(),
+                size: self.size,
+                last_access: Instant::now(),
+            });
+            
+            // Only return to pool if we haven't exceeded the per-bucket limit
+            if bucket_ref.buffers.len() < self.max_buffers_per_bucket {
+                bucket_ref.buffers.push(buffer);
+                bucket_ref.last_access = Instant::now();
             }
         }
     }

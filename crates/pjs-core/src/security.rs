@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn test_security_validator_with_config() {
         let config = SecurityConfig::low_memory();
-        let _validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone());
         
         // Should use low memory limits
         assert!(validator.validate_input_size(config.json.max_input_size).is_ok());
@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn test_high_throughput_config() {
         let config = SecurityConfig::high_throughput();
-        let _validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone());
         
         // High throughput should have higher limits than default
         let default_config = SecurityConfig::default();
