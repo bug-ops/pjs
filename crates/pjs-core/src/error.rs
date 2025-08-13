@@ -68,6 +68,10 @@ pub enum Error {
     #[error("UTF-8 conversion failed: {0}")]
     Utf8(String),
 
+    /// Security violation error
+    #[error("Security error: {0}")]
+    SecurityError(String),
+
     /// Generic error for other cases
     #[error("{0}")]
     Other(String),
@@ -140,6 +144,11 @@ impl Error {
         Self::Utf8(message.into())
     }
 
+    /// Create a security error
+    pub fn security_error(message: impl Into<String>) -> Self {
+        Self::SecurityError(message.into())
+    }
+
     /// Create a generic error
     pub fn other(message: impl Into<String>) -> Self {
         Self::Other(message.into())
@@ -163,6 +172,11 @@ impl Error {
         )
     }
 
+    /// Check if the error is a security-related error
+    pub fn is_security_error(&self) -> bool {
+        matches!(self, Self::SecurityError(_))
+    }
+
     /// Get error category as string
     pub fn category(&self) -> &'static str {
         match self {
@@ -172,6 +186,7 @@ impl Error {
             Self::Io(_) | Self::ConnectionFailed(_) => "network",
             Self::ClientError(_) | Self::InvalidSession(_) | Self::InvalidUrl(_) => "client",
             Self::Utf8(_) => "encoding",
+            Self::SecurityError(_) => "security",
             Self::Other(_) => "other",
         }
     }

@@ -7,6 +7,7 @@ use crate::{
     StreamFrame, PriorityStreamer,
     Error as PjsError, Result as PjsResult,
     domain::Priority,
+    security::{RateLimitGuard, RateLimitError},
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -25,11 +26,13 @@ use sha2::{Sha256, Digest};
 pub mod client;
 #[cfg(feature = "http-server")]
 pub mod server;
+pub mod security;
 
 #[cfg(feature = "websocket-client")]
 pub use client::*;
 #[cfg(feature = "http-server")]
 pub use server::*;
+pub use security::SecureWebSocketHandler;
 
 /// WebSocket message types for PJS streaming
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +109,7 @@ pub struct StreamSession {
     pub current_frame: u32,
     pub acknowledged_frames: Vec<u32>,
     pub client_metrics: ClientMetrics,
+    pub rate_limit_guard: Option<RateLimitGuard>,
 }
 
 /// Client performance metrics for adaptive streaming
@@ -216,6 +220,7 @@ impl AdaptiveStreamController {
             current_frame: 0,
             acknowledged_frames: Vec::new(),
             client_metrics: ClientMetrics::default(),
+            rate_limit_guard: None, // Will be set when connection is established
         };
         
         self.sessions.write().await.insert(session_id.clone(), session);
@@ -322,6 +327,30 @@ impl AdaptiveStreamController {
         self.frame_tx.subscribe()
     }
     
+    /// Set rate limit guard for a session
+    pub async fn set_rate_limit_guard(&self, session_id: &str, guard: RateLimitGuard) -> PjsResult<()> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(session_id)
+            .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
+        
+        session.rate_limit_guard = Some(guard);
+        Ok(())
+    }
+    
+    /// Validate message against rate limits
+    pub async fn validate_message(&self, session_id: &str, frame_size: usize) -> PjsResult<()> {
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(session_id)
+            .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
+            
+        if let Some(guard) = &session.rate_limit_guard {
+            guard.check_message(frame_size)
+                .map_err(|e| PjsError::SecurityError(format!("Rate limit violation: {}", e)))?;
+        }
+        
+        Ok(())
+    }
+
     /// Clean up expired sessions
     pub async fn cleanup_expired_sessions(&self, max_age: Duration) {
         let mut sessions = self.sessions.write().await;

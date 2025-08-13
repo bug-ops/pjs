@@ -2,6 +2,18 @@
 
 use crate::{error::{Error, Result}, config::SecurityConfig};
 
+pub mod rate_limit;
+pub mod compression_bomb;
+
+pub use rate_limit::{
+    WebSocketRateLimiter, RateLimitConfig, RateLimitError, 
+    RateLimitGuard, RateLimitStats
+};
+pub use compression_bomb::{
+    CompressionBombDetector, CompressionBombConfig, CompressionBombProtector,
+    CompressionBombError, CompressionStats
+};
+
 /// Security validator with configuration-based limits
 #[derive(Debug, Clone)]
 pub struct SecurityValidator {

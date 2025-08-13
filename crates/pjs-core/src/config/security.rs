@@ -1,5 +1,6 @@
 //! Security configuration and limits
 
+use crate::security::compression_bomb::CompressionBombConfig;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -74,6 +75,34 @@ pub struct NetworkLimits {
     
     /// Maximum payload size for HTTP requests
     pub max_http_payload_size: usize,
+    
+    /// Rate limiting configuration
+    pub rate_limiting: RateLimitingConfig,
+    
+    /// Compression bomb protection configuration
+    pub compression_bomb: CompressionBombConfig,
+}
+
+/// Rate limiting configuration for DoS protection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitingConfig {
+    /// Maximum requests per time window per IP
+    pub max_requests_per_window: u32,
+    
+    /// Time window for rate limiting in seconds
+    pub window_duration_secs: u64,
+    
+    /// Maximum concurrent connections per IP
+    pub max_connections_per_ip: usize,
+    
+    /// Maximum WebSocket messages per second per connection
+    pub max_messages_per_second: u32,
+    
+    /// Burst allowance (extra messages above rate)
+    pub burst_allowance: u32,
+    
+    /// Enable rate limiting
+    pub enabled: bool,
 }
 
 /// Session management security limits
@@ -138,6 +167,21 @@ impl Default for NetworkLimits {
             connection_timeout_secs: 30,
             max_requests_per_second: 100,
             max_http_payload_size: 50 * 1024 * 1024, // 50MB
+            rate_limiting: RateLimitingConfig::default(),
+            compression_bomb: CompressionBombConfig::default(),
+        }
+    }
+}
+
+impl Default for RateLimitingConfig {
+    fn default() -> Self {
+        Self {
+            max_requests_per_window: 100,
+            window_duration_secs: 60,
+            max_connections_per_ip: 10,
+            max_messages_per_second: 30,
+            burst_allowance: 5,
+            enabled: true,
         }
     }
 }
@@ -178,6 +222,15 @@ impl SecurityConfig {
                 connection_timeout_secs: 60,
                 max_requests_per_second: 1000,
                 max_http_payload_size: 200 * 1024 * 1024, // 200MB
+                rate_limiting: RateLimitingConfig {
+                    max_requests_per_window: 1000,
+                    window_duration_secs: 60,
+                    max_connections_per_ip: 50,
+                    max_messages_per_second: 100,
+                    burst_allowance: 20,
+                    enabled: true,
+                },
+                compression_bomb: CompressionBombConfig::high_throughput(),
             },
             sessions: SessionLimits {
                 max_session_id_length: 256,
@@ -212,6 +265,15 @@ impl SecurityConfig {
                 connection_timeout_secs: 15,
                 max_requests_per_second: 10,
                 max_http_payload_size: 5 * 1024 * 1024, // 5MB
+                rate_limiting: RateLimitingConfig {
+                    max_requests_per_window: 20,
+                    window_duration_secs: 60,
+                    max_connections_per_ip: 2,
+                    max_messages_per_second: 5,
+                    burst_allowance: 2,
+                    enabled: true,
+                },
+                compression_bomb: CompressionBombConfig::low_memory(),
             },
             sessions: SessionLimits {
                 max_session_id_length: 64,
@@ -246,6 +308,15 @@ impl SecurityConfig {
                 connection_timeout_secs: 30,
                 max_requests_per_second: 50,
                 max_http_payload_size: 25 * 1024 * 1024, // 25MB
+                rate_limiting: RateLimitingConfig {
+                    max_requests_per_window: 200,
+                    window_duration_secs: 60,
+                    max_connections_per_ip: 20,
+                    max_messages_per_second: 50,
+                    burst_allowance: 10,
+                    enabled: true,
+                },
+                compression_bomb: CompressionBombConfig::default(),
             },
             sessions: SessionLimits {
                 max_session_id_length: 128,

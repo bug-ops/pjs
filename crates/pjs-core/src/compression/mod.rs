@@ -3,6 +3,8 @@
 //! Implements intelligent compression strategies based on JSON schema analysis
 //! to optimize bandwidth usage while maintaining streaming capabilities.
 
+pub mod secure;
+
 use crate::domain::{DomainResult, DomainError};
 use serde_json::{json, Value as JsonValue};
 use std::collections::HashMap;
