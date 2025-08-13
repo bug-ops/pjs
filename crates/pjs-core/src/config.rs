@@ -3,11 +3,16 @@
 //! This module provides centralized configuration for all components,
 //! replacing hardcoded constants with configurable values.
 
+pub mod security;
+
 use crate::compression::CompressionConfig;
+pub use security::SecurityConfig;
 
 /// Global configuration for PJS library components
 #[derive(Debug, Clone, Default)]
 pub struct PjsConfig {
+    /// Security configuration and limits
+    pub security: SecurityConfig,
     /// Configuration for compression algorithms
     pub compression: CompressionConfig,
     /// Configuration for parsers
@@ -99,6 +104,7 @@ impl PjsConfig {
     /// Configuration optimized for low latency
     pub fn low_latency() -> Self {
         Self {
+            security: SecurityConfig::development(),
             compression: CompressionConfig::default(),
             parser: ParserConfig {
                 max_input_size_mb: 10,
@@ -125,6 +131,7 @@ impl PjsConfig {
     /// Configuration optimized for high throughput
     pub fn high_throughput() -> Self {
         Self {
+            security: SecurityConfig::high_throughput(),
             compression: CompressionConfig::default(),
             parser: ParserConfig {
                 max_input_size_mb: 1000, // 1GB
@@ -151,6 +158,7 @@ impl PjsConfig {
     /// Configuration optimized for mobile/constrained devices
     pub fn mobile() -> Self {
         Self {
+            security: SecurityConfig::low_memory(),
             compression: CompressionConfig {
                 min_array_length: 1,
                 min_string_length: 2,

@@ -21,6 +21,7 @@ pub mod error;
 pub mod frame;
 pub mod infrastructure;
 pub mod parser;
+pub mod security;
 pub mod semantic;
 pub mod stream;
 

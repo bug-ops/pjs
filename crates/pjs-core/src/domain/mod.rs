@@ -77,6 +77,12 @@ pub enum DomainError {
 
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    #[error("Security violation: {0}")]
+    SecurityViolation(String),
+
+    #[error("Resource exhausted: {0}")]
+    ResourceExhausted(String),
 }
 
 impl DomainError {

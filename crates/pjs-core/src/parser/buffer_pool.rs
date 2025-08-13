@@ -3,7 +3,11 @@
 //! This module provides a memory pool system to minimize allocations during
 //! JSON parsing, with support for different buffer sizes and reuse strategies.
 
-use crate::domain::{DomainResult, DomainError};
+use crate::{
+    domain::{DomainResult, DomainError},
+    security::SecurityValidator,
+    config::SecurityConfig,
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -31,6 +35,8 @@ pub struct PoolConfig {
     pub track_stats: bool,
     /// Alignment for SIMD operations (typically 32 or 64 bytes)
     pub simd_alignment: usize,
+    /// Security validator for buffer validation
+    pub validator: SecurityValidator,
 }
 
 /// Standard buffer sizes for different parsing scenarios
@@ -98,8 +104,28 @@ impl BufferPool {
         }
     }
 
+    /// Create buffer pool with security configuration
+    pub fn with_security_config(security_config: SecurityConfig) -> Self {
+        Self::with_config(PoolConfig::from(&security_config))
+    }
+
     /// Get buffer of specified size, reusing if available
     pub fn get_buffer(&self, size: BufferSize) -> DomainResult<PooledBuffer> {
+        // Security validation: check buffer size
+        self.config.validator.validate_buffer_size(size as usize)
+            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
+
+        // Check if we would exceed total memory limit
+        let current_usage = self.current_memory_usage().unwrap_or(0);
+        if current_usage + (size as usize) > self.config.max_total_memory {
+            return Err(DomainError::ResourceExhausted(format!(
+                "Adding buffer of size {} would exceed memory limit: current={}, limit={}",
+                size as usize,
+                current_usage,
+                self.config.max_total_memory
+            )));
+        }
+
         if self.config.track_stats {
             self.increment_allocations();
         }
@@ -116,7 +142,12 @@ impl BufferPool {
                     self.increment_cache_hits();
                 }
                 
-                return Ok(PooledBuffer::new(buffer, Arc::clone(&self.pools), size));
+                return Ok(PooledBuffer::new(
+                    buffer, 
+                    Arc::clone(&self.pools), 
+                    size,
+                    self.config.max_buffers_per_bucket
+                ));
             }
 
         // No buffer available, create new one
@@ -125,7 +156,12 @@ impl BufferPool {
         }
 
         let buffer = AlignedBuffer::new(size as usize, self.config.simd_alignment)?;
-        Ok(PooledBuffer::new(buffer, Arc::clone(&self.pools), size))
+        Ok(PooledBuffer::new(
+            buffer, 
+            Arc::clone(&self.pools), 
+            size,
+            self.config.max_buffers_per_bucket
+        ))
     }
 
     /// Get buffer with at least the specified capacity
@@ -320,6 +356,7 @@ pub struct PooledBuffer {
     buffer: Option<AlignedBuffer>,
     pool: Arc<Mutex<HashMap<BufferSize, BufferBucket>>>,
     size: BufferSize,
+    max_buffers_per_bucket: usize,
 }
 
 impl PooledBuffer {
@@ -327,11 +364,13 @@ impl PooledBuffer {
         buffer: AlignedBuffer,
         pool: Arc<Mutex<HashMap<BufferSize, BufferBucket>>>,
         size: BufferSize,
+        max_buffers_per_bucket: usize,
     ) -> Self {
         Self {
             buffer: Some(buffer),
             pool,
             size,
+            max_buffers_per_bucket,
         }
     }
 
@@ -370,8 +409,8 @@ impl Drop for PooledBuffer {
                     last_access: Instant::now(),
                 });
                 
-                // Only return to pool if we haven't exceeded the limit
-                if bucket.buffers.len() < 50 { // TODO: Use config value
+                // Only return to pool if we haven't exceeded the per-bucket limit
+                if bucket.buffers.len() < self.max_buffers_per_bucket {
                     bucket.buffers.push(buffer);
                     bucket.last_access = Instant::now();
                 }
@@ -388,37 +427,54 @@ pub struct CleanupStats {
 }
 
 impl PoolConfig {
+    /// Create configuration from security config
+    pub fn from_security_config(security_config: &SecurityConfig) -> Self {
+        Self::from(security_config)
+    }
+
     /// Create configuration optimized for SIMD operations
     pub fn simd_optimized() -> Self {
-        Self {
-            max_buffers_per_bucket: 100,
-            max_total_memory: 64 * 1024 * 1024, // 64MB
-            buffer_ttl: Duration::from_secs(300), // 5 minutes
-            track_stats: true,
-            simd_alignment: 64, // AVX-512 alignment
-        }
+        let mut config = Self::from(&SecurityConfig::high_throughput());
+        config.simd_alignment = 64; // AVX-512 alignment
+        config
     }
 
     /// Create configuration for low-memory environments
     pub fn low_memory() -> Self {
-        Self {
-            max_buffers_per_bucket: 10,
-            max_total_memory: 8 * 1024 * 1024, // 8MB
-            buffer_ttl: Duration::from_secs(60), // 1 minute
-            track_stats: false, // Reduce overhead
-            simd_alignment: 32, // AVX2 alignment
-        }
+        let mut config = Self::from(&SecurityConfig::low_memory());
+        config.track_stats = false; // Reduce overhead
+        config
+    }
+
+    /// Create configuration for development/testing
+    pub fn development() -> Self {
+        Self::from(&SecurityConfig::development())
     }
 }
 
 impl Default for PoolConfig {
     fn default() -> Self {
+        let security_config = SecurityConfig::default();
         Self {
-            max_buffers_per_bucket: 50,
-            max_total_memory: 32 * 1024 * 1024, // 32MB
-            buffer_ttl: Duration::from_secs(180), // 3 minutes
+            max_buffers_per_bucket: security_config.buffers.max_buffers_per_bucket,
+            max_total_memory: security_config.buffers.max_total_memory,
+            buffer_ttl: security_config.buffer_ttl(),
             track_stats: true,
             simd_alignment: 32, // AVX2 alignment
+            validator: SecurityValidator::new(security_config),
+        }
+    }
+}
+
+impl From<&SecurityConfig> for PoolConfig {
+    fn from(security_config: &SecurityConfig) -> Self {
+        Self {
+            max_buffers_per_bucket: security_config.buffers.max_buffers_per_bucket,
+            max_total_memory: security_config.buffers.max_total_memory,
+            buffer_ttl: security_config.buffer_ttl(),
+            track_stats: true,
+            simd_alignment: 32, // AVX2 alignment
+            validator: SecurityValidator::new(security_config.clone()),
         }
     }
 }
@@ -583,5 +639,55 @@ mod tests {
         let pool = global_buffer_pool();
         let buffer = pool.get_buffer(BufferSize::Medium);
         assert!(buffer.is_ok());
+    }
+
+    #[test]
+    fn test_memory_limit_enforcement() {
+        let config = PoolConfig {
+            max_total_memory: 1024, // Very small limit
+            max_buffers_per_bucket: 10,
+            ..Default::default()
+        };
+        let pool = BufferPool::with_config(config);
+
+        // Create a buffer that exceeds the memory limit
+        let result = pool.get_buffer(BufferSize::Medium); // 8KB > 1KB limit
+        
+        assert!(result.is_err());
+        
+        if let Err(e) = result {
+            assert!(e.to_string().contains("memory limit"));
+        }
+    }
+
+    #[test]
+    fn test_per_bucket_limit_enforcement() {
+        let config = PoolConfig {
+            max_buffers_per_bucket: 2, // Very small limit
+            max_total_memory: 10 * 1024 * 1024, // Generous memory limit
+            ..Default::default()
+        };
+        let pool = BufferPool::with_config(config);
+
+        // Allocate and drop buffers to fill the bucket
+        for _ in 0..3 {
+            let _buffer = pool.get_buffer(BufferSize::Small).unwrap();
+            // Buffer goes back to pool on drop
+        }
+
+        // Only 2 buffers should be retained in the pool
+        let stats = pool.stats().unwrap();
+        assert!(stats.cache_hits <= 2, "Too many buffers retained in bucket");
+    }
+
+    #[test]
+    fn test_buffer_size_validation() {
+        let pool = BufferPool::new();
+        
+        // All standard buffer sizes should be valid
+        for size in BufferSize::all_sizes() {
+            let result = pool.get_buffer(*size);
+            assert!(result.is_ok(), "Buffer size {:?} should be valid", size);
+        }
     }
 }
