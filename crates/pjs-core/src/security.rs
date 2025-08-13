@@ -160,14 +160,14 @@ impl DepthTracker {
     
     /// Enter a new nesting level (array/object)
     pub fn enter(&mut self) -> Result<()> {
-        self.current_depth += 1;
-        if self.current_depth > self.max_depth {
+        if self.current_depth >= self.max_depth {
             return Err(Error::Other(format!(
-                "JSON nesting depth {} exceeds maximum allowed {}", 
-                self.current_depth, 
+                "JSON nesting depth {} would exceed maximum allowed {}", 
+                self.current_depth + 1, 
                 self.max_depth
             )));
         }
+        self.current_depth += 1;
         Ok(())
     }
     
@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn test_high_throughput_config() {
         let config = SecurityConfig::high_throughput();
-        let validator = SecurityValidator::new(config.clone());
+        let _validator = SecurityValidator::new(config.clone());
         
         // High throughput should have higher limits than default
         let default_config = SecurityConfig::default();

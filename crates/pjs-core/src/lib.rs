@@ -44,7 +44,11 @@ pub use application::{
 };
 
 // Configuration exports
-pub use config::{ParserConfig, PjsConfig, SimdConfig, StreamingConfig};
+pub use config::{
+    ParserConfig, PjsConfig, SimdConfig, StreamingConfig,
+    SecurityConfig,
+    security::{JsonLimits, BufferLimits, NetworkLimits, SessionLimits},
+};
 
 // Compression exports
 pub use compression::{
@@ -60,7 +64,8 @@ pub use stream::{
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
 pub use memory::{ArenaJsonParser, JsonArena, CombinedArenaStats};
-pub use parser::{ParseConfig, ParseStats, Parser};
+pub use parser::{ParseConfig, ParseStats, Parser, SimpleParser, SonicParser, ZeroCopyParser, LazyParser};
+pub use security::{SecurityValidator, DepthTracker};
 pub use semantic::{SemanticMeta, SemanticType};
 // Legacy stream exports (will be deprecated)
 // pub use stream::{
