@@ -14,33 +14,29 @@ pjson-rs = { path = "../pjs-core" }
 
 # Web server
 axum = { workspace = true, features = ["ws"] }
-tower.workspace = true
-tower-http.workspace = true
-hyper.workspace = true
 
 # Async
 tokio = { workspace = true, features = ["full"] }
-futures.workspace = true
+futures = { workspace = true }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+serde_json = { workspace = true }
 
 # WebSocket
-tokio-tungstenite.workspace = true
-url.workspace = true
+tokio-tungstenite = { workspace = true }
+url = { workspace = true }
 
 # Logging
-tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Time and utilities
-chrono.workspace = true
-uuid.workspace = true
-rand.workspace = true
+chrono = { workspace = true }
+rand = { workspace = true }
 
 # CLI
-clap = { version = "4.4", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 
 [[bin]]
 name = "interactive-demo-server"

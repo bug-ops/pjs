@@ -15,22 +15,15 @@ publish.workspace = true
 pjson-rs = { path = "../pjs-core" }
 
 # Benchmarking
-criterion.workspace = true
-tokio = { workspace = true, features = ["time", "rt", "macros"] }
-serde_json.workspace = true
-bytes.workspace = true
+criterion = { workspace = true, features = ["html_reports"] }
+serde_json = { workspace = true }
+bytes = { workspace = true }
 
 # Comparison with other libraries
-simd-json = "0.15"
-sonic-rs.workspace = true
-
-# Data generation
-fake = { version = "4.4", features = ["derive"] }
-rand = "0.9"
-
+sonic-rs = { workspace = true }
 
 [dev-dependencies]
-proptest.workspace = true
+proptest = { workspace = true }
 
 [features]
 default = ["streaming"]

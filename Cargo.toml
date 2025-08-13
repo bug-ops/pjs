@@ -25,7 +25,7 @@ serde_json = "1.0"
 tokio = { version = "1.35", features = ["full"] }
 
 # Performance
-rayon = "1.8"
+rayon = "1.11"
 crossbeam = "0.8"
 smallvec = { version = "1.11", features = ["union", "const_generics"] }
 ahash = "0.8"
@@ -34,8 +34,9 @@ parking_lot = "0.12"
 # SIMD and low-level
 bitflags = "2.9"
 memchr = "2.6"
-bytemuck = { version = "1.14", features = ["derive"] }
+bytemuck = "1.14"
 sonic-rs = "0.5"
+simd-json = "0.15"
 
 # Async and network
 futures = "0.3"
@@ -43,8 +44,8 @@ async-std = "1.12"
 socket2 = "0.6"
 axum = "0.8"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-hyper = { version = "1.6", features = ["full"] }
+tower-http = "0.6"
+hyper = "1.6"
 # quinn = { version = "0.10", optional = true }  # Will add when needed
 
 # Memory management  
@@ -52,7 +53,7 @@ bumpalo = "3.14"
 typed-arena = "2.0"
 
 # Testing and benchmarking
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = "0.7"
 proptest = "1.4"
 
 # GPU (will be added later as separate crate dependencies)
@@ -63,12 +64,17 @@ proptest = "1.4"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.18", features = ["v4", "serde"] }
+chrono = "0.4"
+uuid = "1.18"
 async-trait = "0.1"
+maplit = "1.0"
+priority-queue = "2.0"
+
+# Cryptographic hashing
+sha2 = "0.10"
 
 # HTTP client and metrics
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = "0.12"
 prometheus = "0.14"
 
 # WebSocket
@@ -77,6 +83,12 @@ url = "2.5"
 
 # Random generation  
 rand = "0.9"
+
+# Data generation
+fake = "4.4"
+
+# CLI
+clap = "4.4"
 
 [profile.release]
 opt-level = 3
