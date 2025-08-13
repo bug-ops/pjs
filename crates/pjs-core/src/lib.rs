@@ -30,17 +30,23 @@ pub mod stream;
 pub use domain::{
     DomainError, DomainEvent, DomainResult, Frame as DomainFrame, JsonPath, Priority, SessionId,
     Stream, StreamId, StreamSession,
+    // GAT-based domain ports (zero-cost async abstractions)
+    ports::{
+        FrameSourceGat, FrameSinkGat, StreamRepositoryGat, StreamStoreGat, EventPublisherGat,
+        FrameSinkGatExt
+    },
+    services::{GatStreamingOrchestrator, GatOrchestratorFactory, OrchestratorConfig, HealthStatus},
 };
 
 // Events exports  
 pub use domain::events::{PriorityDistribution, PriorityPercentages};
 
-// Application layer exports
+// Application layer exports (some temporarily disabled for GAT migration)
 pub use application::{
     ApplicationError, ApplicationResult, commands,
-    handlers::{CommandHandler, QueryHandler},
+    // handlers::{CommandHandler, QueryHandler}, // TODO: migrate to GAT
     queries,
-    services::{SessionService, StreamingService},
+    // services::{SessionService, StreamingService}, // TODO: migrate to GAT
 };
 
 // Configuration exports
@@ -87,7 +93,7 @@ pub mod prelude {
         ApplicationError,
         // Application layer
         ApplicationResult,
-        CommandHandler,
+        // CommandHandler, // TODO: migrate to GAT
         DomainError,
         DomainEvent,
         DomainFrame,
@@ -106,16 +112,16 @@ pub mod prelude {
         PriorityPercentages,
         // PriorityStreamer,
         ProcessResult,
-        QueryHandler,
+        // QueryHandler, // TODO: migrate to GAT
         Result,
         SemanticMeta,
         SemanticType,
         SessionId,
-        SessionService,
+        // SessionService, // TODO: migrate to GAT
         Stream,
         StreamId,
         StreamProcessor,
         StreamSession,
-        StreamingService,
+        // StreamingService, // TODO: migrate to GAT
     };
 }

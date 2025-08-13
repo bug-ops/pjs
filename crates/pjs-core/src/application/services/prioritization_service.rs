@@ -33,7 +33,7 @@ impl Default for PerformanceContext {
 }
 
 /// Strategies for priority calculation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PrioritizationStrategy {
     /// Conservative - prioritize stability over performance
     Conservative,
@@ -46,7 +46,7 @@ pub enum PrioritizationStrategy {
 }
 
 /// Custom priority calculation rules
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CustomPriorityRules {
     pub latency_threshold_ms: f64,
     pub bandwidth_threshold_mbps: f64,

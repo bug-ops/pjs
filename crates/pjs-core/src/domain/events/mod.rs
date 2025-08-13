@@ -457,7 +457,7 @@ mod tests {
 }
 
 /// Event identifier for tracking and correlation
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EventId(uuid::Uuid);
 
 impl EventId {
@@ -489,11 +489,15 @@ impl Default for EventId {
     }
 }
 
-/// Trait for event subscribers that handle domain events
-#[async_trait::async_trait]
+/// GAT-based trait for event subscribers that handle domain events
 pub trait EventSubscriber {
+    /// Future type for handling events
+    type HandleFuture<'a>: std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
     /// Handle a domain event
-    async fn handle(&self, event: &DomainEvent) -> crate::domain::DomainResult<()>;
+    fn handle(&self, event: &DomainEvent) -> Self::HandleFuture<'_>;
 }
 
 /// Extension methods for DomainEvent

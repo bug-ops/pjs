@@ -13,11 +13,11 @@ use crate::domain::{
             StreamSessionRepository, FrameRepository, 
             EventRepository, CacheRepository
         },
-        EventPublisher, MetricsCollector,
+        EventPublisherGat, MetricsCollectorGat,
     },
     events::DomainEvent,
 };
-use async_trait::async_trait;
+// async_trait removed - using GAT traits
 use chrono::Utc;
 use std::{
     collections::HashMap,
@@ -38,8 +38,8 @@ pub struct StreamingOrchestrator {
     
     // I/O ports
     writer_factory: Arc<dyn WriterFactory>,
-    event_publisher: Arc<dyn EventPublisher>,
-    metrics: Arc<dyn MetricsCollector>,
+    event_publisher: Arc<dyn EventPublisherGat>,
+    metrics: Arc<dyn MetricsCollectorGat>,
 }
 
 impl StreamingOrchestrator {
@@ -49,8 +49,8 @@ impl StreamingOrchestrator {
         event_repository: Arc<dyn EventRepository>,
         cache: Arc<dyn CacheRepository>,
         writer_factory: Arc<dyn WriterFactory>,
-        event_publisher: Arc<dyn EventPublisher>,
-        metrics: Arc<dyn MetricsCollector>,
+        event_publisher: Arc<dyn EventPublisherGat>,
+        metrics: Arc<dyn MetricsCollectorGat>,
     ) -> Self {
         Self {
             session_repository,

@@ -6,24 +6,24 @@ use crate::{
         aggregates::StreamSession,
         entities::Stream,
         events::EventStore,
-        ports::{StreamRepository, StreamStore},
+        ports::{StreamRepositoryGat, StreamStoreGat},
     },
 };
-use async_trait::async_trait;
+// async_trait removed - using GAT traits
 use std::sync::Arc;
 
 /// Handler for session-related queries
 #[derive(Debug)]
 pub struct SessionQueryHandler<R>
 where
-    R: StreamRepository,
+    R: StreamRepositoryGat + 'static,
 {
     repository: Arc<R>,
 }
 
 impl<R> SessionQueryHandler<R>
 where
-    R: StreamRepository,
+    R: StreamRepositoryGat + 'static,
 {
     pub fn new(repository: Arc<R>) -> Self {
         Self { repository }
@@ -165,7 +165,7 @@ where
 
 impl<R> SessionQueryHandler<R>
 where
-    R: StreamRepository,
+    R: StreamRepositoryGat + 'static,
 {
     fn matches_filters(&self, session: &StreamSession, filters: &SessionFilters) -> bool {
         // State filter
@@ -210,7 +210,7 @@ where
 #[derive(Debug)]
 pub struct StreamQueryHandler<R, S>
 where
-    R: StreamRepository,
+    R: StreamRepositoryGat + 'static,
     S: StreamStore,
 {
     session_repository: Arc<R>,
@@ -220,7 +220,7 @@ where
 
 impl<R, S> StreamQueryHandler<R, S>
 where
-    R: StreamRepository,
+    R: StreamRepositoryGat + 'static,
     S: StreamStore,
 {
     pub fn new(session_repository: Arc<R>, stream_store: Arc<S>) -> Self {
@@ -372,14 +372,14 @@ where
 #[derive(Debug)]
 pub struct SystemQueryHandler<R>
 where
-    R: StreamRepository,
+    R: StreamRepositoryGat + 'static,
 {
     repository: Arc<R>,
 }
 
 impl<R> SystemQueryHandler<R>
 where
-    R: StreamRepository,
+    R: StreamRepositoryGat + 'static,
 {
     pub fn new(repository: Arc<R>) -> Self {
         Self { repository }

@@ -14,7 +14,7 @@ pub mod value_objects;
 pub use aggregates::StreamSession;
 pub use entities::{Frame, Stream};
 pub use events::DomainEvent;
-pub use ports::{FrameSink, FrameSource, StreamRepository};
+pub use ports::{FrameSinkGat, FrameSourceGat, StreamRepositoryGat};
 pub use services::PriorityService;
 pub use value_objects::{JsonPath, Priority, SessionId, StreamId};
 

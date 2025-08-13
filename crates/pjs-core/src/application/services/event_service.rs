@@ -9,46 +9,97 @@ use crate::{
         dto::{DomainEventDto, ToDto, FromDto},
     },
     domain::{
-        events::{DomainEvent, EventStore, EventSubscriber},
+        events::{DomainEvent, EventStore},
         value_objects::{SessionId, StreamId},
     },
 };
+use tracing;
 use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex};
 
 /// Service for managing domain events with DTO conversion
-pub struct EventService<S>
+/// Uses compile-time polymorphism for zero-cost abstractions
+pub struct EventService<S, H>
 where
     S: EventStore,
+    H: EventHandler,
 {
     event_store: Arc<Mutex<S>>,
-    subscribers: Vec<Arc<dyn EventSubscriber + Send + Sync>>,
+    event_handler: H,
 }
 
-impl<S> EventService<S>
+/// Zero-cost event handler trait with stack allocation
+pub trait EventHandler {
+    type HandleFuture<'a>: std::future::Future<Output = ApplicationResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle_event(&self, event: &DomainEvent) -> Self::HandleFuture<'_>;
+}
+
+/// No-op handler for when events don't need processing
+pub struct NoOpEventHandler;
+
+impl EventHandler for NoOpEventHandler {
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle_event(&self, _event: &DomainEvent) -> Self::HandleFuture<'_> {
+        async move { Ok(()) }
+    }
+}
+
+/// Logging handler with zero allocations
+pub struct LoggingEventHandler;
+
+impl EventHandler for LoggingEventHandler {
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle_event(&self, event: &DomainEvent) -> Self::HandleFuture<'_> {
+        let event_type = event.event_type();
+        let session_id = event.session_id();
+        let stream_id = event.stream_id();
+        
+        async move {
+            // Stack-allocated logging without heap allocation
+            match event_type {
+                "stream_completed" => {
+                    if let Some(stream) = stream_id {
+                        tracing::info!("Stream completed: session={}, stream={}", session_id, stream);
+                    }
+                }
+                "session_activated" => {
+                    tracing::info!("Session activated: {}", session_id);
+                }
+                _ => {
+                    tracing::debug!("Domain event processed: {}", event_type);
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+impl<S, H> EventService<S, H>
 where
     S: EventStore,
+    H: EventHandler,
 {
-    /// Create new event service with event store
-    pub fn new(event_store: Arc<Mutex<S>>) -> Self {
+    /// Create new event service with event store and handler
+    pub fn new(event_store: Arc<Mutex<S>>, event_handler: H) -> Self {
         Self {
             event_store,
-            subscribers: Vec::new(),
+            event_handler,
         }
     }
 
-    /// Add event subscriber
-    pub fn add_subscriber(&mut self, subscriber: Arc<dyn EventSubscriber + Send + Sync>) {
-        self.subscribers.push(subscriber);
-    }
-
-    /// Publish domain event (converts to DTO for serialization)
-    pub async fn publish_event(&mut self, event: DomainEvent) -> ApplicationResult<()> {
-        // Notify subscribers first
-        for subscriber in &self.subscribers {
-            subscriber.handle(&event).await
-                .map_err(crate::application::ApplicationError::Domain)?;
-        }
+    /// Publish domain event with zero-cost handling
+    pub async fn publish_event(&self, event: DomainEvent) -> ApplicationResult<()> {
+        // Handle event with zero-cost abstraction
+        self.event_handler.handle_event(&event).await?;
 
         // Store event
         self.event_store
@@ -61,13 +112,10 @@ where
     }
 
     /// Publish multiple domain events
-    pub async fn publish_events(&mut self, events: Vec<DomainEvent>) -> ApplicationResult<()> {
-        // Notify subscribers for each event
+    pub async fn publish_events(&self, events: Vec<DomainEvent>) -> ApplicationResult<()> {
+        // Handle events with zero-cost abstraction
         for event in &events {
-            for subscriber in &self.subscribers {
-                subscriber.handle(event).await
-                    .map_err(crate::application::ApplicationError::Domain)?;
-            }
+            self.event_handler.handle_event(event).await?;
         }
 
         // Store all events
@@ -132,7 +180,7 @@ where
     }
 
     /// Replay events from DTOs (for event sourcing reconstruction)
-    pub fn replay_from_dtos(&mut self, event_dtos: Vec<DomainEventDto>) -> ApplicationResult<Vec<DomainEvent>> {
+    pub fn replay_from_dtos(&self, event_dtos: Vec<DomainEventDto>) -> ApplicationResult<Vec<DomainEvent>> {
         let mut events = Vec::new();
         
         for dto in event_dtos {
@@ -145,13 +193,35 @@ where
     }
 }
 
-/// Event publishing convenience methods
-impl<S> EventService<S>
+/// Convenience constructors for common configurations
+impl<S> EventService<S, NoOpEventHandler>
 where
     S: EventStore,
 {
-    /// Publish session activated event
-    pub async fn publish_session_activated(&mut self, session_id: SessionId) -> ApplicationResult<()> {
+    /// Create event service with no-op handler (maximum performance)
+    pub fn with_noop_handler(event_store: Arc<Mutex<S>>) -> Self {
+        Self::new(event_store, NoOpEventHandler)
+    }
+}
+
+impl<S> EventService<S, LoggingEventHandler>
+where
+    S: EventStore,
+{
+    /// Create event service with logging handler (zero-allocation logging)
+    pub fn with_logging_handler(event_store: Arc<Mutex<S>>) -> Self {
+        Self::new(event_store, LoggingEventHandler)
+    }
+}
+
+/// Event publishing convenience methods
+impl<S, H> EventService<S, H>
+where
+    S: EventStore,
+    H: EventHandler,
+{
+    /// Publish session activated event  
+    pub async fn publish_session_activated(&self, session_id: SessionId) -> ApplicationResult<()> {
         let event = DomainEvent::SessionActivated {
             session_id,
             timestamp: Utc::now(),
@@ -160,7 +230,7 @@ where
     }
 
     /// Publish session closed event
-    pub async fn publish_session_closed(&mut self, session_id: SessionId) -> ApplicationResult<()> {
+    pub async fn publish_session_closed(&self, session_id: SessionId) -> ApplicationResult<()> {
         let event = DomainEvent::SessionClosed {
             session_id,
             timestamp: Utc::now(),
@@ -170,7 +240,7 @@ where
 
     /// Publish stream created event
     pub async fn publish_stream_created(
-        &mut self, 
+        &self, 
         session_id: SessionId, 
         stream_id: StreamId
     ) -> ApplicationResult<()> {
@@ -184,7 +254,7 @@ where
 
     /// Publish stream completed event
     pub async fn publish_stream_completed(
-        &mut self, 
+        &self, 
         session_id: SessionId, 
         stream_id: StreamId
     ) -> ApplicationResult<()> {
@@ -198,7 +268,7 @@ where
 
     /// Publish stream failed event
     pub async fn publish_stream_failed(
-        &mut self, 
+        &self, 
         session_id: SessionId, 
         stream_id: StreamId,
         error: String
@@ -217,10 +287,10 @@ where
 mod tests {
     use super::*;
     use crate::domain::{
-        events::InMemoryEventStore,
+        events::{InMemoryEventStore, EventSubscriber},
         value_objects::{SessionId, StreamId},
     };
-    use async_trait::async_trait;
+    use std::sync::RwLock;
 
     // Mock subscriber for testing
     struct MockSubscriber {
@@ -241,28 +311,34 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl EventSubscriber for MockSubscriber {
-        async fn handle(&self, event: &DomainEvent) -> crate::domain::DomainResult<()> {
-            self.received_events.lock()
-                .map_err(|_| crate::domain::DomainError::Logic("Event subscriber lock poisoned".to_string()))?
-                .push(event.clone());
-            Ok(())
+        type HandleFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn handle(&self, event: &DomainEvent) -> Self::HandleFuture<'_> {
+            let event = event.clone();
+            async move {
+                self.received_events.lock()
+                    .map_err(|_| crate::domain::DomainError::Logic("Event subscriber lock poisoned".to_string()))?
+                    .push(event);
+                Ok(())
+            }
         }
     }
 
     #[tokio::test]
     async fn test_event_service_creation() {
         let store = Arc::new(std::sync::Mutex::new(InMemoryEventStore::new()));
-        let service = EventService::new(store);
+        let _service = EventService::with_noop_handler(store);
         
-        assert_eq!(service.subscribers.len(), 0);
+        // Service created successfully
     }
 
     #[tokio::test]
     async fn test_publish_event() {
         let store = Arc::new(std::sync::Mutex::new(InMemoryEventStore::new()));
-        let mut service = EventService::new(store.clone());
+        let service = EventService::with_logging_handler(store.clone());
         
         let session_id = SessionId::new();
         
@@ -281,24 +357,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_event_subscriber() {
+    async fn test_event_handler() {
         let store = Arc::new(std::sync::Mutex::new(InMemoryEventStore::new()));
-        let mut service = EventService::new(store);
-        
-        let subscriber = Arc::new(MockSubscriber::new());
-        service.add_subscriber(subscriber.clone());
+        let service = EventService::with_logging_handler(store);
         
         let session_id = SessionId::new();
         service.publish_session_activated(session_id).await.unwrap();
         
-        // Verify subscriber received event
-        assert_eq!(subscriber.event_count(), 1);
+        // Verify event was handled and stored
+        let events = service.get_session_events(session_id).unwrap();
+        assert_eq!(events.len(), 1);
     }
 
     #[tokio::test]
     async fn test_dto_conversion() {
         let store = Arc::new(std::sync::Mutex::new(InMemoryEventStore::new()));
-        let mut service = EventService::new(store);
+        let service = EventService::with_logging_handler(store);
         
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
@@ -326,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_events() {
         let store = Arc::new(std::sync::Mutex::new(InMemoryEventStore::new()));
-        let mut service = EventService::new(store);
+        let service = EventService::with_logging_handler(store);
         
         let session_id = SessionId::new();
         let stream_id = StreamId::new();

@@ -5,13 +5,13 @@
 
 pub mod commands;
 pub mod dto;
-pub mod handlers;
+// pub mod handlers; // TODO: migrate handlers to GAT
 pub mod queries;
 pub mod services;
 pub mod shared;
 
 pub use commands::*;
-pub use handlers::{CommandHandler, QueryHandler};
+// pub use handlers::{CommandHandler, QueryHandler}; // TODO: migrate to GAT
 pub use queries::*;
 pub use shared::AdjustmentUrgency;
 

@@ -1,6 +1,6 @@
 //! Metrics collection and monitoring implementation
 
-use async_trait::async_trait;
+// async_trait removed - using GAT traits
 use parking_lot::RwLock;
 use std::{
     collections::HashMap,
@@ -10,7 +10,7 @@ use std::{
 
 use crate::domain::{
     DomainResult,
-    ports::MetricsCollector,
+    ports::MetricsCollectorGat,
     value_objects::{SessionId, StreamId},
 };
 
