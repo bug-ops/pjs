@@ -4,8 +4,7 @@ use crate::domain::{
     DomainResult,
     value_objects::{JsonPath, Priority},
 };
-// TODO: Fix architecture violation - domain layer should not depend on serde_json::Value
-// Create domain-specific value objects instead
+// Temporary: use serde_json::Value until full migration to domain-specific JsonData
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 

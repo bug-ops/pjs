@@ -32,7 +32,8 @@ use crate::{
     infrastructure::services::{SessionManager, TimeoutMonitor},
 };
 
-// TODO: Implement proper CQRS handlers when application layer is ready
+// Placeholder CQRS handlers for HTTP layer compatibility
+// Replace with proper application layer handlers when ready
 pub trait CommandHandler<C, R> {
     fn handle(&self, command: C) -> impl std::future::Future<Output = Result<R, String>> + Send;
 }

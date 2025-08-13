@@ -145,7 +145,7 @@ impl Frame {
         Ok(())
     }
 
-    // TODO: Implement serialization methods later when needed
+    // Serialization methods handled by application layer DTOs
 
     /// Check if frame contains numeric array data
     pub fn is_numeric(&self) -> bool {
@@ -164,8 +164,8 @@ impl FrameHeader {
 }
 
 /// Fast CRC32C implementation for checksums
+/// Future optimization: implement hardware CRC32C with SSE4.2 detection
 fn crc32c(data: &[u8]) -> u32 {
-    // TODO: Use hardware CRC32C if available (SSE4.2)
     crc32c_sw(data)
 }
 

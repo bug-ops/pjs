@@ -369,12 +369,11 @@ mod tests {
     #[test]
     fn test_patch_frame_creation() {
         let stream_id = StreamId::new();
-        // TODO: Handle unwrap() - add proper error handling for JsonPath construction in tests
-        let path = JsonPath::new("$.users[0].name").unwrap();
+        let path = JsonPath::new("$.users[0].name").expect("Failed to create JsonPath in test");
         let patch = FramePatch::set(path, JsonData::String("John".to_string()));
 
-        // TODO: Handle unwrap() - add proper error handling for Frame construction in tests
-        let frame = Frame::patch(stream_id, 2, Priority::HIGH, vec![patch]).unwrap();
+        let frame = Frame::patch(stream_id, 2, Priority::HIGH, vec![patch])
+            .expect("Failed to create patch frame in test");
 
         assert_eq!(frame.frame_type(), &FrameType::Patch);
         assert_eq!(frame.priority(), Priority::HIGH);

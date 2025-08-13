@@ -49,7 +49,7 @@ pub struct StoredEvent {
     pub event_type: String,
     pub session_id: Option<SessionId>,
     pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub payload: serde_json::Value,
+    pub metadata: std::collections::HashMap<String, String>,
 }
 
 impl InMemoryEventPublisher {
@@ -165,7 +165,7 @@ impl EventPublisherGat for InMemoryEventPublisher {
                 event_type: event.event_type().to_string(),
                 session_id: Some(event.session_id()),
                 timestamp: event.occurred_at(),
-                payload: event.payload().clone(),
+                metadata: event.metadata(),
             };
 
             // Store event in lock-free map (EventId is Copy)
@@ -214,7 +214,7 @@ impl EventPublisherGat for InMemoryEventPublisher {
                         event_type: event.event_type().to_string(),
                         session_id: Some(event.session_id()),
                         timestamp: event.occurred_at(),
-                        payload: event.payload().clone(),
+                        metadata: event.metadata(),
                     };
 
                     // Store event in lock-free map (EventId is Copy)
@@ -301,7 +301,7 @@ impl EventPublisherGat for HttpEventPublisher {
                 "event_type": event.event_type(),
                 "session_id": event.session_id().to_string(),
                 "occurred_at": event.occurred_at(),
-                "payload": event.payload()
+                "metadata": event.metadata()
             });
 
             for attempt in 0..self.retry_attempts {
@@ -344,7 +344,7 @@ impl EventPublisherGat for HttpEventPublisher {
                         "event_type": event.event_type(),
                         "session_id": event.session_id().to_string(),
                         "occurred_at": event.occurred_at(),
-                        "payload": event.payload()
+                        "metadata": event.metadata()
                     })
                 })
                 .collect();

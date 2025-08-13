@@ -454,16 +454,16 @@ mod tests {
             },
         ];
 
-        // TODO: Handle unwrap() - add proper error handling for event store operations in tests
-        store.append_events(events.clone()).unwrap();
+        store.append_events(events.clone())
+            .expect("Failed to append events to store in test");
         assert_eq!(store.event_count(), 2);
 
-        // TODO: Handle unwrap() - add proper error handling for session events retrieval in tests
-        let session_events = store.get_events_for_session(session_id).unwrap();
+        let session_events = store.get_events_for_session(session_id)
+            .expect("Failed to retrieve session events in test");
         assert_eq!(session_events.len(), 2);
 
-        // TODO: Handle unwrap() - add proper error handling for stream events retrieval in tests
-        let stream_events = store.get_events_for_stream(stream_id).unwrap();
+        let stream_events = store.get_events_for_stream(stream_id)
+            .expect("Failed to retrieve stream events in test");
         assert_eq!(stream_events.len(), 1);
     }
 
@@ -475,10 +475,10 @@ mod tests {
             timestamp: Utc::now(),
         };
 
-        // TODO: Handle unwrap() - add proper error handling for event serialization in tests
-        let serialized = serde_json::to_string(&event).unwrap();
-        // TODO: Handle unwrap() - add proper error handling for event deserialization in tests
-        let deserialized: DomainEvent = serde_json::from_str(&serialized).unwrap();
+        let serialized = serde_json::to_string(&event)
+            .expect("Failed to serialize event in test");
+        let deserialized: DomainEvent = serde_json::from_str(&serialized)
+            .expect("Failed to deserialize event in test");
 
         assert_eq!(event, deserialized);
     }
@@ -583,13 +583,17 @@ impl DomainEvent {
         }
     }
 
-    /// Get event payload as JSON
-    pub fn payload(&self) -> &serde_json::Value {
-        // TODO: Fix architecture violation - domain events should not depend on serde_json::Value
-        // For now, return empty object - this should be implemented with domain value objects
-        use std::sync::LazyLock;
-        static EMPTY: LazyLock<serde_json::Value> =
-            LazyLock::new(|| serde_json::Value::Object(serde_json::Map::new()));
-        &EMPTY
+    /// Get event metadata as key-value pairs
+    pub fn metadata(&self) -> std::collections::HashMap<String, String> {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("event_type".to_string(), self.event_type().to_string());
+        metadata.insert("session_id".to_string(), self.session_id().to_string());
+        metadata.insert("timestamp".to_string(), self.occurred_at().to_rfc3339());
+        
+        if let Some(stream_id) = self.stream_id() {
+            metadata.insert("stream_id".to_string(), stream_id.to_string());
+        }
+        
+        metadata
     }
 }

@@ -308,11 +308,11 @@ impl SimdAllocator {
 
     #[cfg(feature = "jemalloc")]
     fn jemalloc_stats(&self) -> AllocatorStats {
-        // Simplified stats without jemalloc-ctl dependency
-        // TODO: Implement proper jemalloc statistics when tikv_jemalloc_ctl is available
+        // Simplified stats - full jemalloc statistics require additional configuration
+        // and may not be available in all environments
         AllocatorStats {
             allocated_bytes: 0,
-            resident_bytes: 0,
+            resident_bytes: 0, 
             metadata_bytes: 0,
             backend: self.backend,
         }

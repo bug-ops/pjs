@@ -56,9 +56,9 @@ pub use application::{
     ApplicationError,
     ApplicationResult,
     commands,
-    // handlers::{CommandHandler, QueryHandler}, // TODO: migrate to GAT
+    // handlers::{CommandHandler, QueryHandler}, // Disabled: migrate to GAT when implementing CQRS
     queries,
-    // services::{SessionService, StreamingService}, // TODO: migrate to GAT
+    // services::{SessionService, StreamingService}, // Disabled: replaced by SessionManager
 };
 
 // Configuration exports
