@@ -2,9 +2,9 @@ name: Rust Test & Coverage
 
 on:
   push:
-    branches: [ "main", "develop" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "develop" ]
+    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -42,11 +42,13 @@ jobs:
         components: llvm-tools-preview
 
     - name: Setup sccache (Unix)
+      id: sccache-unix
       if: matrix.os != 'windows-latest'
       uses: mozilla-actions/sccache-action@v0.0.4
       continue-on-error: true
 
     - name: Setup sccache (Windows)
+      id: sccache-windows
       if: matrix.os == 'windows-latest'
       uses: mozilla-actions/sccache-action@v0.0.4
       continue-on-error: true
@@ -54,7 +56,7 @@ jobs:
         version: "v0.7.4"
 
     - name: Configure sccache
-      if: success()
+      if: steps.sccache-unix.outcome == 'success' || steps.sccache-windows.outcome == 'success'
       run: |
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
         echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV

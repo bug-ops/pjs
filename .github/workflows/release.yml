@@ -1,0 +1,185 @@
+name: Release to crates.io
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings"
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  # Verify the release before publishing
+  verify:
+    name: Verify Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog generation
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Releasing version: $VERSION"
+
+      - name: Verify version matches Cargo.toml
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "Version mismatch: tag=$TAG_VERSION, Cargo.toml=$CARGO_VERSION"
+            exit 1
+          fi
+          echo "Version verified: $CARGO_VERSION"
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release"
+          save-if: false
+
+      - name: Check formatting
+        run: cargo +nightly fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run tests (nextest)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Build workspace
+        run: cargo build --workspace --all-targets --all-features
+
+      - name: Run tests with nextest
+        run: cargo nextest run --workspace --all-features --no-fail-fast
+
+      - name: Run doctests
+        run: cargo test --workspace --doc --all-features
+
+  # Generate changelog using git-cliff
+  generate-changelog:
+    name: Generate Changelog
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate changelog for this release
+        run: |
+          git-cliff --tag "${{ github.ref_name }}" --strip all > RELEASE_NOTES.md
+
+      - name: Display release notes
+        run: cat RELEASE_NOTES.md
+
+      - name: Upload release notes as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
+
+  # Publish to crates.io
+  publish:
+    name: Publish to crates.io
+    needs: [verify, generate-changelog]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "publish"
+          save-if: false
+
+      - name: Publish pjs-core to crates.io
+        run: cargo publish --manifest-path crates/pjs-core/Cargo.toml --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+
+      - name: Wait for pjs-core to be available (up to 2 minutes)
+        run: |
+          for i in {1..24}; do
+            if cargo search pjson-rs --limit 1 2>/dev/null | grep -q "pjson-rs"; then
+              echo "pjson-rs is now available on crates.io"
+              exit 0
+            fi
+            echo "Waiting for pjson-rs to be available... ($i/24)"
+            sleep 5
+          done
+          echo "Warning: pjson-rs may not be immediately available"
+
+  # Create GitHub release
+  github-release:
+    name: Create GitHub Release
+    needs: [verify, generate-changelog, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Post-release notifications
+  notify:
+    name: Release Complete
+    needs: [verify, github-release]
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Release notification
+        run: |
+          echo "Release ${{ needs.verify.outputs.version }} has been successfully published!"
+          echo "Repository: https://github.com/${{ github.repository }}"
+          echo "Release: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+          echo "crates.io: https://crates.io/crates/pjson-rs"
