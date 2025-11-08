@@ -455,7 +455,8 @@ mod tests {
         let cursor = Cursor::new(data.as_slice());
         let original_position = cursor.position();
 
-        let protector = CompressionBombProtector::new(cursor, CompressionBombConfig::default(), data.len());
+        let protector =
+            CompressionBombProtector::new(cursor, CompressionBombConfig::default(), data.len());
 
         // Extract inner reader
         let inner = protector.into_inner();
@@ -496,7 +497,10 @@ mod tests {
         assert!(result.is_err());
 
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Compression depth exceeded") || error_msg.contains("Security error"));
+        assert!(
+            error_msg.contains("Compression depth exceeded")
+                || error_msg.contains("Security error")
+        );
     }
 
     #[test]
@@ -530,7 +534,11 @@ mod tests {
         let cursor = Cursor::new(data.as_slice());
 
         let compressed_size = 5; // Simulating 5 bytes compressed to 13 bytes
-        let mut protector = CompressionBombProtector::new(cursor, CompressionBombConfig::default(), compressed_size);
+        let mut protector = CompressionBombProtector::new(
+            cursor,
+            CompressionBombConfig::default(),
+            compressed_size,
+        );
 
         let mut buffer = Vec::new();
         protector.read_to_end(&mut buffer).unwrap();

@@ -420,10 +420,18 @@ mod tests {
         assert!(result.is_err());
 
         // Valid length with hyphens
-        assert!(validator.validate_session_id("valid-session-id-123").is_ok());
+        assert!(
+            validator
+                .validate_session_id("valid-session-id-123")
+                .is_ok()
+        );
 
         // Valid length with underscores
-        assert!(validator.validate_session_id("valid_session_id_123").is_ok());
+        assert!(
+            validator
+                .validate_session_id("valid_session_id_123")
+                .is_ok()
+        );
     }
 
     #[test]

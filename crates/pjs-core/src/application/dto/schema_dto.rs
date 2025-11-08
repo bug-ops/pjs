@@ -357,12 +357,15 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
         let deserialized: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(deserialized, SchemaDefinitionDto::String {
-            min_length: Some(1),
-            max_length: Some(100),
-            pattern: Some(_),
-            enum_values: Some(_)
-        }));
+        assert!(matches!(
+            deserialized,
+            SchemaDefinitionDto::String {
+                min_length: Some(1),
+                max_length: Some(100),
+                pattern: Some(_),
+                enum_values: Some(_)
+            }
+        ));
     }
 
     #[test]
@@ -377,12 +380,15 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
         let deserialized: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(deserialized, SchemaDefinitionDto::String {
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            enum_values: None
-        }));
+        assert!(matches!(
+            deserialized,
+            SchemaDefinitionDto::String {
+                min_length: None,
+                max_length: None,
+                pattern: None,
+                enum_values: None
+            }
+        ));
     }
 
     #[test]
@@ -395,10 +401,13 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
         let deserialized: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(deserialized, SchemaDefinitionDto::Integer {
-            minimum: Some(-100),
-            maximum: Some(100)
-        }));
+        assert!(matches!(
+            deserialized,
+            SchemaDefinitionDto::Integer {
+                minimum: Some(-100),
+                maximum: Some(100)
+            }
+        ));
     }
 
     #[test]
@@ -451,12 +460,15 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
         let deserialized: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(deserialized, SchemaDefinitionDto::Array {
-            items: Some(_),
-            min_items: Some(1),
-            max_items: Some(10),
-            unique_items: true
-        }));
+        assert!(matches!(
+            deserialized,
+            SchemaDefinitionDto::Array {
+                items: Some(_),
+                min_items: Some(1),
+                max_items: Some(10),
+                unique_items: true
+            }
+        ));
     }
 
     #[test]
@@ -471,12 +483,15 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
         let deserialized: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(deserialized, SchemaDefinitionDto::Array {
-            items: None,
-            min_items: None,
-            max_items: None,
-            unique_items: false
-        }));
+        assert!(matches!(
+            deserialized,
+            SchemaDefinitionDto::Array {
+                items: None,
+                min_items: None,
+                max_items: None,
+                unique_items: false
+            }
+        ));
     }
 
     #[test]
@@ -527,10 +542,13 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
         let deserialized: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(deserialized, SchemaDefinitionDto::Object {
-            additional_properties: true,
-            ..
-        }));
+        assert!(matches!(
+            deserialized,
+            SchemaDefinitionDto::Object {
+                additional_properties: true,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -553,7 +571,9 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
         let deserialized: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(deserialized, SchemaDefinitionDto::OneOf { schemas } if schemas.len() == 2));
+        assert!(
+            matches!(deserialized, SchemaDefinitionDto::OneOf { schemas } if schemas.len() == 2)
+        );
     }
 
     #[test]
@@ -578,7 +598,9 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
         let deserialized: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(deserialized, SchemaDefinitionDto::AllOf { schemas } if schemas.len() == 2));
+        assert!(
+            matches!(deserialized, SchemaDefinitionDto::AllOf { schemas } if schemas.len() == 2)
+        );
     }
 
     #[test]
@@ -606,12 +628,15 @@ mod tests {
 
         let schema: Schema = dto.into();
 
-        assert!(matches!(schema, Schema::String {
-            min_length: Some(5),
-            max_length: Some(50),
-            pattern: Some(_),
-            allowed_values: Some(_)
-        }));
+        assert!(matches!(
+            schema,
+            Schema::String {
+                min_length: Some(5),
+                max_length: Some(50),
+                pattern: Some(_),
+                allowed_values: Some(_)
+            }
+        ));
     }
 
     #[test]
@@ -623,10 +648,13 @@ mod tests {
 
         let schema: Schema = dto.into();
 
-        assert!(matches!(schema, Schema::Integer {
-            minimum: Some(10),
-            maximum: Some(20)
-        }));
+        assert!(matches!(
+            schema,
+            Schema::Integer {
+                minimum: Some(10),
+                maximum: Some(20)
+            }
+        ));
     }
 
     #[test]
@@ -674,12 +702,15 @@ mod tests {
 
         let schema: Schema = dto.into();
 
-        assert!(matches!(schema, Schema::Array {
-            items: Some(_),
-            min_items: Some(0),
-            max_items: Some(100),
-            unique_items: true
-        }));
+        assert!(matches!(
+            schema,
+            Schema::Array {
+                items: Some(_),
+                min_items: Some(0),
+                max_items: Some(100),
+                unique_items: true
+            }
+        ));
     }
 
     #[test]
@@ -693,12 +724,15 @@ mod tests {
 
         let schema: Schema = dto.into();
 
-        assert!(matches!(schema, Schema::Array {
-            items: None,
-            min_items: None,
-            max_items: None,
-            unique_items: false
-        }));
+        assert!(matches!(
+            schema,
+            Schema::Array {
+                items: None,
+                min_items: None,
+                max_items: None,
+                unique_items: false
+            }
+        ));
     }
 
     #[test]
@@ -796,12 +830,15 @@ mod tests {
 
         let dto: SchemaDefinitionDto = (&schema).into();
 
-        assert!(matches!(dto, SchemaDefinitionDto::String {
-            min_length: Some(10),
-            max_length: Some(100),
-            pattern: Some(_),
-            enum_values: Some(_)
-        }));
+        assert!(matches!(
+            dto,
+            SchemaDefinitionDto::String {
+                min_length: Some(10),
+                max_length: Some(100),
+                pattern: Some(_),
+                enum_values: Some(_)
+            }
+        ));
     }
 
     #[test]
@@ -813,10 +850,13 @@ mod tests {
 
         let dto: SchemaDefinitionDto = (&schema).into();
 
-        assert!(matches!(dto, SchemaDefinitionDto::Integer {
-            minimum: Some(0),
-            maximum: Some(1000)
-        }));
+        assert!(matches!(
+            dto,
+            SchemaDefinitionDto::Integer {
+                minimum: Some(0),
+                maximum: Some(1000)
+            }
+        ));
     }
 
     #[test]
@@ -863,12 +903,15 @@ mod tests {
 
         let dto: SchemaDefinitionDto = (&schema).into();
 
-        assert!(matches!(dto, SchemaDefinitionDto::Array {
-            items: Some(_),
-            min_items: Some(1),
-            max_items: Some(50),
-            unique_items: true
-        }));
+        assert!(matches!(
+            dto,
+            SchemaDefinitionDto::Array {
+                items: Some(_),
+                min_items: Some(1),
+                max_items: Some(50),
+                unique_items: true
+            }
+        ));
     }
 
     #[test]
@@ -978,7 +1021,10 @@ mod tests {
         let deserialized: SchemaRegistrationDto = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.id, "user-schema");
-        assert!(matches!(deserialized.schema, SchemaDefinitionDto::Object { .. }));
+        assert!(matches!(
+            deserialized.schema,
+            SchemaDefinitionDto::Object { .. }
+        ));
         assert!(deserialized.metadata.is_some());
     }
 
@@ -1019,7 +1065,10 @@ mod tests {
         let deserialized: SchemaMetadataDto = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.version, "2.5");
-        assert_eq!(deserialized.description, Some("Complete metadata".to_string()));
+        assert_eq!(
+            deserialized.description,
+            Some("Complete metadata".to_string())
+        );
         assert_eq!(deserialized.author, Some("Jane Smith".to_string()));
         assert_eq!(deserialized.created_at, Some(9876543210));
     }

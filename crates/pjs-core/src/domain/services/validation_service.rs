@@ -781,7 +781,10 @@ mod tests {
         let result = validator.validate(&JsonData::String("yellow".to_string()), &schema, "/color");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, SchemaValidationError::InvalidEnumValue { .. }));
+        assert!(matches!(
+            err,
+            SchemaValidationError::InvalidEnumValue { .. }
+        ));
     }
 
     #[test]
@@ -833,7 +836,10 @@ mod tests {
         let result = validator.validate(&too_few, &schema, "/items");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, SchemaValidationError::ArraySizeConstraint { .. }));
+        assert!(matches!(
+            err,
+            SchemaValidationError::ArraySizeConstraint { .. }
+        ));
 
         // Invalid: too many items
         let too_many = JsonData::Array(vec![
@@ -894,7 +900,11 @@ mod tests {
         obj_with_extra.insert("name".to_string(), JsonData::String("test".to_string()));
         obj_with_extra.insert("extra".to_string(), JsonData::Integer(42));
         let with_extra = JsonData::Object(obj_with_extra);
-        assert!(validator.validate(&with_extra, &schema_allow, "/obj").is_ok());
+        assert!(
+            validator
+                .validate(&with_extra, &schema_allow, "/obj")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -912,11 +922,7 @@ mod tests {
         // Valid: matches exactly one schema (string)
         assert!(
             validator
-                .validate(
-                    &JsonData::String("test".to_string()),
-                    &schema,
-                    "/value"
-                )
+                .validate(&JsonData::String("test".to_string()), &schema, "/value")
                 .is_ok()
         );
 
@@ -935,17 +941,13 @@ mod tests {
 
         let schema = Schema::OneOf {
             schemas: SmallVec::from_vec(vec![
-                Box::new(Schema::string(Some(5), None)), // min length 5
+                Box::new(Schema::string(Some(5), None)),    // min length 5
                 Box::new(Schema::integer(Some(100), None)), // min 100
             ]),
         };
 
         // Invalid: matches no schemas (string too short, not an integer)
-        let result = validator.validate(
-            &JsonData::String("hi".to_string()),
-            &schema,
-            "/value",
-        );
+        let result = validator.validate(&JsonData::String("hi".to_string()), &schema, "/value");
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1120,9 +1122,21 @@ mod tests {
         // Test all type mismatches
         let test_cases = vec![
             (Schema::Null, JsonData::Integer(42), "null"),
-            (Schema::Boolean, JsonData::String("true".to_string()), "boolean"),
-            (Schema::integer(None, None), JsonData::String("42".to_string()), "integer"),
-            (Schema::number(None, None), JsonData::String("3.14".to_string()), "number"),
+            (
+                Schema::Boolean,
+                JsonData::String("true".to_string()),
+                "boolean",
+            ),
+            (
+                Schema::integer(None, None),
+                JsonData::String("42".to_string()),
+                "integer",
+            ),
+            (
+                Schema::number(None, None),
+                JsonData::String("3.14".to_string()),
+                "number",
+            ),
             (Schema::string(None, None), JsonData::Integer(42), "string"),
             (
                 Schema::Array {
