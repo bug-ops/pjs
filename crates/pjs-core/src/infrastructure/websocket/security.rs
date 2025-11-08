@@ -130,7 +130,12 @@ mod tests {
         let guard = handler.create_connection_guard(ip).unwrap();
 
         // Should allow message
-        assert!(handler.validate_message(&guard, 1024).is_ok());
+        let result = handler.validate_message(&guard, 1024);
+        assert!(
+            result.is_ok(),
+            "validate_message failed: {:?}",
+            result.err()
+        );
 
         // Get stats
         let stats = handler.get_security_stats();

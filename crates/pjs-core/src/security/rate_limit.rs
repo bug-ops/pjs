@@ -91,12 +91,12 @@ struct ClientRateLimit {
 }
 
 impl ClientRateLimit {
-    fn new() -> Self {
+    fn new(burst_allowance: u32) -> Self {
         let now = Instant::now();
         Self {
             requests: Vec::new(),
             connection_count: 0,
-            tokens: 0.0, // Start with no tokens
+            tokens: burst_allowance as f64, // Start with burst allowance tokens
             last_refill: now,
         }
     }
@@ -155,7 +155,11 @@ impl WebSocketRateLimiter {
     /// Check if request is allowed (HTTP upgrade to WebSocket)
     pub fn check_request(&self, ip: IpAddr) -> Result<(), RateLimitError> {
         let now = Instant::now();
-        let mut client = self.clients.entry(ip).or_insert_with(ClientRateLimit::new);
+        let burst = self.config.burst_allowance;
+        let mut client = self
+            .clients
+            .entry(ip)
+            .or_insert_with(|| ClientRateLimit::new(burst));
 
         // Clean old requests outside window
         let window_start = now - self.config.window_duration;
@@ -176,7 +180,11 @@ impl WebSocketRateLimiter {
 
     /// Check if new connection is allowed
     pub fn check_connection(&self, ip: IpAddr) -> Result<(), RateLimitError> {
-        let mut client = self.clients.entry(ip).or_insert_with(ClientRateLimit::new);
+        let burst = self.config.burst_allowance;
+        let mut client = self
+            .clients
+            .entry(ip)
+            .or_insert_with(|| ClientRateLimit::new(burst));
 
         if client.connection_count >= self.config.max_connections_per_ip {
             return Err(RateLimitError::ConnectionLimitExceeded {
@@ -352,12 +360,11 @@ mod tests {
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // First connection should create the client entry
-        let mut client = limiter
+        let client = limiter
             .clients
             .entry(ip)
-            .or_insert_with(ClientRateLimit::new);
-        // Pre-fill some tokens for the test
-        client.tokens = config.burst_allowance as f64;
+            .or_insert_with(|| ClientRateLimit::new(config.burst_allowance));
+        // Tokens are already initialized with burst_allowance
         drop(client);
 
         // Should allow burst messages
@@ -425,7 +432,7 @@ mod tests {
             let mut client = limiter
                 .clients
                 .entry(ip)
-                .or_insert_with(ClientRateLimit::new);
+                .or_insert_with(|| ClientRateLimit::new(config.burst_allowance));
             client.tokens = 0.5; // Start with partial token
         }
 
@@ -503,7 +510,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = WebSocketRateLimiter::new(config.clone());
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // With 0 burst, even the first message might be throttled
@@ -511,7 +518,7 @@ mod tests {
         let mut client = limiter
             .clients
             .entry(ip)
-            .or_insert_with(ClientRateLimit::new);
+            .or_insert_with(|| ClientRateLimit::new(config.burst_allowance));
         client.tokens = 0.0;
         drop(client);
 
