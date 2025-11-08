@@ -15,6 +15,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
 
+## [0.4.3] - 2025-11-08
+
+### 📦 Dependency Updates
+
+Updated dependencies to latest stable versions for improved performance, security, and compatibility:
+
+**Major Updates:**
+- `tokio`: 1.35 → 1.48 (major async runtime improvements)
+- `hyper`: 1.6 → 1.7 (HTTP/2 performance enhancements)
+- `simd-json`: 0.15 → 0.17 (SIMD parsing optimizations)
+- `tokio-tungstenite`: 0.27 → 0.28 (WebSocket stability improvements)
+
+**Notable Minor Updates (141 packages total):**
+- `axum`: 0.8.4 → 0.8.6
+- `serde`: 1.0.219 → 1.0.228
+- `serde_json`: 1.0.142 → 1.0.145
+- `thiserror`: 2.0.14 → 2.0.17
+- `reqwest`: 0.12.23 → 0.12.24
+- `sonic-rs`: 0.5.3 → 0.5.6
+- `parking_lot`: 0.12.4 → 0.12.5
+- `dashmap`: 6.1.0 (stable, RC versions skipped)
+- `uuid`: 1.18.0 → 1.18.1
+- `url`: 2.5.4 → 2.5.7
+- `clap`: 4.5.45 → 4.5.51
+- `bytes`: 1.5 → 1.10
+- `tikv-jemallocator`: 0.6.0 → 0.6.1
+- `tikv-jemalloc-ctl`: 0.6.0 → 0.6.1
+- `priority-queue`: 2.5.0 → 2.7.0
+- `proptest`: 1.7.0 → 1.9.0
+- `regex`: 1.11.1 → 1.12.2
+- `rustls`: 0.23.31 → 0.23.35
+
+### ✅ Testing
+
+- All 370 tests passing with updated dependencies
+- Zero regressions detected
+- Build time: ~19s (debug), ~5s (incremental)
+
+### 🔒 Security
+
+- Updated `rustls` and `rustls-webpki` for latest TLS security patches
+- Updated OpenSSL bindings to 0.10.75
+
 ## [0.4.2] - 2025-11-08
 
 ### 🚀 Performance Improvements
