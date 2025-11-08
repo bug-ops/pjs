@@ -25,8 +25,13 @@ concurrency:
 
 jobs:
   build:
+    name: Build (${{ matrix.allocator }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator: [system, jemalloc, mimalloc]
 
     steps:
     - uses: actions/checkout@v4
@@ -50,17 +55,29 @@ jobs:
     - name: Cache Cargo
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: "build"
+        shared-key: "build-${{ matrix.allocator }}"
         save-if: ${{ github.ref == 'refs/heads/main' }}
+
+    - name: Set allocator features
+      id: features
+      run: |
+        if [ "${{ matrix.allocator }}" = "jemalloc" ]; then
+          echo "features=jemalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        elif [ "${{ matrix.allocator }}" = "mimalloc" ]; then
+          echo "features=mimalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        else
+          echo "features=schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        fi
 
     - name: Build with nightly features
       run: |
         echo "Using Rust nightly for zero-cost GAT abstractions"
+        echo "Allocator: ${{ matrix.allocator }}"
         rustc --version
-        cargo build --verbose --features "schema-validation,compression,http-server" --workspace
+        cargo build --verbose --features "${{ steps.features.outputs.features }}" --workspace
 
     - name: Build release
-      run: cargo build --release --verbose --features "schema-validation,compression,http-server" --workspace
+      run: cargo build --release --verbose --features "${{ steps.features.outputs.features }}" --workspace
 
     - name: sccache stats
       if: always()
