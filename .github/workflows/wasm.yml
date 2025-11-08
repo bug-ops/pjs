@@ -1,0 +1,409 @@
+name: WASM Build & Test
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'crates/pjs-wasm/**'
+      - 'crates/pjs-domain/**'
+      - 'crates/pjs-js-client/examples/browser-wasm/**'
+      - '.github/workflows/wasm.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/pjs-wasm/**'
+      - 'crates/pjs-domain/**'
+      - 'crates/pjs-js-client/examples/browser-wasm/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings"
+  RUSTUP_MAX_RETRIES: 10
+  # wasm-pack configuration
+  WASM_PACK_CACHE_DIR: ~/.wasm-pack
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Native Rust tests for pjs-wasm library
+  wasm-test:
+    name: WASM Library Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wasm-test"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Run pjs-wasm library tests
+        run: cargo nextest run -p pjs-wasm --lib --no-fail-fast
+
+      - name: Run pjs-domain library tests
+        run: cargo nextest run -p pjs-domain --lib --no-fail-fast
+
+      - name: Run doctests
+        run: |
+          cargo test -p pjs-wasm --doc
+          cargo test -p pjs-domain --doc
+
+  # Build WASM binaries for multiple targets
+  wasm-build:
+    name: Build WASM (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - web
+          - nodejs
+          - bundler
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup sccache
+        id: sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Configure sccache
+        if: steps.sccache.outcome == 'success'
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wasm-build-${{ matrix.target }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Cache wasm-pack
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WASM_PACK_CACHE_DIR }}
+          key: wasm-pack-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            wasm-pack-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@latest
+
+      - name: Build WASM for ${{ matrix.target }}
+        working-directory: crates/pjs-wasm
+        run: |
+          wasm-pack build \
+            --target ${{ matrix.target }} \
+            --release \
+            --out-dir pkg-${{ matrix.target }}
+
+      - name: Verify WASM build
+        working-directory: crates/pjs-wasm
+        run: |
+          echo "Verifying pkg-${{ matrix.target }} directory..."
+          ls -lh pkg-${{ matrix.target }}/
+
+          # Check essential files
+          test -f pkg-${{ matrix.target }}/pjs_wasm.js || (echo "Missing JS file" && exit 1)
+          test -f pkg-${{ matrix.target }}/pjs_wasm.d.ts || (echo "Missing TypeScript definitions" && exit 1)
+          test -f pkg-${{ matrix.target }}/pjs_wasm_bg.wasm || (echo "Missing WASM binary" && exit 1)
+          test -f pkg-${{ matrix.target }}/package.json || (echo "Missing package.json" && exit 1)
+
+          echo "✓ All required files present"
+
+      - name: Check TypeScript definitions
+        working-directory: crates/pjs-wasm
+        run: |
+          echo "Checking TypeScript definitions for ${{ matrix.target }}..."
+          grep -q "class PjsParser" pkg-${{ matrix.target }}/pjs_wasm.d.ts || (echo "Missing PjsParser class definition" && exit 1)
+          grep -q "function version" pkg-${{ matrix.target }}/pjs_wasm.d.ts || (echo "Missing version function definition" && exit 1)
+          echo "✓ TypeScript definitions valid"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || echo "sccache not available"
+        continue-on-error: true
+
+      - name: Upload WASM build artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: wasm-build-${{ matrix.target }}
+          path: crates/pjs-wasm/pkg-${{ matrix.target }}/
+          retention-days: 7
+
+  # Bundle size analysis
+  wasm-bundle-size:
+    name: WASM Bundle Size
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Analyze bundle sizes
+        id: bundle-size
+        run: |
+          echo "## WASM Bundle Size Report" > bundle-report.md
+          echo "" >> bundle-report.md
+          echo "| Target | Raw (KB) | Gzipped (KB) | Status |" >> bundle-report.md
+          echo "|--------|----------|-------------|--------|" >> bundle-report.md
+
+          for target in web nodejs bundler; do
+            if [ -f "artifacts/wasm-build-$target/pjs_wasm_bg.wasm" ]; then
+              raw_size=$(($(wc -c < "artifacts/wasm-build-$target/pjs_wasm_bg.wasm") / 1024))
+              gzipped_size=$(($(gzip -c < "artifacts/wasm-build-$target/pjs_wasm_bg.wasm" | wc -c) / 1024))
+
+              # Check size constraints (raw < 200 KB, gzipped < 80 KB)
+              status="✓ PASS"
+              if [ $raw_size -gt 200 ] || [ $gzipped_size -gt 80 ]; then
+                status="⚠ WARNING"
+              fi
+
+              echo "| $target | $raw_size | $gzipped_size | $status |" >> bundle-report.md
+
+              # Export for PR comment
+              echo "${target}_raw_kb=$raw_size" >> $GITHUB_OUTPUT
+              echo "${target}_gzipped_kb=$gzipped_size" >> $GITHUB_OUTPUT
+            fi
+          done
+
+          cat bundle-report.md
+
+      - name: Upload bundle size report
+        uses: actions/upload-artifact@v5
+        with:
+          name: bundle-size-report
+          path: bundle-report.md
+          retention-days: 30
+
+      - name: Comment PR with bundle sizes
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('bundle-report.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+  # Node.js example test
+  wasm-node-example:
+    name: Node.js Example Test
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download web build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-build-web
+          path: crates/pjs-js-client/examples/browser-wasm/pkg
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Run Node.js example
+        working-directory: crates/pjs-js-client/examples/browser-wasm
+        run: |
+          echo "Running Node.js example with WASM..."
+          node example.js
+
+      - name: Verify example output
+        working-directory: crates/pjs-js-client/examples/browser-wasm
+        run: |
+          # Check example ran successfully (should have created frames)
+          node example.js | grep -q "Example 1: Basic Usage" || (echo "Example failed" && exit 1)
+          node example.js | grep -q "Generated" || (echo "No frame generation detected" && exit 1)
+          echo "✓ Example test passed"
+
+  # Package validation
+  wasm-package-validation:
+    name: NPM Package Validation
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download web build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-build-web
+          path: wasm-pkg
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Validate package.json
+        run: |
+          echo "Validating package.json..."
+          test -f wasm-pkg/package.json || (echo "Missing package.json" && exit 1)
+
+          # Check required fields
+          node -e "
+            const pkg = require('./wasm-pkg/package.json');
+            const required = ['name', 'version', 'files', 'main', 'types'];
+            for (const field of required) {
+              if (!pkg[field]) {
+                console.error(\`Missing required field: \${field}\`);
+                process.exit(1);
+              }
+            }
+            console.log('✓ All required fields present');
+            console.log(\`Package: \${pkg.name} v\${pkg.version}\`);
+          "
+
+      - name: Check required files
+        run: |
+          echo "Checking required package files..."
+          required_files=("pjs_wasm.js" "pjs_wasm.d.ts" "pjs_wasm_bg.wasm" "pjs_wasm_bg.wasm.d.ts" "package.json" "README.md")
+
+          for file in "${required_files[@]}"; do
+            test -f "wasm-pkg/$file" || (echo "Missing required file: $file" && exit 1)
+          done
+
+          echo "✓ All required files present"
+
+      - name: Validate TypeScript definitions
+        run: |
+          echo "Validating TypeScript definitions..."
+
+          # Check for main exports
+          grep -q "class PjsParser" wasm-pkg/pjs_wasm.d.ts || (echo "Missing PjsParser class" && exit 1)
+          grep -q "class PriorityConstants" wasm-pkg/pjs_wasm.d.ts || (echo "Missing PriorityConstants" && exit 1)
+          grep -q "class PriorityConfigBuilder" wasm-pkg/pjs_wasm.d.ts || (echo "Missing PriorityConfigBuilder" && exit 1)
+          grep -q "export function version" wasm-pkg/pjs_wasm.d.ts || (echo "Missing version function" && exit 1)
+
+          echo "✓ All expected exports present"
+
+      - name: Create test package
+        run: |
+          mkdir -p test-pkg
+          cp -r wasm-pkg/* test-pkg/
+          cd test-pkg
+          npm init -y
+          echo "✓ Test package created"
+
+      - name: Upload validated package
+        uses: actions/upload-artifact@v5
+        with:
+          name: validated-wasm-package
+          path: wasm-pkg/
+          retention-days: 7
+
+  # Quality checks for WASM crate
+  wasm-quality:
+    name: WASM Code Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wasm-quality"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check formatting
+        run: cargo +nightly fmt --check -p pjs-wasm -p pjs-domain
+
+      - name: Run clippy for WASM
+        run: |
+          cargo clippy -p pjs-wasm --all-targets -- -D warnings
+          cargo clippy -p pjs-domain --all-targets -- -D warnings
+
+      - name: Check documentation
+        run: |
+          cargo doc -p pjs-wasm --no-deps --release
+          cargo doc -p pjs-domain --no-deps --release
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+      - name: Verify no unsafe code
+        run: |
+          echo "Checking for unsafe code in pjs-domain (should have none)..."
+          unsafe_count=$(grep -r "unsafe" crates/pjs-domain/src --include="*.rs" | grep -v "// SAFETY:" | wc -l)
+          if [ $unsafe_count -gt 0 ]; then
+            echo "⚠ Warning: Found unsafe code in pjs-domain (WASM core should avoid unsafe)"
+            grep -r "unsafe" crates/pjs-domain/src --include="*.rs" | grep -v "// SAFETY:"
+          fi
+
+          echo "Checking for unsafe code in pjs-wasm..."
+          unsafe_count=$(grep -r "unsafe" crates/pjs-wasm/src --include="*.rs" | grep -v "// SAFETY:" | wc -l)
+          if [ $unsafe_count -gt 0 ]; then
+            echo "⚠ Warning: Found unsafe code in pjs-wasm"
+            grep -r "unsafe" crates/pjs-wasm/src --include="*.rs" | grep -v "// SAFETY:"
+          fi
+
+  # Final status check
+  wasm-ci-success:
+    name: WASM CI Success
+    needs: [wasm-test, wasm-build, wasm-bundle-size, wasm-node-example, wasm-package-validation, wasm-quality]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all WASM jobs passed
+        run: |
+          if [[ "${{ needs.wasm-test.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-build.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-bundle-size.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-node-example.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-package-validation.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-quality.result }}" != "success" ]]; then
+            echo "One or more WASM CI jobs failed"
+            exit 1
+          fi
+          echo "✓ All WASM CI jobs passed successfully!"
