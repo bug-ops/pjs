@@ -5,7 +5,10 @@
 //! a JavaScript-friendly API using wasm-bindgen.
 
 use wasm_bindgen::prelude::*;
-use pjs_domain::value_objects::JsonData;
+use pjs_domain::{
+    entities::Frame,
+    value_objects::{JsonData, Priority, StreamId},
+};
 
 /// PJS Parser for WebAssembly.
 ///
@@ -105,6 +108,77 @@ impl PjsParser {
     #[wasm_bindgen]
     pub fn version() -> String {
         env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    /// Generate priority-based frames from JSON data.
+    ///
+    /// This method uses the domain layer to create skeleton and complete frames.
+    ///
+    /// # Arguments
+    ///
+    /// * `json_str` - JSON string to convert to frames
+    /// * `min_priority` - Minimum priority threshold (1-255)
+    ///
+    /// # Returns
+    ///
+    /// Array of frames as JsValue
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// const parser = new PjsParser();
+    /// const frames = parser.generateFrames('{"name": "Alice"}', 50);
+    /// console.log(frames);
+    /// ```
+    #[wasm_bindgen(js_name = generateFrames)]
+    pub fn generate_frames(&self, json_str: &str, min_priority: u8) -> Result<JsValue, JsValue> {
+        // Parse JSON
+        let value: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
+
+        let json_data: JsonData = value.into();
+
+        // Create stream ID
+        let stream_id = StreamId::new();
+
+        // Validate priority (not used in simplified implementation yet)
+        let _priority = Priority::new(min_priority)
+            .map_err(|e| JsValue::from_str(&format!("Invalid priority: {:?}", e)))?;
+
+        // Generate frames using domain logic
+        let mut frames = Vec::new();
+
+        // 1. Skeleton frame (structure only)
+        let skeleton = Self::create_skeleton(&json_data);
+        let skeleton_frame = Frame::skeleton(stream_id.clone(), 0, skeleton);
+        frames.push(skeleton_frame);
+
+        // 2. Complete frame (full data)
+        let complete_frame = Frame::complete(stream_id, 1, None);
+        frames.push(complete_frame);
+
+        // Convert frames to JsValue
+        serde_wasm_bindgen::to_value(&frames)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
+    }
+
+    /// Create skeleton structure from data (internal helper)
+    fn create_skeleton(data: &JsonData) -> JsonData {
+        match data {
+            JsonData::Object(map) => {
+                let skeleton_map: std::collections::HashMap<String, JsonData> = map
+                    .keys()
+                    .map(|k| (k.clone(), JsonData::Null))
+                    .collect();
+                JsonData::Object(skeleton_map)
+            }
+            JsonData::Array(arr) => {
+                let skeleton_arr: Vec<JsonData> =
+                    (0..arr.len()).map(|_| JsonData::Null).collect();
+                JsonData::Array(skeleton_arr)
+            }
+            _ => JsonData::Null,
+        }
     }
 }
 

@@ -51,6 +51,10 @@ export * from './types/index.js';
 // Utility functions
 export { createPJSClient, validateFrame, parseJsonPath } from './utils/index.js';
 
+// Parser module (optional WASM support)
+export { WasmParser, createWasmParser } from './parser/index.js';
+export type { WasmParserOptions } from './parser/index.js';
+
 /**
  * Library version
  */
@@ -69,25 +73,24 @@ export const DEFAULT_CONFIG = {
 
 /**
  * Quick start function to create a PJS client with minimal configuration
- * 
+ *
  * @param baseUrl - PJS server base URL
  * @param options - Additional client options
  * @returns Configured PJS client instance
- * 
+ *
  * @example
  * ```typescript
  * import { quickStart } from '@pjs/client';
- * 
+ *
  * const client = quickStart('http://localhost:3000');
  * const data = await client.stream('/api/users');
  * ```
  */
-export function quickStart(
-  baseUrl: string, 
+export async function quickStart(
+  baseUrl: string,
   options: Partial<import('./types/index.js').PJSClientConfig> = {}
-): import('./core/client.js').PJSClient {
-  const { PJSClient } = require('./core/client.js');
-  
+): Promise<import('./core/client.js').PJSClient> {
+  const { PJSClient } = await import('./core/client.js');
   return new PJSClient({
     baseUrl,
     ...DEFAULT_CONFIG,
