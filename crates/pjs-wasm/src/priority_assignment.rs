@@ -4,7 +4,6 @@
 //! It analyzes JSON structure and assigns priorities based on configurable rules.
 
 use pjs_domain::value_objects::{JsonData, JsonPath, Priority};
-use pjs_domain::DomainResult;
 use std::collections::HashMap;
 
 /// Priority assignment rules configuration
@@ -61,6 +60,7 @@ impl Default for PriorityConfig {
 
 impl PriorityConfig {
     /// Create new configuration with default values
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -114,11 +114,13 @@ impl PriorityAssigner {
     }
 
     /// Get reference to configuration
+    #[allow(dead_code)]
     pub fn config(&self) -> &PriorityConfig {
         &self.config
     }
 
     /// Get mutable reference to configuration
+    #[allow(dead_code)]
     pub fn config_mut(&mut self) -> &mut PriorityConfig {
         &mut self.config
     }
@@ -187,6 +189,7 @@ impl PriorityAssigner {
     }
 
     /// Calculate priority for array elements
+    #[allow(dead_code)]
     pub fn calculate_array_priority(&self, path: &JsonPath, elements: &[JsonData]) -> Priority {
         // Large arrays get background priority
         if elements.len() > 50 {
@@ -194,20 +197,18 @@ impl PriorityAssigner {
         }
 
         // Check field name patterns
-        if let Some(segment) = path.last_segment() {
-            if let pjs_domain::value_objects::PathSegment::Key(key) = segment {
-                if self
-                    .config
-                    .background_patterns
-                    .iter()
-                    .any(|p| key.contains(p.as_str()))
-                {
-                    return Priority::BACKGROUND;
-                }
+        if let Some(pjs_domain::value_objects::PathSegment::Key(key)) = path.last_segment() {
+            if self
+                .config
+                .background_patterns
+                .iter()
+                .any(|p| key.contains(p.as_str()))
+            {
+                return Priority::BACKGROUND;
+            }
 
-                if matches!(key.as_str(), "items" | "data" | "results") {
-                    return Priority::MEDIUM;
-                }
+            if matches!(key.as_str(), "items" | "data" | "results") {
+                return Priority::MEDIUM;
             }
         }
 
@@ -274,6 +275,7 @@ pub struct PrioritizedField {
 
 impl PrioritizedField {
     /// Create new prioritized field
+    #[allow(dead_code)]
     pub fn new(path: JsonPath, priority: Priority, value: JsonData) -> Self {
         Self {
             path,
@@ -284,7 +286,9 @@ impl PrioritizedField {
 }
 
 /// Group prioritized fields by priority level
-pub fn group_by_priority(fields: Vec<PrioritizedField>) -> HashMap<Priority, Vec<PrioritizedField>> {
+pub fn group_by_priority(
+    fields: Vec<PrioritizedField>,
+) -> HashMap<Priority, Vec<PrioritizedField>> {
     let mut groups: HashMap<Priority, Vec<PrioritizedField>> = HashMap::new();
 
     for field in fields {
@@ -382,9 +386,7 @@ mod tests {
         );
 
         // Large array (>50 elements)
-        let large_arr: Vec<JsonData> = (0..100)
-            .map(|i| JsonData::Integer(i.into()))
-            .collect();
+        let large_arr: Vec<JsonData> = (0..100).map(|i| JsonData::Integer(i.into())).collect();
         assert_eq!(
             assigner.calculate_array_priority(&path, &large_arr),
             Priority::BACKGROUND

@@ -51,14 +51,23 @@ impl Default for StreamConfig {
 /// Stream statistics for monitoring
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StreamStats {
+    /// Total number of frames generated
     pub total_frames: u64,
+    /// Number of skeleton frames sent
     pub skeleton_frames: u64,
+    /// Number of patch frames sent
     pub patch_frames: u64,
+    /// Number of completion frames sent
     pub complete_frames: u64,
+    /// Number of error frames sent
     pub error_frames: u64,
+    /// Total bytes transmitted across all frames
     pub total_bytes: u64,
+    /// Bytes transmitted in critical priority frames
     pub critical_bytes: u64,
+    /// Bytes transmitted in high priority frames
     pub high_priority_bytes: u64,
+    /// Average size of frames in bytes
     pub average_frame_size: f64,
 }
 
@@ -420,7 +429,7 @@ impl Stream {
         }
 
         let mut frames = Vec::new();
-        let chunk_size = (patches.len() + max_frames - 1) / max_frames; // Ceiling division
+        let chunk_size = patches.len().div_ceil(max_frames);
 
         for patch_chunk in patches.chunks(chunk_size) {
             let priority = patch_chunk

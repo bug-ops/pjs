@@ -26,16 +26,16 @@
 extern crate alloc;
 
 #[cfg(not(feature = "std"))]
-use alloc::{string::String, format, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 
-pub mod value_objects;
 pub mod entities;
 pub mod events;
+pub mod value_objects;
 
 // Re-export core types
-pub use value_objects::{Priority, JsonPath, JsonData, SessionId, StreamId, Schema};
 pub use entities::{Frame, Stream};
 pub use events::{DomainEvent, SessionState};
+pub use value_objects::{JsonData, JsonPath, Priority, Schema, SessionId, StreamId};
 
 /// Domain Result type
 pub type DomainResult<T> = Result<T, DomainError>;

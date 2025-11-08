@@ -382,12 +382,19 @@ impl Schema {
 /// Simplified schema type for quick type checking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SchemaType {
+    /// String type
     String,
+    /// Integer type
     Integer,
+    /// Floating-point number type
     Number,
+    /// Boolean type
     Boolean,
+    /// Null type
     Null,
+    /// Array type
     Array,
+    /// Object type
     Object,
 }
 

@@ -144,16 +144,19 @@ impl TryFrom<u8> for Priority {
     }
 }
 
-/// Priority validation rules
+/// Priority validation rules (reserved for future use)
+#[allow(dead_code)]
 pub trait PriorityRule {
     fn validate(&self, priority: Priority) -> bool;
     fn name(&self) -> &'static str;
 }
 
-/// Rule: Priority must be at least minimum value
+/// Rule: Priority must be at least minimum value (reserved for future use)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MinimumPriority(pub Priority);
 
+#[allow(dead_code)]
 impl PriorityRule for MinimumPriority {
     fn validate(&self, priority: Priority) -> bool {
         priority >= self.0
@@ -164,13 +167,15 @@ impl PriorityRule for MinimumPriority {
     }
 }
 
-/// Rule: Priority must be within range
+/// Rule: Priority must be within range (reserved for future use)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PriorityRange {
     pub min: Priority,
     pub max: Priority,
 }
 
+#[allow(dead_code)]
 impl PriorityRule for PriorityRange {
     fn validate(&self, priority: Priority) -> bool {
         priority >= self.min && priority <= self.max
@@ -181,11 +186,13 @@ impl PriorityRule for PriorityRange {
     }
 }
 
-/// Collection of priority rules for validation
+/// Collection of priority rules for validation (reserved for future use)
+#[allow(dead_code)]
 pub struct PriorityRules {
     rules: Vec<Box<dyn PriorityRule + Send + Sync>>,
 }
 
+#[allow(dead_code)]
 impl PriorityRules {
     pub fn new() -> Self {
         Self { rules: Vec::new() }

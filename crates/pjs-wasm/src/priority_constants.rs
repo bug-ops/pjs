@@ -36,6 +36,7 @@ impl PriorityConstants {
     /// const frames = parser.generateFrames(json, PriorityConstants.CRITICAL);
     /// ```
     #[wasm_bindgen(getter)]
+    #[allow(non_snake_case)]
     pub fn CRITICAL() -> u8 {
         Priority::CRITICAL.value()
     }
@@ -48,6 +49,7 @@ impl PriorityConstants {
     /// const frames = parser.generateFrames(json, PriorityConstants.HIGH);
     /// ```
     #[wasm_bindgen(getter)]
+    #[allow(non_snake_case)]
     pub fn HIGH() -> u8 {
         Priority::HIGH.value()
     }
@@ -60,6 +62,7 @@ impl PriorityConstants {
     /// const frames = parser.generateFrames(json, PriorityConstants.MEDIUM);
     /// ```
     #[wasm_bindgen(getter)]
+    #[allow(non_snake_case)]
     pub fn MEDIUM() -> u8 {
         Priority::MEDIUM.value()
     }
@@ -72,6 +75,7 @@ impl PriorityConstants {
     /// const frames = parser.generateFrames(json, PriorityConstants.LOW);
     /// ```
     #[wasm_bindgen(getter)]
+    #[allow(non_snake_case)]
     pub fn LOW() -> u8 {
         Priority::LOW.value()
     }
@@ -84,6 +88,7 @@ impl PriorityConstants {
     /// const frames = parser.generateFrames(json, PriorityConstants.BACKGROUND);
     /// ```
     #[wasm_bindgen(getter)]
+    #[allow(non_snake_case)]
     pub fn BACKGROUND() -> u8 {
         Priority::BACKGROUND.value()
     }

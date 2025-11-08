@@ -4,10 +4,10 @@
 //! It wraps the pure domain logic from `pjs-domain` and exposes it through
 //! a JavaScript-friendly API using wasm-bindgen.
 
-use crate::priority_assignment::{group_by_priority, sort_priorities, PriorityAssigner};
+use crate::priority_assignment::{PriorityAssigner, group_by_priority, sort_priorities};
 use crate::priority_config::PriorityConfigBuilder;
 use pjs_domain::entities::Frame;
-use pjs_domain::entities::frame::{FramePatch, FrameType};
+use pjs_domain::entities::frame::FramePatch;
 use pjs_domain::value_objects::{JsonData, Priority, StreamId};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
@@ -228,12 +228,7 @@ impl PjsParser {
                 // Create patches for this priority level
                 let patches: Result<Vec<FramePatch>, String> = fields
                     .iter()
-                    .map(|field| {
-                        Ok(FramePatch::set(
-                            field.path.clone(),
-                            field.value.clone(),
-                        ))
-                    })
+                    .map(|field| Ok(FramePatch::set(field.path.clone(), field.value.clone())))
                     .collect();
 
                 let patches = patches?;
@@ -293,6 +288,7 @@ impl Default for PjsParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pjs_domain::entities::frame::FrameType;
 
     #[test]
     fn test_parser_creation() {
@@ -308,8 +304,7 @@ mod tests {
 
     #[test]
     fn test_parser_with_config() {
-        let config = PriorityConfigBuilder::new()
-            .add_critical_field("custom_id".to_string());
+        let config = PriorityConfigBuilder::new().add_critical_field("custom_id".to_string());
         let _parser = PjsParser::with_config(config);
         // Parser created successfully with custom config
     }
@@ -361,10 +356,7 @@ mod tests {
 
     #[test]
     fn test_create_skeleton_array() {
-        let data = JsonData::Array(vec![
-            JsonData::Integer(1),
-            JsonData::Integer(2),
-        ]);
+        let data = JsonData::Array(vec![JsonData::Integer(1), JsonData::Integer(2)]);
 
         let skeleton = PjsParser::create_skeleton(&data);
         assert_eq!(skeleton, JsonData::Array(vec![]));
@@ -391,10 +383,7 @@ mod tests {
         assert_eq!(frames[0].frame_type(), &FrameType::Skeleton);
 
         // Last frame should be complete
-        assert_eq!(
-            frames.last().unwrap().frame_type(),
-            &FrameType::Complete
-        );
+        assert_eq!(frames.last().unwrap().frame_type(), &FrameType::Complete);
 
         // Middle frames should be patches
         for frame in frames.iter().skip(1).take(frames.len() - 2) {
@@ -553,10 +542,7 @@ mod wasm_tests {
             .add_high_field("display_name".to_string());
 
         let parser = PjsParser::with_config(config);
-        let result = parser.generate_frames(
-            r#"{"user_id": 123, "display_name": "Alice"}"#,
-            10,
-        );
+        let result = parser.generate_frames(r#"{"user_id": 123, "display_name": "Alice"}"#, 10);
         assert!(result.is_ok());
     }
 
