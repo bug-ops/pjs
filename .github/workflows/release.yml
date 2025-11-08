@@ -62,7 +62,7 @@ jobs:
         run: cargo +nightly fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --features "schema-validation,compression,http-server" -- -D warnings
 
       - name: Run tests (nextest)
         uses: taiki-e/install-action@v2
@@ -70,13 +70,13 @@ jobs:
           tool: nextest
 
       - name: Build workspace
-        run: cargo build --workspace --all-targets --all-features
+        run: cargo build --workspace --all-targets --features "schema-validation,compression,http-server"
 
       - name: Run tests with nextest
-        run: cargo nextest run --workspace --all-features --no-fail-fast
+        run: cargo nextest run --workspace --features "schema-validation,compression,http-server" --no-fail-fast
 
       - name: Run doctests
-        run: cargo test --workspace --doc --all-features
+        run: cargo test --workspace --doc --features "schema-validation,compression,http-server"
 
   # Generate changelog using git-cliff
   generate-changelog:

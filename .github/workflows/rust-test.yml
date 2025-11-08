@@ -25,13 +25,14 @@ concurrency:
 jobs:
   # Cross-platform tests
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }}, ${{ matrix.allocator }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        allocator: [system, jemalloc, mimalloc]
 
     steps:
     - uses: actions/checkout@v4
@@ -71,17 +72,30 @@ jobs:
       with:
         tool: nextest
 
+    - name: Set allocator features
+      id: features
+      run: |
+        if [ "${{ matrix.allocator }}" = "jemalloc" ]; then
+          echo "features=jemalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        elif [ "${{ matrix.allocator }}" = "mimalloc" ]; then
+          echo "features=mimalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        else
+          echo "features=schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+
     - name: Build workspace
-      run: cargo build --workspace --all-targets --all-features
+      run: cargo build --workspace --all-targets --features "${{ steps.features.outputs.features }}"
 
     - name: Run tests (nextest)
       run: |
         echo "Running tests with Rust nightly for GAT zero-cost abstractions"
+        echo "Allocator: ${{ matrix.allocator }}"
         rustc --version
-        cargo nextest run --workspace --all-features --no-fail-fast
+        cargo nextest run --workspace --features "${{ steps.features.outputs.features }}" --no-fail-fast
 
     - name: Run doctests
-      run: cargo test --workspace --doc --all-features
+      run: cargo test --workspace --doc --features "${{ steps.features.outputs.features }}"
 
     - name: sccache stats
       if: always()
@@ -120,7 +134,7 @@ jobs:
 
     - name: Generate coverage
       run: |
-        cargo llvm-cov --all-features --workspace --lcov \
+        cargo llvm-cov --features "schema-validation,compression,http-server" --workspace --lcov \
           --output-path lcov.info nextest
 
     - name: Upload to codecov
@@ -141,7 +155,7 @@ jobs:
         retention-days: 30
 
     - name: Generate HTML coverage report
-      run: cargo llvm-cov --all-features --workspace --html
+      run: cargo llvm-cov --features "schema-validation,compression,http-server" --workspace --html
 
     - name: Upload HTML coverage
       uses: actions/upload-artifact@v4

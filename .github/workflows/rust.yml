@@ -57,10 +57,10 @@ jobs:
       run: |
         echo "Using Rust nightly for zero-cost GAT abstractions"
         rustc --version
-        cargo build --verbose --all-features --workspace
+        cargo build --verbose --features "schema-validation,compression,http-server" --workspace
 
     - name: Build release
-      run: cargo build --release --verbose --all-features --workspace
+      run: cargo build --release --verbose --features "schema-validation,compression,http-server" --workspace
 
     - name: sccache stats
       if: always()
