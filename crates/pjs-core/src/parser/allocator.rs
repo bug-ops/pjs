@@ -289,12 +289,23 @@ impl SimdAllocator {
 
     #[cfg(feature = "jemalloc")]
     fn jemalloc_stats(&self) -> AllocatorStats {
-        // Simplified stats - full jemalloc statistics require additional configuration
-        // and may not be available in all environments
+        use tikv_jemalloc_ctl::{epoch, stats};
+
+        // Update the statistics cache
+        if let Err(e) = epoch::mib().map(|mib| mib.advance()) {
+            eprintln!("Failed to advance jemalloc epoch: {}", e);
+            return AllocatorStats::default();
+        }
+
+        // Query statistics
+        let allocated = stats::allocated::read().unwrap_or(0);
+        let resident = stats::resident::read().unwrap_or(0);
+        let metadata = stats::metadata::read().unwrap_or(0);
+
         AllocatorStats {
-            allocated_bytes: 0,
-            resident_bytes: 0,
-            metadata_bytes: 0,
+            allocated_bytes: allocated,
+            resident_bytes: resident,
+            metadata_bytes: metadata,
             backend: self.backend,
         }
     }

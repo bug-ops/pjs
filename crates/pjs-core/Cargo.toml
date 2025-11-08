@@ -46,7 +46,7 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 
 # Memory allocator dependencies
 tikv-jemallocator = { workspace = true, optional = true }
-tikv-jemalloc-ctl = { workspace = true, optional = true }
+tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats"] }
 tikv-jemalloc-sys = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }
 libmimalloc-sys = { workspace = true, optional = true }
