@@ -181,6 +181,7 @@ impl SimdAllocator {
         size: usize,
         alignment: usize,
     ) -> DomainResult<NonNull<u8>> {
+        #[link(name = "jemalloc")]
         unsafe extern "C" {
             fn mallocx(size: usize, flags: i32) -> *mut std::ffi::c_void;
         }
@@ -205,6 +206,7 @@ impl SimdAllocator {
         _old_layout: Layout,
         new_size: usize,
     ) -> DomainResult<NonNull<u8>> {
+        #[link(name = "jemalloc")]
         unsafe extern "C" {
             fn rallocx(
                 ptr: *mut std::ffi::c_void,
@@ -229,6 +231,7 @@ impl SimdAllocator {
 
     #[cfg(feature = "jemalloc")]
     unsafe fn jemalloc_dealloc_aligned(&self, ptr: NonNull<u8>, layout: Layout) {
+        #[link(name = "jemalloc")]
         unsafe extern "C" {
             fn dallocx(ptr: *mut std::ffi::c_void, flags: i32);
         }
@@ -244,6 +247,7 @@ impl SimdAllocator {
         size: usize,
         alignment: usize,
     ) -> DomainResult<NonNull<u8>> {
+        #[link(name = "mimalloc")]
         unsafe extern "C" {
             fn mi_malloc_aligned(size: usize, alignment: usize) -> *mut std::ffi::c_void;
         }
@@ -266,6 +270,7 @@ impl SimdAllocator {
         _old_layout: Layout,
         new_size: usize,
     ) -> DomainResult<NonNull<u8>> {
+        #[link(name = "mimalloc")]
         unsafe extern "C" {
             fn mi_realloc_aligned(
                 ptr: *mut std::ffi::c_void,
@@ -289,6 +294,7 @@ impl SimdAllocator {
 
     #[cfg(feature = "mimalloc")]
     unsafe fn mimalloc_dealloc_aligned(&self, ptr: NonNull<u8>, _layout: Layout) {
+        #[link(name = "mimalloc")]
         unsafe extern "C" {
             fn mi_free(ptr: *mut std::ffi::c_void);
         }
