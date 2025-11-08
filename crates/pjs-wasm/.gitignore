@@ -1,0 +1,8 @@
+# wasm-pack build output
+pkg/
+
+# Target directory (if built standalone)
+target/
+
+# Cargo.lock (library crate)
+Cargo.lock

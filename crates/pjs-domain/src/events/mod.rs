@@ -1,11 +1,23 @@
 //! Domain events for event sourcing and integration
 
-use crate::domain::{
-    aggregates::stream_session::SessionState,
-    value_objects::{SessionId, StreamId},
-};
+use crate::value_objects::{SessionId, StreamId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Session state in its lifecycle
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionState {
+    /// Session is being initialized
+    Initializing,
+    /// Session is active with streams
+    Active,
+    /// Session is gracefully closing
+    Closing,
+    /// Session completed successfully
+    Completed,
+    /// Session failed with error
+    Failed,
+}
 
 /// Domain events that represent business-relevant state changes
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -13,119 +25,173 @@ use serde::{Deserialize, Serialize};
 pub enum DomainEvent {
     /// Session was activated and is ready to accept streams
     SessionActivated {
+        /// ID of the activated session
         session_id: SessionId,
+        /// When the session was activated
         timestamp: DateTime<Utc>,
     },
 
     /// Session was closed gracefully
     SessionClosed {
+        /// ID of the closed session
         session_id: SessionId,
+        /// When the session was closed
         timestamp: DateTime<Utc>,
     },
 
     /// Session expired due to timeout
     SessionExpired {
+        /// ID of the expired session
         session_id: SessionId,
+        /// When the session expired
         timestamp: DateTime<Utc>,
     },
 
     /// Session was forcefully closed due to timeout
     SessionTimedOut {
+        /// ID of the timed out session
         session_id: SessionId,
+        /// State the session was in before timeout
         original_state: SessionState,
+        /// Duration in seconds before timeout occurred
         timeout_duration: u64,
+        /// When the timeout occurred
         timestamp: DateTime<Utc>,
     },
 
     /// Session timeout was extended
     SessionTimeoutExtended {
+        /// ID of the session with extended timeout
         session_id: SessionId,
+        /// Additional seconds added to the timeout
         additional_seconds: u64,
+        /// New expiration timestamp
         new_expires_at: DateTime<Utc>,
+        /// When the extension was applied
         timestamp: DateTime<Utc>,
     },
 
     /// New stream was created in the session
     StreamCreated {
+        /// ID of the session containing the stream
         session_id: SessionId,
+        /// ID of the newly created stream
         stream_id: StreamId,
+        /// When the stream was created
         timestamp: DateTime<Utc>,
     },
 
     /// Stream started sending data
     StreamStarted {
+        /// ID of the session containing the stream
         session_id: SessionId,
+        /// ID of the stream that started
         stream_id: StreamId,
+        /// When the stream started
         timestamp: DateTime<Utc>,
     },
 
     /// Stream completed successfully
     StreamCompleted {
+        /// ID of the session containing the stream
         session_id: SessionId,
+        /// ID of the completed stream
         stream_id: StreamId,
+        /// When the stream completed
         timestamp: DateTime<Utc>,
     },
 
     /// Stream failed with error
     StreamFailed {
+        /// ID of the session containing the stream
         session_id: SessionId,
+        /// ID of the failed stream
         stream_id: StreamId,
+        /// Error message describing the failure
         error: String,
+        /// When the stream failed
         timestamp: DateTime<Utc>,
     },
 
     /// Stream was cancelled
     StreamCancelled {
+        /// ID of the session containing the stream
         session_id: SessionId,
+        /// ID of the cancelled stream
         stream_id: StreamId,
+        /// When the stream was cancelled
         timestamp: DateTime<Utc>,
     },
 
     /// Skeleton frame was generated for a stream
     SkeletonGenerated {
+        /// ID of the session containing the stream
         session_id: SessionId,
+        /// ID of the stream that generated the skeleton
         stream_id: StreamId,
+        /// Size of the skeleton frame in bytes
         frame_size_bytes: u64,
+        /// When the skeleton was generated
         timestamp: DateTime<Utc>,
     },
 
     /// Patch frames were generated for a stream
     PatchFramesGenerated {
+        /// ID of the session containing the stream
         session_id: SessionId,
+        /// ID of the stream that generated patches
         stream_id: StreamId,
+        /// Number of patch frames generated
         frame_count: usize,
+        /// Total size of all patches in bytes
         total_bytes: u64,
+        /// Highest priority level among the patches
         highest_priority: u8,
+        /// When the patches were generated
         timestamp: DateTime<Utc>,
     },
 
     /// Multiple frames were batched for efficient sending
     FramesBatched {
+        /// ID of the session containing the frames
         session_id: SessionId,
+        /// Number of frames in the batch
         frame_count: usize,
+        /// When the batch was created
         timestamp: DateTime<Utc>,
     },
 
     /// Priority threshold was adjusted for adaptive streaming
     PriorityThresholdAdjusted {
+        /// ID of the session with adjusted threshold
         session_id: SessionId,
+        /// Previous priority threshold value
         old_threshold: u8,
+        /// New priority threshold value
         new_threshold: u8,
+        /// Reason for the adjustment
         reason: String,
+        /// When the threshold was adjusted
         timestamp: DateTime<Utc>,
     },
 
     /// Stream configuration was updated
     StreamConfigUpdated {
+        /// ID of the session containing the stream
         session_id: SessionId,
+        /// ID of the stream with updated configuration
         stream_id: StreamId,
+        /// When the configuration was updated
         timestamp: DateTime<Utc>,
     },
 
     /// Performance metrics were recorded
     PerformanceMetricsRecorded {
+        /// ID of the session being measured
         session_id: SessionId,
+        /// Recorded performance metrics
         metrics: PerformanceMetrics,
+        /// When the metrics were recorded
         timestamp: DateTime<Utc>,
     },
 }
@@ -133,20 +199,30 @@ pub enum DomainEvent {
 /// Performance metrics for monitoring and optimization
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PerformanceMetrics {
+    /// Number of frames transmitted per second
     pub frames_per_second: f64,
+    /// Number of bytes transmitted per second
     pub bytes_per_second: f64,
+    /// Average size of frames in bytes
     pub average_frame_size: f64,
+    /// Distribution of frames across priority levels
     pub priority_distribution: PriorityDistribution,
+    /// Network latency in milliseconds, if available
     pub latency_ms: Option<u64>,
 }
 
 /// Distribution of frames by priority level
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PriorityDistribution {
+    /// Number of critical priority frames
     pub critical_frames: u64,
+    /// Number of high priority frames
     pub high_frames: u64,
+    /// Number of medium priority frames
     pub medium_frames: u64,
+    /// Number of low priority frames
     pub low_frames: u64,
+    /// Number of background priority frames
     pub background_frames: u64,
 }
 
@@ -202,10 +278,15 @@ impl PriorityDistribution {
 /// Priority distribution as percentages (for demos and visualization)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PriorityPercentages {
-    pub critical: f64, // 0-1 percentage
+    /// Critical priority percentage (0.0-1.0)
+    pub critical: f64,
+    /// High priority percentage (0.0-1.0)
     pub high: f64,
+    /// Medium priority percentage (0.0-1.0)
     pub medium: f64,
+    /// Low priority percentage (0.0-1.0)
     pub low: f64,
+    /// Background priority percentage (0.0-1.0)
     pub background: f64,
 }
 
@@ -325,18 +406,34 @@ impl DomainEvent {
     }
 }
 
-/// Event sourcing support
+/// Event sourcing support for storing and retrieving domain events
 pub trait EventStore {
     /// Append events to the store
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if events cannot be persisted
     fn append_events(&mut self, events: Vec<DomainEvent>) -> Result<(), String>;
 
     /// Get events for a specific session
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if events cannot be retrieved
     fn get_events_for_session(&self, session_id: SessionId) -> Result<Vec<DomainEvent>, String>;
 
     /// Get events for a specific stream
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if events cannot be retrieved
     fn get_events_for_stream(&self, stream_id: StreamId) -> Result<Vec<DomainEvent>, String>;
 
     /// Get all events since a specific timestamp
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if events cannot be retrieved
     fn get_events_since(&self, since: DateTime<Utc>) -> Result<Vec<DomainEvent>, String>;
 }
 
@@ -347,14 +444,17 @@ pub struct InMemoryEventStore {
 }
 
 impl InMemoryEventStore {
+    /// Create a new empty event store
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Get all events in the store
     pub fn all_events(&self) -> &[DomainEvent] {
         &self.events
     }
 
+    /// Get the total number of events in the store
     pub fn event_count(&self) -> usize {
         self.events.len()
     }
@@ -397,7 +497,7 @@ impl EventStore for InMemoryEventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::value_objects::{SessionId, StreamId};
+    use crate::value_objects::{SessionId, StreamId};
 
     #[test]
     fn test_domain_event_properties() {
@@ -522,7 +622,7 @@ impl Default for EventId {
 /// GAT-based trait for event subscribers that handle domain events
 pub trait EventSubscriber {
     /// Future type for handling events
-    type HandleFuture<'a>: std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+    type HandleFuture<'a>: std::future::Future<Output = crate::DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 

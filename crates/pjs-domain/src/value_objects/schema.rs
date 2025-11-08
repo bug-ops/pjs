@@ -5,13 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use crate::domain::DomainError;
+use crate::DomainError;
 
 /// Schema identifier for tracking and referencing schemas
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SchemaId(Arc<str>);
+pub struct SchemaId(String);
 
 impl SchemaId {
     /// Create a new schema identifier
@@ -24,11 +24,11 @@ impl SchemaId {
     ///
     /// # Examples
     /// ```
-    /// # use pjson_rs::domain::value_objects::SchemaId;
+    /// # use pjs_domain::value_objects::SchemaId;
     /// let schema_id = SchemaId::new("user-profile-v1");
     /// ```
     pub fn new(id: impl Into<String>) -> Self {
-        Self(Arc::from(id.into()))
+        Self(id.into())
     }
 
     /// Get schema ID as string slice
@@ -56,7 +56,7 @@ impl std::fmt::Display for SchemaId {
 ///
 /// # Examples
 /// ```
-/// # use pjson_rs::domain::value_objects::{Schema, SchemaType};
+/// # use pjs_domain::value_objects::{Schema, SchemaType};
 /// let schema = Schema::Object {
 ///     properties: vec![
 ///         ("id".to_string(), Schema::Integer { minimum: Some(1), maximum: None }),
@@ -72,7 +72,6 @@ impl std::fmt::Display for SchemaId {
 /// };
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub enum Schema {
     /// String type with optional constraints
     String {
@@ -81,9 +80,9 @@ pub enum Schema {
         /// Maximum string length (inclusive)
         max_length: Option<usize>,
         /// Pattern to match (regex)
-        pattern: Option<Arc<str>>,
+        pattern: Option<String>,
         /// Enumeration of allowed values
-        allowed_values: Option<SmallVec<[Arc<str>; 8]>>,
+        allowed_values: Option<SmallVec<[String; 8]>>,
     },
 
     /// Integer type with optional range constraints
@@ -157,7 +156,7 @@ pub type SchemaValidationResult<T> = Result<T, SchemaValidationError>;
 /// # Design
 /// - Includes full path context for nested validation failures
 /// - Provides actionable error messages for debugging
-/// - Zero-allocation for common error cases using `Arc<str>`
+/// - Zero-allocation for common error cases using `String`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, thiserror::Error)]
 pub enum SchemaValidationError {
     /// Type mismatch error
@@ -383,12 +382,19 @@ impl Schema {
 /// Simplified schema type for quick type checking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SchemaType {
+    /// String type
     String,
+    /// Integer type
     Integer,
+    /// Floating-point number type
     Number,
+    /// Boolean type
     Boolean,
+    /// Null type
     Null,
+    /// Array type
     Array,
+    /// Object type
     Object,
 }
 

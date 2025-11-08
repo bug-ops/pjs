@@ -1,0 +1,8 @@
+# WASM build artifacts (regenerate with wasm-pack)
+pkg/
+
+# Node modules if using bundler
+node_modules/
+
+# Build outputs
+dist/

@@ -65,6 +65,9 @@
   "dependencies": {
     "ws": "^8.16.0"
   },
+  "optionalDependencies": {
+    "pjs-wasm": "file:../pjs-wasm/pkg"
+  },
   "peerDependencies": {
     "ws": "^8.16.0"
   },

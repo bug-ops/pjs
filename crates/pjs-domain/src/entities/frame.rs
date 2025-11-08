@@ -1,6 +1,6 @@
 //! Frame entity with streaming data
 
-use crate::domain::{
+use crate::{
     DomainError, DomainResult,
     value_objects::{JsonData, JsonPath, Priority, StreamId},
 };
@@ -286,8 +286,11 @@ impl Frame {
 /// Individual patch within a frame
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FramePatch {
+    /// JSON path to the target location
     pub path: JsonPath,
+    /// Operation to perform at the path
     pub operation: PatchOperation,
+    /// Value to apply with the operation
     pub value: JsonData,
 }
 
@@ -295,13 +298,18 @@ pub struct FramePatch {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PatchOperation {
+    /// Set a value at the path
     Set,
+    /// Append to an array at the path
     Append,
+    /// Merge object at the path
     Merge,
+    /// Delete value at the path
     Delete,
 }
 
-/// Patch payload structure
+/// Patch payload structure (reserved for future use)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PatchPayload {
     patches: Vec<FramePatch>,

@@ -507,14 +507,14 @@ impl FromDto<DomainEventDto> for DomainEvent {
                 // Parse SessionState from string - basic implementation
                 let state = match original_state.as_str() {
                     "Initializing" => {
-                        crate::domain::aggregates::stream_session::SessionState::Initializing
+                        crate::domain::events::SessionState::Initializing
                     }
-                    "Active" => crate::domain::aggregates::stream_session::SessionState::Active,
-                    "Closing" => crate::domain::aggregates::stream_session::SessionState::Closing,
+                    "Active" => crate::domain::events::SessionState::Active,
+                    "Closing" => crate::domain::events::SessionState::Closing,
                     "Completed" => {
-                        crate::domain::aggregates::stream_session::SessionState::Completed
+                        crate::domain::events::SessionState::Completed
                     }
-                    "Failed" => crate::domain::aggregates::stream_session::SessionState::Failed,
+                    "Failed" => crate::domain::events::SessionState::Failed,
                     _ => {
                         return Err(DomainError::InvalidInput(format!(
                             "Invalid session state: {}",

@@ -4,9 +4,11 @@
 [![Crates.io](https://img.shields.io/crates/v/pjson-rs.svg)](https://crates.io/crates/pjson-rs)
 [![Documentation](https://docs.rs/pjson-rs/badge.svg)](https://docs.rs/pjson-rs)
 [![Rust Build](https://github.com/bug-ops/pjs/actions/workflows/rust.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/rust.yml)
+[![WASM Build](https://github.com/bug-ops/pjs/actions/workflows/wasm.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/wasm.yml)
 [![codecov](https://codecov.io/gh/bug-ops/pjs/branch/main/graph/badge.svg)](https://codecov.io/gh/bug-ops/pjs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 [![Rust Version](https://img.shields.io/badge/rust-nightly-orange.svg)](https://www.rust-lang.org)
+[![WebAssembly](https://img.shields.io/badge/wasm-ready-brightgreen.svg)](.github/workflows/wasm.yml)
 
 **🚀 6.3x faster than serde_json | 🎯 5.3x faster progressive loading | 💾 Bounded memory usage | 🏗️ Production Ready**
 
@@ -704,6 +706,7 @@ impl StreamingAdapter for YourFramework {
 ### Performance Benefits of Nightly Rust
 
 **Zero-Cost Abstractions:**
+
 - **1.82x faster** trait dispatch vs async_trait
 - **Zero heap allocations** for futures
 - **Pure stack allocation** - no runtime overhead
@@ -879,7 +882,7 @@ Built with:
 
 ## Community
 
-- 📖 [Documentation](SPECIFICATION.md) - Complete protocol specification
+- 📖 [Documentation](docs/architecture/SPECIFICATION.md) - Complete protocol specification
 - 📋 [Changelog](CHANGELOG.md) - Detailed version history
 - 📊 [Benchmarks](crates/pjs-bench/README.md) - Comprehensive performance results
 - 💬 [Discussions](https://github.com/bug-ops/pjs/discussions) - Questions and ideas

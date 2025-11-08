@@ -115,7 +115,7 @@ body:
         - label: I have read the README and documentation
         - label: I have checked existing issues and discussions
         - label: I have looked at the examples in the repository
-        - label: I have reviewed the specification (SPECIFICATION.md)
+        - label: I have reviewed the specification (docs/architecture/SPECIFICATION.md)
         - label: I have tried the demo applications
 
   - type: textarea

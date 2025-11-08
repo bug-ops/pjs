@@ -14,6 +14,7 @@ exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
 
 [dependencies]
+pjs-domain = { path = "../pjs-domain" }
 async-trait = { workspace = true }
 axum = { workspace = true, optional = true, features = ["ws"] }
 bitflags = { workspace = true }
@@ -66,7 +67,11 @@ simd-avx512 = [] # AVX-512 support
 simd-neon = []   # ARM NEON support
 
 # Memory allocator features (mutually exclusive)
-jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys"]
+jemalloc = [
+    "dep:tikv-jemallocator",
+    "dep:tikv-jemalloc-ctl",
+    "dep:tikv-jemalloc-sys",
+]
 mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # system allocator is the default (no deps needed)
 

@@ -1,6 +1,6 @@
 //! Stream entity representing a prioritized data stream
 
-use crate::domain::{
+use crate::{
     DomainError, DomainResult,
     entities::Frame,
     value_objects::{JsonData, Priority, SessionId, StreamId},
@@ -51,14 +51,23 @@ impl Default for StreamConfig {
 /// Stream statistics for monitoring
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StreamStats {
+    /// Total number of frames generated
     pub total_frames: u64,
+    /// Number of skeleton frames sent
     pub skeleton_frames: u64,
+    /// Number of patch frames sent
     pub patch_frames: u64,
+    /// Number of completion frames sent
     pub complete_frames: u64,
+    /// Number of error frames sent
     pub error_frames: u64,
+    /// Total bytes transmitted across all frames
     pub total_bytes: u64,
+    /// Bytes transmitted in critical priority frames
     pub critical_bytes: u64,
+    /// Bytes transmitted in high priority frames
     pub high_priority_bytes: u64,
+    /// Average size of frames in bytes
     pub average_frame_size: f64,
 }
 
@@ -343,11 +352,11 @@ impl Stream {
         self.stats.total_bytes += frame_size;
 
         match frame.frame_type() {
-            crate::domain::entities::frame::FrameType::Skeleton => {
+            crate::entities::frame::FrameType::Skeleton => {
                 self.stats.skeleton_frames += 1;
                 self.stats.critical_bytes += frame_size;
             }
-            crate::domain::entities::frame::FrameType::Patch => {
+            crate::entities::frame::FrameType::Patch => {
                 self.stats.patch_frames += 1;
                 if frame.is_critical() {
                     self.stats.critical_bytes += frame_size;
@@ -355,11 +364,11 @@ impl Stream {
                     self.stats.high_priority_bytes += frame_size;
                 }
             }
-            crate::domain::entities::frame::FrameType::Complete => {
+            crate::entities::frame::FrameType::Complete => {
                 self.stats.complete_frames += 1;
                 self.stats.critical_bytes += frame_size;
             }
-            crate::domain::entities::frame::FrameType::Error => {
+            crate::entities::frame::FrameType::Error => {
                 self.stats.error_frames += 1;
                 self.stats.critical_bytes += frame_size;
             }
@@ -404,7 +413,7 @@ impl Stream {
         &self,
         _data: &JsonData,
         _threshold: Priority,
-    ) -> DomainResult<Vec<crate::domain::entities::frame::FramePatch>> {
+    ) -> DomainResult<Vec<crate::entities::frame::FramePatch>> {
         // Simplified patch extraction - would need more sophisticated logic
         Ok(Vec::new())
     }
@@ -412,7 +421,7 @@ impl Stream {
     /// Private helper: Batch patches into frames
     fn batch_patches_into_frames(
         &mut self,
-        patches: Vec<crate::domain::entities::frame::FramePatch>,
+        patches: Vec<crate::entities::frame::FramePatch>,
         max_frames: usize,
     ) -> DomainResult<Vec<Frame>> {
         if patches.is_empty() {
@@ -420,7 +429,7 @@ impl Stream {
         }
 
         let mut frames = Vec::new();
-        let chunk_size = (patches.len() + max_frames - 1) / max_frames; // Ceiling division
+        let chunk_size = patches.len().div_ceil(max_frames);
 
         for patch_chunk in patches.chunks(chunk_size) {
             let priority = patch_chunk
@@ -519,7 +528,7 @@ mod tests {
 
         assert_eq!(
             skeleton.frame_type(),
-            &crate::domain::entities::frame::FrameType::Skeleton
+            &crate::entities::frame::FrameType::Skeleton
         );
         assert_eq!(skeleton.sequence(), 1);
         assert_eq!(stream.stats().skeleton_frames, 1);

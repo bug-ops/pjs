@@ -1,0 +1,21 @@
+{
+  "name": "pjs-wasm-browser-demo",
+  "version": "0.1.0",
+  "description": "Browser demo for PJS WebAssembly priority-based JSON streaming",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "serve": "./serve.sh",
+    "example": "node example.js",
+    "build:wasm": "cd ../../pjs-wasm && wasm-pack build --target web --release && cp -r pkg ../pjs-js-client/examples/browser-wasm/"
+  },
+  "keywords": [
+    "wasm",
+    "webassembly",
+    "json",
+    "streaming",
+    "priority"
+  ],
+  "author": "PJS Contributors",
+  "license": "MIT OR Apache-2.0"
+}
