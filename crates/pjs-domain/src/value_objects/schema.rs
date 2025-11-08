@@ -24,7 +24,7 @@ impl SchemaId {
     ///
     /// # Examples
     /// ```
-    /// # use pjson_rs::domain::value_objects::SchemaId;
+    /// # use pjs_domain::value_objects::SchemaId;
     /// let schema_id = SchemaId::new("user-profile-v1");
     /// ```
     pub fn new(id: impl Into<String>) -> Self {
@@ -56,7 +56,7 @@ impl std::fmt::Display for SchemaId {
 ///
 /// # Examples
 /// ```
-/// # use pjson_rs::domain::value_objects::{Schema, SchemaType};
+/// # use pjs_domain::value_objects::{Schema, SchemaType};
 /// let schema = Schema::Object {
 ///     properties: vec![
 ///         ("id".to_string(), Schema::Integer { minimum: Some(1), maximum: None }),

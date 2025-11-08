@@ -176,8 +176,9 @@ impl PjsParser {
 
         let json_data: JsonData = value.into();
 
-        // Create stream ID
-        let stream_id = StreamId::new();
+        // Create stream ID (use fixed UUID for WASM to avoid Node.js crypto issues)
+        let stream_id = StreamId::from_string("00000000-0000-0000-0000-000000000001")
+            .map_err(|e| JsValue::from_str(&format!("StreamId creation error: {}", e)))?;
 
         // Validate minimum priority threshold
         let min_priority_threshold = Priority::new(min_priority)
