@@ -6,16 +6,16 @@
 //! TODO: Remove serde derives once all serialization uses DTOs
 
 use crate::domain::{DomainError, DomainResult};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::num::NonZeroU8;
-use serde::{Deserialize, Serialize};
 
 /// Type-safe priority value (1-255 range)
-/// 
-/// This is a pure domain object. Serialization should be handled 
+///
+/// This is a pure domain object. Serialization should be handled
 /// in the application layer via DTOs, but serde is temporarily kept
 /// for compatibility with existing code.
-/// 
+///
 /// TODO: Remove Serialize, Deserialize derives once all serialization uses DTOs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Priority(NonZeroU8);
@@ -102,12 +102,30 @@ impl Priority {
 impl fmt::Display for Priority {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::CRITICAL => { let val = self.0.get(); write!(f, "Critical({val})") },
-            Self::HIGH => { let val = self.0.get(); write!(f, "High({val})") },
-            Self::MEDIUM => { let val = self.0.get(); write!(f, "Medium({val})") },
-            Self::LOW => { let val = self.0.get(); write!(f, "Low({val})") },
-            Self::BACKGROUND => { let val = self.0.get(); write!(f, "Background({val})") },
-            _ => { let val = self.0.get(); write!(f, "Priority({val})") },
+            Self::CRITICAL => {
+                let val = self.0.get();
+                write!(f, "Critical({val})")
+            }
+            Self::HIGH => {
+                let val = self.0.get();
+                write!(f, "High({val})")
+            }
+            Self::MEDIUM => {
+                let val = self.0.get();
+                write!(f, "Medium({val})")
+            }
+            Self::LOW => {
+                let val = self.0.get();
+                write!(f, "Low({val})")
+            }
+            Self::BACKGROUND => {
+                let val = self.0.get();
+                write!(f, "Background({val})")
+            }
+            _ => {
+                let val = self.0.get();
+                write!(f, "Priority({val})")
+            }
         }
     }
 }
@@ -182,7 +200,7 @@ impl PriorityRules {
         for rule in &self.rules {
             if !rule.validate(priority) {
                 return Err(DomainError::InvalidPriority(format!(
-                    "Priority {priority} violates rule: {}", 
+                    "Priority {priority} violates rule: {}",
                     rule.name()
                 )));
             }

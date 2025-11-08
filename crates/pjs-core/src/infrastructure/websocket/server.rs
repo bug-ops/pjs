@@ -7,8 +7,8 @@ use async_trait::async_trait;
 #[cfg(feature = "http-server")]
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::Response,
 };
@@ -45,12 +45,15 @@ impl AxumWebSocketTransport {
     /// Handle WebSocket connection lifecycle
     pub async fn handle_socket(self: Arc<Self>, socket: WebSocket) {
         info!("New WebSocket connection established");
-        
+
         let connection_id = uuid::Uuid::new_v4().to_string();
-        self.active_connections.write().await.push(connection_id.clone());
-        
+        self.active_connections
+            .write()
+            .await
+            .push(connection_id.clone());
+
         let frame_rx = self.controller.subscribe_frames();
-        
+
         // Create channels for communication between tasks
         let (_outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<WsMessage>();
         let (mut sender, mut receiver) = socket.split();
@@ -152,16 +155,36 @@ impl AxumWebSocketTransport {
     }
 
     /// Handle WebSocket message for a specific connection
-    async fn handle_websocket_message(&self, connection_id: String, message: WsMessage) -> PjsResult<()> {
-        debug!("Handling WebSocket message for connection {}: {:?}", connection_id, message);
-        
+    async fn handle_websocket_message(
+        &self,
+        connection_id: String,
+        message: WsMessage,
+    ) -> PjsResult<()> {
+        debug!(
+            "Handling WebSocket message for connection {}: {:?}",
+            connection_id, message
+        );
+
         match message {
-            WsMessage::FrameAck { session_id, frame_id, processing_time_ms } => {
-                self.controller.handle_frame_ack(&session_id, frame_id, processing_time_ms).await?;
+            WsMessage::FrameAck {
+                session_id,
+                frame_id,
+                processing_time_ms,
+            } => {
+                self.controller
+                    .handle_frame_ack(&session_id, frame_id, processing_time_ms)
+                    .await?;
             }
-            WsMessage::StreamInit { session_id: _, data, options } => {
+            WsMessage::StreamInit {
+                session_id: _,
+                data,
+                options,
+            } => {
                 let _session_id = self.controller.create_session(data, options).await?;
-                info!("Created new streaming session for connection {}", connection_id);
+                info!(
+                    "Created new streaming session for connection {}",
+                    connection_id
+                );
             }
             WsMessage::Ping { timestamp: _ } => {
                 // Pong is handled automatically by the WebSocket implementation
@@ -171,7 +194,7 @@ impl AxumWebSocketTransport {
                 warn!("Unhandled message type from connection {}", connection_id);
             }
         }
-        
+
         Ok(())
     }
 }
@@ -202,13 +225,13 @@ impl WebSocketTransport for AxumWebSocketTransport {
         _connection: Arc<Self::Connection>,
         message: WsMessage,
     ) -> PjsResult<()> {
-        let json_str = serde_json::to_string(&message)
-            .map_err(|e| PjsError::Serialization(e.to_string()))?;
-        
+        let json_str =
+            serde_json::to_string(&message).map_err(|e| PjsError::Serialization(e.to_string()))?;
+
         // Note: In practice, this would need to be handled differently
         // since we can't directly send through Arc<WebSocket>
         // The actual sending is handled in handle_socket via frame subscription
-        
+
         debug!("Frame queued for transmission: {}", json_str);
         Ok(())
     }
@@ -224,18 +247,32 @@ impl WebSocketTransport for AxumWebSocketTransport {
                 let session_id = self.controller.create_session(data, options).await?;
                 self.controller.start_streaming(&session_id).await?;
             }
-            WsMessage::FrameAck { session_id, frame_id, processing_time_ms } => {
-                debug!("Received frame ack: session={}, frame={}, time={}ms", 
-                       session_id, frame_id, processing_time_ms);
-                self.controller.handle_frame_ack(&session_id, frame_id, processing_time_ms).await?;
+            WsMessage::FrameAck {
+                session_id,
+                frame_id,
+                processing_time_ms,
+            } => {
+                debug!(
+                    "Received frame ack: session={}, frame={}, time={}ms",
+                    session_id, frame_id, processing_time_ms
+                );
+                self.controller
+                    .handle_frame_ack(&session_id, frame_id, processing_time_ms)
+                    .await?;
             }
             WsMessage::Ping { timestamp } => {
                 debug!("Received ping with timestamp: {}", timestamp);
                 // Pong is handled automatically in handle_socket
             }
-            WsMessage::Error { session_id, error, code } => {
-                warn!("Received error from client: session={:?}, error={}, code={}", 
-                      session_id, error, code);
+            WsMessage::Error {
+                session_id,
+                error,
+                code,
+            } => {
+                warn!(
+                    "Received error from client: session={:?}, error={}, code={}",
+                    session_id, error, code
+                );
             }
             _ => {
                 warn!("Unhandled message type: {:?}", message);
@@ -254,9 +291,8 @@ impl WebSocketTransport for AxumWebSocketTransport {
 /// Helper function to create WebSocket router for Axum
 pub fn create_websocket_router() -> axum::Router<Arc<AxumWebSocketTransport>> {
     use axum::routing::get;
-    
-    axum::Router::new()
-        .route("/ws", get(AxumWebSocketTransport::upgrade_handler))
+
+    axum::Router::new().route("/ws", get(AxumWebSocketTransport::upgrade_handler))
 }
 
 #[cfg(test)]
@@ -277,11 +313,19 @@ mod tests {
             "critical": {"id": 1, "status": "active"},
             "metadata": {"created": "2024-01-15T12:00:00Z"}
         });
-        
-        let session_id = transport.controller.create_session(data, StreamOptions::default()).await.unwrap();
+
+        let session_id = transport
+            .controller
+            .create_session(data, StreamOptions::default())
+            .await
+            .unwrap();
         assert!(!session_id.is_empty());
-        
+
         // Test starting stream
-        transport.controller.start_streaming(&session_id).await.unwrap();
+        transport
+            .controller
+            .start_streaming(&session_id)
+            .await
+            .unwrap();
     }
 }

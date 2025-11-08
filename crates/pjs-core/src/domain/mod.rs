@@ -14,7 +14,7 @@ pub mod value_objects;
 pub use aggregates::StreamSession;
 pub use entities::{Frame, Stream};
 pub use events::DomainEvent;
-pub use ports::{FrameSink, FrameSource, StreamRepository};
+pub use ports::{FrameSinkGat, FrameSourceGat, StreamRepositoryGat};
 pub use services::PriorityService;
 pub use value_objects::{JsonPath, Priority, SessionId, StreamId};
 
@@ -77,6 +77,12 @@ pub enum DomainError {
 
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    #[error("Security violation: {0}")]
+    SecurityViolation(String),
+
+    #[error("Resource exhausted: {0}")]
+    ResourceExhausted(String),
 }
 
 impl DomainError {

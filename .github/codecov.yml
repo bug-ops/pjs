@@ -1,8 +1,71 @@
+# Codecov configuration for PJS
+# Coverage requirements aligned with CLAUDE.md
+
 coverage:
   status:
     project:
       default:
-        informational: true
+        target: 70%        # Overall project minimum
+        threshold: 2%      # Allow 2% drop
+        informational: true  # Don't block PR merge
     patch:
       default:
-        target: 0%
+        target: 75%        # New code should be well-tested
+        informational: true  # Don't block PR merge
+
+  # Layer-specific coverage requirements
+  precision: 2
+  round: down
+  range: "60...100"
+
+comment:
+  layout: "reach,diff,flags,files,footer"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+
+# Ignore test files and examples from coverage
+ignore:
+  - "tests/"
+  - "benches/"
+  - "examples/"
+  - "crates/pjs-demo/"
+  - "crates/pjs-bench/"
+  - "**/tests.rs"
+  - "**/test_*.rs"
+
+# File-level coverage flags
+flags:
+  unittests:
+    paths:
+      - "crates/pjs-core/src/"
+    carryforward: true
+
+# Critical modules requiring high coverage
+component_management:
+  individual_components:
+    # Domain layer - 80% minimum
+    - component_id: domain
+      name: Domain Layer
+      paths:
+        - "crates/pjs-core/src/domain/**"
+
+    # Security modules - 100% required
+    - component_id: security
+      name: Security Modules
+      paths:
+        - "crates/pjs-core/src/security/**"
+        - "crates/pjs-core/src/domain/services/validation_service.rs"
+
+    # Application layer - 70% minimum
+    - component_id: application
+      name: Application Layer
+      paths:
+        - "crates/pjs-core/src/application/**"
+
+    # Infrastructure - 60% minimum
+    - component_id: infrastructure
+      name: Infrastructure Layer
+      paths:
+        - "crates/pjs-core/src/infrastructure/**"

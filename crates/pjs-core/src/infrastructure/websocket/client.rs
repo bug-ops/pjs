@@ -10,12 +10,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{
-    sync::{mpsc, RwLock},
-};
-use tokio_tungstenite::{
-    connect_async, tungstenite::Message,
-};
+use tokio::sync::{RwLock, mpsc};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 use url::Url;
 
@@ -50,11 +46,10 @@ struct ReceivedFrame {
 impl PjsWebSocketClient {
     /// Create new WebSocket client
     pub fn new(url: impl AsRef<str>) -> PjsResult<Self> {
-        let url = Url::parse(url.as_ref())
-            .map_err(|e| PjsError::InvalidUrl(e.to_string()))?;
-        
+        let url = Url::parse(url.as_ref()).map_err(|e| PjsError::InvalidUrl(e.to_string()))?;
+
         let (message_tx, message_rx) = mpsc::unbounded_channel();
-        
+
         Ok(Self {
             url,
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -66,20 +61,23 @@ impl PjsWebSocketClient {
     /// Connect to WebSocket server and start message handling
     pub async fn connect(&self) -> PjsResult<()> {
         info!("Connecting to WebSocket server: {}", self.url);
-        
+
         let (ws_stream, _) = connect_async(self.url.as_str())
             .await
             .map_err(|e| PjsError::ConnectionFailed(e.to_string()))?;
-        
+
         info!("WebSocket connection established");
-        
+
         let (mut write, mut read) = ws_stream.split();
-        
+
         // Take the receiver (can only be done once)
-        let mut message_rx = self.message_rx.write().await
+        let mut message_rx = self
+            .message_rx
+            .write()
+            .await
             .take()
             .ok_or_else(|| PjsError::ClientError("Client already connected".to_string()))?;
-        
+
         // Spawn task to send outgoing messages
         let send_task = tokio::spawn(async move {
             while let Some(message) = message_rx.recv().await {
@@ -103,22 +101,22 @@ impl PjsWebSocketClient {
         let receive_task = tokio::spawn(async move {
             while let Some(msg) = read.next().await {
                 match msg {
-                    Ok(Message::Text(text)) => {
-                        match serde_json::from_str::<WsMessage>(&text) {
-                            Ok(ws_message) => {
-                                if let Err(e) = Self::handle_incoming_message(
-                                    sessions.clone(),
-                                    message_tx.clone(),
-                                    ws_message
-                                ).await {
-                                    error!("Failed to handle incoming message: {}", e);
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Failed to parse incoming message: {}", e);
+                    Ok(Message::Text(text)) => match serde_json::from_str::<WsMessage>(&text) {
+                        Ok(ws_message) => {
+                            if let Err(e) = Self::handle_incoming_message(
+                                sessions.clone(),
+                                message_tx.clone(),
+                                ws_message,
+                            )
+                            .await
+                            {
+                                error!("Failed to handle incoming message: {}", e);
                             }
                         }
-                    }
+                        Err(e) => {
+                            warn!("Failed to parse incoming message: {}", e);
+                        }
+                    },
                     Ok(Message::Binary(data)) => {
                         debug!("Received binary data: {} bytes", data.len());
                     }
@@ -167,16 +165,17 @@ impl PjsWebSocketClient {
     ) -> PjsResult<String> {
         let session_id = uuid::Uuid::new_v4().to_string();
         let options = options.unwrap_or_default();
-        
+
         let message = WsMessage::StreamInit {
             session_id: session_id.clone(),
             data,
             options,
         };
-        
-        self.message_tx.send(message)
+
+        self.message_tx
+            .send(message)
             .map_err(|e| PjsError::ClientError(format!("Failed to send stream request: {e}")))?;
-        
+
         // Initialize session tracking
         let session = StreamSession {
             id: session_id.clone(),
@@ -185,9 +184,12 @@ impl PjsWebSocketClient {
             reconstructed_data: serde_json::json!({}),
             is_complete: false,
         };
-        
-        self.sessions.write().await.insert(session_id.clone(), session);
-        
+
+        self.sessions
+            .write()
+            .await
+            .insert(session_id.clone(), session);
+
         info!("Requested stream initialization: {}", session_id);
         Ok(session_id)
     }
@@ -195,14 +197,16 @@ impl PjsWebSocketClient {
     /// Get current reconstructed data for session
     pub async fn get_current_data(&self, session_id: &str) -> PjsResult<Option<Value>> {
         let sessions = self.sessions.read().await;
-        Ok(sessions.get(session_id)
+        Ok(sessions
+            .get(session_id)
             .map(|session| session.reconstructed_data.clone()))
     }
 
     /// Check if stream is complete
     pub async fn is_stream_complete(&self, session_id: &str) -> bool {
         let sessions = self.sessions.read().await;
-        sessions.get(session_id)
+        sessions
+            .get(session_id)
             .map(|session| session.is_complete)
             .unwrap_or(false)
     }
@@ -212,14 +216,20 @@ impl PjsWebSocketClient {
         let sessions = self.sessions.read().await;
         sessions.get(session_id).map(|session| {
             let total_frames = session.received_frames.len();
-            let processed_frames = session.received_frames.values()
+            let processed_frames = session
+                .received_frames
+                .values()
                 .filter(|frame| frame.processed_at.is_some())
                 .count();
-            
+
             let avg_processing_time = if processed_frames > 0 {
-                let total_time: Duration = session.received_frames.values()
+                let total_time: Duration = session
+                    .received_frames
+                    .values()
                     .filter_map(|frame| {
-                        frame.processed_at.map(|processed| processed.duration_since(frame.received_at))
+                        frame
+                            .processed_at
+                            .map(|processed| processed.duration_since(frame.received_at))
                     })
                     .sum();
                 Some(total_time / processed_frames as u32)
@@ -244,11 +254,17 @@ impl PjsWebSocketClient {
         message: WsMessage,
     ) -> PjsResult<()> {
         match message {
-            WsMessage::StreamFrame { session_id, frame_id, priority, payload, is_complete } => {
+            WsMessage::StreamFrame {
+                session_id,
+                frame_id,
+                priority,
+                payload,
+                is_complete,
+            } => {
                 debug!("Received frame {} for session {}", frame_id, session_id);
-                
+
                 let processing_start = Instant::now();
-                
+
                 {
                     let mut sessions = sessions.write().await;
                     if let Some(session) = sessions.get_mut(&session_id) {
@@ -261,46 +277,55 @@ impl PjsWebSocketClient {
                             processed_at: None,
                         };
                         session.received_frames.insert(frame_id, frame);
-                        
+
                         // Apply frame to reconstructed data
                         Self::apply_frame_to_data(&mut session.reconstructed_data, &payload)?;
-                        
+
                         if is_complete {
                             session.is_complete = true;
                             info!("Stream completed for session {}", session_id);
                         }
-                        
+
                         // Mark as processed
                         if let Some(frame) = session.received_frames.get_mut(&frame_id) {
                             frame.processed_at = Some(Instant::now());
                         }
                     }
                 }
-                
+
                 let processing_time = processing_start.elapsed();
-                
+
                 // Send acknowledgment
                 let ack_message = WsMessage::FrameAck {
                     session_id,
                     frame_id,
                     processing_time_ms: processing_time.as_millis() as u64,
                 };
-                
+
                 if let Err(e) = message_tx.send(ack_message) {
                     warn!("Failed to send frame acknowledgment: {}", e);
                 }
             }
-            WsMessage::StreamComplete { session_id, checksum } => {
+            WsMessage::StreamComplete {
+                session_id,
+                checksum,
+            } => {
                 info!("Stream completed: {} (checksum: {})", session_id, checksum);
-                
+
                 let mut sessions = sessions.write().await;
                 if let Some(session) = sessions.get_mut(&session_id) {
                     session.is_complete = true;
                 }
             }
-            WsMessage::Error { session_id, error, code } => {
-                error!("Received error from server: session={:?}, error={}, code={}", 
-                       session_id, error, code);
+            WsMessage::Error {
+                session_id,
+                error,
+                code,
+            } => {
+                error!(
+                    "Received error from server: session={:?}, error={}, code={}",
+                    session_id, error, code
+                );
             }
             WsMessage::Ping { timestamp } => {
                 debug!("Received ping with timestamp: {}", timestamp);
@@ -361,10 +386,10 @@ mod tests {
     async fn test_stream_session() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
         let data = json!({"test": "data"});
-        
+
         let session_id = client.request_stream(data, None).await.unwrap();
         assert!(!session_id.is_empty());
-        
+
         let sessions = client.sessions.read().await;
         assert!(sessions.contains_key(&session_id));
     }
@@ -373,9 +398,9 @@ mod tests {
     fn test_apply_frame_to_data() {
         let mut data = json!({"existing": "value"});
         let payload = json!({"new": "data", "existing": "updated"});
-        
+
         PjsWebSocketClient::apply_frame_to_data(&mut data, &payload).unwrap();
-        
+
         assert_eq!(data["existing"], "updated");
         assert_eq!(data["new"], "data");
     }

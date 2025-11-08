@@ -1,34 +1,47 @@
 //! Social media dataset generation for PJS demonstrations
 
 use super::DatasetSize;
-use serde_json::{json, Value};
 use rand::Rng;
+use serde_json::{Value, json};
 
 const USERNAMES: &[&str] = &[
-    "alextech", "sarahdev", "mikecoder", "jennyui", "tomstack",
-    "lisadata", "chrisml", "emilyai", "davidweb", "annacloud",
+    "alextech",
+    "sarahdev",
+    "mikecoder",
+    "jennyui",
+    "tomstack",
+    "lisadata",
+    "chrisml",
+    "emilyai",
+    "davidweb",
+    "annacloud",
 ];
 
-const POST_TYPES: &[&str] = &[
-    "text", "image", "video", "link", "poll", "event",
-];
+const POST_TYPES: &[&str] = &["text", "image", "video", "link", "poll", "event"];
 
 const HASHTAGS: &[&str] = &[
-    "#technology", "#coding", "#ai", "#webdev", "#mobile",
-    "#design", "#startup", "#innovation", "#programming", "#data",
+    "#technology",
+    "#coding",
+    "#ai",
+    "#webdev",
+    "#mobile",
+    "#design",
+    "#startup",
+    "#innovation",
+    "#programming",
+    "#data",
 ];
 
 /// Generate social media feed dataset
 pub fn generate_social_data(size: DatasetSize) -> Value {
     let post_count = size.item_count(super::DatasetType::SocialMedia);
     let mut rng = rand::rng();
-    
+
     // Generate users
     let users: Vec<Value> = USERNAMES.iter().enumerate().map(|(i, &username)| {
         // Fixed: Extract complex expressions outside json! macro
         let locations = ["San Francisco", "New York", "London", "Berlin", "Tokyo"];
         let user_location = locations[i % 5];
-        
         json!({
             "id": i + 1,
             "username": username,
@@ -42,9 +55,9 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
             "following": rng.random_range(50..5000),
             "bio": "Software engineer passionate about technology and innovation. Building the future one line of code at a time.",
             "location": user_location,
-            "joined_date": format!("202{}-{:02}-{:02}", 
-                rng.random_range(0..4), 
-                rng.random_range(1..13), 
+            "joined_date": format!("202{}-{:02}-{:02}",
+                rng.random_range(0..4),
+                rng.random_range(1..13),
                 rng.random_range(1..29)
             )
         })
@@ -57,13 +70,13 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
         let likes = rng.random_range(0..1000);
         let shares = rng.random_range(0..likes/3);
         let comments_count = rng.random_range(0..50);
-        
+
         let mut post = json!({
             "id": format!("post_{}", i + 1),
             "user_id": user_id,
             "type": post_type,
             "created_at": format!("2024-01-{:02}T{:02}:{:02}:00Z", 
-                rng.random_range(1..29), 
+                rng.random_range(1..29),
                 rng.random_range(0..24),
                 rng.random_range(0..60)
             ),
@@ -74,8 +87,8 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
                 ).collect::<Vec<_>>(),
                 "mentions": if rng.random_bool(0.3) { 
                     vec![format!("@{}", USERNAMES[rng.random_range(0..USERNAMES.len())])]
-                } else { 
-                    vec![] 
+                } else {
+                    vec![]
                 }
             },
             "engagement": {
@@ -139,7 +152,7 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
                     "user_id": commenter_id,
                     "content": generate_comment_content(),
                     "created_at": format!("2024-01-{:02}T{:02}:{:02}:00Z", 
-                        rng.random_range(1..29), 
+                        rng.random_range(1..29),
                         rng.random_range(0..24),
                         rng.random_range(0..60)
                     ),
@@ -147,7 +160,6 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
                     "replies": if rng.random_bool(0.2) { rng.random_range(1..5) } else { 0 }
                 })
             }).collect();
-            
             post["comments"] = json!(comments);
         }
 
@@ -155,18 +167,29 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
     }).collect();
 
     // Generate trending topics
-    let trending: Vec<Value> = HASHTAGS.iter().take(10).enumerate().map(|(i, &hashtag)| {
-        // Fixed: Extract complex expressions outside json! macro
-        let categories = ["Technology", "Programming", "Innovation", "Design", "Startup"];
-        let category = categories[i % 5];
-        
-        json!({
-            "hashtag": hashtag,
-            "posts_count": rng.random_range(100..10000),
-            "trend_score": 100 - i * 10,
-            "category": category
+    let trending: Vec<Value> = HASHTAGS
+        .iter()
+        .take(10)
+        .enumerate()
+        .map(|(i, &hashtag)| {
+            // Fixed: Extract complex expressions outside json! macro
+            let categories = [
+                "Technology",
+                "Programming",
+                "Innovation",
+                "Design",
+                "Startup",
+            ];
+            let category = categories[i % 5];
+
+            json!({
+                "hashtag": hashtag,
+                "posts_count": rng.random_range(100..10000),
+                "trend_score": 100 - i * 10,
+                "category": category
+            })
         })
-    }).collect();
+        .collect();
 
     // Generate feed analytics
     let analytics = json!({
@@ -245,7 +268,7 @@ fn generate_comment_content() -> String {
         "Looking forward to seeing more content like this.",
         "Thanks for the insights, very helpful!",
     ];
-    
+
     let mut rng = rand::rng();
     comments[rng.random_range(0..comments.len())].to_string()
 }

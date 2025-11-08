@@ -9,7 +9,7 @@ use crate::domain::{
     value_objects::{SessionId, StreamId},
     aggregates::StreamSession,
     entities::Stream,
-    ports::{StreamRepository, StreamStore},
+    ports::{StreamRepositoryGat, StreamStoreGat},
 };
 
 /// In-memory implementation of StreamRepository
@@ -47,33 +47,56 @@ impl Default for InMemoryStreamRepository {
     }
 }
 
-#[async_trait]
-impl StreamRepository for InMemoryStreamRepository {
-    async fn find_session(&self, session_id: SessionId) -> DomainResult<Option<StreamSession>> {
-        let sessions = self.sessions.read();
-        Ok(sessions.get(&session_id).cloned())
+impl StreamRepositoryGat for InMemoryStreamRepository {
+    type FindSessionFuture<'a> = impl std::future::Future<Output = DomainResult<Option<StreamSession>>> + Send + 'a
+    where
+        Self: 'a;
+
+    type SaveSessionFuture<'a> = impl std::future::Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type RemoveSessionFuture<'a> = impl std::future::Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type FindActiveSessionsFuture<'a> = impl std::future::Future<Output = DomainResult<Vec<StreamSession>>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
+        async move {
+            let sessions = self.sessions.read();
+            Ok(sessions.get(&session_id).cloned())
+        }
     }
     
-    async fn save_session(&self, session: StreamSession) -> DomainResult<()> {
-        let mut sessions = self.sessions.write();
-        sessions.insert(session.id(), session);
-        Ok(())
+    fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_> {
+        async move {
+            let mut sessions = self.sessions.write();
+            sessions.insert(session.id(), session);
+            Ok(())
+        }
     }
     
-    async fn remove_session(&self, session_id: SessionId) -> DomainResult<()> {
-        let mut sessions = self.sessions.write();
-        sessions.remove(&session_id);
-        Ok(())
+    fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_> {
+        async move {
+            let mut sessions = self.sessions.write();
+            sessions.remove(&session_id);
+            Ok(())
+        }
     }
     
-    async fn find_active_sessions(&self) -> DomainResult<Vec<StreamSession>> {
-        let sessions = self.sessions.read();
-        let active_sessions = sessions
-            .values()
-            .filter(|session| session.is_active())
-            .cloned()
-            .collect();
-        Ok(active_sessions)
+    fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
+        async move {
+            let sessions = self.sessions.read();
+            let active_sessions = sessions
+                .values()
+                .filter(|session| session.is_active())
+                .cloned()
+                .collect();
+            Ok(active_sessions)
+        }
     }
 }
 

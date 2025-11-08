@@ -13,40 +13,63 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    # The branches below must be a subset of the branches above
     branches: [ "main" ]
   schedule:
     - cron: '39 17 * * 6'
 
 env:
-  RUSTFLAGS: "-Dwarnings"
+  RUSTFLAGS: "-D warnings"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+
+# Cancel previous runs on new push
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rust-clippy-analyze:
     name: Run rust-clippy analyzing
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       security-events: write
       actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
-          cache: true
-          cache-workspaces: true
-          cache-key: ${{ runner.os }}-rust-nightly-${{ hashFiles('**/Cargo.lock') }}
-          components: rustfmt clippy
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "clippy"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Install required cargo
         run: cargo install clippy-sarif sarif-fmt
 
-      - name: Run rust-clippy (nightly)
+      # First check: strict workspace-wide clippy
+      - name: Run clippy (strict mode)
         run: |
           echo "Running clippy with Rust nightly for GAT zero-cost abstractions"
           rustc --version
-          cargo clippy --all-features --message-format=json | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
+          cargo clippy --workspace --all-targets --features "schema-validation,compression,http-server" -- -D warnings
+        continue-on-error: true
+
+      # Second check: SARIF format for GitHub Security
+      - name: Run rust-clippy (SARIF)
+        run: |
+          cargo clippy --workspace --features "schema-validation,compression,http-server" --message-format=json | \
+            clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
         continue-on-error: true
 
       - name: Upload analysis results to GitHub

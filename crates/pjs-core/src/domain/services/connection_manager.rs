@@ -1,7 +1,7 @@
-use async_std::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 
 use crate::domain::DomainError;
 use crate::domain::value_objects::{SessionId, StreamId};
@@ -229,12 +229,7 @@ mod tests {
         let session_id = SessionId::new();
 
         // Register connection
-        assert!(
-            manager
-                .register_connection(session_id)
-                .await
-                .is_ok()
-        );
+        assert!(manager.register_connection(session_id).await.is_ok());
 
         // Get connection state
         let state = manager.get_connection(&session_id).await;
@@ -284,12 +279,7 @@ mod tests {
         let manager = ConnectionManager::new(Duration::from_millis(100), 10);
         let session_id = SessionId::new();
 
-        assert!(
-            manager
-                .register_connection(session_id)
-                .await
-                .is_ok()
-        );
+        assert!(manager.register_connection(session_id).await.is_ok());
 
         // Wait for timeout
         tokio::time::sleep(Duration::from_millis(150)).await;

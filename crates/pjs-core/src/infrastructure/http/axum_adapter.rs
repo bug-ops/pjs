@@ -1,11 +1,11 @@
 //! Axum HTTP server adapter for PJS streaming
 
 use axum::{
-    extract::{Query, State},
-    http::{header, HeaderMap, StatusCode},
-    response::{Response, IntoResponse},
-    routing::{get, post},
     Json, Router,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::{get, post},
 };
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -20,66 +20,87 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     application::{
-        services::{SessionService, StreamingService},
-        handlers::{CommandHandler, QueryHandler},
         commands::*,
         queries::*,
     },
     domain::{
-        value_objects::{SessionId, StreamId, Priority},
         aggregates::stream_session::SessionConfig,
         entities::Frame,
         services::connection_manager::ConnectionManager,
+        value_objects::{Priority, SessionId, StreamId},
     },
+    infrastructure::services::{SessionManager, TimeoutMonitor},
 };
+
+// Placeholder CQRS handlers for HTTP layer compatibility
+// Replace with proper application layer handlers when ready
+pub trait CommandHandler<C, R> {
+    fn handle(&self, command: C) -> impl std::future::Future<Output = Result<R, String>> + Send;
+}
+
+pub trait QueryHandler<Q, R> {
+    fn handle(&self, query: Q) -> impl std::future::Future<Output = Result<R, String>> + Send;
+}
 
 /// Axum application state with PJS services
 #[derive(Clone)]
 pub struct PjsAppState<CH, QH>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
-    session_service: Arc<SessionService<CH, QH>>,
-    streaming_service: Arc<StreamingService<CH>>,
+    session_manager: Arc<SessionManager>,
+    timeout_monitor: Arc<TimeoutMonitor>,
     connection_manager: Arc<ConnectionManager>,
 }
 
 impl<CH, QH> PjsAppState<CH, QH>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     pub fn new(
-        session_service: Arc<SessionService<CH, QH>>,
-        streaming_service: Arc<StreamingService<CH>>,
+        session_manager: Arc<SessionManager>,
+        timeout_monitor: Arc<TimeoutMonitor>,
         connection_manager: Arc<ConnectionManager>,
     ) -> Self {
         Self {
-            session_service,
-            streaming_service,
+            session_manager,
+            timeout_monitor,
             connection_manager,
         }
     }
@@ -119,35 +140,47 @@ pub struct StreamParams {
 /// Create PJS-enabled Axum router
 pub fn create_pjs_router<CH, QH>() -> Router<PjsAppState<CH, QH>>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     Router::new()
         // Session management
         .route("/pjs/sessions", post(create_session::<CH, QH>))
         .route("/pjs/sessions/{session_id}", get(get_session::<CH, QH>))
-        .route("/pjs/sessions/{session_id}/health", get(session_health::<CH, QH>))
-        
+        .route(
+            "/pjs/sessions/{session_id}/health",
+            get(session_health::<CH, QH>),
+        )
         // Streaming endpoints
         .route("/pjs/stream/{session_id}", post(start_stream::<CH, QH>))
-        .route("/pjs/stream/{session_id}/frames", get(stream_frames::<CH, QH>))
-        .route("/pjs/stream/{session_id}/sse", get(stream_server_sent_events::<CH, QH>))
-        
+        .route(
+            "/pjs/stream/{session_id}/frames",
+            get(stream_frames::<CH, QH>),
+        )
+        .route(
+            "/pjs/stream/{session_id}/sse",
+            get(stream_server_sent_events::<CH, QH>),
+        )
         // System endpoints
         .route("/pjs/health", get(system_health))
         .route("/pjs/connections", get(connection_stats::<CH, QH>))
-        
         // Middleware
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -160,19 +193,25 @@ async fn create_session<CH, QH>(
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<Json<CreateSessionResponse>, PjsError>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     let config = SessionConfig {
         max_concurrent_streams: request.max_concurrent_streams.unwrap_or(10),
@@ -181,13 +220,14 @@ where
         enable_compression: true,
         metadata: HashMap::new(),
     };
-    
+
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|h| h.to_str().ok())
         .map(String::from);
-    
-    let session_id = state.session_service
+
+    let session_id = state
+        .session_service
         .create_and_activate_session(
             config,
             request.client_info,
@@ -196,15 +236,19 @@ where
         )
         .await
         .map_err(PjsError::Application)?;
-    
+
     // Register connection with connection manager
-    if let Err(e) = state.connection_manager.register_connection(session_id).await {
+    if let Err(e) = state
+        .connection_manager
+        .register_connection(session_id)
+        .await
+    {
         tracing::warn!("Failed to register connection: {}", e);
     }
-    
+
     // Calculate expiration time
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
-    
+
     Ok(Json(CreateSessionResponse {
         session_id: session_id.to_string(),
         expires_at,
@@ -217,28 +261,35 @@ async fn get_session<CH, QH>(
     axum::extract::Path(session_id): axum::extract::Path<String>,
 ) -> Result<Json<SessionResponse>, PjsError>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id))?;
-    
-    let session_with_health = state.session_service
+    let session_id =
+        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
+
+    let session_with_health = state
+        .session_service
         .get_session_with_health(session_id)
         .await
         .map_err(PjsError::Application)?;
-    
+
     Ok(Json(SessionResponse {
         session: session_with_health.session,
     }))
@@ -250,28 +301,35 @@ async fn session_health<CH, QH>(
     axum::extract::Path(session_id): axum::extract::Path<String>,
 ) -> Result<Json<HealthResponse>, PjsError>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id))?;
-    
-    let session_with_health = state.session_service
+    let session_id =
+        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
+
+    let session_with_health = state
+        .session_service
         .get_session_with_health(session_id)
         .await
         .map_err(PjsError::Application)?;
-    
+
     Ok(Json(HealthResponse {
         health: session_with_health.health,
     }))
@@ -284,38 +342,49 @@ async fn start_stream<CH, QH>(
     Json(request): Json<StartStreamRequest>,
 ) -> Result<Json<serde_json::Value>, PjsError>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id))?;
-    
+    let session_id =
+        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
+
     // Update connection activity
     if let Err(e) = state.connection_manager.update_activity(&session_id).await {
         tracing::warn!("Failed to update connection activity: {}", e);
     }
-    
-    let stream_id = state.session_service
+
+    let stream_id = state
+        .session_service
         .create_and_start_stream(session_id, request.data, None)
         .await
         .map_err(PjsError::Application)?;
-    
+
     // Associate stream with connection
-    if let Err(e) = state.connection_manager.set_stream(&session_id, stream_id).await {
+    if let Err(e) = state
+        .connection_manager
+        .set_stream(&session_id, stream_id)
+        .await
+    {
         tracing::warn!("Failed to associate stream with connection: {}", e);
     }
-    
+
     Ok(Json(serde_json::json!({
         "stream_id": stream_id.to_string(),
         "status": "started"
@@ -329,32 +398,43 @@ async fn stream_frames<CH, QH>(
     Query(params): Query<StreamParams>,
 ) -> Result<Response, PjsError>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     let session_id = SessionId::from_string(&session_id)
         .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    
-    let priority_threshold = params.priority
+
+    let priority_threshold = params
+        .priority
         .map(Priority::new)
         .transpose()
         .map_err(|e| PjsError::InvalidPriority(e.to_string()))?
         .unwrap_or(Priority::MEDIUM);
-    
+
     // Create streaming response
-    let stream = FrameStream::new(state.session_service.clone(), session_id, priority_threshold);
-    
+    let stream = FrameStream::new(
+        state.session_service.clone(),
+        session_id,
+        priority_threshold,
+    );
+
     match params.format.as_deref() {
         Some("sse") => create_sse_response(stream),
         Some("ndjson") => create_ndjson_response(stream),
@@ -369,30 +449,41 @@ async fn stream_server_sent_events<CH, QH>(
     Query(params): Query<StreamParams>,
 ) -> Result<Response, PjsError>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     let session_id = SessionId::from_string(&session_id)
         .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    
-    let priority_threshold = params.priority
+
+    let priority_threshold = params
+        .priority
         .map(Priority::new)
         .transpose()
         .map_err(|e| PjsError::InvalidPriority(e.to_string()))?
         .unwrap_or(Priority::MEDIUM);
-    
-    let stream = FrameStream::new(state.session_service.clone(), session_id, priority_threshold);
+
+    let stream = FrameStream::new(
+        state.session_service.clone(),
+        session_id,
+        priority_threshold,
+    );
     create_sse_response(stream)
 }
 
@@ -406,51 +497,63 @@ async fn system_health() -> Json<serde_json::Value> {
 }
 
 /// Frame streaming implementation
-pub struct FrameStream<CH, QH> 
+pub struct FrameStream<CH, QH>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
-    session_service: Arc<SessionService<CH, QH>>,
+    session_manager: Arc<SessionManager>,
     session_id: SessionId,
     priority_threshold: Priority,
     current_frame: usize,
 }
 
-impl<CH, QH> FrameStream<CH, QH> 
+impl<CH, QH> FrameStream<CH, QH>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     pub fn new(
-        session_service: Arc<SessionService<CH, QH>>,
+        session_manager: Arc<SessionManager>,
         session_id: SessionId,
         priority_threshold: Priority,
     ) -> Self {
         Self {
-            session_service,
+            session_manager,
             session_id,
             priority_threshold,
             current_frame: 0,
@@ -460,19 +563,25 @@ where
 
 impl<CH, QH> Stream for FrameStream<CH, QH>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     type Item = Result<String, PjsError>;
 
@@ -484,7 +593,7 @@ where
                 "priority": self.priority_threshold.value(),
                 "data": format!("Frame #{}", self.current_frame)
             });
-            
+
             self.current_frame += 1;
             Poll::Ready(Some(Ok(frame_data.to_string())))
         } else {
@@ -499,7 +608,7 @@ where
     S: Stream<Item = Result<String, PjsError>> + Send + 'static,
 {
     let body = axum::body::Body::from_stream(stream);
-    
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
@@ -514,7 +623,7 @@ where
     S: Stream<Item = Result<String, PjsError>> + Send + 'static,
 {
     let body = axum::body::Body::from_stream(stream);
-    
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/x-ndjson")
@@ -528,15 +637,13 @@ fn create_sse_response<S>(stream: S) -> Result<Response, PjsError>
 where
     S: Stream<Item = Result<String, PjsError>> + Send + 'static,
 {
-    let sse_stream = stream.map(|item| {
-        match item {
-            Ok(data) => Ok::<String, std::convert::Infallible>(format!("data: {data}\n\n")),
-            Err(e) => Ok::<String, std::convert::Infallible>(format!("event: error\ndata: {e}\n\n")),
-        }
+    let sse_stream = stream.map(|item| match item {
+        Ok(data) => Ok::<String, std::convert::Infallible>(format!("data: {data}\n\n")),
+        Err(e) => Ok::<String, std::convert::Infallible>(format!("event: error\ndata: {e}\n\n")),
     });
-    
+
     let body = axum::body::Body::from_stream(sse_stream);
-    
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
@@ -551,22 +658,28 @@ async fn connection_stats<CH, QH>(
     State(state): State<PjsAppState<CH, QH>>,
 ) -> Json<serde_json::Value>
 where
-    CH: CommandHandler<CreateSessionCommand, SessionId> + 
-         CommandHandler<CreateStreamCommand, StreamId> +
-         CommandHandler<StartStreamCommand, ()> +
-         CommandHandler<CompleteStreamCommand, ()> +
-         CommandHandler<CloseSessionCommand, ()> +
-         CommandHandler<GenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> +
-         CommandHandler<AdjustPriorityThresholdCommand, ()> +
-         Clone + Send + Sync + 'static,
-    QH: QueryHandler<GetSessionQuery, SessionResponse> +
-         QueryHandler<GetSessionHealthQuery, HealthResponse> +
-         QueryHandler<GetActiveSessionsQuery, SessionsResponse> +
-         Clone + Send + Sync + 'static,
+    CH: CommandHandler<CreateSessionCommand, SessionId>
+        + CommandHandler<CreateStreamCommand, StreamId>
+        + CommandHandler<StartStreamCommand, ()>
+        + CommandHandler<CompleteStreamCommand, ()>
+        + CommandHandler<CloseSessionCommand, ()>
+        + CommandHandler<GenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<BatchGenerateFramesCommand, Vec<Frame>>
+        + CommandHandler<AdjustPriorityThresholdCommand, ()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    QH: QueryHandler<GetSessionQuery, SessionResponse>
+        + QueryHandler<GetSessionHealthQuery, HealthResponse>
+        + QueryHandler<GetActiveSessionsQuery, SessionsResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     let stats = state.connection_manager.get_statistics().await;
-    
+
     Json(serde_json::json!({
         "total_connections": stats.total_connections,
         "active_connections": stats.active_connections,
@@ -581,13 +694,13 @@ where
 pub enum PjsError {
     #[error("Application error: {0}")]
     Application(#[from] crate::application::ApplicationError),
-    
+
     #[error("Invalid session ID: {0}")]
     InvalidSessionId(String),
-    
+
     #[error("Invalid priority: {0}")]
     InvalidPriority(String),
-    
+
     #[error("HTTP error: {0}")]
     HttpError(String),
 }
@@ -600,11 +713,11 @@ impl IntoResponse for PjsError {
             PjsError::InvalidPriority(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::HttpError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
-        
+
         let body = Json(serde_json::json!({
             "error": error_message
         }));
-        
+
         (status, body).into_response()
     }
 }
@@ -612,12 +725,12 @@ impl IntoResponse for PjsError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_system_health() {
         let response = system_health().await;
         let health_data: serde_json::Value = response.0;
-        
+
         assert_eq!(health_data["status"], "healthy");
         assert!(!health_data["features"].as_array().unwrap().is_empty());
     }

@@ -4,41 +4,45 @@
 //! allowing infrastructure adapters to implement various storage backends.
 
 use crate::domain::{
-    DomainResult, 
-    entities::{Frame, Stream},
+    DomainResult,
     aggregates::StreamSession,
-    value_objects::{SessionId, StreamId, Priority, JsonPath},
+    entities::{Frame, Stream},
     events::DomainEvent,
+    value_objects::{JsonPath, Priority, SessionId, StreamId},
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 /// Enhanced repository for stream sessions with transactional support
-#[async_trait] 
+#[async_trait]
 pub trait StreamSessionRepository: Send + Sync {
     /// Start a new transaction
     async fn begin_transaction(&self) -> DomainResult<Box<dyn SessionTransaction>>;
-    
+
     /// Find session by ID with read consistency guarantees
     async fn find_session(&self, session_id: SessionId) -> DomainResult<Option<StreamSession>>;
-    
+
     /// Save session with optimistic concurrency control
-    async fn save_session(&self, session: StreamSession, version: Option<u64>) -> DomainResult<u64>;
-    
+    async fn save_session(&self, session: StreamSession, version: Option<u64>)
+    -> DomainResult<u64>;
+
     /// Remove session and all associated data
     async fn remove_session(&self, session_id: SessionId) -> DomainResult<()>;
-    
+
     /// Find sessions by criteria with pagination
     async fn find_sessions_by_criteria(
-        &self, 
+        &self,
         criteria: SessionQueryCriteria,
         pagination: Pagination,
     ) -> DomainResult<SessionQueryResult>;
-    
+
     /// Get session health metrics
-    async fn get_session_health(&self, session_id: SessionId) -> DomainResult<SessionHealthSnapshot>;
-    
+    async fn get_session_health(
+        &self,
+        session_id: SessionId,
+    ) -> DomainResult<SessionHealthSnapshot>;
+
     /// Check if session exists (lightweight operation)
     async fn session_exists(&self, session_id: SessionId) -> DomainResult<bool>;
 }
@@ -48,16 +52,16 @@ pub trait StreamSessionRepository: Send + Sync {
 pub trait SessionTransaction: Send + Sync {
     /// Save session within transaction
     async fn save_session(&self, session: StreamSession) -> DomainResult<()>;
-    
+
     /// Remove session within transaction
     async fn remove_session(&self, session_id: SessionId) -> DomainResult<()>;
-    
+
     /// Add stream to session within transaction
     async fn add_stream(&self, session_id: SessionId, stream: Stream) -> DomainResult<()>;
-    
+
     /// Commit all changes
     async fn commit(self: Box<Self>) -> DomainResult<()>;
-    
+
     /// Rollback all changes
     async fn rollback(self: Box<Self>) -> DomainResult<()>;
 }
@@ -67,23 +71,31 @@ pub trait SessionTransaction: Send + Sync {
 pub trait StreamDataRepository: Send + Sync {
     /// Store stream with metadata indexing
     async fn store_stream(&self, stream: Stream, metadata: StreamMetadata) -> DomainResult<()>;
-    
+
     /// Get stream by ID with caching hints
-    async fn get_stream(&self, stream_id: StreamId, use_cache: bool) -> DomainResult<Option<Stream>>;
-    
+    async fn get_stream(
+        &self,
+        stream_id: StreamId,
+        use_cache: bool,
+    ) -> DomainResult<Option<Stream>>;
+
     /// Delete stream and associated frames
     async fn delete_stream(&self, stream_id: StreamId) -> DomainResult<()>;
-    
+
     /// Find streams by session with filtering
     async fn find_streams_by_session(
         &self,
         session_id: SessionId,
         filter: StreamFilter,
     ) -> DomainResult<Vec<Stream>>;
-    
+
     /// Update stream status
-    async fn update_stream_status(&self, stream_id: StreamId, status: StreamStatus) -> DomainResult<()>;
-    
+    async fn update_stream_status(
+        &self,
+        stream_id: StreamId,
+        status: StreamStatus,
+    ) -> DomainResult<()>;
+
     /// Get stream statistics
     async fn get_stream_statistics(&self, stream_id: StreamId) -> DomainResult<StreamStatistics>;
 }
@@ -93,10 +105,10 @@ pub trait StreamDataRepository: Send + Sync {
 pub trait FrameRepository: Send + Sync {
     /// Store frame with priority indexing
     async fn store_frame(&self, frame: Frame) -> DomainResult<()>;
-    
+
     /// Store multiple frames efficiently
     async fn store_frames(&self, frames: Vec<Frame>) -> DomainResult<()>;
-    
+
     /// Get frames by stream with priority filtering
     async fn get_frames_by_stream(
         &self,
@@ -104,19 +116,22 @@ pub trait FrameRepository: Send + Sync {
         priority_filter: Option<Priority>,
         pagination: Pagination,
     ) -> DomainResult<FrameQueryResult>;
-    
+
     /// Get frames by JSON path
     async fn get_frames_by_path(
         &self,
         stream_id: StreamId,
         path: JsonPath,
     ) -> DomainResult<Vec<Frame>>;
-    
+
     /// Delete frames older than specified time
     async fn cleanup_old_frames(&self, older_than: DateTime<Utc>) -> DomainResult<u64>;
-    
+
     /// Get frame count by priority distribution
-    async fn get_frame_priority_distribution(&self, stream_id: StreamId) -> DomainResult<PriorityDistribution>;
+    async fn get_frame_priority_distribution(
+        &self,
+        stream_id: StreamId,
+    ) -> DomainResult<PriorityDistribution>;
 }
 
 /// Repository for domain events with event sourcing support
@@ -124,10 +139,10 @@ pub trait FrameRepository: Send + Sync {
 pub trait EventRepository: Send + Sync {
     /// Store domain event with ordering guarantees
     async fn store_event(&self, event: DomainEvent, sequence: u64) -> DomainResult<()>;
-    
+
     /// Store multiple events as atomic batch
     async fn store_events(&self, events: Vec<DomainEvent>) -> DomainResult<()>;
-    
+
     /// Get events for session in chronological order
     async fn get_events_for_session(
         &self,
@@ -135,7 +150,7 @@ pub trait EventRepository: Send + Sync {
         from_sequence: Option<u64>,
         limit: Option<usize>,
     ) -> DomainResult<Vec<DomainEvent>>;
-    
+
     /// Get events for stream
     async fn get_events_for_stream(
         &self,
@@ -143,17 +158,17 @@ pub trait EventRepository: Send + Sync {
         from_sequence: Option<u64>,
         limit: Option<usize>,
     ) -> DomainResult<Vec<DomainEvent>>;
-    
+
     /// Get events by type
     async fn get_events_by_type(
         &self,
         event_types: Vec<String>,
         time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
     ) -> DomainResult<Vec<DomainEvent>>;
-    
+
     /// Get latest sequence number
     async fn get_latest_sequence(&self) -> DomainResult<u64>;
-    
+
     /// Replay events for session reconstruction
     async fn replay_session_events(&self, session_id: SessionId) -> DomainResult<Vec<DomainEvent>>;
 }
@@ -164,16 +179,21 @@ pub trait EventRepository: Send + Sync {
 pub trait CacheRepository: Send + Sync {
     /// Get cached value as bytes
     async fn get_bytes(&self, key: &str) -> DomainResult<Option<Vec<u8>>>;
-    
+
     /// Set cached value as bytes with TTL
-    async fn set_bytes(&self, key: &str, value: Vec<u8>, ttl: Option<std::time::Duration>) -> DomainResult<()>;
-    
+    async fn set_bytes(
+        &self,
+        key: &str,
+        value: Vec<u8>,
+        ttl: Option<std::time::Duration>,
+    ) -> DomainResult<()>;
+
     /// Remove cached value
     async fn remove(&self, key: &str) -> DomainResult<()>;
-    
+
     /// Clear all cached values with prefix
     async fn clear_prefix(&self, prefix: &str) -> DomainResult<()>;
-    
+
     /// Get cache statistics
     async fn get_stats(&self) -> DomainResult<CacheStatistics>;
 }
@@ -188,16 +208,22 @@ pub trait CacheExtensions: CacheRepository {
         T: serde::de::DeserializeOwned,
     {
         if let Some(bytes) = self.get_bytes(key).await? {
-            let value = serde_json::from_slice(&bytes)
-                .map_err(|e| crate::domain::DomainError::Logic(format!("Deserialization failed: {e}")))?;
+            let value = serde_json::from_slice(&bytes).map_err(|e| {
+                crate::domain::DomainError::Logic(format!("Deserialization failed: {e}"))
+            })?;
             Ok(Some(value))
         } else {
             Ok(None)
         }
     }
-    
+
     /// Set cached value with serialization
-    async fn set_typed<T>(&self, key: &str, value: &T, ttl: Option<std::time::Duration>) -> DomainResult<()>
+    async fn set_typed<T>(
+        &self,
+        key: &str,
+        value: &T,
+        ttl: Option<std::time::Duration>,
+    ) -> DomainResult<()>
     where
         T: serde::Serialize,
     {

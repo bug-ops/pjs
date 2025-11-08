@@ -4,8 +4,7 @@ use crate::domain::{
     DomainResult,
     value_objects::{JsonPath, Priority},
 };
-// TODO: Fix architecture violation - domain layer should not depend on serde_json::Value
-// Create domain-specific value objects instead
+// Temporary: use serde_json::Value until full migration to domain-specific JsonData
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -75,9 +74,10 @@ impl PriorityService {
 
         // 3. Check for field name match
         if let Some(field_name) = self.extract_field_name(path)
-            && let Some(&priority) = self.field_rules.get(&field_name) {
-                return priority;
-            }
+            && let Some(&priority) = self.field_rules.get(&field_name)
+        {
+            return priority;
+        }
 
         // 4. Check for type-based rules
         let type_name = self.get_value_type_name(value);

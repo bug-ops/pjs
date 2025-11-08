@@ -1,18 +1,18 @@
 //! Event Data Transfer Objects for serialization
 //!
-//! Handles serialization/deserialization of domain events while keeping 
+//! Handles serialization/deserialization of domain events while keeping
 //! the domain layer clean of serialization concerns.
 
 use crate::{
     application::dto::{
+        priority_dto::{FromDto, ToDto},
         session_id_dto::SessionIdDto,
         stream_id_dto::StreamIdDto,
-        priority_dto::{ToDto, FromDto},
     },
     domain::{
-        events::{DomainEvent, PerformanceMetrics, EventId},
-        value_objects::{SessionId, StreamId},
         DomainError,
+        events::{DomainEvent, EventId, PerformanceMetrics},
+        value_objects::{SessionId, StreamId},
     },
 };
 use chrono::{DateTime, Utc};
@@ -37,6 +37,22 @@ pub enum DomainEventDto {
     /// Session expired due to timeout
     SessionExpired {
         session_id: SessionIdDto,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Session was forcefully closed due to timeout
+    SessionTimedOut {
+        session_id: SessionIdDto,
+        original_state: String, // SessionState serialized as string
+        timeout_duration: u64,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Session timeout was extended
+    SessionTimeoutExtended {
+        session_id: SessionIdDto,
+        additional_seconds: u64,
+        new_expires_at: DateTime<Utc>,
         timestamp: DateTime<Utc>,
     },
 
@@ -150,15 +166,17 @@ impl EventIdDto {
     pub fn new(uuid: uuid::Uuid) -> Self {
         Self { uuid }
     }
-    
+
     /// Get UUID value
     pub fn uuid(self) -> uuid::Uuid {
         self.uuid
     }
-    
+
     /// Generate new unique event ID
     pub fn generate() -> Self {
-        Self { uuid: uuid::Uuid::new_v4() }
+        Self {
+            uuid: uuid::Uuid::new_v4(),
+        }
     }
 }
 
@@ -173,107 +191,161 @@ impl std::fmt::Display for EventIdDto {
 impl From<DomainEvent> for DomainEventDto {
     fn from(event: DomainEvent) -> Self {
         match event {
-            DomainEvent::SessionActivated { session_id, timestamp } => {
-                Self::SessionActivated {
-                    session_id: session_id.to_dto(),
-                    timestamp,
-                }
+            DomainEvent::SessionActivated {
+                session_id,
+                timestamp,
+            } => Self::SessionActivated {
+                session_id: session_id.to_dto(),
+                timestamp,
             },
-            DomainEvent::SessionClosed { session_id, timestamp } => {
-                Self::SessionClosed {
-                    session_id: session_id.to_dto(),
-                    timestamp,
-                }
+            DomainEvent::SessionClosed {
+                session_id,
+                timestamp,
+            } => Self::SessionClosed {
+                session_id: session_id.to_dto(),
+                timestamp,
             },
-            DomainEvent::SessionExpired { session_id, timestamp } => {
-                Self::SessionExpired {
-                    session_id: session_id.to_dto(),
-                    timestamp,
-                }
+            DomainEvent::SessionExpired {
+                session_id,
+                timestamp,
+            } => Self::SessionExpired {
+                session_id: session_id.to_dto(),
+                timestamp,
             },
-            DomainEvent::StreamCreated { session_id, stream_id, timestamp } => {
-                Self::StreamCreated {
-                    session_id: session_id.to_dto(),
-                    stream_id: stream_id.to_dto(),
-                    timestamp,
-                }
+            DomainEvent::StreamCreated {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Self::StreamCreated {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                timestamp,
             },
-            DomainEvent::StreamStarted { session_id, stream_id, timestamp } => {
-                Self::StreamStarted {
-                    session_id: session_id.to_dto(),
-                    stream_id: stream_id.to_dto(),
-                    timestamp,
-                }
+            DomainEvent::StreamStarted {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Self::StreamStarted {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                timestamp,
             },
-            DomainEvent::StreamCompleted { session_id, stream_id, timestamp } => {
-                Self::StreamCompleted {
-                    session_id: session_id.to_dto(),
-                    stream_id: stream_id.to_dto(),
-                    timestamp,
-                }
+            DomainEvent::StreamCompleted {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Self::StreamCompleted {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                timestamp,
             },
-            DomainEvent::StreamFailed { session_id, stream_id, error, timestamp } => {
-                Self::StreamFailed {
-                    session_id: session_id.to_dto(),
-                    stream_id: stream_id.to_dto(),
-                    error,
-                    timestamp,
-                }
+            DomainEvent::StreamFailed {
+                session_id,
+                stream_id,
+                error,
+                timestamp,
+            } => Self::StreamFailed {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                error,
+                timestamp,
             },
-            DomainEvent::StreamCancelled { session_id, stream_id, timestamp } => {
-                Self::StreamCancelled {
-                    session_id: session_id.to_dto(),
-                    stream_id: stream_id.to_dto(),
-                    timestamp,
-                }
+            DomainEvent::StreamCancelled {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Self::StreamCancelled {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                timestamp,
             },
-            DomainEvent::SkeletonGenerated { session_id, stream_id, frame_size_bytes, timestamp } => {
-                Self::SkeletonGenerated {
-                    session_id: session_id.to_dto(),
-                    stream_id: stream_id.to_dto(),
-                    frame_size_bytes,
-                    timestamp,
-                }
+            DomainEvent::SkeletonGenerated {
+                session_id,
+                stream_id,
+                frame_size_bytes,
+                timestamp,
+            } => Self::SkeletonGenerated {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                frame_size_bytes,
+                timestamp,
             },
-            DomainEvent::PatchFramesGenerated { session_id, stream_id, frame_count, total_bytes, highest_priority, timestamp } => {
-                Self::PatchFramesGenerated {
-                    session_id: session_id.to_dto(),
-                    stream_id: stream_id.to_dto(),
-                    frame_count,
-                    total_bytes,
-                    highest_priority,
-                    timestamp,
-                }
+            DomainEvent::PatchFramesGenerated {
+                session_id,
+                stream_id,
+                frame_count,
+                total_bytes,
+                highest_priority,
+                timestamp,
+            } => Self::PatchFramesGenerated {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                frame_count,
+                total_bytes,
+                highest_priority,
+                timestamp,
             },
-            DomainEvent::FramesBatched { session_id, frame_count, timestamp } => {
-                Self::FramesBatched {
-                    session_id: session_id.to_dto(),
-                    frame_count,
-                    timestamp,
-                }
+            DomainEvent::FramesBatched {
+                session_id,
+                frame_count,
+                timestamp,
+            } => Self::FramesBatched {
+                session_id: session_id.to_dto(),
+                frame_count,
+                timestamp,
             },
-            DomainEvent::PriorityThresholdAdjusted { session_id, old_threshold, new_threshold, reason, timestamp } => {
-                Self::PriorityThresholdAdjusted {
-                    session_id: session_id.to_dto(),
-                    old_threshold,
-                    new_threshold,
-                    reason,
-                    timestamp,
-                }
+            DomainEvent::PriorityThresholdAdjusted {
+                session_id,
+                old_threshold,
+                new_threshold,
+                reason,
+                timestamp,
+            } => Self::PriorityThresholdAdjusted {
+                session_id: session_id.to_dto(),
+                old_threshold,
+                new_threshold,
+                reason,
+                timestamp,
             },
-            DomainEvent::StreamConfigUpdated { session_id, stream_id, timestamp } => {
-                Self::StreamConfigUpdated {
-                    session_id: session_id.to_dto(),
-                    stream_id: stream_id.to_dto(),
-                    timestamp,
-                }
+            DomainEvent::StreamConfigUpdated {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Self::StreamConfigUpdated {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                timestamp,
             },
-            DomainEvent::PerformanceMetricsRecorded { session_id, metrics, timestamp } => {
-                Self::PerformanceMetricsRecorded {
-                    session_id: session_id.to_dto(),
-                    metrics: metrics.into(),
-                    timestamp,
-                }
+            DomainEvent::PerformanceMetricsRecorded {
+                session_id,
+                metrics,
+                timestamp,
+            } => Self::PerformanceMetricsRecorded {
+                session_id: session_id.to_dto(),
+                metrics: metrics.into(),
+                timestamp,
+            },
+            DomainEvent::SessionTimedOut {
+                session_id,
+                original_state,
+                timeout_duration,
+                timestamp,
+            } => Self::SessionTimedOut {
+                session_id: session_id.to_dto(),
+                original_state: format!("{:?}", original_state),
+                timeout_duration,
+                timestamp,
+            },
+            DomainEvent::SessionTimeoutExtended {
+                session_id,
+                additional_seconds,
+                new_expires_at,
+                timestamp,
+            } => Self::SessionTimeoutExtended {
+                session_id: session_id.to_dto(),
+                additional_seconds,
+                new_expires_at,
+                timestamp,
             },
         }
     }
@@ -287,111 +359,187 @@ impl ToDto<DomainEventDto> for DomainEvent {
 
 impl FromDto<DomainEventDto> for DomainEvent {
     type Error = DomainError;
-    
+
     fn from_dto(dto: DomainEventDto) -> Result<Self, Self::Error> {
         match dto {
-            DomainEventDto::SessionActivated { session_id, timestamp } => {
-                Ok(Self::SessionActivated {
+            DomainEventDto::SessionActivated {
+                session_id,
+                timestamp,
+            } => Ok(Self::SessionActivated {
+                session_id: SessionId::from_dto(session_id)?,
+                timestamp,
+            }),
+            DomainEventDto::SessionClosed {
+                session_id,
+                timestamp,
+            } => Ok(Self::SessionClosed {
+                session_id: SessionId::from_dto(session_id)?,
+                timestamp,
+            }),
+            DomainEventDto::SessionExpired {
+                session_id,
+                timestamp,
+            } => Ok(Self::SessionExpired {
+                session_id: SessionId::from_dto(session_id)?,
+                timestamp,
+            }),
+            DomainEventDto::StreamCreated {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Ok(Self::StreamCreated {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                timestamp,
+            }),
+            DomainEventDto::StreamStarted {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Ok(Self::StreamStarted {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                timestamp,
+            }),
+            DomainEventDto::StreamCompleted {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Ok(Self::StreamCompleted {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                timestamp,
+            }),
+            DomainEventDto::StreamFailed {
+                session_id,
+                stream_id,
+                error,
+                timestamp,
+            } => Ok(Self::StreamFailed {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                error,
+                timestamp,
+            }),
+            DomainEventDto::StreamCancelled {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Ok(Self::StreamCancelled {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                timestamp,
+            }),
+            DomainEventDto::SkeletonGenerated {
+                session_id,
+                stream_id,
+                frame_size_bytes,
+                timestamp,
+            } => Ok(Self::SkeletonGenerated {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                frame_size_bytes,
+                timestamp,
+            }),
+            DomainEventDto::PatchFramesGenerated {
+                session_id,
+                stream_id,
+                frame_count,
+                total_bytes,
+                highest_priority,
+                timestamp,
+            } => Ok(Self::PatchFramesGenerated {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                frame_count,
+                total_bytes,
+                highest_priority,
+                timestamp,
+            }),
+            DomainEventDto::FramesBatched {
+                session_id,
+                frame_count,
+                timestamp,
+            } => Ok(Self::FramesBatched {
+                session_id: SessionId::from_dto(session_id)?,
+                frame_count,
+                timestamp,
+            }),
+            DomainEventDto::PriorityThresholdAdjusted {
+                session_id,
+                old_threshold,
+                new_threshold,
+                reason,
+                timestamp,
+            } => Ok(Self::PriorityThresholdAdjusted {
+                session_id: SessionId::from_dto(session_id)?,
+                old_threshold,
+                new_threshold,
+                reason,
+                timestamp,
+            }),
+            DomainEventDto::StreamConfigUpdated {
+                session_id,
+                stream_id,
+                timestamp,
+            } => Ok(Self::StreamConfigUpdated {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                timestamp,
+            }),
+            DomainEventDto::PerformanceMetricsRecorded {
+                session_id,
+                metrics,
+                timestamp,
+            } => Ok(Self::PerformanceMetricsRecorded {
+                session_id: SessionId::from_dto(session_id)?,
+                metrics: metrics.try_into().map_err(|_| {
+                    DomainError::InvalidInput("Invalid performance metrics".to_string())
+                })?,
+                timestamp,
+            }),
+            DomainEventDto::SessionTimedOut {
+                session_id,
+                original_state,
+                timeout_duration,
+                timestamp,
+            } => {
+                // Parse SessionState from string - basic implementation
+                let state = match original_state.as_str() {
+                    "Initializing" => {
+                        crate::domain::aggregates::stream_session::SessionState::Initializing
+                    }
+                    "Active" => crate::domain::aggregates::stream_session::SessionState::Active,
+                    "Closing" => crate::domain::aggregates::stream_session::SessionState::Closing,
+                    "Completed" => {
+                        crate::domain::aggregates::stream_session::SessionState::Completed
+                    }
+                    "Failed" => crate::domain::aggregates::stream_session::SessionState::Failed,
+                    _ => {
+                        return Err(DomainError::InvalidInput(format!(
+                            "Invalid session state: {}",
+                            original_state
+                        )));
+                    }
+                };
+                Ok(Self::SessionTimedOut {
                     session_id: SessionId::from_dto(session_id)?,
+                    original_state: state,
+                    timeout_duration,
                     timestamp,
                 })
-            },
-            DomainEventDto::SessionClosed { session_id, timestamp } => {
-                Ok(Self::SessionClosed {
-                    session_id: SessionId::from_dto(session_id)?,
-                    timestamp,
-                })
-            },
-            DomainEventDto::SessionExpired { session_id, timestamp } => {
-                Ok(Self::SessionExpired {
-                    session_id: SessionId::from_dto(session_id)?,
-                    timestamp,
-                })
-            },
-            DomainEventDto::StreamCreated { session_id, stream_id, timestamp } => {
-                Ok(Self::StreamCreated {
-                    session_id: SessionId::from_dto(session_id)?,
-                    stream_id: StreamId::from_dto(stream_id)?,
-                    timestamp,
-                })
-            },
-            DomainEventDto::StreamStarted { session_id, stream_id, timestamp } => {
-                Ok(Self::StreamStarted {
-                    session_id: SessionId::from_dto(session_id)?,
-                    stream_id: StreamId::from_dto(stream_id)?,
-                    timestamp,
-                })
-            },
-            DomainEventDto::StreamCompleted { session_id, stream_id, timestamp } => {
-                Ok(Self::StreamCompleted {
-                    session_id: SessionId::from_dto(session_id)?,
-                    stream_id: StreamId::from_dto(stream_id)?,
-                    timestamp,
-                })
-            },
-            DomainEventDto::StreamFailed { session_id, stream_id, error, timestamp } => {
-                Ok(Self::StreamFailed {
-                    session_id: SessionId::from_dto(session_id)?,
-                    stream_id: StreamId::from_dto(stream_id)?,
-                    error,
-                    timestamp,
-                })
-            },
-            DomainEventDto::StreamCancelled { session_id, stream_id, timestamp } => {
-                Ok(Self::StreamCancelled {
-                    session_id: SessionId::from_dto(session_id)?,
-                    stream_id: StreamId::from_dto(stream_id)?,
-                    timestamp,
-                })
-            },
-            DomainEventDto::SkeletonGenerated { session_id, stream_id, frame_size_bytes, timestamp } => {
-                Ok(Self::SkeletonGenerated {
-                    session_id: SessionId::from_dto(session_id)?,
-                    stream_id: StreamId::from_dto(stream_id)?,
-                    frame_size_bytes,
-                    timestamp,
-                })
-            },
-            DomainEventDto::PatchFramesGenerated { session_id, stream_id, frame_count, total_bytes, highest_priority, timestamp } => {
-                Ok(Self::PatchFramesGenerated {
-                    session_id: SessionId::from_dto(session_id)?,
-                    stream_id: StreamId::from_dto(stream_id)?,
-                    frame_count,
-                    total_bytes,
-                    highest_priority,
-                    timestamp,
-                })
-            },
-            DomainEventDto::FramesBatched { session_id, frame_count, timestamp } => {
-                Ok(Self::FramesBatched {
-                    session_id: SessionId::from_dto(session_id)?,
-                    frame_count,
-                    timestamp,
-                })
-            },
-            DomainEventDto::PriorityThresholdAdjusted { session_id, old_threshold, new_threshold, reason, timestamp } => {
-                Ok(Self::PriorityThresholdAdjusted {
-                    session_id: SessionId::from_dto(session_id)?,
-                    old_threshold,
-                    new_threshold,
-                    reason,
-                    timestamp,
-                })
-            },
-            DomainEventDto::StreamConfigUpdated { session_id, stream_id, timestamp } => {
-                Ok(Self::StreamConfigUpdated {
-                    session_id: SessionId::from_dto(session_id)?,
-                    stream_id: StreamId::from_dto(stream_id)?,
-                    timestamp,
-                })
-            },
-            DomainEventDto::PerformanceMetricsRecorded { session_id, metrics, timestamp } => {
-                Ok(Self::PerformanceMetricsRecorded {
-                    session_id: SessionId::from_dto(session_id)?,
-                    metrics: metrics.try_into().map_err(|_| DomainError::InvalidInput("Invalid performance metrics".to_string()))?,
-                    timestamp,
-                })
-            },
+            }
+            DomainEventDto::SessionTimeoutExtended {
+                session_id,
+                additional_seconds,
+                new_expires_at,
+                timestamp,
+            } => Ok(Self::SessionTimeoutExtended {
+                session_id: SessionId::from_dto(session_id)?,
+                additional_seconds,
+                new_expires_at,
+                timestamp,
+            }),
         }
     }
 }
@@ -410,7 +558,7 @@ impl From<PerformanceMetrics> for PerformanceMetricsDto {
 
 impl TryFrom<PerformanceMetricsDto> for PerformanceMetrics {
     type Error = DomainError;
-    
+
     fn try_from(dto: PerformanceMetricsDto) -> Result<Self, Self::Error> {
         Ok(Self {
             frames_per_second: dto.frames_per_second,
@@ -455,10 +603,10 @@ mod tests {
 
         // Convert to DTO
         let dto = domain_event.clone().to_dto();
-        
+
         // Convert back to domain
         let converted = DomainEvent::from_dto(dto).unwrap();
-        
+
         assert_eq!(domain_event, converted);
     }
 
@@ -474,7 +622,7 @@ mod tests {
 
         let dto = PerformanceMetricsDto::from(metrics.clone());
         let converted = PerformanceMetrics::try_from(dto).unwrap();
-        
+
         assert_eq!(metrics, converted);
     }
 
@@ -488,7 +636,7 @@ mod tests {
 
         let serialized = serde_json::to_string(&event_dto).unwrap();
         let deserialized: DomainEventDto = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(event_dto, deserialized);
     }
 
@@ -496,7 +644,7 @@ mod tests {
     fn test_event_id_dto_creation() {
         let uuid = uuid::Uuid::new_v4();
         let event_id_dto = EventIdDto::new(uuid);
-        
+
         assert_eq!(event_id_dto.uuid(), uuid);
     }
 
@@ -504,7 +652,7 @@ mod tests {
     fn test_event_id_dto_generate() {
         let event_id1 = EventIdDto::generate();
         let event_id2 = EventIdDto::generate();
-        
+
         assert_ne!(event_id1, event_id2);
     }
 
@@ -512,16 +660,16 @@ mod tests {
     fn test_event_id_dto_display() {
         let uuid = uuid::Uuid::new_v4();
         let event_id_dto = EventIdDto::new(uuid);
-        
+
         assert_eq!(event_id_dto.to_string(), uuid.to_string());
     }
 
     #[test]
     fn test_event_id_dto_conversion() {
         let event_id = EventId::new();
-        let dto = EventIdDto::from(event_id.clone());
+        let dto = EventIdDto::from(event_id);
         let converted_back = EventId::from(dto);
-        
+
         assert_eq!(event_id, converted_back);
     }
 
@@ -532,37 +680,58 @@ mod tests {
         let timestamp = Utc::now();
 
         // Test SessionActivated
-        let event1 = DomainEvent::SessionActivated { session_id, timestamp };
+        let event1 = DomainEvent::SessionActivated {
+            session_id,
+            timestamp,
+        };
         let dto1 = DomainEventDto::from(event1.clone());
         let converted1 = DomainEvent::from_dto(dto1).unwrap();
         assert_eq!(event1, converted1);
 
         // Test SessionClosed
-        let event2 = DomainEvent::SessionClosed { session_id, timestamp };
+        let event2 = DomainEvent::SessionClosed {
+            session_id,
+            timestamp,
+        };
         let dto2 = DomainEventDto::from(event2.clone());
         let converted2 = DomainEvent::from_dto(dto2).unwrap();
         assert_eq!(event2, converted2);
 
         // Test SessionExpired
-        let event3 = DomainEvent::SessionExpired { session_id, timestamp };
+        let event3 = DomainEvent::SessionExpired {
+            session_id,
+            timestamp,
+        };
         let dto3 = DomainEventDto::from(event3.clone());
         let converted3 = DomainEvent::from_dto(dto3).unwrap();
         assert_eq!(event3, converted3);
 
         // Test StreamCreated
-        let event4 = DomainEvent::StreamCreated { session_id, stream_id, timestamp };
+        let event4 = DomainEvent::StreamCreated {
+            session_id,
+            stream_id,
+            timestamp,
+        };
         let dto4 = DomainEventDto::from(event4.clone());
         let converted4 = DomainEvent::from_dto(dto4).unwrap();
         assert_eq!(event4, converted4);
 
         // Test StreamStarted
-        let event5 = DomainEvent::StreamStarted { session_id, stream_id, timestamp };
+        let event5 = DomainEvent::StreamStarted {
+            session_id,
+            stream_id,
+            timestamp,
+        };
         let dto5 = DomainEventDto::from(event5.clone());
         let converted5 = DomainEvent::from_dto(dto5).unwrap();
         assert_eq!(event5, converted5);
 
         // Test StreamCompleted
-        let event6 = DomainEvent::StreamCompleted { session_id, stream_id, timestamp };
+        let event6 = DomainEvent::StreamCompleted {
+            session_id,
+            stream_id,
+            timestamp,
+        };
         let dto6 = DomainEventDto::from(event6.clone());
         let converted6 = DomainEvent::from_dto(dto6).unwrap();
         assert_eq!(event6, converted6);
@@ -584,7 +753,7 @@ mod tests {
 
         let dto = DomainEventDto::from(event.clone());
         let converted = DomainEvent::from_dto(dto).unwrap();
-        
+
         assert_eq!(event, converted);
     }
 
@@ -600,7 +769,7 @@ mod tests {
 
         let dto = PerformanceMetricsDto::from(metrics.clone());
         let converted = PerformanceMetrics::try_from(dto).unwrap();
-        
+
         assert_eq!(metrics, converted);
         assert_eq!(converted.latency_ms, None);
     }
@@ -622,7 +791,7 @@ mod tests {
 
         let serialized = serde_json::to_string(&event_dto).unwrap();
         let deserialized: DomainEventDto = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(event_dto, deserialized);
     }
 
@@ -657,7 +826,7 @@ mod tests {
 
         let dto = DomainEventDto::from(event.clone());
         let converted = DomainEvent::from_dto(dto).unwrap();
-        
+
         assert_eq!(event, converted);
     }
 
@@ -665,17 +834,17 @@ mod tests {
     fn test_event_id_dto_hash() {
         let uuid1 = uuid::Uuid::new_v4();
         let uuid2 = uuid::Uuid::new_v4();
-        
+
         let event_id1 = EventIdDto::new(uuid1);
         let event_id2 = EventIdDto::new(uuid2);
         let event_id3 = EventIdDto::new(uuid1); // Same UUID as event_id1
-        
+
         use std::collections::HashSet;
         let mut set = HashSet::new();
         set.insert(event_id1.clone());
         set.insert(event_id2);
         set.insert(event_id3);
-        
+
         assert_eq!(set.len(), 2); // Only 2 unique UUIDs
     }
 
@@ -683,12 +852,12 @@ mod tests {
     fn test_event_dto_clone() {
         let session_id = SessionId::new();
         let timestamp = Utc::now();
-        
+
         let original = DomainEventDto::SessionActivated {
             session_id: session_id.to_dto(),
             timestamp,
         };
-        
+
         let cloned = original.clone();
         assert_eq!(original, cloned);
     }
@@ -697,12 +866,12 @@ mod tests {
     fn test_event_dto_debug() {
         let session_id = SessionId::new();
         let timestamp = Utc::now();
-        
+
         let event = DomainEventDto::SessionActivated {
             session_id: session_id.to_dto(),
             timestamp,
         };
-        
+
         let debug_str = format!("{:?}", event);
         assert!(debug_str.contains("SessionActivated"));
     }

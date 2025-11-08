@@ -5,19 +5,16 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use pjson_rs::{
-    parser::{
-        ZeroCopyParser, LazyParser, LazyJsonValue,
-        SimdZeroCopyParser, SimdZeroCopyConfig, BufferSize,
-        global_buffer_pool,
-    },
+use pjson_rs::parser::{
+    BufferSize, LazyJsonValue, LazyParser, SimdZeroCopyConfig, SimdZeroCopyParser, ZeroCopyParser,
+    global_buffer_pool,
 };
 
 #[tokio::test]
 async fn test_zero_copy_parser_basic() {
     let mut parser = ZeroCopyParser::new();
     let input = br#"{"name": "test", "value": 42, "active": true}"#;
-    
+
     let result = parser.parse_lazy(input).unwrap();
     match result {
         LazyJsonValue::ObjectSlice(bytes) => {
@@ -28,11 +25,11 @@ async fn test_zero_copy_parser_basic() {
     }
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_zero_copy_string_parsing() {
     let mut parser = ZeroCopyParser::new();
     let input = br#""hello world""#;
-    
+
     let result = parser.parse_lazy(input).unwrap();
     match result {
         LazyJsonValue::StringBorrowed(bytes) => {
@@ -50,7 +47,7 @@ async fn test_zero_copy_string_parsing() {
 async fn test_escaped_string_allocation() {
     let mut parser = ZeroCopyParser::new();
     let input = br#""hello \"world\"!""#;
-    
+
     let result = parser.parse_lazy(input).unwrap();
     match result {
         LazyJsonValue::StringOwned(ref s) => {
@@ -68,9 +65,9 @@ async fn test_escaped_string_allocation() {
 async fn test_simd_zero_copy_parser() {
     let mut parser = SimdZeroCopyParser::new();
     let input = br#"{"numbers": [1, 2, 3, 4, 5], "text": "sample"}"#;
-    
+
     let result = parser.parse_simd(input).unwrap();
-    
+
     // Check that we got a valid result
     match result.value {
         LazyJsonValue::ObjectSlice(bytes) => {
@@ -78,10 +75,10 @@ async fn test_simd_zero_copy_parser() {
         }
         _ => panic!("Expected object slice"),
     }
-    
+
     // Check memory efficiency
     assert!(result.memory_usage.efficiency() > 0.8); // Should be mostly zero-copy
-    
+
     // Check processing time is reasonable
     assert!(result.processing_time_ns > 0);
     assert!(result.processing_time_ns < 1_000_000); // Less than 1ms
@@ -90,11 +87,11 @@ async fn test_simd_zero_copy_parser() {
 #[tokio::test]
 async fn test_buffer_pool_integration() {
     let pool = global_buffer_pool();
-    
+
     // Get a buffer from the pool
     let buffer = pool.get_buffer(BufferSize::Medium).unwrap();
     assert!(buffer.capacity() >= BufferSize::Medium as usize);
-    
+
     // Check pool statistics
     let stats = pool.stats().unwrap();
     assert!(stats.total_allocations > 0);
@@ -111,17 +108,17 @@ async fn test_memory_efficiency_comparison() {
         br#"{"key": "value"}"#,
         br#"[1, 2, 3, 4, 5]"#,
     ];
-    
+
     let mut total_zero_copy_efficiency = 0.0;
     let mut test_count = 0;
-    
+
     for test_input in test_cases {
         let mut parser = ZeroCopyParser::new();
         let result = parser.parse_lazy(test_input).unwrap();
-        
+
         let memory_usage = result.memory_usage();
         let efficiency = memory_usage.efficiency();
-        
+
         println!(
             "Input: {:?}, Efficiency: {:.2}, Allocated: {}, Referenced: {}",
             std::str::from_utf8(test_input).unwrap_or("<invalid utf8>"),
@@ -129,51 +126,54 @@ async fn test_memory_efficiency_comparison() {
             memory_usage.allocated_bytes,
             memory_usage.referenced_bytes
         );
-        
+
         total_zero_copy_efficiency += efficiency;
         test_count += 1;
-        
+
         // Basic sanity checks
         assert!(memory_usage.total() > 0);
         assert!((0.0..=1.0).contains(&efficiency));
     }
-    
+
     let average_efficiency = total_zero_copy_efficiency / test_count as f64;
     println!("Average zero-copy efficiency: {:.2}", average_efficiency);
-    
+
     // We expect high efficiency for simple cases
-    assert!(average_efficiency > 0.7, "Zero-copy efficiency should be > 70%");
+    assert!(
+        average_efficiency > 0.7,
+        "Zero-copy efficiency should be > 70%"
+    );
 }
 
 #[tokio::test]
 async fn test_parser_performance_comparison() {
     let large_json = generate_large_test_json(1000);
     let input_bytes = large_json.as_bytes();
-    
+
     // Test zero-copy parser
     let start = std::time::Instant::now();
     let mut zero_copy_parser = ZeroCopyParser::new();
     let zero_copy_result = zero_copy_parser.parse_lazy(input_bytes).unwrap();
     let zero_copy_time = start.elapsed();
-    
+
     // Test SIMD zero-copy parser
     let start = std::time::Instant::now();
     let mut simd_parser = SimdZeroCopyParser::new();
     let simd_result = simd_parser.parse_simd(input_bytes).unwrap();
     let simd_time = start.elapsed();
-    
+
     println!("Zero-copy parser: {:?}", zero_copy_time);
     println!("SIMD zero-copy parser: {:?}", simd_time);
     println!("SIMD processing time: {}ns", simd_result.processing_time_ns);
-    
+
     // Both should complete in reasonable time
     assert!(zero_copy_time.as_millis() < 100); // Less than 100ms
     assert!(simd_time.as_millis() < 100);
-    
+
     // Check memory efficiency
     let zero_copy_efficiency = zero_copy_result.memory_usage();
     let simd_efficiency = simd_result.memory_usage;
-    
+
     assert!(zero_copy_efficiency.efficiency() > 0.5);
     assert!(simd_efficiency.efficiency() > 0.5);
 }
@@ -181,29 +181,29 @@ async fn test_parser_performance_comparison() {
 #[tokio::test]
 async fn test_parser_reuse() {
     let mut parser = ZeroCopyParser::new();
-    
+
     let inputs = vec![
         br#""first string""# as &[u8],
         br#"42"#,
         br#"{"key": "value"}"#,
         br#"[1, 2, 3]"#,
     ];
-    
+
     for input in inputs {
         let result = parser.parse_lazy(input).unwrap();
-        
+
         // Verify we got a valid result
         match result {
-            LazyJsonValue::StringBorrowed(_) | 
-            LazyJsonValue::StringOwned(_) |
-            LazyJsonValue::NumberSlice(_) |
-            LazyJsonValue::ObjectSlice(_) |
-            LazyJsonValue::ArraySlice(_) => {
+            LazyJsonValue::StringBorrowed(_)
+            | LazyJsonValue::StringOwned(_)
+            | LazyJsonValue::NumberSlice(_)
+            | LazyJsonValue::ObjectSlice(_)
+            | LazyJsonValue::ArraySlice(_) => {
                 // All good
             }
             _ => panic!("Unexpected result type"),
         }
-        
+
         // Reset for next use
         parser.reset();
         assert!(parser.is_complete());
@@ -225,13 +225,13 @@ async fn test_config_variations() {
         SimdZeroCopyConfig::high_performance(),
         SimdZeroCopyConfig::low_memory(),
     ];
-    
+
     let input = br#"{"test": "configuration", "number": 123}"#;
-    
+
     for config in configs {
         let mut parser = SimdZeroCopyParser::with_config(config);
         let result = parser.parse_simd(input).unwrap();
-        
+
         // All configurations should produce valid results
         match result.value {
             LazyJsonValue::ObjectSlice(_) => {
@@ -239,7 +239,7 @@ async fn test_config_variations() {
             }
             _ => panic!("Expected object slice"),
         }
-        
+
         assert!(result.processing_time_ns > 0);
     }
 }
@@ -247,7 +247,7 @@ async fn test_config_variations() {
 // Helper function to generate test data
 fn generate_large_test_json(size: usize) -> String {
     let mut json = String::from("{\"items\": [");
-    
+
     for i in 0..size {
         if i > 0 {
             json.push(',');
@@ -260,10 +260,10 @@ fn generate_large_test_json(size: usize) -> String {
             i % 2 == 0
         ));
     }
-    
+
     json.push_str("], \"metadata\": {\"count\": ");
     json.push_str(&size.to_string());
     json.push_str(", \"generated\": true}}");
-    
+
     json
 }

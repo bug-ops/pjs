@@ -13,7 +13,7 @@ pub async fn simulate_network_latency(connection_type: NetworkType) {
         NetworkType::Mobile3G => Duration::from_millis(300),
         NetworkType::Satellite => Duration::from_millis(600),
     };
-    
+
     sleep(delay).await;
 }
 
@@ -21,7 +21,7 @@ pub async fn simulate_network_latency(connection_type: NetworkType) {
 #[derive(Debug, Clone, Copy)]
 pub enum NetworkType {
     Fiber,
-    Cable, 
+    Cable,
     Wifi,
     Mobile4G,
     Mobile3G,
@@ -30,7 +30,7 @@ pub enum NetworkType {
 
 impl std::str::FromStr for NetworkType {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "fiber" | "f" => Ok(NetworkType::Fiber),
@@ -57,11 +57,11 @@ impl PerfTimer {
             name: name.into(),
         }
     }
-    
+
     pub fn elapsed(&self) -> Duration {
         self.start.elapsed()
     }
-    
+
     pub fn lap(&self, label: &str) {
         println!("  ⏱️  {}: {} - {:?}", self.name, label, self.elapsed());
     }
@@ -78,12 +78,12 @@ pub fn format_bytes(bytes: usize) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
     let mut size = bytes as f64;
     let mut unit_index = 0;
-    
+
     while size >= 1024.0 && unit_index < UNITS.len() - 1 {
         size /= 1024.0;
         unit_index += 1;
     }
-    
+
     if unit_index == 0 {
         format!("{} {}", bytes, UNITS[unit_index])
     } else {

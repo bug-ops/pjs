@@ -3,11 +3,16 @@
 //! This module provides centralized configuration for all components,
 //! replacing hardcoded constants with configurable values.
 
+pub mod security;
+
 use crate::compression::CompressionConfig;
+pub use security::SecurityConfig;
 
 /// Global configuration for PJS library components
 #[derive(Debug, Clone, Default)]
 pub struct PjsConfig {
+    /// Security configuration and limits
+    pub security: SecurityConfig,
     /// Configuration for compression algorithms
     pub compression: CompressionConfig,
     /// Configuration for parsers
@@ -59,13 +64,12 @@ pub struct SimdConfig {
     pub enable_stats: bool,
 }
 
-
 impl Default for ParserConfig {
     fn default() -> Self {
         Self {
             max_input_size_mb: 100,
             buffer_initial_capacity: 8192, // 8KB
-            simd_min_size: 4096, // 4KB
+            simd_min_size: 4096,           // 4KB
             enable_semantics: true,
         }
     }
@@ -76,7 +80,7 @@ impl Default for StreamingConfig {
         Self {
             max_frame_size: 64 * 1024, // 64KB
             default_chunk_size: 1024,
-            operation_timeout_ms: 5000, // 5 seconds
+            operation_timeout_ms: 5000,   // 5 seconds
             max_bandwidth_bps: 1_000_000, // 1MB/s
         }
     }
@@ -99,17 +103,18 @@ impl PjsConfig {
     /// Configuration optimized for low latency
     pub fn low_latency() -> Self {
         Self {
+            security: SecurityConfig::development(),
             compression: CompressionConfig::default(),
             parser: ParserConfig {
                 max_input_size_mb: 10,
                 buffer_initial_capacity: 4096, // 4KB
-                simd_min_size: 2048, // 2KB
-                enable_semantics: false, // Disable for speed
+                simd_min_size: 2048,           // 2KB
+                enable_semantics: false,       // Disable for speed
             },
             streaming: StreamingConfig {
                 max_frame_size: 16 * 1024, // 16KB
                 default_chunk_size: 512,
-                operation_timeout_ms: 1000, // 1 second
+                operation_timeout_ms: 1000,    // 1 second
                 max_bandwidth_bps: 10_000_000, // 10MB/s
             },
             simd: SimdConfig {
@@ -125,17 +130,18 @@ impl PjsConfig {
     /// Configuration optimized for high throughput
     pub fn high_throughput() -> Self {
         Self {
+            security: SecurityConfig::high_throughput(),
             compression: CompressionConfig::default(),
             parser: ParserConfig {
-                max_input_size_mb: 1000, // 1GB
+                max_input_size_mb: 1000,        // 1GB
                 buffer_initial_capacity: 32768, // 32KB
-                simd_min_size: 8192, // 8KB
+                simd_min_size: 8192,            // 8KB
                 enable_semantics: true,
             },
             streaming: StreamingConfig {
                 max_frame_size: 256 * 1024, // 256KB
                 default_chunk_size: 4096,
-                operation_timeout_ms: 30000, // 30 seconds
+                operation_timeout_ms: 30000,    // 30 seconds
                 max_bandwidth_bps: 100_000_000, // 100MB/s
             },
             simd: SimdConfig {
@@ -151,13 +157,14 @@ impl PjsConfig {
     /// Configuration optimized for mobile/constrained devices
     pub fn mobile() -> Self {
         Self {
+            security: SecurityConfig::low_memory(),
             compression: CompressionConfig {
                 min_array_length: 1,
                 min_string_length: 2,
                 min_frequency_count: 1,
                 uuid_compression_potential: 0.5,
                 string_dict_threshold: 25.0, // Lower threshold
-                delta_threshold: 15.0, // Lower threshold
+                delta_threshold: 15.0,       // Lower threshold
                 min_delta_potential: 0.2,
                 run_length_threshold: 10.0, // Lower threshold
                 min_compression_potential: 0.3,
@@ -166,19 +173,19 @@ impl PjsConfig {
             parser: ParserConfig {
                 max_input_size_mb: 10,
                 buffer_initial_capacity: 2048, // 2KB
-                simd_min_size: 1024, // 1KB
+                simd_min_size: 1024,           // 1KB
                 enable_semantics: false,
             },
             streaming: StreamingConfig {
                 max_frame_size: 8 * 1024, // 8KB
                 default_chunk_size: 256,
                 operation_timeout_ms: 10000, // 10 seconds
-                max_bandwidth_bps: 100_000, // 100KB/s
+                max_bandwidth_bps: 100_000,  // 100KB/s
             },
             simd: SimdConfig {
                 batch_size: 25,
                 initial_capacity: 2048, // 2KB
-                avx512_alignment: 32, // Smaller alignment
+                avx512_alignment: 32,   // Smaller alignment
                 vectorized_chunk_size: 8,
                 enable_stats: false,
             },
@@ -224,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_compression_with_custom_config() {
-        use crate::compression::{SchemaAnalyzer, CompressionConfig};
+        use crate::compression::{CompressionConfig, SchemaAnalyzer};
         use serde_json::json;
 
         // Create custom compression config with lower thresholds
@@ -235,7 +242,7 @@ mod tests {
         };
 
         let mut analyzer = SchemaAnalyzer::with_config(compression_config);
-        
+
         // Test data that should trigger dictionary compression with low threshold
         let data = json!({
             "users": [
@@ -245,13 +252,13 @@ mod tests {
         });
 
         let strategy = analyzer.analyze(&data).unwrap();
-        
+
         // With lower threshold, should detect dictionary compression opportunity
         match strategy {
-            crate::compression::CompressionStrategy::Dictionary { .. } | 
-            crate::compression::CompressionStrategy::Hybrid { .. } => {
+            crate::compression::CompressionStrategy::Dictionary { .. }
+            | crate::compression::CompressionStrategy::Hybrid { .. } => {
                 // Expected with low threshold
-            },
+            }
             _ => {
                 // Also acceptable, depends on specific data characteristics
             }

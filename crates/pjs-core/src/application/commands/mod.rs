@@ -1,10 +1,7 @@
 //! Commands - Write operations that change system state
 
 use crate::application::dto::{PriorityDto, SessionIdDto, StreamIdDto};
-use crate::domain::{
-    aggregates::stream_session::SessionConfig,
-    entities::stream::StreamConfig,
-};
+use crate::domain::{aggregates::stream_session::SessionConfig, entities::stream::StreamConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 

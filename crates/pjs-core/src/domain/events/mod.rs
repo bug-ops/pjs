@@ -1,6 +1,9 @@
 //! Domain events for event sourcing and integration
 
-use crate::domain::value_objects::{SessionId, StreamId};
+use crate::domain::{
+    aggregates::stream_session::SessionState,
+    value_objects::{SessionId, StreamId},
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +26,22 @@ pub enum DomainEvent {
     /// Session expired due to timeout
     SessionExpired {
         session_id: SessionId,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Session was forcefully closed due to timeout
+    SessionTimedOut {
+        session_id: SessionId,
+        original_state: SessionState,
+        timeout_duration: u64,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Session timeout was extended
+    SessionTimeoutExtended {
+        session_id: SessionId,
+        additional_seconds: u64,
+        new_expires_at: DateTime<Utc>,
         timestamp: DateTime<Utc>,
     },
 
@@ -131,7 +150,6 @@ pub struct PriorityDistribution {
     pub background_frames: u64,
 }
 
-
 impl PriorityDistribution {
     /// Create new empty distribution
     pub fn new() -> Self {
@@ -140,7 +158,11 @@ impl PriorityDistribution {
 
     /// Get total frames count
     pub fn total_frames(&self) -> u64 {
-        self.critical_frames + self.high_frames + self.medium_frames + self.low_frames + self.background_frames
+        self.critical_frames
+            + self.high_frames
+            + self.medium_frames
+            + self.low_frames
+            + self.background_frames
     }
 
     /// Convert to percentages (0.0-1.0)
@@ -159,7 +181,7 @@ impl PriorityDistribution {
         }
     }
 
-    /// Convert from count-based version 
+    /// Convert from count-based version
     pub fn from_counts(
         critical_count: u64,
         high_count: u64,
@@ -180,7 +202,7 @@ impl PriorityDistribution {
 /// Priority distribution as percentages (for demos and visualization)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PriorityPercentages {
-    pub critical: f64,    // 0-1 percentage
+    pub critical: f64, // 0-1 percentage
     pub high: f64,
     pub medium: f64,
     pub low: f64,
@@ -217,6 +239,8 @@ impl DomainEvent {
             Self::PriorityThresholdAdjusted { session_id, .. } => *session_id,
             Self::StreamConfigUpdated { session_id, .. } => *session_id,
             Self::PerformanceMetricsRecorded { session_id, .. } => *session_id,
+            Self::SessionTimedOut { session_id, .. } => *session_id,
+            Self::SessionTimeoutExtended { session_id, .. } => *session_id,
         }
     }
 
@@ -252,6 +276,8 @@ impl DomainEvent {
             Self::PriorityThresholdAdjusted { timestamp, .. } => *timestamp,
             Self::StreamConfigUpdated { timestamp, .. } => *timestamp,
             Self::PerformanceMetricsRecorded { timestamp, .. } => *timestamp,
+            Self::SessionTimedOut { timestamp, .. } => *timestamp,
+            Self::SessionTimeoutExtended { timestamp, .. } => *timestamp,
         }
     }
 
@@ -272,6 +298,8 @@ impl DomainEvent {
             Self::PriorityThresholdAdjusted { .. } => "priority_threshold_adjusted",
             Self::StreamConfigUpdated { .. } => "stream_config_updated",
             Self::PerformanceMetricsRecorded { .. } => "performance_metrics_recorded",
+            Self::SessionTimedOut { .. } => "session_timed_out",
+            Self::SessionTimeoutExtended { .. } => "session_timeout_extended",
         }
     }
 
@@ -426,16 +454,19 @@ mod tests {
             },
         ];
 
-        // TODO: Handle unwrap() - add proper error handling for event store operations in tests
-        store.append_events(events.clone()).unwrap();
+        store
+            .append_events(events.clone())
+            .expect("Failed to append events to store in test");
         assert_eq!(store.event_count(), 2);
 
-        // TODO: Handle unwrap() - add proper error handling for session events retrieval in tests
-        let session_events = store.get_events_for_session(session_id).unwrap();
+        let session_events = store
+            .get_events_for_session(session_id)
+            .expect("Failed to retrieve session events in test");
         assert_eq!(session_events.len(), 2);
 
-        // TODO: Handle unwrap() - add proper error handling for stream events retrieval in tests
-        let stream_events = store.get_events_for_stream(stream_id).unwrap();
+        let stream_events = store
+            .get_events_for_stream(stream_id)
+            .expect("Failed to retrieve stream events in test");
         assert_eq!(stream_events.len(), 1);
     }
 
@@ -447,17 +478,16 @@ mod tests {
             timestamp: Utc::now(),
         };
 
-        // TODO: Handle unwrap() - add proper error handling for event serialization in tests
-        let serialized = serde_json::to_string(&event).unwrap();
-        // TODO: Handle unwrap() - add proper error handling for event deserialization in tests
-        let deserialized: DomainEvent = serde_json::from_str(&serialized).unwrap();
+        let serialized = serde_json::to_string(&event).expect("Failed to serialize event in test");
+        let deserialized: DomainEvent =
+            serde_json::from_str(&serialized).expect("Failed to deserialize event in test");
 
         assert_eq!(event, deserialized);
     }
 }
 
 /// Event identifier for tracking and correlation
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EventId(uuid::Uuid);
 
 impl EventId {
@@ -465,12 +495,12 @@ impl EventId {
     pub fn new() -> Self {
         Self(uuid::Uuid::new_v4())
     }
-    
+
     /// Create from existing UUID
     pub fn from_uuid(uuid: uuid::Uuid) -> Self {
         Self(uuid)
     }
-    
+
     /// Get inner UUID
     pub fn inner(&self) -> uuid::Uuid {
         self.0
@@ -489,11 +519,15 @@ impl Default for EventId {
     }
 }
 
-/// Trait for event subscribers that handle domain events
-#[async_trait::async_trait]
+/// GAT-based trait for event subscribers that handle domain events
 pub trait EventSubscriber {
+    /// Future type for handling events
+    type HandleFuture<'a>: std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
     /// Handle a domain event
-    async fn handle(&self, event: &DomainEvent) -> crate::domain::DomainResult<()>;
+    fn handle(&self, event: &DomainEvent) -> Self::HandleFuture<'_>;
 }
 
 /// Extension methods for DomainEvent
@@ -509,15 +543,26 @@ impl DomainEvent {
         content.hash(&mut hash);
         let hash_val = hash.finish();
         let uuid = uuid::Uuid::from_bytes([
-            (hash_val >> 56) as u8, (hash_val >> 48) as u8,
-            (hash_val >> 40) as u8, (hash_val >> 32) as u8,
-            (hash_val >> 24) as u8, (hash_val >> 16) as u8,
-            (hash_val >> 8) as u8, hash_val as u8,
-            0, 0, 0, 0, 0, 0, 0, 0
+            (hash_val >> 56) as u8,
+            (hash_val >> 48) as u8,
+            (hash_val >> 40) as u8,
+            (hash_val >> 32) as u8,
+            (hash_val >> 24) as u8,
+            (hash_val >> 16) as u8,
+            (hash_val >> 8) as u8,
+            hash_val as u8,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
         ]);
         EventId::from_uuid(uuid)
     }
-    
+
     /// Get event timestamp
     pub fn occurred_at(&self) -> DateTime<Utc> {
         match self {
@@ -534,19 +579,23 @@ impl DomainEvent {
             | DomainEvent::FramesBatched { timestamp, .. }
             | DomainEvent::PriorityThresholdAdjusted { timestamp, .. }
             | DomainEvent::StreamConfigUpdated { timestamp, .. }
-            | DomainEvent::PerformanceMetricsRecorded { timestamp, .. } => *timestamp,
+            | DomainEvent::PerformanceMetricsRecorded { timestamp, .. }
+            | DomainEvent::SessionTimedOut { timestamp, .. }
+            | DomainEvent::SessionTimeoutExtended { timestamp, .. } => *timestamp,
         }
     }
-    
-    
-    /// Get event payload as JSON
-    pub fn payload(&self) -> &serde_json::Value {
-        // TODO: Fix architecture violation - domain events should not depend on serde_json::Value
-        // For now, return empty object - this should be implemented with domain value objects
-        use std::sync::LazyLock;
-        static EMPTY: LazyLock<serde_json::Value> = LazyLock::new(|| {
-            serde_json::Value::Object(serde_json::Map::new())
-        });
-        &EMPTY
+
+    /// Get event metadata as key-value pairs
+    pub fn metadata(&self) -> std::collections::HashMap<String, String> {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("event_type".to_string(), self.event_type().to_string());
+        metadata.insert("session_id".to_string(), self.session_id().to_string());
+        metadata.insert("timestamp".to_string(), self.occurred_at().to_rfc3339());
+
+        if let Some(stream_id) = self.stream_id() {
+            metadata.insert("stream_id".to_string(), stream_id.to_string());
+        }
+
+        metadata
     }
 }

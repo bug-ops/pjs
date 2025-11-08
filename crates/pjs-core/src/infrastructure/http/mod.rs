@@ -1,10 +1,16 @@
 //! HTTP transport implementations
 
-pub mod axum_adapter;
+// TODO: Fix axum_adapter compilation errors before enabling
+// pub mod axum_adapter;
 pub mod axum_extension;
-pub mod streaming;
 pub mod middleware;
+pub mod streaming;
 
-pub use axum_adapter::{PjsAppState, CreateSessionRequest, CreateSessionResponse, StartStreamRequest, StreamParams};
+// TODO: Re-enable when axum_adapter is fixed
+// pub use axum_adapter::{
+//     CreateSessionRequest, CreateSessionResponse, PjsAppState, StartStreamRequest, StreamParams,
+// };
 pub use axum_extension::{PjsConfig, PjsExtension};
-pub use streaming::{StreamFormat, AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamError};
+pub use streaming::{
+    AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamError, StreamFormat,
+};

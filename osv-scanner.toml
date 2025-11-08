@@ -1,0 +1,14 @@
+# OSV Scanner configuration
+# https://google.github.io/osv-scanner/configuration/
+
+# Ignore specific vulnerabilities
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+reason = "paste is unmaintained but not a security vulnerability. Used only as transitive dev/build dependency in tikv-jemalloc-ctl v0.6.1, not in production code. Waiting for upstream to remove dependency."
+
+# Alternative: ignore by package name
+# [[PackageOverrides]]
+# name = "paste"
+# ecosystem = "crates.io"
+# ignore = true
+# reason = "Unmaintained but safe transitive dependency"

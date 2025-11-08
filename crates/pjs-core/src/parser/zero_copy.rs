@@ -4,16 +4,15 @@
 //! providing lazy evaluation and zero-copy string extraction where possible.
 
 use crate::{
-    domain::{DomainResult, DomainError},
+    config::SecurityConfig,
+    domain::{DomainError, DomainResult},
     parser::ValueType,
+    security::SecurityValidator,
 };
-use std::{
-    marker::PhantomData,
-    str::from_utf8,
-};
+use std::{marker::PhantomData, str::from_utf8};
 
 /// Zero-copy lazy parser trait with lifetime management
-/// 
+///
 /// This trait enables parsers that work directly on input buffers without
 /// copying data, using Rust's lifetime system to ensure memory safety.
 pub trait LazyParser<'a> {
@@ -38,7 +37,7 @@ pub struct ZeroCopyParser<'a> {
     input: &'a [u8],
     position: usize,
     depth: usize,
-    max_depth: usize,
+    validator: SecurityValidator,
     _phantom: PhantomData<&'a ()>,
 }
 
@@ -49,18 +48,18 @@ impl<'a> ZeroCopyParser<'a> {
             input: &[],
             position: 0,
             depth: 0,
-            max_depth: 64, // Prevent stack overflow
+            validator: SecurityValidator::default(),
             _phantom: PhantomData,
         }
     }
 
-    /// Create parser with custom max depth
-    pub fn with_max_depth(max_depth: usize) -> Self {
+    /// Create parser with custom security configuration
+    pub fn with_security_config(security_config: SecurityConfig) -> Self {
         Self {
             input: &[],
             position: 0,
             depth: 0,
-            max_depth,
+            validator: SecurityValidator::new(security_config),
             _phantom: PhantomData,
         }
     }
@@ -68,9 +67,11 @@ impl<'a> ZeroCopyParser<'a> {
     /// Parse JSON value starting at current position
     pub fn parse_value(&mut self) -> DomainResult<LazyJsonValue<'a>> {
         self.skip_whitespace();
-        
+
         if self.position >= self.input.len() {
-            return Err(DomainError::InvalidInput("Unexpected end of input".to_string()));
+            return Err(DomainError::InvalidInput(
+                "Unexpected end of input".to_string(),
+            ));
         }
 
         let ch = self.input[self.position];
@@ -83,8 +84,10 @@ impl<'a> ZeroCopyParser<'a> {
             b'-' | b'0'..=b'9' => self.parse_number(),
             _ => {
                 let ch_char = ch as char;
-                Err(DomainError::InvalidInput(format!("Unexpected character: {ch_char}")))
-            },
+                Err(DomainError::InvalidInput(format!(
+                    "Unexpected character: {ch_char}"
+                )))
+            }
         }
     }
 
@@ -103,7 +106,7 @@ impl<'a> ZeroCopyParser<'a> {
                 b'"' => {
                     let string_slice = &self.input[start..self.position];
                     self.position += 1; // Skip closing quote
-                    
+
                     // Check if string contains escape sequences
                     if string_slice.contains(&b'\\') {
                         // String needs unescaping - we'll need to allocate
@@ -129,9 +132,9 @@ impl<'a> ZeroCopyParser<'a> {
 
     /// Parse object value lazily
     fn parse_object(&mut self) -> DomainResult<LazyJsonValue<'a>> {
-        if self.depth >= self.max_depth {
-            return Err(DomainError::InvalidInput("Maximum nesting depth exceeded".to_string()));
-        }
+        self.validator
+            .validate_json_depth(self.depth + 1)
+            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
 
         if self.position >= self.input.len() || self.input[self.position] != b'{' {
             return Err(DomainError::InvalidInput("Expected '{'".to_string()));
@@ -147,7 +150,9 @@ impl<'a> ZeroCopyParser<'a> {
         if self.position < self.input.len() && self.input[self.position] == b'}' {
             self.position += 1;
             self.depth -= 1;
-            return Ok(LazyJsonValue::ObjectSlice(&self.input[start..self.position]));
+            return Ok(LazyJsonValue::ObjectSlice(
+                &self.input[start..self.position],
+            ));
         }
 
         let mut first = true;
@@ -163,7 +168,7 @@ impl<'a> ZeroCopyParser<'a> {
             self.skip_whitespace();
             self.expect_char(b':')?;
             self.skip_whitespace();
-            
+
             // Parse value
             let _value = self.parse_value()?;
             self.skip_whitespace();
@@ -172,14 +177,16 @@ impl<'a> ZeroCopyParser<'a> {
         self.expect_char(b'}')?;
         self.depth -= 1;
 
-        Ok(LazyJsonValue::ObjectSlice(&self.input[start..self.position]))
+        Ok(LazyJsonValue::ObjectSlice(
+            &self.input[start..self.position],
+        ))
     }
 
     /// Parse array value lazily
     fn parse_array(&mut self) -> DomainResult<LazyJsonValue<'a>> {
-        if self.depth >= self.max_depth {
-            return Err(DomainError::InvalidInput("Maximum nesting depth exceeded".to_string()));
-        }
+        self.validator
+            .validate_json_depth(self.depth + 1)
+            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
 
         if self.position >= self.input.len() || self.input[self.position] != b'[' {
             return Err(DomainError::InvalidInput("Expected '['".to_string()));
@@ -219,20 +226,28 @@ impl<'a> ZeroCopyParser<'a> {
 
     /// Parse boolean value
     fn parse_boolean(&mut self) -> DomainResult<LazyJsonValue<'a>> {
-        if self.position + 4 <= self.input.len() && &self.input[self.position..self.position + 4] == b"true" {
+        if self.position + 4 <= self.input.len()
+            && &self.input[self.position..self.position + 4] == b"true"
+        {
             self.position += 4;
             Ok(LazyJsonValue::Boolean(true))
-        } else if self.position + 5 <= self.input.len() && &self.input[self.position..self.position + 5] == b"false" {
+        } else if self.position + 5 <= self.input.len()
+            && &self.input[self.position..self.position + 5] == b"false"
+        {
             self.position += 5;
             Ok(LazyJsonValue::Boolean(false))
         } else {
-            Err(DomainError::InvalidInput("Invalid boolean value".to_string()))
+            Err(DomainError::InvalidInput(
+                "Invalid boolean value".to_string(),
+            ))
         }
     }
 
     /// Parse null value
     fn parse_null(&mut self) -> DomainResult<LazyJsonValue<'a>> {
-        if self.position + 4 <= self.input.len() && &self.input[self.position..self.position + 4] == b"null" {
+        if self.position + 4 <= self.input.len()
+            && &self.input[self.position..self.position + 4] == b"null"
+        {
             self.position += 4;
             Ok(LazyJsonValue::Null)
         } else {
@@ -268,7 +283,9 @@ impl<'a> ZeroCopyParser<'a> {
         if self.position < self.input.len() && self.input[self.position] == b'.' {
             self.position += 1;
             if self.position >= self.input.len() || !self.input[self.position].is_ascii_digit() {
-                return Err(DomainError::InvalidInput("Invalid number: missing digits after decimal".to_string()));
+                return Err(DomainError::InvalidInput(
+                    "Invalid number: missing digits after decimal".to_string(),
+                ));
             }
             while self.position < self.input.len() && self.input[self.position].is_ascii_digit() {
                 self.position += 1;
@@ -276,13 +293,19 @@ impl<'a> ZeroCopyParser<'a> {
         }
 
         // Handle exponent
-        if self.position < self.input.len() && (self.input[self.position] == b'e' || self.input[self.position] == b'E') {
+        if self.position < self.input.len()
+            && (self.input[self.position] == b'e' || self.input[self.position] == b'E')
+        {
             self.position += 1;
-            if self.position < self.input.len() && (self.input[self.position] == b'+' || self.input[self.position] == b'-') {
+            if self.position < self.input.len()
+                && (self.input[self.position] == b'+' || self.input[self.position] == b'-')
+            {
                 self.position += 1;
             }
             if self.position >= self.input.len() || !self.input[self.position].is_ascii_digit() {
-                return Err(DomainError::InvalidInput("Invalid number: missing digits in exponent".to_string()));
+                return Err(DomainError::InvalidInput(
+                    "Invalid number: missing digits in exponent".to_string(),
+                ));
             }
             while self.position < self.input.len() && self.input[self.position].is_ascii_digit() {
                 self.position += 1;
@@ -338,10 +361,16 @@ impl<'a> ZeroCopyParser<'a> {
                             i += 6;
                             continue;
                         } else {
-                            return Err(DomainError::InvalidInput("Invalid unicode escape".to_string()));
+                            return Err(DomainError::InvalidInput(
+                                "Invalid unicode escape".to_string(),
+                            ));
                         }
                     }
-                    _ => return Err(DomainError::InvalidInput("Invalid escape sequence".to_string())),
+                    _ => {
+                        return Err(DomainError::InvalidInput(
+                            "Invalid escape sequence".to_string(),
+                        ));
+                    }
                 }
                 i += 2;
             } else {
@@ -360,10 +389,15 @@ impl<'a> LazyParser<'a> for ZeroCopyParser<'a> {
     type Error = DomainError;
 
     fn parse_lazy(&mut self, input: &'a [u8]) -> Result<Self::Output, Self::Error> {
+        // Validate input size first
+        self.validator
+            .validate_input_size(input.len())
+            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
+
         self.input = input;
         self.position = 0;
         self.depth = 0;
-        
+
         self.parse_value()
     }
 
@@ -421,32 +455,25 @@ impl<'a> LazyJsonValue<'a> {
     /// Convert to string (allocating if needed)
     pub fn to_string_lossy(&self) -> String {
         match self {
-            LazyJsonValue::StringBorrowed(bytes) => {
-                String::from_utf8_lossy(bytes).to_string()
-            }
+            LazyJsonValue::StringBorrowed(bytes) => String::from_utf8_lossy(bytes).to_string(),
             LazyJsonValue::StringOwned(s) => s.clone(),
-            LazyJsonValue::NumberSlice(bytes) => {
-                String::from_utf8_lossy(bytes).to_string()
-            }
+            LazyJsonValue::NumberSlice(bytes) => String::from_utf8_lossy(bytes).to_string(),
             LazyJsonValue::Boolean(b) => b.to_string(),
             LazyJsonValue::Null => "null".to_string(),
-            LazyJsonValue::ObjectSlice(bytes) => {
-                String::from_utf8_lossy(bytes).to_string()
-            }
-            LazyJsonValue::ArraySlice(bytes) => {
-                String::from_utf8_lossy(bytes).to_string()
-            }
+            LazyJsonValue::ObjectSlice(bytes) => String::from_utf8_lossy(bytes).to_string(),
+            LazyJsonValue::ArraySlice(bytes) => String::from_utf8_lossy(bytes).to_string(),
         }
     }
 
     /// Try to parse as string without allocation
     pub fn as_str(&self) -> DomainResult<&str> {
         match self {
-            LazyJsonValue::StringBorrowed(bytes) => {
-                from_utf8(bytes).map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {e}")))
-            }
+            LazyJsonValue::StringBorrowed(bytes) => from_utf8(bytes)
+                .map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {e}"))),
             LazyJsonValue::StringOwned(s) => Ok(s.as_str()),
-            _ => Err(DomainError::InvalidInput("Value is not a string".to_string())),
+            _ => Err(DomainError::InvalidInput(
+                "Value is not a string".to_string(),
+            )),
         }
     }
 
@@ -459,7 +486,9 @@ impl<'a> LazyJsonValue<'a> {
                 s.parse::<f64>()
                     .map_err(|e| DomainError::InvalidInput(format!("Invalid number: {e}")))
             }
-            _ => Err(DomainError::InvalidInput("Value is not a number".to_string())),
+            _ => Err(DomainError::InvalidInput(
+                "Value is not a number".to_string(),
+            )),
         }
     }
 
@@ -467,7 +496,9 @@ impl<'a> LazyJsonValue<'a> {
     pub fn as_boolean(&self) -> DomainResult<bool> {
         match self {
             LazyJsonValue::Boolean(b) => Ok(*b),
-            _ => Err(DomainError::InvalidInput("Value is not a boolean".to_string())),
+            _ => Err(DomainError::InvalidInput(
+                "Value is not a boolean".to_string(),
+            )),
         }
     }
 
@@ -616,7 +647,7 @@ mod tests {
     fn test_parse_string() {
         let mut parser = ZeroCopyParser::new();
         let input = br#""hello world""#;
-        
+
         let result = parser.parse_lazy(input).unwrap();
         match result {
             LazyJsonValue::StringBorrowed(bytes) => {
@@ -630,7 +661,7 @@ mod tests {
     fn test_parse_escaped_string() {
         let mut parser = ZeroCopyParser::new();
         let input = br#""hello \"world\"""#;
-        
+
         let result = parser.parse_lazy(input).unwrap();
         match result {
             LazyJsonValue::StringOwned(s) => {
@@ -644,7 +675,7 @@ mod tests {
     fn test_parse_number() {
         let mut parser = ZeroCopyParser::new();
         let input = b"123.45";
-        
+
         let result = parser.parse_lazy(input).unwrap();
         match result {
             LazyJsonValue::NumberSlice(bytes) => {
@@ -658,10 +689,10 @@ mod tests {
     #[test]
     fn test_parse_boolean() {
         let mut parser = ZeroCopyParser::new();
-        
+
         let result = parser.parse_lazy(b"true").unwrap();
         assert_eq!(result, LazyJsonValue::Boolean(true));
-        
+
         parser.reset();
         let result = parser.parse_lazy(b"false").unwrap();
         assert_eq!(result, LazyJsonValue::Boolean(false));
@@ -679,7 +710,7 @@ mod tests {
     fn test_parse_empty_object() {
         let mut parser = ZeroCopyParser::new();
         let result = parser.parse_lazy(b"{}").unwrap();
-        
+
         match result {
             LazyJsonValue::ObjectSlice(bytes) => {
                 assert_eq!(bytes, b"{}");
@@ -692,7 +723,7 @@ mod tests {
     fn test_parse_empty_array() {
         let mut parser = ZeroCopyParser::new();
         let result = parser.parse_lazy(b"[]").unwrap();
-        
+
         match result {
             LazyJsonValue::ArraySlice(bytes) => {
                 assert_eq!(bytes, b"[]");
@@ -704,14 +735,14 @@ mod tests {
     #[test]
     fn test_memory_usage() {
         let mut parser = ZeroCopyParser::new();
-        
+
         // Zero-copy string
         let result1 = parser.parse_lazy(br#""hello""#).unwrap();
         let usage1 = result1.memory_usage();
         assert_eq!(usage1.allocated_bytes, 0);
         assert_eq!(usage1.referenced_bytes, 5);
         assert_eq!(usage1.efficiency(), 1.0);
-        
+
         // Escaped string (requires allocation)
         parser.reset();
         let result2 = parser.parse_lazy(br#""he\"llo""#).unwrap();
@@ -725,7 +756,7 @@ mod tests {
     fn test_complex_object() {
         let mut parser = ZeroCopyParser::new();
         let input = br#"{"name": "test", "value": 42, "active": true}"#;
-        
+
         let result = parser.parse_lazy(input).unwrap();
         match result {
             LazyJsonValue::ObjectSlice(bytes) => {
@@ -738,11 +769,11 @@ mod tests {
     #[test]
     fn test_parser_reuse() {
         let mut parser = ZeroCopyParser::new();
-        
+
         // First parse
         let result1 = parser.parse_lazy(b"123").unwrap();
         assert!(matches!(result1, LazyJsonValue::NumberSlice(_)));
-        
+
         // Reset and reuse
         parser.reset();
         let result2 = parser.parse_lazy(br#""hello""#).unwrap();

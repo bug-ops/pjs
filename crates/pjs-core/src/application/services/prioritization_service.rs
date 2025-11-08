@@ -3,10 +3,7 @@
 //! This service focuses solely on determining the optimal priority thresholds
 //! for streaming operations based on performance context and business rules.
 
-use crate::{
-    application::ApplicationResult,
-    domain::value_objects::Priority,
-};
+use crate::{application::ApplicationResult, domain::value_objects::Priority};
 
 /// Context information for priority calculations
 #[derive(Debug, Clone)]
@@ -33,7 +30,7 @@ impl Default for PerformanceContext {
 }
 
 /// Strategies for priority calculation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PrioritizationStrategy {
     /// Conservative - prioritize stability over performance
     Conservative,
@@ -46,7 +43,7 @@ pub enum PrioritizationStrategy {
 }
 
 /// Custom priority calculation rules
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CustomPriorityRules {
     pub latency_threshold_ms: f64,
     pub bandwidth_threshold_mbps: f64,
@@ -93,7 +90,7 @@ impl PrioritizationService {
         context: &PerformanceContext,
     ) -> ApplicationResult<PriorityCalculationResult> {
         let mut reasoning = Vec::new();
-        
+
         let priority = match &self.strategy {
             PrioritizationStrategy::Conservative => {
                 self.calculate_conservative_priority(context, &mut reasoning)?
@@ -127,7 +124,7 @@ impl PrioritizationService {
         stream_count: usize,
     ) -> ApplicationResult<PriorityCalculationResult> {
         let mut base_result = self.calculate_adaptive_priority(context)?;
-        
+
         // Adjust for multi-stream scenarios
         let stream_factor = match stream_count {
             1..=3 => 0,
@@ -136,7 +133,8 @@ impl PrioritizationService {
             _ => 30,
         };
 
-        base_result.calculated_priority = base_result.calculated_priority.increase_by(stream_factor);
+        base_result.calculated_priority =
+            base_result.calculated_priority.increase_by(stream_factor);
         base_result.reasoning.push(format!(
             "Increased priority by {stream_factor} for {stream_count} concurrent streams"
         ));
@@ -299,9 +297,10 @@ impl PrioritizationService {
         }
 
         // Apply reduction for good performance
-        if context.average_latency_ms < rules.latency_threshold_ms / 2.0 &&
-           context.available_bandwidth_mbps > rules.bandwidth_threshold_mbps * 2.0 &&
-           context.error_rate < rules.error_rate_threshold / 2.0 {
+        if context.average_latency_ms < rules.latency_threshold_ms / 2.0
+            && context.available_bandwidth_mbps > rules.bandwidth_threshold_mbps * 2.0
+            && context.error_rate < rules.error_rate_threshold / 2.0
+        {
             priority = priority.decrease_by(rules.priority_reduction_on_good_performance);
             reasoning.push("Custom: Excellent performance - reducing priority".to_string());
         }
@@ -328,7 +327,10 @@ impl PrioritizationService {
         confidence.max(0.1) // Minimum confidence of 10%
     }
 
-    fn analyze_latency_adjustment(&self, metrics: &StreamingMetrics) -> ApplicationResult<Option<PriorityAdjustment>> {
+    fn analyze_latency_adjustment(
+        &self,
+        metrics: &StreamingMetrics,
+    ) -> ApplicationResult<Option<PriorityAdjustment>> {
         if metrics.average_latency_ms > 1500.0 && metrics.p99_latency_ms > 3000.0 {
             Ok(Some(PriorityAdjustment {
                 new_threshold: Priority::CRITICAL,
@@ -354,12 +356,18 @@ impl PrioritizationService {
         }
     }
 
-    fn analyze_throughput_adjustment(&self, metrics: &StreamingMetrics) -> ApplicationResult<Option<PriorityAdjustment>> {
+    fn analyze_throughput_adjustment(
+        &self,
+        metrics: &StreamingMetrics,
+    ) -> ApplicationResult<Option<PriorityAdjustment>> {
         if metrics.throughput_mbps < 1.0 && metrics.error_rate < 0.02 {
             // Low throughput but no errors suggests we can be more aggressive
             Ok(Some(PriorityAdjustment {
                 new_threshold: Priority::LOW,
-                reason: format!("Low throughput {:.1}Mbps with good stability", metrics.throughput_mbps),
+                reason: format!(
+                    "Low throughput {:.1}Mbps with good stability",
+                    metrics.throughput_mbps
+                ),
                 confidence: 0.7,
                 urgency: AdjustmentUrgency::Medium,
             }))
@@ -367,7 +375,10 @@ impl PrioritizationService {
             // Very high throughput suggests we can be more selective
             Ok(Some(PriorityAdjustment {
                 new_threshold: Priority::MEDIUM,
-                reason: format!("High throughput {:.1}Mbps allows selectivity", metrics.throughput_mbps),
+                reason: format!(
+                    "High throughput {:.1}Mbps allows selectivity",
+                    metrics.throughput_mbps
+                ),
                 confidence: 0.8,
                 urgency: AdjustmentUrgency::Low,
             }))
@@ -376,7 +387,10 @@ impl PrioritizationService {
         }
     }
 
-    fn analyze_error_rate_adjustment(&self, metrics: &StreamingMetrics) -> ApplicationResult<Option<PriorityAdjustment>> {
+    fn analyze_error_rate_adjustment(
+        &self,
+        metrics: &StreamingMetrics,
+    ) -> ApplicationResult<Option<PriorityAdjustment>> {
         if metrics.error_rate > 0.1 {
             Ok(Some(PriorityAdjustment {
                 new_threshold: Priority::CRITICAL,
@@ -387,7 +401,10 @@ impl PrioritizationService {
         } else if metrics.error_rate < 0.001 {
             Ok(Some(PriorityAdjustment {
                 new_threshold: Priority::LOW,
-                reason: format!("Excellent stability {:.3}% errors", metrics.error_rate * 100.0),
+                reason: format!(
+                    "Excellent stability {:.3}% errors",
+                    metrics.error_rate * 100.0
+                ),
                 confidence: 0.8,
                 urgency: AdjustmentUrgency::Low,
             }))
@@ -471,9 +488,9 @@ mod tests {
 
         let service = PrioritizationService::new(PrioritizationStrategy::Custom(custom_rules));
         let context = PerformanceContext {
-            average_latency_ms: 50.0,  // Good
-            available_bandwidth_mbps: 15.0,  // Good
-            error_rate: 0.005,  // Good
+            average_latency_ms: 50.0,       // Good
+            available_bandwidth_mbps: 15.0, // Good
+            error_rate: 0.005,              // Good
             ..Default::default()
         };
 

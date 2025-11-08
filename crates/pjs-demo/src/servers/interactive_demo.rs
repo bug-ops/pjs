@@ -4,16 +4,16 @@
 //! across different data types and network conditions.
 
 use axum::{
+    Router,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, Json, Response},
     routing::get,
-    Router,
 };
 use clap::Parser;
 use pjs_demo::{
-    data::{generate_dataset, generate_metadata, DatasetSize, DatasetType},
-    utils::{simulate_network_latency, NetworkType, PerfTimer},
+    data::{DatasetSize, DatasetType, generate_dataset, generate_metadata},
+    utils::{NetworkType, PerfTimer, simulate_network_latency},
 };
 // TODO: Re-enable streaming imports when infrastructure is stable
 // use pjson_rs::{
@@ -21,7 +21,7 @@ use pjs_demo::{
 //     StreamingCompressor, SchemaCompressor, CompressionStrategy,
 // };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use tokio::time::sleep;
 use tracing::info;
@@ -74,21 +74,24 @@ async fn traditional_endpoint(
     State(_state): State<AppState>,
 ) -> Result<Json<Value>, StatusCode> {
     let _timer = PerfTimer::new("Traditional JSON");
-    
+
     // Parse parameters
-    let dataset_type = params.dataset_type
+    let dataset_type = params
+        .dataset_type
         .as_deref()
         .unwrap_or("ecommerce")
         .parse::<DatasetType>()
         .unwrap_or(DatasetType::ECommerce);
-        
-    let dataset_size = params.dataset_size
+
+    let dataset_size = params
+        .dataset_size
         .as_deref()
         .unwrap_or("medium")
         .parse::<DatasetSize>()
         .unwrap_or(DatasetSize::Medium);
-        
-    let network_type = params.network_type
+
+    let network_type = params
+        .network_type
         .as_deref()
         .unwrap_or("wifi")
         .parse::<NetworkType>()
@@ -96,21 +99,21 @@ async fn traditional_endpoint(
 
     // Simulate network latency
     simulate_network_latency(network_type).await;
-    
+
     // Generate full dataset
     let data = generate_dataset(dataset_type, dataset_size);
     let metadata = generate_metadata(dataset_type, dataset_size, &data);
-    
+
     // Simulate processing time
     sleep(Duration::from_millis(50)).await;
-    
+
     let response = json!({
         "data": data,
         "metadata": metadata,
         "approach": "traditional",
         "generated_at": chrono::Utc::now().to_rfc3339()
     });
-    
+
     Ok(Json(response))
 }
 
@@ -121,38 +124,44 @@ async fn pjs_streaming_endpoint(
     State(_state): State<AppState>,
 ) -> Result<Response, StatusCode> {
     let _timer = PerfTimer::new("PJS Streaming");
-    
+
     // Parse parameters
-    let dataset_type = params.dataset_type
+    let dataset_type = params
+        .dataset_type
         .as_deref()
         .unwrap_or("ecommerce")
         .parse::<DatasetType>()
         .unwrap_or(DatasetType::ECommerce);
-        
-    let dataset_size = params.dataset_size
+
+    let dataset_size = params
+        .dataset_size
         .as_deref()
         .unwrap_or("medium")
         .parse::<DatasetSize>()
         .unwrap_or(DatasetSize::Medium);
-        
-    let network_type = params.network_type
+
+    let network_type = params
+        .network_type
         .as_deref()
         .unwrap_or("wifi")
         .parse::<NetworkType>()
         .unwrap_or(NetworkType::Wifi);
 
     // Check if client wants streaming
-    let wants_streaming = headers.get("Accept")
+    let wants_streaming = headers
+        .get("Accept")
         .and_then(|h| h.to_str().ok())
-        .is_some_and(|accept| accept.contains("text/event-stream") || accept.contains("application/x-pjs-stream"));
+        .is_some_and(|accept| {
+            accept.contains("text/event-stream") || accept.contains("application/x-pjs-stream")
+        });
 
     if wants_streaming {
         // Minimal network latency for skeleton
         simulate_network_latency(NetworkType::Fiber).await;
-        
+
         // Generate skeleton immediately
         let skeleton = generate_skeleton(dataset_type);
-        
+
         let response = axum::response::Response::builder()
             .status(200)
             .header("Content-Type", "application/json")
@@ -160,30 +169,30 @@ async fn pjs_streaming_endpoint(
             .header("X-PJS-Priority", "100")
             .body(axum::body::Body::from(skeleton.to_string()))
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            
+
         Ok(response)
     } else {
         // Simulate reduced latency due to PJS optimizations
         simulate_network_latency(network_type).await;
         sleep(Duration::from_millis(20)).await; // Reduced processing time
-        
+
         let data = generate_dataset(dataset_type, dataset_size);
         let metadata = generate_metadata(dataset_type, dataset_size, &data);
-        
+
         let response_data = json!({
             "data": data,
             "metadata": metadata,
             "approach": "pjs_optimized",
             "generated_at": chrono::Utc::now().to_rfc3339()
         });
-        
+
         let response = axum::response::Response::builder()
             .status(200)
             .header("Content-Type", "application/json")
             .header("X-PJS-Optimized", "true")
             .body(axum::body::Body::from(response_data.to_string()))
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            
+
         Ok(response)
     }
 }
@@ -193,19 +202,22 @@ async fn performance_comparison(
     Query(params): Query<DemoRequest>,
     State(_state): State<AppState>,
 ) -> Result<Json<DemoResponse>, StatusCode> {
-    let dataset_type = params.dataset_type
+    let dataset_type = params
+        .dataset_type
         .as_deref()
         .unwrap_or("ecommerce")
         .parse::<DatasetType>()
         .unwrap_or(DatasetType::ECommerce);
-        
-    let dataset_size = params.dataset_size
+
+    let dataset_size = params
+        .dataset_size
         .as_deref()
         .unwrap_or("medium")
         .parse::<DatasetSize>()
         .unwrap_or(DatasetSize::Medium);
-        
-    let network_type = params.network_type
+
+    let network_type = params
+        .network_type
         .as_deref()
         .unwrap_or("wifi")
         .parse::<NetworkType>()
@@ -213,9 +225,7 @@ async fn performance_comparison(
 
     // Generate test data
     let data = generate_dataset(dataset_type, dataset_size);
-    let data_size = serde_json::to_string(&data)
-        .map(|s| s.len())
-        .unwrap_or(0);
+    let data_size = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(0);
 
     // Simulate traditional approach
     let traditional_start = std::time::Instant::now();
@@ -272,7 +282,7 @@ fn generate_skeleton(dataset_type: DatasetType) -> Value {
         }),
         DatasetType::SocialMedia => json!({
             "feed": {
-                "name": "PJS Social Demo", 
+                "name": "PJS Social Demo",
                 "description": "Loading...",
                 "version": "1.0"
             },
@@ -321,7 +331,7 @@ async fn api_info() -> Json<Value> {
         "endpoints": {
             "/": "Interactive web demo interface",
             "/traditional": "Traditional JSON API endpoint",
-            "/pjs-streaming": "PJS optimized streaming endpoint", 
+            "/pjs-streaming": "PJS optimized streaming endpoint",
             "/performance": "Performance comparison API",
             "/ws": "WebSocket streaming endpoint",
             "/api/info": "This API information endpoint"
@@ -345,14 +355,13 @@ async fn api_info() -> Json<Value> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
+
     // Initialize logging
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(if args.verbose { 
-            tracing::Level::DEBUG 
-        } else { 
-            tracing::Level::INFO 
-        });
+    let subscriber = tracing_subscriber::fmt().with_max_level(if args.verbose {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    });
     subscriber.init();
 
     let state = AppState {
@@ -370,7 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
-    
+
     println!();
     println!("🚀 PJS Interactive Demo Server");
     println!("==============================");

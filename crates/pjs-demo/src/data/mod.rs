@@ -1,13 +1,13 @@
 //! Data generation utilities for PJS demonstrations
 
-pub mod ecommerce;
-pub mod social;
 pub mod analytics;
+pub mod ecommerce;
 pub mod realtime;
+pub mod social;
 
+pub use analytics::*;
 pub use ecommerce::*;
 pub use social::*;
-pub use analytics::*;
 // pub use realtime::*; // TODO: Enable when realtime module is used
 
 use serde_json::Value;
@@ -106,21 +106,36 @@ pub fn generate_dataset(dataset_type: DatasetType, size: DatasetSize) -> Value {
 }
 
 /// Generate metadata for dataset
-pub fn generate_metadata(dataset_type: DatasetType, size: DatasetSize, data: &Value) -> HashMap<String, Value> {
+pub fn generate_metadata(
+    dataset_type: DatasetType,
+    size: DatasetSize,
+    data: &Value,
+) -> HashMap<String, Value> {
     let mut metadata = HashMap::new();
-    
-    metadata.insert("type".to_string(), serde_json::json!(format!("{dataset_type:?}").to_lowercase()));
-    metadata.insert("size".to_string(), serde_json::json!(format!("{size:?}").to_lowercase()));
-    
+
+    metadata.insert(
+        "type".to_string(),
+        serde_json::json!(format!("{dataset_type:?}").to_lowercase()),
+    );
+    metadata.insert(
+        "size".to_string(),
+        serde_json::json!(format!("{size:?}").to_lowercase()),
+    );
+
     let json_str = serde_json::to_string(data).unwrap_or_default();
     metadata.insert("bytes".to_string(), serde_json::json!(json_str.len()));
-    metadata.insert("size_kb".to_string(), serde_json::json!((json_str.len() as f64 / 1024.0).round() / 10.0 * 10.0));
-    
-    metadata.insert("generated_at".to_string(), 
-                   serde_json::json!(chrono::Utc::now().to_rfc3339()));
-    
+    metadata.insert(
+        "size_kb".to_string(),
+        serde_json::json!((json_str.len() as f64 / 1024.0).round() / 10.0 * 10.0),
+    );
+
+    metadata.insert(
+        "generated_at".to_string(),
+        serde_json::json!(chrono::Utc::now().to_rfc3339()),
+    );
+
     let item_count = size.item_count(dataset_type);
     metadata.insert("items".to_string(), serde_json::json!(item_count));
-    
+
     metadata
 }

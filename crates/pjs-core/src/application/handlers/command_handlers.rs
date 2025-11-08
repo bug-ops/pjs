@@ -5,19 +5,19 @@ use crate::{
     domain::{
         aggregates::StreamSession,
         entities::Frame,
-        ports::{EventPublisher, StreamRepository},
+        ports::{EventPublisherGat, StreamRepositoryGat},
         value_objects::{SessionId, StreamId},
     },
 };
-use async_trait::async_trait;
+// async_trait removed - using GAT traits
 use std::sync::Arc;
 
 /// Handler for session management commands
 #[derive(Debug)]
 pub struct SessionCommandHandler<R, P>
 where
-    R: StreamRepository,
-    P: EventPublisher,
+    R: StreamRepositoryGat + 'static,
+    P: EventPublisherGat + 'static,
 {
     repository: Arc<R>,
     event_publisher: Arc<P>,
@@ -25,8 +25,8 @@ where
 
 impl<R, P> SessionCommandHandler<R, P>
 where
-    R: StreamRepository,
-    P: EventPublisher,
+    R: StreamRepositoryGat + 'static,
+    P: EventPublisherGat + 'static,
 {
     pub fn new(repository: Arc<R>, event_publisher: Arc<P>) -> Self {
         Self {
@@ -400,7 +400,7 @@ mod tests {
     use crate::domain::{
         aggregates::stream_session::SessionConfig,
         events::DomainEvent,
-        ports::{EventPublisher, StreamRepository},
+        ports::{EventPublisherGat, StreamRepositoryGat},
     };
     use std::collections::HashMap;
 

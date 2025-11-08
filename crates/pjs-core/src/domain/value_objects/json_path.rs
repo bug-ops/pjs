@@ -6,15 +6,15 @@
 //! TODO: Remove serde derives once all serialization uses DTOs
 
 use crate::domain::{DomainError, DomainResult};
-use std::fmt;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Type-safe JSON Path for addressing nodes in JSON structures
-/// 
-/// This is a pure domain object. Serialization should be handled 
+///
+/// This is a pure domain object. Serialization should be handled
 /// in the application layer via DTOs, but serde is temporarily kept
 /// for compatibility with existing code.
-/// 
+///
 /// TODO: Remove Serialize, Deserialize derives once all serialization uses DTOs
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct JsonPath(String);
@@ -84,9 +84,10 @@ impl JsonPath {
 
         // Handle array index case: $.key[0] -> $.key
         if let Some(pos) = self.0.rfind('[')
-            && pos > 1 {
-                return Some(Self(self.0[..pos].to_string()));
-            }
+            && pos > 1
+        {
+            return Some(Self(self.0[..pos].to_string()));
+        }
 
         // If no separator found and not root, parent is root
         Some(Self::root())
@@ -101,12 +102,13 @@ impl JsonPath {
         // Check for array index: [123]
         if let Some(start) = self.0.rfind('[')
             && let Some(end) = self.0.rfind(']')
-                && end > start {
-                    let index_str = &self.0[start + 1..end];
-                    if let Ok(index) = index_str.parse::<usize>() {
-                        return Some(PathSegment::Index(index));
-                    }
-                }
+            && end > start
+        {
+            let index_str = &self.0[start + 1..end];
+            if let Ok(index) = index_str.parse::<usize>() {
+                return Some(PathSegment::Index(index));
+            }
+        }
 
         // Check for key segment
         if let Some(pos) = self.0.rfind('.') {
@@ -194,8 +196,9 @@ impl JsonPath {
                         if next_ch == '.' || next_ch == '[' {
                             break;
                         }
-                        key.push(chars.next()
-                            .ok_or_else(|| DomainError::InvalidPath("Incomplete key segment".to_string()))?);
+                        key.push(chars.next().ok_or_else(|| {
+                            DomainError::InvalidPath("Incomplete key segment".to_string())
+                        })?);
                     }
 
                     if key.is_empty() {

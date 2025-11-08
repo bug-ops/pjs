@@ -29,7 +29,7 @@ impl TimeoutMonitor {
     pub fn start(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut ticker = interval(self.check_interval);
-            
+
             loop {
                 ticker.tick().await;
                 self.connection_manager.process_timeouts().await;

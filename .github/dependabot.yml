@@ -1,14 +1,44 @@
+# Dependabot configuration for PJS
 version: 2
 updates:
+  # Cargo dependencies
   - package-ecosystem: "cargo"
-    directory: "/" 
-    versioning-strategy: "lockfile-only"
+    directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Etc/GMT-0"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Group minor and patch updates
     groups:
-      lock:
-        patterns: ["*"]
-    allow:
-      - dependency-type: "all"
-    labels: ["A-dependencies"]
-    open-pull-requests-limit: 1
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Ignore nightly-specific dependencies
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Etc/GMT-0"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"

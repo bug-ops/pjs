@@ -12,23 +12,74 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings"
+  RUSTUP_MAX_RETRIES: 10
+
+# Cancel previous runs on new push
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-
+    name: Build (${{ matrix.allocator }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator: [system, jemalloc, mimalloc]
 
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions/checkout@v4
+
+    - name: Install Rust nightly
+      uses: dtolnay/rust-toolchain@nightly
       with:
-        toolchain: nightly
-        cache: true
-        cache-workspaces: true
-        cache-key: ${{ runner.os }}-rust-nightly-${{ hashFiles('**/Cargo.lock') }}
         components: llvm-tools-preview
+
+    - name: Setup sccache
+      id: sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
+      continue-on-error: true
+
+    - name: Configure sccache
+      if: steps.sccache.outcome == 'success'
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+
+    - name: Cache Cargo
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "build-${{ matrix.allocator }}"
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+
+    - name: Set allocator features
+      id: features
+      run: |
+        if [ "${{ matrix.allocator }}" = "jemalloc" ]; then
+          echo "features=jemalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        elif [ "${{ matrix.allocator }}" = "mimalloc" ]; then
+          echo "features=mimalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        else
+          echo "features=schema-validation,compression,http-server" >> $GITHUB_OUTPUT
+        fi
+
     - name: Build with nightly features
       run: |
         echo "Using Rust nightly for zero-cost GAT abstractions"
+        echo "Allocator: ${{ matrix.allocator }}"
         rustc --version
-        cargo build --verbose --all-features
+        cargo build --verbose --features "${{ steps.features.outputs.features }}" --workspace
+
+    - name: Build release
+      run: cargo build --release --verbose --features "${{ steps.features.outputs.features }}" --workspace
+
+    - name: sccache stats
+      if: always()
+      run: sccache --show-stats || echo "sccache not available"
+      continue-on-error: true

@@ -6,8 +6,8 @@
 #![allow(clippy::uninlined_format_args)]
 
 use pjson_rs::{
-    CompressionStrategy, SchemaAnalyzer, SchemaCompressor,
-    Priority, StreamFrame, StreamingCompressor,
+    CompressionStrategy, Priority, SchemaAnalyzer, SchemaCompressor, StreamFrame,
+    StreamingCompressor,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -18,13 +18,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Demo 1: Basic schema analysis
     demo_basic_schema_analysis()?;
-    
+
     // Demo 2: Dictionary compression
     demo_dictionary_compression()?;
-    
+
     // Demo 3: Streaming compression with priorities
     demo_streaming_compression()?;
-    
+
     // Demo 4: Compression with real-world data patterns
     demo_realworld_patterns()?;
 
@@ -36,7 +36,7 @@ fn demo_basic_schema_analysis() -> Result<(), Box<dyn std::error::Error>> {
     println!("-----------------------");
 
     let mut analyzer = SchemaAnalyzer::new();
-    
+
     // Sample e-commerce data with repetitive patterns
     let sample_data = json!({
         "products": [
@@ -49,17 +49,17 @@ fn demo_basic_schema_analysis() -> Result<(), Box<dyn std::error::Error>> {
                 "price": 2399.99
             },
             {
-                "id": 1002, 
+                "id": 1002,
                 "name": "iPhone 15",
                 "category": "Electronics",
-                "status": "available", 
+                "status": "available",
                 "brand": "Apple",
                 "price": 999.99
             },
             {
                 "id": 1003,
                 "name": "AirPods Pro",
-                "category": "Electronics", 
+                "category": "Electronics",
                 "status": "available",
                 "brand": "Apple",
                 "price": 249.99
@@ -73,12 +73,12 @@ fn demo_basic_schema_analysis() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let strategy = analyzer.analyze(&sample_data)?;
-    
+
     println!("📊 Analyzed data structure:");
     let products_len = sample_data["products"].as_array().unwrap().len();
     println!("   - Products: {products_len} items");
     println!("   - Detected strategy: {strategy:?}");
-    
+
     match strategy {
         CompressionStrategy::Dictionary { ref dictionary } => {
             let dict_len = dictionary.len();
@@ -87,7 +87,10 @@ fn demo_basic_schema_analysis() -> Result<(), Box<dyn std::error::Error>> {
                 println!("     '{string}' → {index}");
             }
         }
-        CompressionStrategy::Hybrid { ref string_dict, ref numeric_deltas } => {
+        CompressionStrategy::Hybrid {
+            ref string_dict,
+            ref numeric_deltas,
+        } => {
             let string_dict_len = string_dict.len();
             println!("   - String dictionary: {string_dict_len} entries");
             let numeric_deltas_len = numeric_deltas.len();
@@ -113,15 +116,14 @@ fn demo_dictionary_compression() -> Result<(), Box<dyn std::error::Error>> {
     dictionary.insert("Apple".to_string(), 2);
     dictionary.insert("operational".to_string(), 3);
 
-    let compressor = SchemaCompressor::with_strategy(
-        CompressionStrategy::Dictionary { dictionary }
-    );
+    let compressor =
+        SchemaCompressor::with_strategy(CompressionStrategy::Dictionary { dictionary });
 
     let data = json!({
         "product": {
             "name": "MacBook",
             "category": "Electronics",
-            "brand": "Apple", 
+            "brand": "Apple",
             "status": "available"
         },
         "store_status": "operational"
@@ -133,13 +135,19 @@ fn demo_dictionary_compression() -> Result<(), Box<dyn std::error::Error>> {
     println!("📦 Compression Results:");
     println!("   - Original size: {} bytes", original_size);
     println!("   - Compressed size: {} bytes", compressed.compressed_size);
-    println!("   - Compression ratio: {:.2}", compressed.compression_ratio(original_size));
-    println!("   - Bytes saved: {}", compressed.compression_savings(original_size));
+    println!(
+        "   - Compression ratio: {:.2}",
+        compressed.compression_ratio(original_size)
+    );
+    println!(
+        "   - Bytes saved: {}",
+        compressed.compression_savings(original_size)
+    );
     println!("   - Strategy: {:?}", compressed.strategy);
-    
+
     println!("\n🔍 Compressed data preview:");
     println!("   {}", serde_json::to_string_pretty(&compressed.data)?);
-    
+
     println!("\n📋 Metadata (for decompression):");
     for (key, value) in compressed.compression_metadata.iter().take(3) {
         println!("   {} → {}", key, value);
@@ -166,12 +174,12 @@ fn demo_streaming_compression() -> Result<(), Box<dyn std::error::Error>> {
         metadata: HashMap::new(),
     };
 
-    // High priority frame (user data)  
+    // High priority frame (user data)
     let high_frame = StreamFrame {
         data: json!({
             "user": {
                 "id": 12345,
-                "name": "Alice Johnson", 
+                "name": "Alice Johnson",
                 "role": "admin",
                 "status": "active"
             }
@@ -190,7 +198,7 @@ fn demo_streaming_compression() -> Result<(), Box<dyn std::error::Error>> {
                 "session_duration": 245,
                 "traffic_sources": {
                     "organic": 0.45,
-                    "direct": 0.32, 
+                    "direct": 0.32,
                     "referral": 0.23
                 }
             }
@@ -200,21 +208,24 @@ fn demo_streaming_compression() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("🚀 Processing frames by priority:");
-    
+
     let compressed_critical = streaming_compressor.compress_frame(critical_frame)?;
-    println!("   ⚠️  CRITICAL: {} bytes → {} bytes", 
+    println!(
+        "   ⚠️  CRITICAL: {} bytes → {} bytes",
         serde_json::to_string(&compressed_critical.frame.data)?.len(),
         compressed_critical.compressed_data.compressed_size
     );
 
     let compressed_high = streaming_compressor.compress_frame(high_frame)?;
-    println!("   🔥 HIGH: {} bytes → {} bytes",
-        serde_json::to_string(&compressed_high.frame.data)?.len(), 
+    println!(
+        "   🔥 HIGH: {} bytes → {} bytes",
+        serde_json::to_string(&compressed_high.frame.data)?.len(),
         compressed_high.compressed_data.compressed_size
     );
 
     let compressed_low = streaming_compressor.compress_frame(low_frame)?;
-    println!("   📊 LOW: {} bytes → {} bytes",
+    println!(
+        "   📊 LOW: {} bytes → {} bytes",
         serde_json::to_string(&compressed_low.frame.data)?.len(),
         compressed_low.compressed_data.compressed_size
     );
@@ -224,8 +235,15 @@ fn demo_streaming_compression() -> Result<(), Box<dyn std::error::Error>> {
     println!("   - Frames processed: {}", stats.frames_processed);
     println!("   - Total input: {} bytes", stats.total_input_bytes);
     println!("   - Total output: {} bytes", stats.total_output_bytes);
-    println!("   - Overall ratio: {:.3}", stats.overall_compression_ratio());
-    println!("   - Bytes saved: {} ({:.1}%)", stats.bytes_saved(), stats.percentage_saved());
+    println!(
+        "   - Overall ratio: {:.3}",
+        stats.overall_compression_ratio()
+    );
+    println!(
+        "   - Bytes saved: {} ({:.1}%)",
+        stats.bytes_saved(),
+        stats.percentage_saved()
+    );
 
     if !stats.priority_ratios.is_empty() {
         println!("   - Priority ratios:");
@@ -264,7 +282,7 @@ fn demo_realworld_patterns() -> Result<(), Box<dyn std::error::Error>> {
                     "last_login": "2024-01-15T10:30:00Z"
                 },
                 {
-                    "id": "user_002", 
+                    "id": "user_002",
                     "email": "bob@example.com",
                     "status": "active",
                     "role": "user",
@@ -273,7 +291,7 @@ fn demo_realworld_patterns() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 {
                     "id": "user_003",
-                    "email": "charlie@example.com", 
+                    "email": "charlie@example.com",
                     "status": "inactive",
                     "role": "user",
                     "created_at": "2024-01-03T00:00:00Z",
@@ -304,14 +322,21 @@ fn demo_realworld_patterns() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📡 API Response Analysis:");
     println!("   - Original size: {} bytes", original_size);
-    println!("   - Users count: {}", api_response["data"]["users"].as_array().unwrap().len());
+    println!(
+        "   - Users count: {}",
+        api_response["data"]["users"].as_array().unwrap().len()
+    );
     println!("   - Detected strategy: {strategy:?}");
     println!("   - Optimized strategy: {:?}", optimized_strategy);
 
     println!("\n🎯 Compression Results:");
     println!("   - Compressed size: {} bytes", compressed.compressed_size);
-    println!("   - Compression ratio: {:.3}", compressed.compression_ratio(original_size));
-    println!("   - Space savings: {} bytes ({:.1}%)", 
+    println!(
+        "   - Compression ratio: {:.3}",
+        compressed.compression_ratio(original_size)
+    );
+    println!(
+        "   - Space savings: {} bytes ({:.1}%)",
         compressed.compression_savings(original_size),
         (1.0 - compressed.compression_ratio(original_size)) * 100.0
     );
@@ -324,7 +349,8 @@ fn demo_realworld_patterns() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🌐 Bandwidth Impact (1000 requests):");
     println!("   - Without compression: {:.2} MB", estimated_original_mb);
     println!("   - With compression: {:.2} MB", estimated_compressed_mb);
-    println!("   - Bandwidth saved: {:.2} MB ({:.1}%)", 
+    println!(
+        "   - Bandwidth saved: {:.2} MB ({:.1}%)",
         bandwidth_saved_mb,
         (bandwidth_saved_mb / estimated_original_mb) * 100.0
     );

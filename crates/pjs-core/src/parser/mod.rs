@@ -3,6 +3,7 @@
 //! This module provides both SIMD-optimized parsing and serde fallback,
 //! allowing rapid MVP development while building towards maximum performance.
 
+pub mod allocator;
 pub mod buffer_pool;
 pub mod scanner;
 pub mod simd;
@@ -12,13 +13,18 @@ pub mod sonic;
 pub mod value;
 pub mod zero_copy;
 
-pub use buffer_pool::{BufferPool, PooledBuffer, BufferSize, PoolConfig, global_buffer_pool};
+pub use allocator::{AllocatorBackend, AllocatorStats, SimdAllocator, global_allocator};
+pub use buffer_pool::{
+    BufferPool, BufferSize, PoolConfig, PooledBuffer, SimdType, global_buffer_pool,
+};
 pub use scanner::{JsonScanner, ScanResult, StringLocation};
-pub use simd_zero_copy::{SimdZeroCopyParser, SimdZeroCopyConfig, SimdParseResult, SimdParsingStats};
+pub use simd_zero_copy::{
+    SimdParseResult, SimdParsingStats, SimdZeroCopyConfig, SimdZeroCopyParser,
+};
 pub use simple::{ParseConfig, ParseStats, SimpleParser};
 pub use sonic::{LazyFrame, SonicConfig, SonicParser};
 pub use value::{JsonValue, LazyArray, LazyObject};
-pub use zero_copy::{LazyParser, ZeroCopyParser, LazyJsonValue, MemoryUsage, IncrementalParser};
+pub use zero_copy::{IncrementalParser, LazyJsonValue, LazyParser, MemoryUsage, ZeroCopyParser};
 
 use crate::{Result, SemanticMeta};
 
@@ -76,7 +82,7 @@ impl Parser {
             sonic: SonicParser::new(),
             simple: SimpleParser::new(),
             zero_copy_simd: None, // Will be initialized on first use
-            use_sonic: false, // Use zero-copy instead
+            use_sonic: false,     // Use zero-copy instead
             use_zero_copy: true,
         }
     }

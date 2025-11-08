@@ -453,7 +453,11 @@ mod tests {
             "total": 2
         });
 
-        let stream = Stream::new(session_id, source_data.clone().into(), StreamConfig::default());
+        let stream = Stream::new(
+            session_id,
+            source_data.clone().into(),
+            StreamConfig::default(),
+        );
 
         assert_eq!(stream.session_id(), session_id);
         assert_eq!(stream.state(), &StreamState::Preparing);
@@ -509,8 +513,9 @@ mod tests {
 
         // Start streaming and create skeleton
         assert!(stream.start_streaming().is_ok());
-        // TODO: Handle unwrap() - add proper error handling for skeleton frame creation in tests
-        let skeleton = stream.create_skeleton_frame().unwrap();
+        let skeleton = stream
+            .create_skeleton_frame()
+            .expect("Failed to create skeleton frame in test");
 
         assert_eq!(
             skeleton.frame_type(),

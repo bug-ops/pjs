@@ -18,9 +18,6 @@ pjson-rs = { path = "../pjs-core" }
 serde_json = { workspace = true }
 sonic-rs = { workspace = true }
 
-[dev-dependencies]
-proptest = { workspace = true }
-
 [features]
 default = ["streaming"]
 streaming = []

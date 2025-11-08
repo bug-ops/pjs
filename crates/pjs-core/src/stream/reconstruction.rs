@@ -4,7 +4,9 @@
 //! skeleton + patch stream frames, enabling progressive data loading.
 
 use crate::Result;
-use crate::stream::priority::{JsonPatch, JsonPath, PatchOperation, PathSegment, PriorityStreamFrame};
+use crate::stream::priority::{
+    JsonPatch, JsonPath, PatchOperation, PathSegment, PriorityStreamFrame,
+};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 
@@ -217,9 +219,10 @@ impl JsonReconstructor {
             }
             JsonValue::Array(arr) => {
                 if let Ok(index) = target_key.parse::<usize>()
-                    && index < arr.len() {
-                        arr.remove(index);
-                    }
+                    && index < arr.len()
+                {
+                    arr.remove(index);
+                }
             }
             _ => {
                 return Err(crate::Error::Other(
@@ -246,9 +249,9 @@ impl JsonReconstructor {
             match segment {
                 PathSegment::Key(key) => {
                     if let JsonValue::Object(map) = current {
-                        current = map.get_mut(key).ok_or_else(|| {
-                            crate::Error::Other(format!("Key not found: {key}"))
-                        })?;
+                        current = map
+                            .get_mut(key)
+                            .ok_or_else(|| crate::Error::Other(format!("Key not found: {key}")))?;
                     } else {
                         return Err(crate::Error::Other("Expected object".to_string()));
                     }
@@ -280,9 +283,9 @@ impl JsonReconstructor {
             match segment {
                 PathSegment::Key(key) => {
                     if let JsonValue::Object(map) = current {
-                        current = map.get_mut(key).ok_or_else(|| {
-                            crate::Error::Other(format!("Key not found: {key}"))
-                        })?;
+                        current = map
+                            .get_mut(key)
+                            .ok_or_else(|| crate::Error::Other(format!("Key not found: {key}")))?;
                     } else {
                         return Err(crate::Error::Other("Expected object".to_string()));
                     }

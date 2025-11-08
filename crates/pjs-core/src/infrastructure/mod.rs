@@ -8,6 +8,7 @@ pub mod adapters;
 pub mod http;
 pub mod integration;
 pub mod repositories;
+pub mod schema_repository;
 pub mod services;
 #[cfg(feature = "http-server")]
 pub mod websocket;
@@ -16,6 +17,7 @@ pub use adapters::*;
 #[cfg(feature = "http-server")]
 pub use http::*;
 pub use integration::*;
+pub use schema_repository::SchemaRepository;
 pub use services::*;
 #[cfg(feature = "http-server")]
 pub use websocket::*;

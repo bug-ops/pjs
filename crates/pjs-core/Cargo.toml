@@ -14,19 +14,20 @@ exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
 
 [dependencies]
-async-std = { workspace = true, features = ["attributes"] }
 async-trait = { workspace = true }
 axum = { workspace = true, optional = true, features = ["ws"] }
 bitflags = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 crossbeam = { workspace = true }
+dashmap = { workspace = true }
 futures = { workspace = true, optional = true }
 maplit = { workspace = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
 priority-queue = { workspace = true }
 prometheus = { workspace = true, optional = true }
+rayon = { workspace = true }
 reqwest = { workspace = true, features = ["json"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -38,16 +39,24 @@ tracing = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
+typed-arena = { workspace = true }
 tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
 url = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
+
+# Memory allocator dependencies
+tikv-jemallocator = { workspace = true, optional = true }
+tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats"] }
+tikv-jemalloc-sys = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
+libmimalloc-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [features]
-default = ["simd-auto"]
+default = ["simd-auto", "schema-validation"]
 
 # SIMD features
 simd-auto = []   # Auto-detect best SIMD
@@ -55,6 +64,11 @@ simd-sse42 = []  # SSE 4.2 support
 simd-avx2 = []   # AVX2 support  
 simd-avx512 = [] # AVX-512 support
 simd-neon = []   # ARM NEON support
+
+# Memory allocator features (mutually exclusive)
+jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys"]
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+# system allocator is the default (no deps needed)
 
 # Optional features (will be added later)
 # gpu = ["dep:cudarc", "dep:wgpu"]
@@ -72,6 +86,9 @@ prometheus-metrics = ["dep:prometheus"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["axum", "tower", "tower-http", "hyper", "futures", "sha2"]
+
+[package.metadata.cargo-machete]
+ignored = ["tikv-jemallocator", "tikv-jemalloc-ctl", "mimalloc"]
 
 [[example]]
 name = "simple_priority_demo"
