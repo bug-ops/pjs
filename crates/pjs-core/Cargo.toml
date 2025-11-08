@@ -14,7 +14,6 @@ exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
 
 [dependencies]
-async-std = { workspace = true, features = ["attributes"] }
 async-trait = { workspace = true }
 axum = { workspace = true, optional = true, features = ["ws"] }
 bitflags = { workspace = true }

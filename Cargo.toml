@@ -19,7 +19,6 @@ categories = ["encoding", "network-programming", "parser-implementations"]
 
 [workspace.dependencies]
 ahash = "0.8"
-async-std = "1.12"
 async-trait = "0.1"
 axum = "0.8"
 bitflags = "2.9"

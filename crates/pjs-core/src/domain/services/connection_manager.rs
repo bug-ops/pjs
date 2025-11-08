@@ -1,7 +1,7 @@
-use async_std::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 
 use crate::domain::DomainError;
 use crate::domain::value_objects::{SessionId, StreamId};
