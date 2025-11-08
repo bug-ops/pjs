@@ -26,6 +26,10 @@ smallvec = { workspace = true, features = ["serde"] }
 # UUID generation for IDs
 uuid = { workspace = true, features = ["v4", "serde"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# WASM-specific: uuid needs js feature for browser crypto
+uuid = { workspace = true, features = ["v4", "serde", "js"] }
+
 # Timestamps
 chrono = { workspace = true, features = ["serde"] }
 
