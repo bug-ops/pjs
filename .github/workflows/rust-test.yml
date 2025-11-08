@@ -44,16 +44,14 @@ jobs:
     - name: Setup sccache (Unix)
       id: sccache-unix
       if: matrix.os != 'windows-latest'
-      uses: mozilla-actions/sccache-action@v0.0.4
+      uses: mozilla-actions/sccache-action@v0.0.9
       continue-on-error: true
 
     - name: Setup sccache (Windows)
       id: sccache-windows
       if: matrix.os == 'windows-latest'
-      uses: mozilla-actions/sccache-action@v0.0.4
+      uses: mozilla-actions/sccache-action@v0.0.9
       continue-on-error: true
-      with:
-        version: "v0.7.4"
 
     - name: Configure sccache
       if: steps.sccache-unix.outcome == 'success' || steps.sccache-windows.outcome == 'success'

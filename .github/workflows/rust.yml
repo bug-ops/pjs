@@ -38,7 +38,7 @@ jobs:
 
     - name: Setup sccache
       id: sccache
-      uses: mozilla-actions/sccache-action@v0.0.4
+      uses: mozilla-actions/sccache-action@v0.0.9
       continue-on-error: true
 
     - name: Configure sccache
