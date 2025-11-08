@@ -13,6 +13,12 @@
 // Allow dead code for fields and methods that will be used in future features
 #![allow(dead_code)]
 
+// Allocator FFI dependencies
+#[cfg(feature = "jemalloc")]
+extern crate tikv_jemalloc_sys;
+#[cfg(feature = "mimalloc")]
+extern crate libmimalloc_sys;
+
 pub mod application;
 pub mod compression;
 pub mod config;

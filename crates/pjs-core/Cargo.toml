@@ -47,7 +47,9 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 # Memory allocator dependencies
 tikv-jemallocator = { workspace = true, optional = true }
 tikv-jemalloc-ctl = { workspace = true, optional = true }
+tikv-jemalloc-sys = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }
+libmimalloc-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -64,8 +66,8 @@ simd-avx512 = [] # AVX-512 support
 simd-neon = []   # ARM NEON support
 
 # Memory allocator features (mutually exclusive)
-jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
-mimalloc = ["dep:mimalloc"]
+jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys"]
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # system allocator is the default (no deps needed)
 
 # Optional features (will be added later)

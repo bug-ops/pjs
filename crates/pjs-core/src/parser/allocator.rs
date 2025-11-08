@@ -181,14 +181,11 @@ impl SimdAllocator {
         size: usize,
         alignment: usize,
     ) -> DomainResult<NonNull<u8>> {
-        #[link(name = "jemalloc")]
-        unsafe extern "C" {
-            fn mallocx(size: usize, flags: i32) -> *mut std::ffi::c_void;
-        }
+        use tikv_jemalloc_sys as jemalloc;
 
         // MALLOCX_ALIGN macro equivalent
         let align_flag = alignment.trailing_zeros() as i32;
-        let ptr = unsafe { mallocx(size, align_flag) };
+        let ptr = unsafe { jemalloc::mallocx(size, align_flag) };
         if ptr.is_null() {
             return Err(DomainError::ResourceExhausted(format!(
                 "Jemalloc failed to allocate {} bytes with alignment {}",
@@ -206,18 +203,11 @@ impl SimdAllocator {
         _old_layout: Layout,
         new_size: usize,
     ) -> DomainResult<NonNull<u8>> {
-        #[link(name = "jemalloc")]
-        unsafe extern "C" {
-            fn rallocx(
-                ptr: *mut std::ffi::c_void,
-                size: usize,
-                flags: i32,
-            ) -> *mut std::ffi::c_void;
-        }
+        use tikv_jemalloc_sys as jemalloc;
 
         let alignment = _old_layout.align();
         let align_flag = alignment.trailing_zeros() as i32;
-        let new_ptr = unsafe { rallocx(ptr.as_ptr() as *mut _, new_size, align_flag) };
+        let new_ptr = unsafe { jemalloc::rallocx(ptr.as_ptr() as *mut _, new_size, align_flag) };
 
         if new_ptr.is_null() {
             return Err(DomainError::ResourceExhausted(format!(
@@ -231,13 +221,10 @@ impl SimdAllocator {
 
     #[cfg(feature = "jemalloc")]
     unsafe fn jemalloc_dealloc_aligned(&self, ptr: NonNull<u8>, layout: Layout) {
-        #[link(name = "jemalloc")]
-        unsafe extern "C" {
-            fn dallocx(ptr: *mut std::ffi::c_void, flags: i32);
-        }
+        use tikv_jemalloc_sys as jemalloc;
 
         let align_flag = layout.align().trailing_zeros() as i32;
-        unsafe { dallocx(ptr.as_ptr() as *mut _, align_flag) };
+        unsafe { jemalloc::dallocx(ptr.as_ptr() as *mut _, align_flag) };
     }
 
     // Mimalloc-specific implementations
@@ -247,12 +234,9 @@ impl SimdAllocator {
         size: usize,
         alignment: usize,
     ) -> DomainResult<NonNull<u8>> {
-        #[link(name = "mimalloc")]
-        unsafe extern "C" {
-            fn mi_malloc_aligned(size: usize, alignment: usize) -> *mut std::ffi::c_void;
-        }
+        use libmimalloc_sys as mi;
 
-        let ptr = unsafe { mi_malloc_aligned(size, alignment) };
+        let ptr = unsafe { mi::mi_malloc_aligned(size, alignment) };
         if ptr.is_null() {
             return Err(DomainError::ResourceExhausted(format!(
                 "Mimalloc failed to allocate {} bytes with alignment {}",
@@ -270,17 +254,10 @@ impl SimdAllocator {
         _old_layout: Layout,
         new_size: usize,
     ) -> DomainResult<NonNull<u8>> {
-        #[link(name = "mimalloc")]
-        unsafe extern "C" {
-            fn mi_realloc_aligned(
-                ptr: *mut std::ffi::c_void,
-                new_size: usize,
-                alignment: usize,
-            ) -> *mut std::ffi::c_void;
-        }
+        use libmimalloc_sys as mi;
 
         let alignment = _old_layout.align();
-        let new_ptr = unsafe { mi_realloc_aligned(ptr.as_ptr() as *mut _, new_size, alignment) };
+        let new_ptr = unsafe { mi::mi_realloc_aligned(ptr.as_ptr() as *mut _, new_size, alignment) };
 
         if new_ptr.is_null() {
             return Err(DomainError::ResourceExhausted(format!(
@@ -294,12 +271,9 @@ impl SimdAllocator {
 
     #[cfg(feature = "mimalloc")]
     unsafe fn mimalloc_dealloc_aligned(&self, ptr: NonNull<u8>, _layout: Layout) {
-        #[link(name = "mimalloc")]
-        unsafe extern "C" {
-            fn mi_free(ptr: *mut std::ffi::c_void);
-        }
+        use libmimalloc_sys as mi;
 
-        unsafe { mi_free(ptr.as_ptr() as *mut _) };
+        unsafe { mi::mi_free(ptr.as_ptr() as *mut _) };
     }
 
     /// Get allocator statistics (if available)
