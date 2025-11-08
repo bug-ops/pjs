@@ -10,9 +10,9 @@
 [![Rust Version](https://img.shields.io/badge/rust-nightly-orange.svg)](https://www.rust-lang.org)
 [![WebAssembly](https://img.shields.io/badge/wasm-ready-brightgreen.svg)](.github/workflows/wasm.yml)
 
-**🚀 6.3x faster than serde_json | 🎯 5.3x faster progressive loading | 💾 Bounded memory usage | 🏗️ Production Ready**
+**🚀 6.3x faster than serde_json | 🎯 5.3x faster progressive loading | 💾 Bounded memory usage | 🌐 WebAssembly Ready**
 
-> **New in v0.3.0**: Production-ready code quality with zero clippy warnings, Clean Architecture compliance, and comprehensive test coverage (196 tests). **Now requires nightly Rust for zero-cost abstractions**.
+> **New in v0.3.0**: WebAssembly support with priority-based JSON streaming for browsers and Node.js. Production-ready code quality with zero clippy warnings, Clean Architecture compliance, and comprehensive test coverage (500+ tests). **Now requires nightly Rust for zero-cost abstractions**.
 
 </div>
 
@@ -73,6 +73,35 @@
 - Simple API
 - Drop-in replacement
 - Extensive documentation
+
+</td>
+</tr>
+<tr>
+<td>
+
+### 🌐 WebAssembly Support
+
+- Browser integration
+- Node.js compatible
+- 120KB bundle (52KB gzipped)
+
+</td>
+<td>
+
+### 🎨 Interactive Demos
+
+- Real-time visualization
+- Priority threshold control
+- Performance metrics
+
+</td>
+<td>
+
+### 📦 Multi-Platform
+
+- Native Rust performance
+- WASM for browsers
+- Cross-platform compatibility
 
 </td>
 </tr>
@@ -358,6 +387,135 @@ client.onFrame((frame) => {
 });
 ```
 
+### WebAssembly (Browser & Node.js)
+
+PJS provides full WebAssembly support for running priority-based JSON streaming directly in browsers and Node.js environments.
+
+#### Installation
+
+```bash
+npm install pjs-wasm
+# or use from CDN
+```
+
+#### Browser Usage
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <script type="module">
+        import init, { PjsParser, PriorityConstants } from './pkg/pjs_wasm.js';
+
+        async function main() {
+            // Initialize WASM module
+            await init();
+
+            // Create parser instance
+            const parser = new PjsParser();
+
+            // Generate priority-based frames
+            const jsonData = JSON.stringify({
+                user_id: 123,
+                name: "Alice",
+                profile: { /* large nested data */ }
+            });
+
+            const frames = parser.generateFrames(jsonData, PriorityConstants.MEDIUM);
+
+            // Process frames in priority order
+            frames.forEach(frame => {
+                console.log(`Frame type: ${frame.frame_type}`);
+                console.log(`Priority: ${frame.priority}`);
+
+                if (frame.priority >= 90) {
+                    // Render critical data immediately
+                    updateUI(frame.data);
+                } else {
+                    // Queue lower priority data
+                    queueUpdate(frame.data);
+                }
+            });
+        }
+
+        main();
+    </script>
+</head>
+<body>
+    <div id="app">Loading...</div>
+</body>
+</html>
+```
+
+#### Node.js Usage
+
+```javascript
+import init, { PjsParser, PriorityConfigBuilder } from 'pjs-wasm';
+import { readFile } from 'fs/promises';
+
+async function processWithWasm() {
+    // Load WASM binary for Node.js
+    const wasmBuffer = await readFile('./node_modules/pjs-wasm/pkg/pjs_wasm_bg.wasm');
+    await init(wasmBuffer);
+
+    // Create parser with custom configuration
+    const config = new PriorityConfigBuilder()
+        .addCriticalField('id')
+        .addCriticalField('status')
+        .addHighField('title')
+        .addLowPattern('metadata');
+
+    const parser = PjsParser.withConfig(config);
+
+    // Generate frames with priority threshold
+    const data = JSON.stringify({ /* your data */ });
+    const frames = parser.generateFrames(data, 50); // Only priority >= 50
+
+    console.log(`Generated ${frames.length} frames`);
+
+    // Process frames
+    frames.forEach((frame, i) => {
+        console.log(`Frame ${i}: ${frame.frame_type} (priority: ${frame.priority})`);
+    });
+}
+
+processWithWasm();
+```
+
+#### Interactive Demo
+
+Try the interactive browser demo:
+
+```bash
+cd crates/pjs-js-client/examples/browser-wasm
+./serve.sh
+```
+
+Visit `http://localhost:8000` to see:
+
+- Real-time frame generation with priority control
+- Interactive priority threshold slider
+- Performance metrics and visualization
+- Comparison with native JSON parsing
+
+#### Building WASM from Source
+
+```bash
+# Install wasm-pack
+curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+# Build for web browsers
+wasm-pack build crates/pjs-wasm --target web --release
+
+# Build for Node.js
+wasm-pack build crates/pjs-wasm --target nodejs --release
+
+# Build for bundlers (webpack, rollup)
+wasm-pack build crates/pjs-wasm --target bundler --release
+```
+
+**Bundle size**: 120 KB raw / 52 KB gzipped - optimized for web delivery!
+
 ### WebSocket Streaming
 
 ```rust
@@ -496,51 +654,71 @@ Intelligent frame processing:
 ```plain
 pjs/
 ├── crates/
-│   ├── pjs-core/           # Core protocol, domain logic, and HTTP integration
+│   ├── pjs-domain/         # 🆕 Pure domain logic (WASM-compatible)
+│   │   ├── src/
+│   │   │   ├── entities/       # StreamSession, Frame, Stream aggregates
+│   │   │   ├── events/         # Domain events (SessionCreated, etc.)
+│   │   │   ├── ports/          # GAT-based trait interfaces
+│   │   │   ├── services/       # ValidationService, StreamingOrchestrator
+│   │   │   └── value_objects/  # Priority, SessionId, JsonData, Schema
+│   │   └── tests/              # Domain logic tests (43 tests)
+│   ├── pjs-wasm/           # 🆕 WebAssembly bindings (web, nodejs, bundler)
+│   │   ├── src/
+│   │   │   ├── parser.rs           # WASM parser with priority frame generation
+│   │   │   ├── priority_assignment.rs # Priority calculation engine
+│   │   │   ├── priority_config.rs  # JavaScript-friendly configuration
+│   │   │   └── priority_constants.rs # Priority level constants
+│   │   ├── pkg/                # Generated WASM package (120KB/52KB gzipped)
+│   │   └── tests/              # WASM-specific tests (25 tests)
+│   ├── pjs-core/           # Core protocol and HTTP integration (uses pjs-domain)
 │   │   ├── src/
 │   │   │   ├── application/    # CQRS handlers, services, DTOs
-│   │   │   ├── domain/         # Value objects, entities, aggregates
 │   │   │   ├── infrastructure/ # HTTP, WebSocket, repositories, adapters
 │   │   │   ├── parser/         # SIMD, zero-copy, buffer pools
 │   │   │   ├── stream/         # Priority streaming, reconstruction
 │   │   │   └── compression/    # Schema-based compression
 │   │   ├── examples/           # Standalone demos (zero-copy, compression)
-│   │   └── tests/              # Integration tests
+│   │   └── tests/              # Integration tests (400+ tests)
 │   ├── pjs-demo/           # Interactive demo servers with WebSocket streaming
 │   │   └── src/
 │   │       ├── servers/        # Demo server implementations
-│   │       ├── clients/        # WebSocket client demos  
+│   │       ├── clients/        # WebSocket client demos
 │   │       ├── data/           # Sample data generators (analytics, ecommerce)
 │   │       └── static/         # HTML interfaces
-│   ├── pjs-js-client/      # JavaScript/TypeScript client library ✅ IMPLEMENTED
+│   ├── pjs-js-client/      # JavaScript/TypeScript client library + WASM demos
 │   │   ├── src/            # TypeScript source code with transport layers
+│   │   ├── examples/
+│   │   │   └── browser-wasm/   # 🆕 Interactive WASM demo (HTML + examples)
 │   │   ├── tests/          # Jest test suite with full coverage
 │   │   └── package.json    # NPM configuration and dependencies
 │   └── pjs-bench/          # Benchmarking suite
 │       └── benches/        # Criterion.rs performance benchmarks
 └── examples/               # Root-level usage examples
     ├── axum_server.rs      # Complete HTTP server demo
-    ├── simple_usage.rs     # Basic usage patterns  
+    ├── simple_usage.rs     # Basic usage patterns
     └── streaming_demo_server.rs # Advanced streaming demo
 ```
 
 ### Current Implementation Status
 
 - **Phase 1**: ✅ Core foundation (100% complete)
-- **Phase 2**: ✅ Protocol layer (100% complete)  
+- **Phase 2**: ✅ Protocol layer (100% complete)
 - **Phase 3**: ✅ Client/Server framework (100% complete)
 - **Phase 4**: ✅ Transport layer (100% complete)
 - **Phase 5**: ✅ Production features (100% complete)
 - **Phase 6**: ✅ Real-Time Streaming (100% complete)
 - **Phase 7**: ✅ JavaScript/TypeScript Client SDK (100% complete)
 - **Phase 8**: ✅ Code Quality & Production Readiness (100% complete)
-- **Overall**: ~98% of core functionality implemented
+- **Phase 9**: ✅ WebAssembly Support (100% complete)
+- **Overall**: Complete production-ready implementation
 
 ### Implemented Components
 
-- **✅ pjs-core**: Complete Rust implementation with Clean Architecture
-- **✅ pjs-demo**: Interactive demo servers with real-time WebSocket streaming  
-- **✅ pjs-js-client**: Full TypeScript/JavaScript client library with transport layers
+- **✅ pjs-domain**: Pure domain logic with DDD principles (WASM-compatible, 43 tests)
+- **✅ pjs-wasm**: WebAssembly bindings for browsers & Node.js (25 tests, 120KB bundle)
+- **✅ pjs-core**: Complete Rust implementation with Clean Architecture (400+ tests)
+- **✅ pjs-demo**: Interactive demo servers with real-time WebSocket streaming
+- **✅ pjs-js-client**: Full TypeScript/JavaScript client library + WASM demos
 - **✅ pjs-bench**: Comprehensive benchmarking suite with performance validation
 - **✅ Examples**: Multiple working examples from simple to advanced usage
 
