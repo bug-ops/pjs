@@ -1189,10 +1189,13 @@ mod tests {
         // Note: We can't easily test incompatible alignments since the allocator
         // might provide better alignment than requested for performance reasons.
         // Instead, test the requested alignment vs required alignment directly.
-        assert!(64 >= 16); // SSE compatible
-        assert!(64 >= 32); // AVX2 compatible  
-        assert!(64 >= 64); // AVX512 compatible
-        assert!(64 >= 16); // NEON compatible
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(64 >= 16); // SSE compatible
+            assert!(64 >= 32); // AVX2 compatible
+            assert!(64 >= 64); // AVX512 compatible
+            assert!(64 >= 16); // NEON compatible
+        }
 
         let buffer_16 = AlignedBuffer::new(1024, 16).unwrap();
 
@@ -1205,9 +1208,12 @@ mod tests {
 
         // Note: actual_alignment() might be higher than 16 due to allocator behavior
         // so we can't reliably test incompatibility. Instead verify logic:
-        assert!(16 >= 16); // SSE requirement met
-        assert!(16 < 32); // AVX2 requirement NOT met by requested alignment
-        assert!(16 < 64); // AVX512 requirement NOT met by requested alignment
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(16 >= 16); // SSE requirement met
+            assert!(16 < 32); // AVX2 requirement NOT met by requested alignment
+            assert!(16 < 64); // AVX512 requirement NOT met by requested alignment
+        }
     }
 
     #[test]

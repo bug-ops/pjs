@@ -246,7 +246,7 @@ mod tests {
         let compressor = SecureCompressor::new(detector, CompressionStrategy::RunLength);
 
         // Should be able to create compressor
-        assert!(std::ptr::addr_of!(compressor).cast::<u8>() != std::ptr::null());
+        assert!(!std::ptr::addr_of!(compressor).cast::<u8>().is_null());
     }
 
     #[test]

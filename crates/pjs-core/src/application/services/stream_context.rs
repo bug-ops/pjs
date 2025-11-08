@@ -327,11 +327,15 @@ mod tests {
 
     #[test]
     fn test_timeout_detection() {
-        let mut config = StreamConfig::default();
-        config.session_timeout_seconds = 1; // 1 second timeout
+        let config = StreamConfig {
+            session_timeout_seconds: 1, // 1 second timeout
+            ..StreamConfig::default()
+        };
 
-        let mut session = StreamSession::default();
-        session.session_start_time = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        let mut session = StreamSession {
+            session_start_time: std::time::Instant::now() - std::time::Duration::from_secs(2),
+            ..StreamSession::default()
+        };
         session.last_metrics_update = std::time::Instant::now();
 
         let context = StreamContext::new(&config, &session);

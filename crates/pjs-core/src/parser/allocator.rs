@@ -28,12 +28,12 @@ impl AllocatorBackend {
     pub fn current() -> Self {
         #[cfg(feature = "jemalloc")]
         {
-            return Self::Jemalloc;
+            Self::Jemalloc
         }
 
         #[cfg(all(feature = "mimalloc", not(feature = "jemalloc")))]
         {
-            return Self::Mimalloc;
+            Self::Mimalloc
         }
 
         #[cfg(all(not(feature = "jemalloc"), not(feature = "mimalloc")))]

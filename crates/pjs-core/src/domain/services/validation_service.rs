@@ -1095,7 +1095,7 @@ mod tests {
         );
         assert!(
             validator
-                .validate(&JsonData::Float(3.14), &schema, "/")
+                .validate(&JsonData::Float(std::f64::consts::PI), &schema, "/")
                 .is_ok()
         );
         assert!(

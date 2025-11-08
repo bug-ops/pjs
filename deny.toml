@@ -8,17 +8,21 @@ no-default-features = false
 
 [advisories]
 version = 2
-db-urls = ["https://github.com/RustSec/advisory-db"]
+db-urls = ["https://github.com/rustsec/advisory-db"]
 db-path = "~/.cargo/advisory-db"
+vulnerability = "deny"
+unmaintained = "warn"
 yanked = "warn"
+notice = "warn"
 
 # Ignore specific advisories
 ignore = [
-    # Example: "RUSTSEC-2025-0052", # async-std unmaintained - migration to smol/tokio planned
+    # Add specific CVEs to ignore here if needed
 ]
 
 [licenses]
 version = 2
+unlicensed = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -30,7 +34,10 @@ allow = [
     "0BSD",
     "Zlib",
     "Unicode-DFS-2016",
+    "MPL-2.0",
 ]
+copyleft = "warn"
+default = "deny"
 confidence-threshold = 0.8
 exceptions = []
 
@@ -47,7 +54,12 @@ workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
 deny = []
-skip = []
+
+# Skip false positives from feature-gated allocators
+skip = [
+    { name = "tikv-jemallocator", reason = "Feature-gated allocator" },
+    { name = "mimalloc", reason = "Feature-gated allocator" },
+]
 skip-tree = []
 
 [sources]

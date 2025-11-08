@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn test_event_id_dto_conversion() {
         let event_id = EventId::new();
-        let dto = EventIdDto::from(event_id.clone());
+        let dto = EventIdDto::from(event_id);
         let converted_back = EventId::from(dto);
 
         assert_eq!(event_id, converted_back);

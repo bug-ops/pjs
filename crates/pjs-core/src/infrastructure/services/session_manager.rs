@@ -326,8 +326,10 @@ mod tests {
         let manager = SessionManager::new();
 
         // Create session with very short timeout
-        let mut session_config = SessionConfig::default();
-        session_config.session_timeout_seconds = 1; // 1 second
+        let session_config = SessionConfig {
+            session_timeout_seconds: 1, // 1 second
+            ..SessionConfig::default()
+        };
 
         let session = StreamSession::new(session_config);
         let _session_id = session.id();
@@ -359,8 +361,10 @@ mod tests {
         manager.start().await.unwrap();
 
         // Create expired session
-        let mut session_config = SessionConfig::default();
-        session_config.session_timeout_seconds = 1;
+        let session_config = SessionConfig {
+            session_timeout_seconds: 1,
+            ..SessionConfig::default()
+        };
 
         let session = StreamSession::new(session_config);
         manager.add_session(session).await.unwrap();
