@@ -287,8 +287,8 @@ impl ValidationService {
         path: &str,
         min_length: Option<usize>,
         max_length: Option<usize>,
-        _pattern: &Option<std::sync::Arc<str>>,
-        allowed_values: &Option<smallvec::SmallVec<[std::sync::Arc<str>; 8]>>,
+        _pattern: &Option<String>,
+        allowed_values: &Option<smallvec::SmallVec<[String; 8]>>,
     ) -> SchemaValidationResult<()> {
         let value = match data {
             JsonData::String(s) => s,
@@ -326,7 +326,7 @@ impl ValidationService {
         }
 
         if let Some(allowed) = allowed_values
-            && !allowed.iter().any(|v| v.as_ref() == value)
+            && !allowed.iter().any(|v| v.as_str() == value)
         {
             return Err(SchemaValidationError::InvalidEnumValue {
                 path: path.to_string(),
@@ -745,12 +745,11 @@ mod tests {
     fn test_validate_string_enum_values() {
         let validator = ValidationService::new();
         use smallvec::SmallVec;
-        use std::sync::Arc;
 
         let allowed_values = Some(SmallVec::from_vec(vec![
-            Arc::from("red"),
-            Arc::from("green"),
-            Arc::from("blue"),
+            String::from("red"),
+            String::from("green"),
+            String::from("blue"),
         ]));
 
         let schema = Schema::String {

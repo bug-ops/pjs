@@ -3,7 +3,7 @@
 use crate::domain::{
     DomainError, DomainResult,
     entities::{Frame, Stream, stream::StreamConfig},
-    events::DomainEvent,
+    events::{DomainEvent, SessionState},
     value_objects::{JsonData, Priority, SessionId, StreamId},
 };
 use chrono::{DateTime, Utc};
@@ -38,21 +38,6 @@ fn convert_serde_to_domain(value: &SerdeValue) -> JsonData {
             JsonData::Object(map)
         }
     }
-}
-
-/// Session state in its lifecycle
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SessionState {
-    /// Session is being initialized
-    Initializing,
-    /// Session is active with streams
-    Active,
-    /// Session is gracefully closing
-    Closing,
-    /// Session completed successfully
-    Completed,
-    /// Session failed with error
-    Failed,
 }
 
 /// Session configuration

@@ -1367,6 +1367,7 @@ dependencies = [
  "mimalloc",
  "once_cell",
  "parking_lot",
+ "pjs-domain",
  "priority-queue",
  "prometheus",
  "rayon",

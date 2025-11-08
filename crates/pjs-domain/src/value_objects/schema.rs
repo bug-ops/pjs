@@ -72,7 +72,6 @@ impl std::fmt::Display for SchemaId {
 /// };
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub enum Schema {
     /// String type with optional constraints
     String {

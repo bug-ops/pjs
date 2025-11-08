@@ -35,7 +35,7 @@ pub mod events;
 // Re-export core types
 pub use value_objects::{Priority, JsonPath, JsonData, SessionId, StreamId, Schema};
 pub use entities::{Frame, Stream};
-pub use events::DomainEvent;
+pub use events::{DomainEvent, SessionState};
 
 /// Domain Result type
 pub type DomainResult<T> = Result<T, DomainError>;
