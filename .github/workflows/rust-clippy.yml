@@ -11,7 +11,7 @@ name: Rust Clippy Analyze
 
 on:
   push:
-    branches: [ "main", "develop", "feature/*" ]
+    branches: [ "main", "develop" ]
   pull_request:
     branches: [ "main", "develop" ]
   schedule:
