@@ -879,7 +879,7 @@ Built with:
 
 ## Community
 
-- 📖 [Documentation](SPECIFICATION.md) - Complete protocol specification
+- 📖 [Documentation](docs/architecture/SPECIFICATION.md) - Complete protocol specification
 - 📋 [Changelog](CHANGELOG.md) - Detailed version history
 - 📊 [Benchmarks](crates/pjs-bench/README.md) - Comprehensive performance results
 - 💬 [Discussions](https://github.com/bug-ops/pjs/discussions) - Questions and ideas

@@ -1339,6 +1339,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pjs-domain"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
 name = "pjson-rs"
 version = "0.4.3"
 dependencies = [
