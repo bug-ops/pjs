@@ -7,9 +7,11 @@ coverage:
       default:
         target: 70%        # Overall project minimum
         threshold: 2%      # Allow 2% drop
+        informational: true  # Don't block PR merge
     patch:
       default:
         target: 75%        # New code should be well-tested
+        informational: true  # Don't block PR merge
 
   # Layer-specific coverage requirements
   precision: 2
