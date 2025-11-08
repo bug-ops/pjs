@@ -513,7 +513,8 @@ mod tests {
 
         // Start streaming and create skeleton
         assert!(stream.start_streaming().is_ok());
-        let skeleton = stream.create_skeleton_frame()
+        let skeleton = stream
+            .create_skeleton_frame()
             .expect("Failed to create skeleton frame in test");
 
         assert_eq!(

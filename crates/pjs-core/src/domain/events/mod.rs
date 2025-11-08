@@ -454,15 +454,18 @@ mod tests {
             },
         ];
 
-        store.append_events(events.clone())
+        store
+            .append_events(events.clone())
             .expect("Failed to append events to store in test");
         assert_eq!(store.event_count(), 2);
 
-        let session_events = store.get_events_for_session(session_id)
+        let session_events = store
+            .get_events_for_session(session_id)
             .expect("Failed to retrieve session events in test");
         assert_eq!(session_events.len(), 2);
 
-        let stream_events = store.get_events_for_stream(stream_id)
+        let stream_events = store
+            .get_events_for_stream(stream_id)
             .expect("Failed to retrieve stream events in test");
         assert_eq!(stream_events.len(), 1);
     }
@@ -475,10 +478,9 @@ mod tests {
             timestamp: Utc::now(),
         };
 
-        let serialized = serde_json::to_string(&event)
-            .expect("Failed to serialize event in test");
-        let deserialized: DomainEvent = serde_json::from_str(&serialized)
-            .expect("Failed to deserialize event in test");
+        let serialized = serde_json::to_string(&event).expect("Failed to serialize event in test");
+        let deserialized: DomainEvent =
+            serde_json::from_str(&serialized).expect("Failed to deserialize event in test");
 
         assert_eq!(event, deserialized);
     }
@@ -589,11 +591,11 @@ impl DomainEvent {
         metadata.insert("event_type".to_string(), self.event_type().to_string());
         metadata.insert("session_id".to_string(), self.session_id().to_string());
         metadata.insert("timestamp".to_string(), self.occurred_at().to_rfc3339());
-        
+
         if let Some(stream_id) = self.stream_id() {
             metadata.insert("stream_id".to_string(), stream_id.to_string());
         }
-        
+
         metadata
     }
 }

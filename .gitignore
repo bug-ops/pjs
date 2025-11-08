@@ -21,3 +21,6 @@ target
 #.idea/
 tasks
 **/node_modules/
+
+.local
+.claude

@@ -7,6 +7,7 @@ pub mod connection_manager;
 pub mod priority_service;
 // pub mod streaming_orchestrator; // TODO: migrate to GAT
 pub mod gat_orchestrator;
+pub mod validation_service;
 
 pub use connection_manager::{ConnectionManager, ConnectionState, ConnectionStatistics};
 pub use priority_service::PriorityService;
@@ -17,3 +18,4 @@ pub use priority_service::PriorityService;
 pub use gat_orchestrator::{
     GatOrchestratorFactory, GatStreamingOrchestrator, HealthStatus, OrchestratorConfig,
 };
+pub use validation_service::ValidationService;

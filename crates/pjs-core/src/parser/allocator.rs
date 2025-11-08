@@ -312,7 +312,7 @@ impl SimdAllocator {
         // and may not be available in all environments
         AllocatorStats {
             allocated_bytes: 0,
-            resident_bytes: 0, 
+            resident_bytes: 0,
             metadata_bytes: 0,
             backend: self.backend,
         }

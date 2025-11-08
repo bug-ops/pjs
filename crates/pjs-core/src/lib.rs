@@ -45,6 +45,10 @@ pub use domain::{
     },
     services::{
         GatOrchestratorFactory, GatStreamingOrchestrator, HealthStatus, OrchestratorConfig,
+        ValidationService,
+    },
+    value_objects::{
+        JsonData, Schema, SchemaId, SchemaType, SchemaValidationError, SchemaValidationResult,
     },
 };
 
@@ -56,6 +60,10 @@ pub use application::{
     ApplicationError,
     ApplicationResult,
     commands,
+    dto::{
+        SchemaDefinitionDto, SchemaMetadataDto, SchemaRegistrationDto, ValidationErrorDto,
+        ValidationRequestDto, ValidationResultDto,
+    },
     // handlers::{CommandHandler, QueryHandler}, // Disabled: migrate to GAT when implementing CQRS
     queries,
     // services::{SessionService, StreamingService}, // Disabled: replaced by SessionManager
@@ -119,6 +127,7 @@ pub mod prelude {
         Frame,
         FrameFlags,
         FrameHeader,
+        JsonData,
         JsonPath,
         // TODO: Re-add when legacy modules are reconciled
         JsonReconstructor,
@@ -129,6 +138,11 @@ pub mod prelude {
         ProcessResult,
         // QueryHandler, // TODO: migrate to GAT
         Result,
+        Schema,
+        SchemaId,
+        SchemaRepository,
+        SchemaType,
+        SchemaValidationError,
         SemanticMeta,
         SemanticType,
         SessionId,
@@ -138,5 +152,9 @@ pub mod prelude {
         StreamProcessor,
         StreamSession,
         // StreamingService, // TODO: migrate to GAT
+        ValidationService,
     };
 }
+
+// Infrastructure exports for schema validation
+pub use infrastructure::SchemaRepository;
