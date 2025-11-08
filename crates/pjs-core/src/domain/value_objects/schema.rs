@@ -60,7 +60,12 @@ impl std::fmt::Display for SchemaId {
 /// let schema = Schema::Object {
 ///     properties: vec![
 ///         ("id".to_string(), Schema::Integer { minimum: Some(1), maximum: None }),
-///         ("name".to_string(), Schema::String { min_length: Some(1), max_length: Some(100) }),
+///         ("name".to_string(), Schema::String {
+///             min_length: Some(1),
+///             max_length: Some(100),
+///             pattern: None,
+///             allowed_values: None,
+///         }),
 ///     ].into_iter().collect(),
 ///     required: vec!["id".to_string(), "name".to_string()],
 ///     additional_properties: false,

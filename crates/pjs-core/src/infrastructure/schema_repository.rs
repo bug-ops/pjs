@@ -23,7 +23,7 @@ use crate::{
 ///
 /// # Examples
 /// ```
-/// # use pjson_rs::infrastructure::adapters::SchemaRepository;
+/// # use pjson_rs::SchemaRepository;
 /// # use pjson_rs::domain::value_objects::{Schema, SchemaId};
 /// let repo = SchemaRepository::new();
 /// let schema_id = SchemaId::new("user-v1");
