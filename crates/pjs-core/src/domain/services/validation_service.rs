@@ -720,4 +720,452 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn test_validate_number_nan_infinity() {
+        let validator = ValidationService::new();
+        let schema = Schema::number(Some(0.0), Some(100.0));
+
+        // NaN should be rejected
+        let result = validator.validate(&JsonData::Float(f64::NAN), &schema, "/value");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, SchemaValidationError::TypeMismatch { .. }));
+
+        // Infinity should be rejected
+        let result = validator.validate(&JsonData::Float(f64::INFINITY), &schema, "/value");
+        assert!(result.is_err());
+
+        // Negative infinity should be rejected
+        let result = validator.validate(&JsonData::Float(f64::NEG_INFINITY), &schema, "/value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_string_enum_values() {
+        let validator = ValidationService::new();
+        use smallvec::SmallVec;
+        use std::sync::Arc;
+
+        let allowed_values = Some(SmallVec::from_vec(vec![
+            Arc::from("red"),
+            Arc::from("green"),
+            Arc::from("blue"),
+        ]));
+
+        let schema = Schema::String {
+            min_length: None,
+            max_length: None,
+            pattern: None,
+            allowed_values,
+        };
+
+        // Valid enum values
+        assert!(
+            validator
+                .validate(&JsonData::String("red".to_string()), &schema, "/color")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::String("green".to_string()), &schema, "/color")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::String("blue".to_string()), &schema, "/color")
+                .is_ok()
+        );
+
+        // Invalid enum value
+        let result = validator.validate(&JsonData::String("yellow".to_string()), &schema, "/color");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, SchemaValidationError::InvalidEnumValue { .. }));
+    }
+
+    #[test]
+    fn test_validate_array_unique_items() {
+        let validator = ValidationService::new();
+        let schema = Schema::Array {
+            items: Some(Box::new(Schema::integer(None, None))),
+            min_items: None,
+            max_items: None,
+            unique_items: true,
+        };
+
+        // Valid: all unique items
+        let unique = JsonData::Array(vec![
+            JsonData::Integer(1),
+            JsonData::Integer(2),
+            JsonData::Integer(3),
+        ]);
+        assert!(validator.validate(&unique, &schema, "/items").is_ok());
+
+        // Invalid: duplicate items
+        let duplicates = JsonData::Array(vec![
+            JsonData::Integer(1),
+            JsonData::Integer(2),
+            JsonData::Integer(1),
+        ]);
+        let result = validator.validate(&duplicates, &schema, "/items");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, SchemaValidationError::DuplicateItems { .. }));
+    }
+
+    #[test]
+    fn test_validate_array_min_max_items() {
+        let validator = ValidationService::new();
+        let schema = Schema::Array {
+            items: None,
+            min_items: Some(2),
+            max_items: Some(4),
+            unique_items: false,
+        };
+
+        // Valid: within range
+        let valid = JsonData::Array(vec![JsonData::Integer(1), JsonData::Integer(2)]);
+        assert!(validator.validate(&valid, &schema, "/items").is_ok());
+
+        // Invalid: too few items
+        let too_few = JsonData::Array(vec![JsonData::Integer(1)]);
+        let result = validator.validate(&too_few, &schema, "/items");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, SchemaValidationError::ArraySizeConstraint { .. }));
+
+        // Invalid: too many items
+        let too_many = JsonData::Array(vec![
+            JsonData::Integer(1),
+            JsonData::Integer(2),
+            JsonData::Integer(3),
+            JsonData::Integer(4),
+            JsonData::Integer(5),
+        ]);
+        let result = validator.validate(&too_many, &schema, "/items");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SchemaValidationError::ArraySizeConstraint { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_object_additional_properties() {
+        let validator = ValidationService::new();
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), Schema::string(Some(1), Some(100)));
+
+        // Schema disallows additional properties
+        let schema = Schema::Object {
+            properties: properties.clone(),
+            required: vec![],
+            additional_properties: false,
+        };
+
+        let mut valid_obj = HashMap::new();
+        valid_obj.insert("name".to_string(), JsonData::String("test".to_string()));
+
+        // Valid: no additional properties
+        let valid = JsonData::Object(valid_obj.clone());
+        assert!(validator.validate(&valid, &schema, "/obj").is_ok());
+
+        // Invalid: has additional property
+        let mut invalid_obj = valid_obj;
+        invalid_obj.insert("extra".to_string(), JsonData::Integer(42));
+        let invalid = JsonData::Object(invalid_obj);
+        let result = validator.validate(&invalid, &schema, "/obj");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            SchemaValidationError::AdditionalPropertyNotAllowed { .. }
+        ));
+
+        // Schema allows additional properties
+        let schema_allow = Schema::Object {
+            properties,
+            required: vec![],
+            additional_properties: true,
+        };
+
+        let mut obj_with_extra = HashMap::new();
+        obj_with_extra.insert("name".to_string(), JsonData::String("test".to_string()));
+        obj_with_extra.insert("extra".to_string(), JsonData::Integer(42));
+        let with_extra = JsonData::Object(obj_with_extra);
+        assert!(validator.validate(&with_extra, &schema_allow, "/obj").is_ok());
+    }
+
+    #[test]
+    fn test_validate_one_of_single_match() {
+        let validator = ValidationService::new();
+        use smallvec::SmallVec;
+
+        let schema = Schema::OneOf {
+            schemas: SmallVec::from_vec(vec![
+                Box::new(Schema::string(Some(1), None)),
+                Box::new(Schema::integer(Some(0), None)),
+            ]),
+        };
+
+        // Valid: matches exactly one schema (string)
+        assert!(
+            validator
+                .validate(
+                    &JsonData::String("test".to_string()),
+                    &schema,
+                    "/value"
+                )
+                .is_ok()
+        );
+
+        // Valid: matches exactly one schema (integer)
+        assert!(
+            validator
+                .validate(&JsonData::Integer(42), &schema, "/value")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_one_of_no_match() {
+        let validator = ValidationService::new();
+        use smallvec::SmallVec;
+
+        let schema = Schema::OneOf {
+            schemas: SmallVec::from_vec(vec![
+                Box::new(Schema::string(Some(5), None)), // min length 5
+                Box::new(Schema::integer(Some(100), None)), // min 100
+            ]),
+        };
+
+        // Invalid: matches no schemas (string too short, not an integer)
+        let result = validator.validate(
+            &JsonData::String("hi".to_string()),
+            &schema,
+            "/value",
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SchemaValidationError::NoMatchingOneOf { .. }
+        ));
+
+        // Invalid: matches no schemas (integer too small, not a string)
+        let result = validator.validate(&JsonData::Integer(50), &schema, "/value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_one_of_multiple_matches() {
+        let validator = ValidationService::new();
+        use smallvec::SmallVec;
+
+        let schema = Schema::OneOf {
+            schemas: SmallVec::from_vec(vec![
+                Box::new(Schema::integer(None, None)), // matches any integer
+                Box::new(Schema::integer(Some(0), Some(100))), // matches integers 0-100
+            ]),
+        };
+
+        // Invalid: matches both schemas (ambiguous)
+        let result = validator.validate(&JsonData::Integer(50), &schema, "/value");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SchemaValidationError::NoMatchingOneOf { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_all_of_success() {
+        let validator = ValidationService::new();
+        use smallvec::SmallVec;
+
+        let schema = Schema::AllOf {
+            schemas: SmallVec::from_vec(vec![
+                Box::new(Schema::integer(Some(0), None)),   // >= 0
+                Box::new(Schema::integer(None, Some(100))), // <= 100
+            ]),
+        };
+
+        // Valid: matches all schemas
+        assert!(
+            validator
+                .validate(&JsonData::Integer(50), &schema, "/value")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::Integer(0), &schema, "/value")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::Integer(100), &schema, "/value")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_all_of_failure() {
+        let validator = ValidationService::new();
+        use smallvec::SmallVec;
+
+        let schema = Schema::AllOf {
+            schemas: SmallVec::from_vec(vec![
+                Box::new(Schema::integer(Some(0), None)),   // >= 0
+                Box::new(Schema::integer(None, Some(100))), // <= 100
+            ]),
+        };
+
+        // Invalid: fails first constraint
+        let result = validator.validate(&JsonData::Integer(-1), &schema, "/value");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, SchemaValidationError::AllOfFailure { .. }));
+
+        // Invalid: fails second constraint
+        let result = validator.validate(&JsonData::Integer(101), &schema, "/value");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SchemaValidationError::AllOfFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_max_depth_exceeded() {
+        let validator = ValidationService::with_max_depth(5);
+
+        // Create nested structure that exceeds max depth
+        fn create_nested(depth: usize) -> JsonData {
+            if depth == 0 {
+                JsonData::Integer(42)
+            } else {
+                let mut obj = HashMap::new();
+                obj.insert("nested".to_string(), create_nested(depth - 1));
+                JsonData::Object(obj)
+            }
+        }
+
+        fn create_nested_schema(depth: usize) -> Schema {
+            if depth == 0 {
+                Schema::integer(None, None)
+            } else {
+                Schema::Object {
+                    properties: [("nested".to_string(), create_nested_schema(depth - 1))]
+                        .into_iter()
+                        .collect(),
+                    required: vec![],
+                    additional_properties: false,
+                }
+            }
+        }
+
+        let data = create_nested(10);
+        let schema = create_nested_schema(10);
+
+        // Should fail due to depth limit
+        let result = validator.validate(&data, &schema, "/deep");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, SchemaValidationError::TypeMismatch { .. }));
+    }
+
+    #[test]
+    fn test_validate_any_schema() {
+        let validator = ValidationService::new();
+        let schema = Schema::Any;
+
+        // Any schema accepts all types
+        assert!(validator.validate(&JsonData::Null, &schema, "/").is_ok());
+        assert!(
+            validator
+                .validate(&JsonData::Bool(true), &schema, "/")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::Integer(42), &schema, "/")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::Float(3.14), &schema, "/")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::String("test".to_string()), &schema, "/")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::Array(vec![]), &schema, "/")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::Object(HashMap::new()), &schema, "/")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_type_mismatches() {
+        let validator = ValidationService::new();
+
+        // Test all type mismatches
+        let test_cases = vec![
+            (Schema::Null, JsonData::Integer(42), "null"),
+            (Schema::Boolean, JsonData::String("true".to_string()), "boolean"),
+            (Schema::integer(None, None), JsonData::String("42".to_string()), "integer"),
+            (Schema::number(None, None), JsonData::String("3.14".to_string()), "number"),
+            (Schema::string(None, None), JsonData::Integer(42), "string"),
+            (
+                Schema::Array {
+                    items: None,
+                    min_items: None,
+                    max_items: None,
+                    unique_items: false,
+                },
+                JsonData::Integer(42),
+                "array",
+            ),
+            (
+                Schema::Object {
+                    properties: HashMap::new(),
+                    required: vec![],
+                    additional_properties: true,
+                },
+                JsonData::Integer(42),
+                "object",
+            ),
+        ];
+
+        for (schema, data, expected_type) in test_cases {
+            let result = validator.validate(&data, &schema, "/test");
+            assert!(result.is_err(), "Expected error for {expected_type}");
+            let err = result.unwrap_err();
+            assert!(
+                matches!(err, SchemaValidationError::TypeMismatch { .. }),
+                "Expected TypeMismatch for {expected_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_default_validation_service() {
+        let default = ValidationService::default();
+        let created = ValidationService::new();
+
+        // Both should have same max_depth
+        let schema = Schema::integer(None, None);
+        let data = JsonData::Integer(42);
+
+        assert!(default.validate(&data, &schema, "/").is_ok());
+        assert!(created.validate(&data, &schema, "/").is_ok());
+    }
 }

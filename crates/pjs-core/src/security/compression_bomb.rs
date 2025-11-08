@@ -74,6 +74,7 @@ impl CompressionBombConfig {
 }
 
 /// Protected reader that monitors decompression ratios and sizes
+#[derive(Debug)]
 pub struct CompressionBombProtector<R: Read> {
     inner: R,
     config: CompressionBombConfig,
@@ -433,5 +434,149 @@ mod tests {
         assert_eq!(stats.decompressed_size, 0); // No reads yet
         assert_eq!(stats.ratio, 0.0);
         assert_eq!(stats.compression_depth, 0);
+    }
+
+    #[test]
+    fn test_stats_with_zero_compressed_size() {
+        let data = b"test";
+        let cursor = Cursor::new(data.as_slice());
+
+        // Create protector with zero compressed size
+        let protector = CompressionBombProtector::new(cursor, CompressionBombConfig::default(), 0);
+        let stats = protector.stats();
+
+        assert_eq!(stats.compressed_size, 0);
+        assert_eq!(stats.ratio, 0.0); // Should handle division by zero
+    }
+
+    #[test]
+    fn test_into_inner() {
+        let data = b"test data";
+        let cursor = Cursor::new(data.as_slice());
+        let original_position = cursor.position();
+
+        let protector = CompressionBombProtector::new(cursor, CompressionBombConfig::default(), data.len());
+
+        // Extract inner reader
+        let inner = protector.into_inner();
+        assert_eq!(inner.position(), original_position);
+    }
+
+    #[test]
+    fn test_protect_nested_reader_success() {
+        let detector = CompressionBombDetector::new(CompressionBombConfig {
+            max_compression_depth: 3,
+            ..Default::default()
+        });
+
+        let data = b"nested compression test";
+        let cursor = Cursor::new(data.as_slice());
+
+        // Create nested reader at depth 1 (within limit)
+        let result = detector.protect_nested_reader(cursor, data.len(), 1);
+        assert!(result.is_ok());
+
+        let protector = result.unwrap();
+        let stats = protector.stats();
+        assert_eq!(stats.compression_depth, 1);
+    }
+
+    #[test]
+    fn test_protect_nested_reader_depth_exceeded() {
+        let detector = CompressionBombDetector::new(CompressionBombConfig {
+            max_compression_depth: 2,
+            ..Default::default()
+        });
+
+        let data = b"nested compression test";
+        let cursor = Cursor::new(data.as_slice());
+
+        // Try to create nested reader at depth 3 (exceeds limit)
+        let result = detector.protect_nested_reader(cursor, data.len(), 3);
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Compression depth exceeded") || error_msg.contains("Security error"));
+    }
+
+    #[test]
+    fn test_validate_pre_decompression_size_exceeded() {
+        let config = CompressionBombConfig {
+            max_decompressed_size: 1024,
+            ..Default::default()
+        };
+        let detector = CompressionBombDetector::new(config);
+
+        // Try to validate compressed data larger than max decompressed size
+        let result = detector.validate_pre_decompression(2048);
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("exceeds maximum allowed"));
+    }
+
+    #[test]
+    fn test_validate_pre_decompression_success() {
+        let detector = CompressionBombDetector::default();
+
+        // Reasonable size should pass
+        let result = detector.validate_pre_decompression(1024);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_protected_reader_stats_after_read() {
+        let data = b"Hello, world!";
+        let cursor = Cursor::new(data.as_slice());
+
+        let compressed_size = 5; // Simulating 5 bytes compressed to 13 bytes
+        let mut protector = CompressionBombProtector::new(cursor, CompressionBombConfig::default(), compressed_size);
+
+        let mut buffer = Vec::new();
+        protector.read_to_end(&mut buffer).unwrap();
+
+        let stats = protector.stats();
+        assert_eq!(stats.compressed_size, compressed_size);
+        assert_eq!(stats.decompressed_size, data.len());
+
+        let expected_ratio = data.len() as f64 / compressed_size as f64;
+        assert!((stats.ratio - expected_ratio).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_compression_bomb_error_display() {
+        let ratio_err = CompressionBombError::RatioExceeded {
+            ratio: 150.5,
+            max_ratio: 100.0,
+        };
+        assert!(ratio_err.to_string().contains("150.5"));
+        assert!(ratio_err.to_string().contains("100.0"));
+
+        let size_err = CompressionBombError::SizeExceeded {
+            size: 2048,
+            max_size: 1024,
+        };
+        assert!(size_err.to_string().contains("2048"));
+        assert!(size_err.to_string().contains("1024"));
+
+        let depth_err = CompressionBombError::DepthExceeded {
+            depth: 5,
+            max_depth: 3,
+        };
+        assert!(depth_err.to_string().contains("5"));
+        assert!(depth_err.to_string().contains("3"));
+    }
+
+    #[test]
+    fn test_detector_default() {
+        let detector1 = CompressionBombDetector::default();
+        let detector2 = CompressionBombDetector::new(CompressionBombConfig::default());
+
+        // Both should have same configuration values
+        assert_eq!(detector1.config.max_ratio, detector2.config.max_ratio);
+        assert_eq!(
+            detector1.config.max_decompressed_size,
+            detector2.config.max_decompressed_size
+        );
     }
 }
