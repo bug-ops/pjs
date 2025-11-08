@@ -45,25 +45,25 @@ component_management:
   individual_components:
     # Domain layer - 80% minimum
     - component_id: domain
+      name: Domain Layer
       paths:
         - "crates/pjs-core/src/domain/**"
-      target: 80%
-    
+
     # Security modules - 100% required
     - component_id: security
+      name: Security Modules
       paths:
         - "crates/pjs-core/src/security/**"
         - "crates/pjs-core/src/domain/services/validation_service.rs"
-      target: 100%
-    
+
     # Application layer - 70% minimum
     - component_id: application
+      name: Application Layer
       paths:
         - "crates/pjs-core/src/application/**"
-      target: 70%
-    
+
     # Infrastructure - 60% minimum
     - component_id: infrastructure
+      name: Infrastructure Layer
       paths:
         - "crates/pjs-core/src/infrastructure/**"
-      target: 60%
