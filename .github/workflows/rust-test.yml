@@ -44,14 +44,17 @@ jobs:
     - name: Setup sccache (Unix)
       if: matrix.os != 'windows-latest'
       uses: mozilla-actions/sccache-action@v0.0.4
+      continue-on-error: true
 
     - name: Setup sccache (Windows)
       if: matrix.os == 'windows-latest'
       uses: mozilla-actions/sccache-action@v0.0.4
+      continue-on-error: true
       with:
         version: "v0.7.4"
 
     - name: Configure sccache
+      if: success()
       run: |
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
         echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
@@ -81,7 +84,9 @@ jobs:
       run: cargo test --workspace --doc --all-features
 
     - name: sccache stats
-      run: sccache --show-stats
+      if: always()
+      run: sccache --show-stats || echo "sccache not available"
+      continue-on-error: true
       shell: bash
 
   # Code coverage (Linux only)
