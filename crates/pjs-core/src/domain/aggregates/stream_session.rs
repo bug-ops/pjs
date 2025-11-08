@@ -473,7 +473,7 @@ impl StreamSession {
             ));
         }
 
-        self.expires_at = self.expires_at + chrono::Duration::seconds(additional_seconds as i64);
+        self.expires_at += chrono::Duration::seconds(additional_seconds as i64);
         self.update_timestamp();
 
         self.add_event(DomainEvent::SessionTimeoutExtended {

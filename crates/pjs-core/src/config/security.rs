@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Security configuration for the PJS system
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SecurityConfig {
     /// JSON processing limits
     pub json: JsonLimits,
@@ -124,17 +124,6 @@ pub struct SessionLimits {
     pub max_session_data_size: usize,
 }
 
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            json: JsonLimits::default(),
-            buffers: BufferLimits::default(),
-            network: NetworkLimits::default(),
-            sessions: SessionLimits::default(),
-        }
-    }
-}
-
 impl Default for JsonLimits {
     fn default() -> Self {
         Self {
@@ -250,7 +239,7 @@ impl SecurityConfig {
                 max_depth: 32,
                 max_object_keys: 1_000,
                 max_array_length: 100_000,
-                max_string_length: 1 * 1024 * 1024, // 1MB
+                max_string_length: 1024 * 1024, // 1MB
             },
             buffers: BufferLimits {
                 max_buffer_size: 10 * 1024 * 1024, // 10MB
@@ -260,7 +249,7 @@ impl SecurityConfig {
                 max_buffers_per_bucket: 10,
             },
             network: NetworkLimits {
-                max_websocket_frame_size: 1 * 1024 * 1024, // 1MB
+                max_websocket_frame_size: 1024 * 1024, // 1MB
                 max_concurrent_connections: 1_000,
                 connection_timeout_secs: 15,
                 max_requests_per_second: 10,

@@ -13,7 +13,6 @@ use crate::domain::{
 };
 use chrono::Utc;
 use std::{
-    future::Future,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -88,111 +87,107 @@ where
 
     /// Stream frames with priority-based processing - GAT version with zero allocation
     // Note: tracing instrument removed due to GAT lifetime constraints
-    pub fn stream_with_priority(
+    pub async fn stream_with_priority(
         &self,
         session_id: SessionId,
         stream_id: StreamId,
         frames: Vec<Frame>,
-    ) -> impl Future<Output = DomainResult<StreamingStats>> + Send
+    ) -> DomainResult<StreamingStats>
     where
         Self: 'static,
     {
-        async move {
-            let start_time = Instant::now();
-            info!(
-                "Starting GAT-based streaming for session {} stream {}",
-                session_id, stream_id
-            );
+        let start_time = Instant::now();
+        info!(
+            "Starting GAT-based streaming for session {} stream {}",
+            session_id, stream_id
+        );
 
-            // 1. Validate session exists (zero-cost GAT future)
-            let session = self
-                .session_repository
-                .find_session(session_id)
-                .await?
-                .ok_or_else(|| {
-                    crate::domain::DomainError::SessionNotFound(format!(
-                        "Session {} not found",
-                        session_id
-                    ))
-                })?;
+        // 1. Validate session exists (zero-cost GAT future)
+        let session = self
+            .session_repository
+            .find_session(session_id)
+            .await?
+            .ok_or_else(|| {
+                crate::domain::DomainError::SessionNotFound(format!(
+                    "Session {} not found",
+                    session_id
+                ))
+            })?;
 
-            debug!(
-                "Session {} found with {} streams",
-                session_id,
-                session.streams().len()
-            );
+        debug!(
+            "Session {} found with {} streams",
+            session_id,
+            session.streams().len()
+        );
 
-            // 2. Process frames with priority optimization
-            let stats = self.process_frames_optimized(frames, &session).await?;
+        // 2. Process frames with priority optimization
+        let stats = self.process_frames_optimized(frames, &session).await?;
 
-            // 3. Publish completion event (zero-cost GAT future)
-            let completion_event = DomainEvent::StreamCompleted {
-                session_id,
-                stream_id,
-                timestamp: Utc::now(),
-            };
+        // 3. Publish completion event (zero-cost GAT future)
+        let completion_event = DomainEvent::StreamCompleted {
+            session_id,
+            stream_id,
+            timestamp: Utc::now(),
+        };
 
-            self.event_publisher.publish(completion_event).await?;
+        self.event_publisher.publish(completion_event).await?;
 
-            let total_time = start_time.elapsed();
-            info!(
-                "GAT streaming completed in {:?}: {} frames, {} bytes",
-                total_time, stats.frames_processed, stats.bytes_written
-            );
+        let total_time = start_time.elapsed();
+        info!(
+            "GAT streaming completed in {:?}: {} frames, {} bytes",
+            total_time, stats.frames_processed, stats.bytes_written
+        );
 
-            Ok(StreamingStats {
-                processing_time: total_time,
-                ..stats
-            })
-        }
+        Ok(StreamingStats {
+            processing_time: total_time,
+            ..stats
+        })
     }
 
     /// Process multiple streams concurrently using GAT futures
-    pub fn process_concurrent_streams(
+    pub async fn process_concurrent_streams(
         &self,
         streams: Vec<(SessionId, StreamId, Vec<Frame>)>,
-    ) -> impl Future<Output = DomainResult<Vec<StreamingStats>>> + Send
+    ) -> DomainResult<Vec<StreamingStats>>
     where
         Self: 'static,
     {
-        async move {
-            let start_time = Instant::now();
+        let start_time = Instant::now();
 
-            if streams.len() > self.config.max_concurrent_streams {
-                warn!(
-                    "Limiting concurrent streams from {} to {}",
-                    streams.len(),
-                    self.config.max_concurrent_streams
-                );
-            }
-
-            let limited_streams = streams
-                .into_iter()
-                .take(self.config.max_concurrent_streams)
-                .collect::<Vec<_>>();
-
-            // Use GAT futures for true zero-cost concurrency
-            let mut tasks = Vec::new();
-            for (session_id, stream_id, frames) in limited_streams {
-                let future = self.stream_with_priority(session_id, stream_id, frames);
-                tasks.push(future);
-            }
-
-            // Process all streams concurrently
-            let mut results = Vec::new();
-            for task in tasks {
-                results.push(task.await?);
-            }
-
-            let total_time = start_time.elapsed();
-            info!(
-                "Processed {} streams concurrently in {:?}",
-                results.len(),
-                total_time
+        if streams.len() > self.config.max_concurrent_streams {
+            warn!(
+                "Limiting concurrent streams from {} to {}",
+                streams.len(),
+                self.config.max_concurrent_streams
             );
-
-            Ok(results)
         }
+
+        let limited_streams = streams
+            .into_iter()
+            .take(self.config.max_concurrent_streams)
+            .collect::<Vec<_>>();
+
+        // Use GAT futures for true zero-cost concurrency
+        let mut tasks = Vec::new();
+        for (session_id, stream_id, frames) in limited_streams {
+            let future = self.stream_with_priority(session_id, stream_id, frames);
+            tasks.push(future);
+        }
+
+        // Process all streams concurrently
+        let mut results = Vec::new();
+        for task in tasks {
+            results.push(task.await?);
+        }
+
+        let total_time = start_time.elapsed();
+        info!(
+            "Processed {} streams concurrently in {:?}",
+            results.len(),
+            total_time
+        );
+
+        Ok(results)
     }
 
     /// Optimize frame processing based on priority and session state
@@ -209,8 +204,8 @@ where
             cache_misses: 0,
         };
 
-        // Sort frames by priority for optimal processing order
-        frames.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        // Sort frames by priority for optimal processing order (descending)
+        frames.sort_by_key(|frame| std::cmp::Reverse(frame.priority()));
 
         let batch_size = if session.streams().len() > 5 {
             self.config.batch_size * 2 // Larger batches for busy sessions
@@ -264,42 +259,40 @@ where
     }
 
     /// Health check using GAT futures
-    pub fn health_check(&self) -> impl Future<Output = DomainResult<HealthStatus>> + Send
+    pub async fn health_check(&self) -> DomainResult<HealthStatus>
     where
         Self: 'static,
     {
-        async move {
-            let start_time = Instant::now();
+        let start_time = Instant::now();
 
-            // Test repository connection with zero-cost GAT future
-            let active_sessions = self.session_repository.find_active_sessions().await?;
-            let repository_latency = start_time.elapsed();
+        // Test repository connection with zero-cost GAT future
+        let active_sessions = self.session_repository.find_active_sessions().await?;
+        let repository_latency = start_time.elapsed();
 
-            // Test event publisher with a dummy event
-            let test_event = DomainEvent::StreamCompleted {
-                session_id: SessionId::new(),
-                stream_id: StreamId::new(),
-                timestamp: Utc::now(),
-            };
-            let event_start = Instant::now();
-            self.event_publisher.publish(test_event).await?;
-            let event_publisher_latency = event_start.elapsed();
+        // Test event publisher with a dummy event
+        let test_event = DomainEvent::StreamCompleted {
+            session_id: SessionId::new(),
+            stream_id: StreamId::new(),
+            timestamp: Utc::now(),
+        };
+        let event_start = Instant::now();
+        self.event_publisher.publish(test_event).await?;
+        let event_publisher_latency = event_start.elapsed();
 
-            Ok(HealthStatus {
-                active_sessions: active_sessions.len(),
-                repository_latency,
-                event_publisher_latency,
-                total_latency: start_time.elapsed(),
-                status: if repository_latency < Duration::from_millis(100)
-                    && event_publisher_latency < Duration::from_millis(50)
-                {
-                    "healthy"
-                } else {
-                    "degraded"
-                }
-                .to_string(),
-            })
-        }
+        Ok(HealthStatus {
+            active_sessions: active_sessions.len(),
+            repository_latency,
+            event_publisher_latency,
+            total_latency: start_time.elapsed(),
+            status: if repository_latency < Duration::from_millis(100)
+                && event_publisher_latency < Duration::from_millis(50)
+            {
+                "healthy"
+            } else {
+                "degraded"
+            }
+            .to_string(),
+        })
     }
 
     /// Get configuration

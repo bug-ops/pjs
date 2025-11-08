@@ -203,26 +203,26 @@ impl ValidationService {
             }
         };
 
-        if let Some(min) = minimum {
-            if value < min {
-                return Err(SchemaValidationError::OutOfRange {
-                    path: path.to_string(),
-                    value: value.to_string(),
-                    min: min.to_string(),
-                    max: maximum.map_or("∞".to_string(), |m| m.to_string()),
-                });
-            }
+        if let Some(min) = minimum
+            && value < min
+        {
+            return Err(SchemaValidationError::OutOfRange {
+                path: path.to_string(),
+                value: value.to_string(),
+                min: min.to_string(),
+                max: maximum.map_or("∞".to_string(), |m| m.to_string()),
+            });
         }
 
-        if let Some(max) = maximum {
-            if value > max {
-                return Err(SchemaValidationError::OutOfRange {
-                    path: path.to_string(),
-                    value: value.to_string(),
-                    min: minimum.map_or("-∞".to_string(), |m| m.to_string()),
-                    max: max.to_string(),
-                });
-            }
+        if let Some(max) = maximum
+            && value > max
+        {
+            return Err(SchemaValidationError::OutOfRange {
+                path: path.to_string(),
+                value: value.to_string(),
+                min: minimum.map_or("-∞".to_string(), |m| m.to_string()),
+                max: max.to_string(),
+            });
         }
 
         Ok(())
@@ -256,26 +256,26 @@ impl ValidationService {
             });
         }
 
-        if let Some(min) = minimum {
-            if value < min {
-                return Err(SchemaValidationError::OutOfRange {
-                    path: path.to_string(),
-                    value: value.to_string(),
-                    min: min.to_string(),
-                    max: maximum.map_or("∞".to_string(), |m| m.to_string()),
-                });
-            }
+        if let Some(min) = minimum
+            && value < min
+        {
+            return Err(SchemaValidationError::OutOfRange {
+                path: path.to_string(),
+                value: value.to_string(),
+                min: min.to_string(),
+                max: maximum.map_or("∞".to_string(), |m| m.to_string()),
+            });
         }
 
-        if let Some(max) = maximum {
-            if value > max {
-                return Err(SchemaValidationError::OutOfRange {
-                    path: path.to_string(),
-                    value: value.to_string(),
-                    min: minimum.map_or("-∞".to_string(), |m| m.to_string()),
-                    max: max.to_string(),
-                });
-            }
+        if let Some(max) = maximum
+            && value > max
+        {
+            return Err(SchemaValidationError::OutOfRange {
+                path: path.to_string(),
+                value: value.to_string(),
+                min: minimum.map_or("-∞".to_string(), |m| m.to_string()),
+                max: max.to_string(),
+            });
         }
 
         Ok(())
@@ -303,40 +303,41 @@ impl ValidationService {
 
         let len = value.chars().count();
 
-        if let Some(min) = min_length {
-            if len < min {
-                return Err(SchemaValidationError::StringLengthConstraint {
-                    path: path.to_string(),
-                    actual: len,
-                    min,
-                    max: max_length.unwrap_or(usize::MAX),
-                });
-            }
+        if let Some(min) = min_length
+            && len < min
+        {
+            return Err(SchemaValidationError::StringLengthConstraint {
+                path: path.to_string(),
+                actual: len,
+                min,
+                max: max_length.unwrap_or(usize::MAX),
+            });
         }
 
-        if let Some(max) = max_length {
-            if len > max {
-                return Err(SchemaValidationError::StringLengthConstraint {
-                    path: path.to_string(),
-                    actual: len,
-                    min: min_length.unwrap_or(0),
-                    max,
-                });
-            }
+        if let Some(max) = max_length
+            && len > max
+        {
+            return Err(SchemaValidationError::StringLengthConstraint {
+                path: path.to_string(),
+                actual: len,
+                min: min_length.unwrap_or(0),
+                max,
+            });
         }
 
-        if let Some(allowed) = allowed_values {
-            if !allowed.iter().any(|v| v.as_ref() == value) {
-                return Err(SchemaValidationError::InvalidEnumValue {
-                    path: path.to_string(),
-                    value: value.clone(),
-                });
-            }
+        if let Some(allowed) = allowed_values
+            && !allowed.iter().any(|v| v.as_ref() == value)
+        {
+            return Err(SchemaValidationError::InvalidEnumValue {
+                path: path.to_string(),
+                value: value.clone(),
+            });
         }
 
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn validate_array(
         &self,
         data: &JsonData,
@@ -360,26 +361,26 @@ impl ValidationService {
 
         let len = arr.len();
 
-        if let Some(min) = min_items {
-            if len < min {
-                return Err(SchemaValidationError::ArraySizeConstraint {
-                    path: path.to_string(),
-                    actual: len,
-                    min,
-                    max: max_items.unwrap_or(usize::MAX),
-                });
-            }
+        if let Some(min) = min_items
+            && len < min
+        {
+            return Err(SchemaValidationError::ArraySizeConstraint {
+                path: path.to_string(),
+                actual: len,
+                min,
+                max: max_items.unwrap_or(usize::MAX),
+            });
         }
 
-        if let Some(max) = max_items {
-            if len > max {
-                return Err(SchemaValidationError::ArraySizeConstraint {
-                    path: path.to_string(),
-                    actual: len,
-                    min: min_items.unwrap_or(0),
-                    max,
-                });
-            }
+        if let Some(max) = max_items
+            && len > max
+        {
+            return Err(SchemaValidationError::ArraySizeConstraint {
+                path: path.to_string(),
+                actual: len,
+                min: min_items.unwrap_or(0),
+                max,
+            });
         }
 
         if unique_items {

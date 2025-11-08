@@ -221,14 +221,15 @@ impl StreamSession {
     pub fn from_performance_context(
         ctx: &super::prioritization_service::PerformanceContext,
     ) -> Self {
-        let mut session = Self::default();
-        session.current_latency_ms = ctx.average_latency_ms;
-        session.current_bandwidth_mbps = ctx.available_bandwidth_mbps;
-        session.current_error_rate = ctx.error_rate;
-        session.current_cpu_usage = ctx.cpu_usage;
-        session.current_memory_usage_percent = ctx.memory_usage_percent;
-        session.active_connection_count = ctx.connection_count;
-        session
+        Self {
+            current_latency_ms: ctx.average_latency_ms,
+            current_bandwidth_mbps: ctx.available_bandwidth_mbps,
+            current_error_rate: ctx.error_rate,
+            current_cpu_usage: ctx.cpu_usage,
+            current_memory_usage_percent: ctx.memory_usage_percent,
+            active_connection_count: ctx.connection_count,
+            ..Default::default()
+        }
     }
 
     /// Convert to legacy PerformanceContext for backward compatibility

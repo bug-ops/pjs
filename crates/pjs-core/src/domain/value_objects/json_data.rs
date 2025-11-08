@@ -9,8 +9,9 @@ use std::fmt;
 
 /// Domain-specific representation of JSON-like data
 /// This replaces serde_json::Value to maintain Clean Architecture principles
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum JsonData {
+    #[default]
     /// Null value
     Null,
     /// Boolean value
@@ -281,12 +282,6 @@ impl fmt::Display for JsonData {
                 write!(f, "}}")
             }
         }
-    }
-}
-
-impl Default for JsonData {
-    fn default() -> Self {
-        Self::Null
     }
 }
 

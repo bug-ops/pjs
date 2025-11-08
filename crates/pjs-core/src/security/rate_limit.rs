@@ -137,6 +137,12 @@ pub struct WebSocketRateLimiter {
     clients: Arc<DashMap<IpAddr, ClientRateLimit>>,
 }
 
+impl Default for WebSocketRateLimiter {
+    fn default() -> Self {
+        Self::new(RateLimitConfig::default())
+    }
+}
+
 impl WebSocketRateLimiter {
     /// Create new rate limiter with configuration
     pub fn new(config: RateLimitConfig) -> Self {
@@ -144,11 +150,6 @@ impl WebSocketRateLimiter {
             config,
             clients: Arc::new(DashMap::new()),
         }
-    }
-
-    /// Create with default configuration
-    pub fn default() -> Self {
-        Self::new(RateLimitConfig::default())
     }
 
     /// Check if request is allowed (HTTP upgrade to WebSocket)
@@ -236,13 +237,8 @@ impl WebSocketRateLimiter {
 
         self.clients.retain(|_, client| {
             // Remove clients with no recent activity and no connections
-            if client.connection_count == 0
-                && client.requests.last().map_or(true, |&time| time < cutoff)
-            {
-                false
-            } else {
-                true
-            }
+            !(client.connection_count == 0
+                && client.requests.last().is_none_or(|&time| time < cutoff))
         });
     }
 }

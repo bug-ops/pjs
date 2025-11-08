@@ -167,22 +167,22 @@ impl BufferPool {
         }
 
         // Try to get a buffer from existing bucket
-        if let Some(mut bucket_ref) = self.pools.get_mut(&size) {
-            if let Some(mut buffer) = bucket_ref.buffers.pop() {
-                buffer.last_used = Instant::now();
-                bucket_ref.last_access = Instant::now();
+        if let Some(mut bucket_ref) = self.pools.get_mut(&size)
+            && let Some(mut buffer) = bucket_ref.buffers.pop()
+        {
+            buffer.last_used = Instant::now();
+            bucket_ref.last_access = Instant::now();
 
-                if self.config.track_stats {
-                    self.increment_cache_hits();
-                }
-
-                return Ok(PooledBuffer::new(
-                    buffer,
-                    Arc::clone(&self.pools),
-                    size,
-                    self.config.max_buffers_per_bucket,
-                ));
+            if self.config.track_stats {
+                self.increment_cache_hits();
             }
+
+            return Ok(PooledBuffer::new(
+                buffer,
+                Arc::clone(&self.pools),
+                size,
+                self.config.max_buffers_per_bucket,
+            ));
         }
 
         // No buffer available, create new one
@@ -532,7 +532,7 @@ impl AlignedBuffer {
     /// which is critical for SIMD operations.
     pub fn is_aligned(&self) -> bool {
         let ptr_addr = self.ptr.as_ptr() as usize;
-        ptr_addr % self.alignment == 0
+        ptr_addr.is_multiple_of(self.alignment)
     }
 
     /// Get the actual alignment of the buffer

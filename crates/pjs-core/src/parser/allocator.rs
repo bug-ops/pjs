@@ -10,9 +10,10 @@ use std::{
 };
 
 /// Memory allocator backend
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AllocatorBackend {
     /// System allocator (default)
+    #[default]
     System,
     /// Jemalloc allocator (high-performance, good for heavy allocation workloads)
     #[cfg(feature = "jemalloc")]
@@ -336,12 +337,6 @@ pub struct AllocatorStats {
     pub metadata_bytes: usize,
     /// Backend being used
     pub backend: AllocatorBackend,
-}
-
-impl Default for AllocatorBackend {
-    fn default() -> Self {
-        Self::System
-    }
 }
 
 /// Global allocator instance

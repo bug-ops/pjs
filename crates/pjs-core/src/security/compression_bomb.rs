@@ -211,15 +211,16 @@ pub struct CompressionBombDetector {
     config: CompressionBombConfig,
 }
 
+impl Default for CompressionBombDetector {
+    fn default() -> Self {
+        Self::new(CompressionBombConfig::default())
+    }
+}
+
 impl CompressionBombDetector {
     /// Create new detector with configuration
     pub fn new(config: CompressionBombConfig) -> Self {
         Self { config }
-    }
-
-    /// Create detector with default configuration
-    pub fn default() -> Self {
-        Self::new(CompressionBombConfig::default())
     }
 
     /// Validate compressed data before decompression

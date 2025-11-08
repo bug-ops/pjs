@@ -184,9 +184,7 @@ impl SonicParser {
                     self.validator.validate_json_depth(max_depth)?;
                 }
                 '}' | ']' => {
-                    if depth > 0 {
-                        depth -= 1;
-                    }
+                    depth = depth.saturating_sub(1);
                 }
                 _ => {}
             }

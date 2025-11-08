@@ -65,10 +65,16 @@ pub struct SessionManager {
     cleanup_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::with_config(SessionManagerConfig::default())
+    }
+}
+
 impl SessionManager {
     /// Create new session manager with default config
     pub fn new() -> Self {
-        Self::with_config(SessionManagerConfig::default())
+        Self::default()
     }
 
     /// Create new session manager with custom config

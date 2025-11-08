@@ -180,7 +180,7 @@ impl EventPublisherGat for InMemoryEventPublisher {
                     .event_log
                     .iter()
                     .take(1000) // Remove first 1000 found entries
-                    .map(|entry| entry.key().clone())
+                    .map(|entry| *entry.key())
                     .collect();
 
                 for key in to_remove {
@@ -244,7 +244,7 @@ impl EventPublisherGat for InMemoryEventPublisher {
                     .event_log
                     .iter()
                     .take(1000)
-                    .map(|entry| entry.key().clone())
+                    .map(|entry| *entry.key())
                     .collect();
 
                 for key in to_remove {
