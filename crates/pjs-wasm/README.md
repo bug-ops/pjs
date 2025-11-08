@@ -149,6 +149,44 @@ const v = PjsParser.version();
 console.log(v); // "0.1.0"
 ```
 
+##### `generateFrames(jsonStr: string, minPriority: number): Frame[]`
+
+Generate priority-based frames from JSON data.
+
+**Parameters:**
+- `jsonStr` - The JSON string to convert to frames
+- `minPriority` - Minimum priority threshold (1-255)
+
+**Returns:**
+- Array of frames ordered by priority (highest first)
+
+**Throws:**
+- Error if JSON is invalid or priority is out of range
+
+**Example:**
+```javascript
+const parser = new PjsParser();
+const frames = parser.generateFrames('{"id": 1, "name": "Alice"}', 50);
+// Returns: [skeleton, critical_patches, high_patches, complete]
+```
+
+##### `withConfig(config: PriorityConfigBuilder): PjsParser` (static)
+
+Create a parser with custom priority configuration.
+
+**Parameters:**
+- `config` - Priority configuration builder
+
+**Returns:**
+- New parser instance with custom configuration
+
+**Example:**
+```javascript
+const config = new PriorityConfigBuilder()
+    .addCriticalField('user_id');
+const parser = PjsParser.withConfig(config);
+```
+
 ### `version(): string`
 
 Get the WASM module version.
@@ -260,14 +298,97 @@ Contributions are welcome! Please read the [Contributing Guide](../../CONTRIBUTI
 - [API Documentation](https://docs.rs/pjson-rs)
 - [wasm-bindgen Documentation](https://rustwasm.github.io/docs/wasm-bindgen/)
 
+## Advanced Features
+
+### Priority-Based Frame Generation
+
+Generate priority-ordered frames from JSON data:
+
+```javascript
+import { PjsParser, PriorityConstants } from 'pjs-wasm';
+
+const parser = new PjsParser();
+
+// Generate frames ordered by priority
+const frames = parser.generateFrames(
+    JSON.stringify({
+        id: 1,
+        name: "Alice",
+        bio: "Software developer",
+        analytics: { views: 1000 }
+    }),
+    PriorityConstants.MEDIUM  // Minimum priority threshold
+);
+
+// Frames are ordered: skeleton → critical → high → medium → complete
+```
+
+### Priority Constants
+
+```javascript
+import { PriorityConstants } from 'pjs-wasm';
+
+PriorityConstants.CRITICAL    // 100 - Essential data (IDs, status)
+PriorityConstants.HIGH        // 80  - Important visible data (names, titles)
+PriorityConstants.MEDIUM      // 50  - Regular content
+PriorityConstants.LOW         // 25  - Supplementary data
+PriorityConstants.BACKGROUND  // 10  - Analytics, logs
+```
+
+### Custom Priority Configuration
+
+Customize which fields receive which priorities:
+
+```javascript
+import { PjsParser, PriorityConfigBuilder } from 'pjs-wasm';
+
+const config = new PriorityConfigBuilder()
+    .addCriticalField('user_id')
+    .addCriticalField('session_id')
+    .addHighField('display_name')
+    .addHighField('email')
+    .addLowPattern('debug')           // Fields containing "debug" → low priority
+    .addBackgroundPattern('trace')    // Fields containing "trace" → background priority
+    .setLargeArrayThreshold(200)      // Arrays >200 elements → background priority
+    .setLargeStringThreshold(5000);   // Strings >5000 chars → low priority
+
+const parser = PjsParser.withConfig(config);
+
+const frames = parser.generateFrames(
+    JSON.stringify({ user_id: 123, display_name: "Alice" }),
+    PriorityConstants.LOW
+);
+```
+
+### Progressive Rendering Example
+
+```javascript
+const parser = new PjsParser();
+const frames = parser.generateFrames(jsonData, PriorityConstants.MEDIUM);
+
+for (const frame of frames) {
+    switch (frame.frame_type) {
+        case 'Skeleton':
+            renderLoadingSkeleton(frame.payload);
+            break;
+        case 'Patch':
+            applyDataPatches(frame.payload.patches);
+            break;
+        case 'Complete':
+            finalizeRendering();
+            break;
+    }
+}
+```
+
 ## Future Enhancements
 
 Planned features for future versions:
 
-- [ ] Progressive streaming support
-- [ ] Priority-based partial parsing
+- [x] Progressive streaming support
+- [x] Priority-based partial parsing
 - [ ] Schema validation API
-- [ ] Custom priority configuration
+- [x] Custom priority configuration
 - [ ] WebSocket streaming integration
 - [ ] Compression support
 - [ ] Worker thread support for heavy parsing

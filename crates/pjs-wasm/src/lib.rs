@@ -28,9 +28,14 @@
 use wasm_bindgen::prelude::*;
 
 mod parser;
+mod priority_assignment;
+mod priority_config;
+mod priority_constants;
 mod utils;
 
 pub use parser::PjsParser;
+pub use priority_config::PriorityConfigBuilder;
+pub use priority_constants::PriorityConstants;
 
 /// Initialize WASM module.
 ///
