@@ -11,7 +11,9 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 db-path = "~/.cargo/advisory-db"
 
 # Ignore specific advisories
-ignore = []
+ignore = [
+    "RUSTSEC-2024-0436", # paste - unmaintained, used only in tikv-jemallocator (not in production code)
+]
 
 [licenses]
 version = 2
