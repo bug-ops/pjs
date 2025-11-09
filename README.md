@@ -1,4 +1,3 @@
-<!-- markdownlint-disable MD024 -->
 # PJS - Priority JSON Streaming Protocol
 
 [![Crates.io](https://img.shields.io/crates/v/pjson-rs.svg)](https://crates.io/crates/pjson-rs)
@@ -7,978 +6,213 @@
 [![WASM Build](https://github.com/bug-ops/pjs/actions/workflows/wasm.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/wasm.yml)
 [![codecov](https://codecov.io/gh/bug-ops/pjs/branch/main/graph/badge.svg)](https://codecov.io/gh/bug-ops/pjs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
-[![Rust Version](https://img.shields.io/badge/rust-nightly-orange.svg)](https://www.rust-lang.org)
-[![WebAssembly](https://img.shields.io/badge/wasm-ready-brightgreen.svg)](.github/workflows/wasm.yml)
 
-**🚀 6.3x faster than serde_json | 🎯 5.3x faster progressive loading | 💾 Bounded memory usage | 🌐 WebAssembly Ready**
+**🚀 Priority-based streaming | 🎯 Progressive loading | 💾 Zero-copy operations | 🌐 WebAssembly ready**
 
-> **New in v0.3.0**: WebAssembly support with priority-based JSON streaming for browsers and Node.js. Production-ready code quality with zero clippy warnings, Clean Architecture compliance, and comprehensive test coverage (500+ tests). **Now requires nightly Rust for zero-cost abstractions**.
+High-performance Rust library for priority-based JSON streaming with SIMD acceleration. Stream large JSON responses progressively, delivering critical data first while background data loads asynchronously.
 
-</div>
+> **v0.3.0**: WebAssembly support, Clean Architecture compliance, 500+ tests passing, zero clippy warnings. Requires nightly Rust for zero-cost GAT abstractions.
 
-## 🌟 Key Features
+## Features
 
-<table>
-<tr>
-<td>
+- **⚡ Blazing Fast** - SIMD-accelerated parsing with optimized performance
+- **🎯 Smart Streaming** - Priority-based delivery sends critical data first, skeleton-first rendering
+- **💾 Memory Efficient** - Optimized progressive loading, bounded memory usage, zero-copy operations
+- **🌐 WebAssembly** - Browser and Node.js support with compact bundle size
+- **📊 Schema Aware** - Automatic compression and semantic analysis
+- **🔧 Production Ready** - Clean Architecture, comprehensive tests, Prometheus metrics
 
-### ⚡ Blazing Fast
+## Performance
 
-- **6.3x faster** than serde_json
-- **1.71 GiB/s** throughput
-- SIMD-accelerated parsing
-
-</td>
-<td>
-
-### 🎯 Smart Streaming
-
-- Skeleton-first delivery
-- Priority-based transmission
-- Progressive enhancement
-
-</td>
-<td>
-
-### 💾 Memory Efficient
-
-- **5.3x** faster progressive loading
-- Bounded memory usage
-- Zero-copy operations
-
-</td>
-</tr>
-<tr>
-<td>
-
-### 🔧 Production Ready
-
-- All tests passing
-- Clean Architecture
-
-</td>
-<td>
-
-### 📊 Schema Aware
-
-- Automatic compression
-- Semantic analysis
-- Type optimization
-
-</td>
-<td>
-
-### 🚀 Developer Friendly
-
-- Simple API
-- Drop-in replacement
-- Extensive documentation
-
-</td>
-</tr>
-<tr>
-<td>
-
-### 🌐 WebAssembly Support
-
-- Browser integration
-- Node.js compatible
-- 120KB bundle (52KB gzipped)
-
-</td>
-<td>
-
-### 🎨 Interactive Demos
-
-- Real-time visualization
-- Priority threshold control
-- Performance metrics
-
-</td>
-<td>
-
-### 📦 Multi-Platform
-
-- Native Rust performance
-- WASM for browsers
-- Cross-platform compatibility
-
-</td>
-</tr>
-</table>
-
-## 🎯 The Problem
-
-Modern web applications face a fundamental challenge: **large JSON responses block UI rendering**.
-
-### Current State
-
-- 📊 Analytics dashboard loads 5MB of JSON
-- ⏱️ User waits 2-3 seconds seeing nothing
-- 😤 User thinks app is broken and refreshes
-- 🔄 The cycle repeats
-
-### Why existing solutions fall short
-
-| Solution | Problem |
-|----------|---------|
-| **Pagination** | Requires multiple round-trips, complex state management |
-| **GraphQL** | Still sends complete response, just smaller |
-| **JSON streaming** | No semantic understanding, can't prioritize |
-| **Compression** | Reduces size but not time-to-first-byte |
-
-## ✨ The Solution: PJS
-
-PJS revolutionizes JSON transmission by **understanding your data semantically** and **prioritizing what matters**.
-
-### Core Innovation: Semantic Prioritization
-
-```rust
-#[derive(JsonPriority)]
-struct UserDashboard {
-    #[priority(critical)]  // Sent in first 10ms
-    user_id: u64,
-    user_name: String,
-    
-    #[priority(high)]      // Sent in next 50ms
-    recent_activity: Vec<Activity>,
-    notifications: Vec<Notification>,
-    
-    #[priority(low)]       // Sent when available
-    detailed_analytics: Analytics,  // 4MB of data
-}
-```
-
-### Real-World Impact
-
-```plain
-Traditional JSON Loading:
-[████████████████████] 100% - 2000ms - Full UI renders
-
-PJS Loading:
-[██░░░░░░░░░░░░░░░░░░] 10%  - 10ms   - Critical UI visible
-[██████░░░░░░░░░░░░░░] 30%  - 50ms   - Interactive UI
-[████████████████████] 100% - 2000ms - Full data loaded
-
-User Experience: ⚡ Instant → 😊 Happy
-```
-
-## Key Features
-
-### 🚀 Complete HTTP Server Integration
-
-Production-ready Axum integration with full REST API, session management, and real-time streaming.
-
-### 🎯 Advanced Streaming Implementations
-
-- **AdaptiveFrameStream**: Client capability-based optimization
-- **BatchFrameStream**: High-throughput batch processing  
-- **PriorityFrameStream**: Priority-based frame ordering with buffering
-
-### 🏗️ Domain-Driven Design Architecture
-
-Clean architecture with CQRS pattern, event sourcing, and ports & adapters for maximum testability and maintainability.
-
-### 📊 Production-Ready Infrastructure
-
-- Thread-safe in-memory storage and metrics collection
-- Event publishing with subscription support
-- Prometheus metrics integration
-- Comprehensive middleware stack (CORS, security, compression)
-
-### 🔄 Multiple Response Formats
-
-Automatic format detection supporting JSON, NDJSON, and Server-Sent Events based on client Accept headers.
-
-### ⚡ SIMD-Accelerated Parsing
-
-Powered by `sonic-rs` for blazing fast JSON processing with zero-copy operations.
-
-### 🔄 Real-Time WebSocket Streaming
-
-Complete WebSocket implementation with priority-based frame delivery:
-
-- **Session Management**: Track active WebSocket connections with metrics
-- **Priority-Based Delivery**: Critical data sent first with adaptive delays
-- **Schema-Based Compression**: Intelligent compression using multiple strategies  
-- **Progressive Enhancement**: Skeleton-first streaming with incremental updates
-- **Demo Servers**: Interactive demonstrations of real-time streaming capabilities
-
-## 🎉 What's New in v0.3.0
-
-### 🛠️ Production-Ready Code Quality
-
-- **Zero Clippy Warnings**: All 44+ clippy warnings resolved across entire codebase
-- **Modern Format Strings**: Updated to `format!("{var}")` syntax throughout
-- **Enhanced Error Handling**: Proper Result patterns and async trait compatibility
-- **Memory Safety**: Fixed await-holding lock patterns and buffer alignment issues
-- **196 Tests Passing**: Complete test suite with all features enabled
-
-### 🏗️ Clean Architecture Enforcement
-
-- **Domain Layer Isolation**: Custom `JsonData` value object replacing `serde_json::Value`
-- **Type Safety**: Eliminated all architecture violations in domain layer
-- **Seamless Conversion**: `From` trait implementations for `JsonData ↔ serde_json::Value`
-- **Proper Boundaries**: Clear separation between domain and infrastructure errors
-
-### 🌐 HTTP/WebSocket Modernization
-
-- **Axum v0.8 Compatibility**: Updated route syntax from `:param` to `{param}` format
-- **StreamExt Integration**: Fixed async stream processing with proper trait imports
-- **Body Type Updates**: Modern HTTP body handling for latest axum/hyper versions
-- **All Tests Passing**: Complete HTTP integration test suite validation
-
-### 🔧 Technical Debt Resolution
-
-- **Architecture Compliance**: Resolved all Clean Architecture violations
-- **Lint Standards**: Zero warnings with strict linting enabled (`-D warnings`)
-- **Async Patterns**: Fixed await-across-locks and other async safety issues
-- **Type System**: Enhanced type safety with better generic bounds and aliases
-
-## Benchmarks
-
-### 🚀 **Actual Performance Results**
-
-| Metric | serde_json | sonic-rs | PJS | PJS Advantage |
-|--------|------------|----------|-----|---------------|
-| **Small JSON (43B)** | 275ns | 129ns | 312ns | Competitive |
-| **Medium JSON (351B)** | 1,662ns | 434ns | 590ns | **2.8x vs serde** |
-| **Large JSON (357KB)** | 1,294μs | 216μs | 204μs | **6.3x vs serde, 1.06x vs sonic** |
-| **Memory Efficiency** | Baseline | Fast | **5.3x faster** progressive | **Bounded memory** |
-| **Progressive Loading** | Batch-only | Batch-only | **37μs** vs 198μs | **5.3x faster** |
-
-### 🎯 **Key Performance Achievements**
-
-- **6.3x faster** than serde_json for large JSON processing
-- **1.06x faster** than sonic-rs (SIMD library) on large datasets  
-- **5.3x faster** progressive loading vs traditional batch processing
-- **1.71 GiB/s** sustained throughput (exceeding sonic-rs 1.61 GiB/s)
+| Benchmark | Performance Gain | Notes |
+|-----------|-----------------|-------|
+| **Small JSON** | Competitive | Comparable to industry standards |
+| **Medium JSON** | **~3x faster** | vs traditional parsers |
+| **Large JSON** | **~6x faster** | vs traditional parsers |
+| **Progressive Loading** | **~5x faster** | vs batch processing |
 
 ## Installation
-
-Add PJS to your `Cargo.toml`:
-
-```toml
-[dependencies]
-pjson-rs = "0.3.0"
-
-# Optional: for HTTP server integration
-axum = "0.8"
-tokio = { version = "1", features = ["full"] }
-```
-
-Or use cargo:
 
 ```bash
 cargo add pjson-rs
 ```
 
+Or add to `Cargo.toml`:
+
+```toml
+[dependencies]
+pjson-rs = "0.3.0"
+```
+
 ## Quick Start
 
-### HTTP Server with Axum Integration
+### Rust HTTP Server
 
 ```rust
-use std::sync::Arc;
-use pjson_rs::{
-    application::{
-        handlers::{InMemoryCommandHandler, InMemoryQueryHandler},
-        services::{SessionService, StreamingService},
-    },
-    infrastructure::{
-        adapters::{InMemoryStreamRepository, InMemoryEventPublisher, InMemoryMetricsCollector},
-        http::axum_adapter::{create_pjs_router, PjsAppState},
-    },
-};
+use pjson_rs::infrastructure::http::axum_adapter::create_pjs_router;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Create infrastructure
-    let repository = Arc::new(InMemoryStreamRepository::new());
-    let event_publisher = Arc::new(InMemoryEventPublisher::new());
-    let metrics_collector = Arc::new(InMemoryMetricsCollector::new());
-    
-    // Create CQRS handlers
-    let command_handler = Arc::new(InMemoryCommandHandler::new(
-        repository.clone(), event_publisher, metrics_collector.clone()
-    ));
-    let query_handler = Arc::new(InMemoryQueryHandler::new(repository, metrics_collector));
-    
-    // Create services
-    let session_service = Arc::new(SessionService::new(command_handler.clone(), query_handler.clone()));
-    let streaming_service = Arc::new(StreamingService::new(command_handler));
-    
-    // Build Axum app
-    let app = create_pjs_router()
-        .with_state(PjsAppState::new(session_service, streaming_service));
-    
-    // Start server
+async fn main() {
+    let app = create_pjs_router().with_state(app_state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
-    println!("🚀 PJS Server running on http://127.0.0.1:3000");
     axum::serve(listener, app).await?;
-    
-    Ok(())
 }
 ```
 
-### JavaScript/TypeScript Client Library
-
-Use the official PJS client library for seamless integration:
+Start server and test:
 
 ```bash
-npm install @pjs/client
+# Run example server
+cargo run --example axum_server
+
+# Create session
+curl -X POST http://localhost:3000/pjs/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"max_concurrent_streams": 5}'
+
+# Stream data with priority
+curl http://localhost:3000/pjs/stream/{session_id}/sse
 ```
 
-#### HTTP Streaming
-
-```typescript
-import { PjsClient, createHttpTransport } from '@pjs/client';
-
-// Create client with HTTP transport
-const client = new PjsClient({
-    transport: createHttpTransport({
-        baseUrl: 'http://localhost:3000',
-        format: 'sse' // or 'json', 'ndjson'
-    })
-});
-
-// Stream data with priority-based delivery
-await client.stream({
-    data: { 
-        users: [/* large array */],
-        dashboard: { /* complex object */ }
-    },
-    onFrame: (frame) => {
-        // Frames arrive in priority order
-        if (frame.priority >= 90) {
-            updateUI(frame.data); // Critical data first
-        }
-    }
-});
-```
-
-#### WebSocket Real-Time Streaming
-
-```typescript
-import { PjsClient, createWebSocketTransport } from '@pjs/client';
-
-const client = new PjsClient({
-    transport: createWebSocketTransport({
-        url: 'ws://localhost:3001/ws'
-    })
-});
-
-// Real-time streaming with priority handling
-await client.connect();
-
-client.onFrame((frame) => {
-    console.log(`Priority ${frame.priority}:`, frame.data);
-    
-    // Handle based on priority
-    switch (frame.priority) {
-        case 'critical':
-            showImmediate(frame.data);
-            break;
-        case 'high':
-            queueForNextFrame(frame.data);
-            break;
-        default:
-            processInBackground(frame.data);
-    }
-});
-```
-
-### WebAssembly (Browser & Node.js)
-
-PJS provides full WebAssembly support for running priority-based JSON streaming directly in browsers and Node.js environments.
-
-#### Installation
+### WebAssembly (Browser)
 
 ```bash
 npm install pjs-wasm
-# or use from CDN
 ```
-
-#### Browser Usage
 
 ```html
-<!DOCTYPE html>
-<html>
-<head>
-    <script type="module">
-        import init, { PjsParser, PriorityConstants } from './pkg/pjs_wasm.js';
+<script type="module">
+import init, { PjsParser, PriorityConstants } from './pkg/pjs_wasm.js';
 
-        async function main() {
-            // Initialize WASM module
-            await init();
+async function main() {
+    await init();
+    const parser = new PjsParser();
 
-            // Create parser instance
-            const parser = new PjsParser();
+    const frames = parser.generateFrames(
+        JSON.stringify({ user_id: 123, name: "Alice" }),
+        PriorityConstants.MEDIUM
+    );
 
-            // Generate priority-based frames
-            const jsonData = JSON.stringify({
-                user_id: 123,
-                name: "Alice",
-                profile: { /* large nested data */ }
-            });
-
-            const frames = parser.generateFrames(jsonData, PriorityConstants.MEDIUM);
-
-            // Process frames in priority order
-            frames.forEach(frame => {
-                console.log(`Frame type: ${frame.frame_type}`);
-                console.log(`Priority: ${frame.priority}`);
-
-                if (frame.priority >= 90) {
-                    // Render critical data immediately
-                    updateUI(frame.data);
-                } else {
-                    // Queue lower priority data
-                    queueUpdate(frame.data);
-                }
-            });
+    frames.forEach(frame => {
+        if (frame.priority >= 90) {
+            updateUI(frame.data); // Critical data first
         }
-
-        main();
-    </script>
-</head>
-<body>
-    <div id="app">Loading...</div>
-</body>
-</html>
-```
-
-#### Node.js Usage
-
-```javascript
-import init, { PjsParser, PriorityConfigBuilder } from 'pjs-wasm';
-import { readFile } from 'fs/promises';
-
-async function processWithWasm() {
-    // Load WASM binary for Node.js
-    const wasmBuffer = await readFile('./node_modules/pjs-wasm/pkg/pjs_wasm_bg.wasm');
-    await init(wasmBuffer);
-
-    // Create parser with custom configuration
-    const config = new PriorityConfigBuilder()
-        .addCriticalField('id')
-        .addCriticalField('status')
-        .addHighField('title')
-        .addLowPattern('metadata');
-
-    const parser = PjsParser.withConfig(config);
-
-    // Generate frames with priority threshold
-    const data = JSON.stringify({ /* your data */ });
-    const frames = parser.generateFrames(data, 50); // Only priority >= 50
-
-    console.log(`Generated ${frames.length} frames`);
-
-    // Process frames
-    frames.forEach((frame, i) => {
-        console.log(`Frame ${i}: ${frame.frame_type} (priority: ${frame.priority})`);
     });
 }
 
-processWithWasm();
+main();
+</script>
 ```
 
-#### Interactive Demo
+### WebAssembly (Node.js)
 
-Try the interactive browser demo:
+```javascript
+import init, { PjsParser } from 'pjs-wasm';
+import { readFile } from 'fs/promises';
 
-```bash
-cd crates/pjs-js-client/examples/browser-wasm
-./serve.sh
+const wasmBuffer = await readFile('./node_modules/pjs-wasm/pkg/pjs_wasm_bg.wasm');
+await init(wasmBuffer);
+
+const parser = new PjsParser();
+const frames = parser.generateFrames(JSON.stringify(data), 50);
+
+frames.forEach(frame => {
+    console.log(`Priority ${frame.priority}: ${frame.frame_type}`);
+});
 ```
 
-Visit `http://localhost:8000` to see:
-
-- Real-time frame generation with priority control
-- Interactive priority threshold slider
-- Performance metrics and visualization
-- Comparison with native JSON parsing
-
-#### Building WASM from Source
+### Build WASM from Source
 
 ```bash
 # Install wasm-pack
 curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-# Build for web browsers
-wasm-pack build crates/pjs-wasm --target web --release
-
-# Build for Node.js
-wasm-pack build crates/pjs-wasm --target nodejs --release
-
-# Build for bundlers (webpack, rollup)
-wasm-pack build crates/pjs-wasm --target bundler --release
+# Build for different targets
+wasm-pack build crates/pjs-wasm --target web --release      # Browsers
+wasm-pack build crates/pjs-wasm --target nodejs --release   # Node.js
+wasm-pack build crates/pjs-wasm --target bundler --release  # Webpack/Rollup
 ```
-
-**Bundle size**: 120 KB raw / 52 KB gzipped - optimized for web delivery!
-
-### WebSocket Streaming
-
-```rust
-use pjson_rs::{
-    ApplicationResult,
-    domain::value_objects::SessionId,
-};
-use futures::{SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
-
-#[tokio::main]
-async fn main() -> ApplicationResult<()> {
-    // Connect to WebSocket streaming server
-    let (ws_stream, _) = connect_async("ws://127.0.0.1:3001/ws")
-        .await
-        .expect("Failed to connect");
-    
-    let (mut write, mut read) = ws_stream.split();
-    
-    // Receive prioritized frames
-    while let Some(message) = read.next().await {
-        match message? {
-            Message::Text(text) => {
-                let frame: serde_json::Value = serde_json::from_str(&text)?;
-                
-                match frame["@type"].as_str() {
-                    Some("pjs_frame") => {
-                        let priority = frame["@priority"].as_u64().unwrap_or(0);
-                        
-                        if priority >= 200 {
-                            println!("🚨 Critical data: {}", frame["data"]);
-                        } else if priority >= 100 {
-                            println!("📊 High priority: {}", frame["data"]);
-                        } else {
-                            println!("📝 Background data received");
-                        }
-                    }
-                    Some("stream_complete") => {
-                        println!("✅ Stream completed!");
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-    
-    Ok(())
-}
-```
-
-### Demo Servers
-
-Start the interactive demos to see PJS in action:
-
-```bash
-# WebSocket streaming server with priority-based delivery
-cargo run --bin websocket_streaming --manifest-path crates/pjs-demo/Cargo.toml
-
-# Interactive demo with HTML interface and real-time visualization
-cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
-
-# Simple demo server with basic streaming
-cargo run --bin simple_demo --manifest-path crates/pjs-demo/Cargo.toml
-
-# Performance comparison demo (PJS vs traditional JSON)
-cargo run --bin performance_comparison --manifest-path crates/pjs-demo/Cargo.toml
-```
-
-Or run root-level examples:
-
-```bash
-# Complete Axum HTTP server
-cargo run --example axum_server
-
-# Advanced streaming demo server  
-cargo run --example streaming_demo_server
-
-# Simple usage patterns
-cargo run --example simple_usage
-```
-
-Then visit `http://127.0.0.1:3000` to see priority-based streaming in action.
 
 ## Use Cases
 
-Perfect for:
-
-- 📊 **Real-time dashboards** - Show key metrics instantly
-- 📱 **Mobile apps** - Optimize for slow networks
-- 🛍️ **E-commerce** - Load product essentials first
-- 📈 **Financial platforms** - Prioritize critical trading data
-- 🎮 **Gaming leaderboards** - Show player's rank immediately
-
-## Architecture
-
-PJS implements a clean, layered architecture following Domain-Driven Design principles:
-
-### 1. Domain Layer
-
-Core business logic with value objects (Priority, SessionId, JsonPath) and aggregates (StreamSession) ensuring data consistency.
-
-### 2. Application Layer  
-
-CQRS pattern with separate Command and Query handlers, plus high-level services (SessionService, StreamingService) orchestrating workflows.
-
-### 3. Infrastructure Layer
-
-Adapters implementing domain ports:
-
-- **Storage**: In-memory repositories with thread-safe concurrent access
-- **Events**: Publisher/subscriber pattern for domain event distribution  
-- **Metrics**: Performance monitoring with Prometheus integration
-- **HTTP**: Complete Axum server with middleware stack
-
-### 4. Transport Abstraction
-
-Multi-format streaming support:
-
-- **JSON**: Standard response format
-- **NDJSON**: Newline-delimited for efficient processing
-- **Server-Sent Events**: Real-time browser compatibility
-- Automatic format detection via Accept headers
-
-### 5. Advanced Streaming
-
-Intelligent frame processing:
-
-- **Priority-based delivery**: Critical data first
-- **Adaptive buffering**: Dynamic sizing based on client performance
-- **Batch processing**: High-throughput chunk aggregation
-
-## Technical Architecture
-
-```plain
-pjs/
-├── crates/
-│   ├── pjs-domain/         # 🆕 Pure domain logic (WASM-compatible)
-│   │   ├── src/
-│   │   │   ├── entities/       # StreamSession, Frame, Stream aggregates
-│   │   │   ├── events/         # Domain events (SessionCreated, etc.)
-│   │   │   ├── ports/          # GAT-based trait interfaces
-│   │   │   ├── services/       # ValidationService, StreamingOrchestrator
-│   │   │   └── value_objects/  # Priority, SessionId, JsonData, Schema
-│   │   └── tests/              # Domain logic tests (43 tests)
-│   ├── pjs-wasm/           # 🆕 WebAssembly bindings (web, nodejs, bundler)
-│   │   ├── src/
-│   │   │   ├── parser.rs           # WASM parser with priority frame generation
-│   │   │   ├── priority_assignment.rs # Priority calculation engine
-│   │   │   ├── priority_config.rs  # JavaScript-friendly configuration
-│   │   │   └── priority_constants.rs # Priority level constants
-│   │   ├── pkg/                # Generated WASM package (120KB/52KB gzipped)
-│   │   └── tests/              # WASM-specific tests (25 tests)
-│   ├── pjs-core/           # Core protocol and HTTP integration (uses pjs-domain)
-│   │   ├── src/
-│   │   │   ├── application/    # CQRS handlers, services, DTOs
-│   │   │   ├── infrastructure/ # HTTP, WebSocket, repositories, adapters
-│   │   │   ├── parser/         # SIMD, zero-copy, buffer pools
-│   │   │   ├── stream/         # Priority streaming, reconstruction
-│   │   │   └── compression/    # Schema-based compression
-│   │   ├── examples/           # Standalone demos (zero-copy, compression)
-│   │   └── tests/              # Integration tests (400+ tests)
-│   ├── pjs-demo/           # Interactive demo servers with WebSocket streaming
-│   │   └── src/
-│   │       ├── servers/        # Demo server implementations
-│   │       ├── clients/        # WebSocket client demos
-│   │       ├── data/           # Sample data generators (analytics, ecommerce)
-│   │       └── static/         # HTML interfaces
-│   ├── pjs-js-client/      # JavaScript/TypeScript client library + WASM demos
-│   │   ├── src/            # TypeScript source code with transport layers
-│   │   ├── examples/
-│   │   │   └── browser-wasm/   # 🆕 Interactive WASM demo (HTML + examples)
-│   │   ├── tests/          # Jest test suite with full coverage
-│   │   └── package.json    # NPM configuration and dependencies
-│   └── pjs-bench/          # Benchmarking suite
-│       └── benches/        # Criterion.rs performance benchmarks
-└── examples/               # Root-level usage examples
-    ├── axum_server.rs      # Complete HTTP server demo
-    ├── simple_usage.rs     # Basic usage patterns
-    └── streaming_demo_server.rs # Advanced streaming demo
-```
-
-### Current Implementation Status
-
-- **Phase 1**: ✅ Core foundation (100% complete)
-- **Phase 2**: ✅ Protocol layer (100% complete)
-- **Phase 3**: ✅ Client/Server framework (100% complete)
-- **Phase 4**: ✅ Transport layer (100% complete)
-- **Phase 5**: ✅ Production features (100% complete)
-- **Phase 6**: ✅ Real-Time Streaming (100% complete)
-- **Phase 7**: ✅ JavaScript/TypeScript Client SDK (100% complete)
-- **Phase 8**: ✅ Code Quality & Production Readiness (100% complete)
-- **Phase 9**: ✅ WebAssembly Support (100% complete)
-- **Overall**: Complete production-ready implementation
-
-### Implemented Components
-
-- **✅ pjs-domain**: Pure domain logic with DDD principles (WASM-compatible, 43 tests)
-- **✅ pjs-wasm**: WebAssembly bindings for browsers & Node.js (25 tests, 120KB bundle)
-- **✅ pjs-core**: Complete Rust implementation with Clean Architecture (400+ tests)
-- **✅ pjs-demo**: Interactive demo servers with real-time WebSocket streaming
-- **✅ pjs-js-client**: Full TypeScript/JavaScript client library + WASM demos
-- **✅ pjs-bench**: Comprehensive benchmarking suite with performance validation
-- **✅ Examples**: Multiple working examples from simple to advanced usage
-
-## API Examples
-
-### HTTP Endpoints
-
-The server provides a complete REST API:
-
-```bash
-# Create a new session
-POST /pjs/sessions
-Content-Type: application/json
-{
-  "max_concurrent_streams": 10,
-  "timeout_seconds": 3600,
-  "client_info": "My App v1.0"
-}
-
-# Response: { "session_id": "sess_abc123", "expires_at": "..." }
-
-# Get session info  
-GET /pjs/sessions/{session_id}
-
-# Start streaming data
-POST /pjs/stream/{session_id}
-Content-Type: application/json
-{
-  "data": { "users": [...], "products": [...] },
-  "priority_threshold": 50,
-  "max_frames": 100
-}
-
-# Stream frames (JSON format)
-GET /pjs/stream/{session_id}/frames?format=json&priority=80
-
-# Real-time Server-Sent Events
-GET /pjs/stream/{session_id}/sse
-Accept: text/event-stream
-
-# System health check
-GET /pjs/health
-# Response: { "status": "healthy", "version": "0.3.0" }
-```
-
-### Working Example
-
-A complete working server is available at `examples/axum_server.rs`. To run it:
-
-```bash
-# Start the server
-cargo run --example axum_server
-
-# Test endpoints
-curl -X POST http://localhost:3000/pjs/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"max_concurrent_streams": 5}'
-
-# Check health  
-curl http://localhost:3000/pjs/health
-
-# View metrics
-curl http://localhost:3000/examples/metrics
-```
-
-## Performance Goals
-
-- **Throughput**: >4 GB/s with sonic-rs
-- **Time to First Byte**: <10ms for critical data
-- **Memory Efficiency**: 5-10x reduction vs traditional parsing
-- **CPU Utilization**: Full SIMD acceleration
+- **📊 Real-time Dashboards** - Show key metrics instantly, load details progressively
+- **📱 Mobile Apps** - Optimize for slow networks, critical data first
+- **🛍️ E-commerce** - Product essentials load immediately, reviews/images follow
+- **📈 Financial Platforms** - Trading data prioritized over historical charts
+- **🎮 Gaming Leaderboards** - Player rank appears instantly, full list streams in
 
 ## Building
 
 ### Prerequisites
 
-- **Rust nightly** (required for `impl Trait` in associated types)
-- CPU with AVX2 support (recommended for SIMD acceleration)
-
-### Setting up Rust Nightly
-
 ```bash
-# Install nightly Rust
+# Requires nightly Rust for GAT features
 rustup install nightly
-
-# Set nightly for this project
 rustup override set nightly
-
-# Or use nightly globally
-rustup default nightly
 ```
 
-### Quick Start
+### Build Commands
 
 ```bash
-# Clone repository
-git clone https://github.com/bug-ops/pjs
-cd pjs
-
-# Ensure nightly Rust is active
-rustup override set nightly
-
-# Build with optimizations
+# Standard build
 cargo build --release
 
 # Run tests
 cargo test --workspace
 
-# Run the complete HTTP server example
-cargo run --example axum_server
+# Run benchmarks
+cargo bench -p pjs-bench
 
-# Build with optional features
-cargo build --features "http-client,prometheus-metrics"
+# Run demo servers
+cargo run --bin websocket_streaming --manifest-path crates/pjs-demo/Cargo.toml
+cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 ```
 
 ### Feature Flags
 
-- `http-client`: Enable HTTP-based event publishing
-- `prometheus-metrics`: Enable Prometheus metrics collection
-- `simd-auto`: Auto-detect best SIMD support (default)
-- `compression`: Enable compression middleware
+```toml
+# SIMD optimization
+simd-auto      # Auto-detect (default)
+simd-avx2      # AVX2 support
+simd-neon      # ARM NEON
 
-## Framework Integration
+# Memory allocators (optional)
+jemalloc       # tikv-jemallocator
+mimalloc       # mimalloc
 
-### Universal Integration Layer with Zero-Cost Abstractions
-
-PJS provides true zero-cost abstractions using **nightly Rust features** for maximum performance. The Universal Framework Integration Layer uses Generic Associated Types (GATs) with `impl Trait` to eliminate all runtime overhead:
-
-```rust
-use pjson_rs::infrastructure::integration::StreamingAdapter;
-use std::future::Future;
-
-// Zero-cost framework integration with GATs
-impl StreamingAdapter for YourFramework {
-    type Request = YourRequest;
-    type Response = YourResponse;
-    type Error = YourError;
-
-    // TRUE zero-cost futures - no Box allocation!
-    type StreamingResponseFuture<'a> = impl Future<Output = IntegrationResult<Self::Response>> + Send + 'a
-    where
-        Self: 'a;
-
-    fn create_streaming_response<'a>(
-        &'a self,
-        session_id: SessionId,
-        frames: Vec<StreamFrame>,
-        format: StreamingFormat,
-    ) -> Self::StreamingResponseFuture<'a> {
-        // Direct async block - compiler generates optimal Future type
-        async move {
-            // Your framework-specific logic here
-            Ok(your_response)
-        }
-    }
-
-    fn framework_name(&self) -> &'static str {
-        "your_framework"
-    }
-}
+# Features
+schema-validation     # Schema validation (default)
+compression           # Schema-based compression
+http-server           # Axum HTTP server
+websocket-server      # WebSocket streaming
+prometheus-metrics    # Prometheus integration
 ```
 
-### Performance Benefits of Nightly Rust
+## Architecture
 
-**Zero-Cost Abstractions:**
+PJS follows Clean Architecture with Domain-Driven Design:
 
-- **1.82x faster** trait dispatch vs async_trait
-- **Zero heap allocations** for futures
-- **Pure stack allocation** - no runtime overhead
-- **Static dispatch** eliminates vtables
-- **Complete inlining** for hot paths
+- **pjs-domain** - Pure business logic, WASM-compatible (43 tests)
+- **pjs-wasm** - WebAssembly bindings for browsers & Node.js (25 tests)
+- **pjs-core** - Rust implementation with HTTP/WebSocket integration (400+ tests)
+- **pjs-demo** - Interactive demo servers with real-time streaming
+- **pjs-js-client** - TypeScript/JavaScript client library
+- **pjs-bench** - Comprehensive performance benchmarks
 
-### Currently Supported
-
-- **✅ Axum**: Full native integration with zero-cost GAT futures
-- **🔧 Any Framework**: Universal adapter with true zero-cost abstractions
-- **📋 Planned**: Helper macros for popular frameworks (Actix, Warp, Tide)
-
-### Integration Examples
-
-```rust
-// Axum (native support)
-use pjson_rs::infrastructure::http::axum_adapter::create_pjs_router;
-let app = create_pjs_router().with_state(app_state);
-
-// Custom framework integration
-use pjson_rs::infrastructure::adapters::UniversalAdapter;
-let adapter = UniversalAdapter::new()
-    .with_serializer(your_serializer)
-    .with_transport(your_transport);
-```
-
-## Production Features
-
-### Middleware Stack
-
-The HTTP server includes production-ready middleware:
-
-```rust
-use pjson_rs::infrastructure::http::middleware::*;
-
-let app = create_pjs_router()
-    .layer(axum::middleware::from_fn(pjs_cors_middleware))
-    .layer(axum::middleware::from_fn(security_middleware))
-    .layer(axum::middleware::from_fn(health_check_middleware))
-    .layer(PjsMiddleware::new()
-        .with_compression(true)
-        .with_metrics(true)
-        .with_max_request_size(10 * 1024 * 1024))
-    .with_state(app_state);
-```
-
-### Monitoring & Metrics
-
-Built-in Prometheus metrics support:
-
-```rust
-// Automatically tracks:
-// - pjs_active_sessions
-// - pjs_total_sessions_created  
-// - pjs_frames_processed_total
-// - pjs_bytes_streamed_total
-// - pjs_frame_processing_time_ms
-
-let metrics = collector.export_prometheus();
-// Expose at /metrics endpoint for Prometheus scraping
-```
-
-### Event System
-
-Comprehensive domain event tracking:
-
-```rust
-// Events automatically generated:
-// - SessionCreated, SessionActivated, SessionEnded
-// - StreamStarted, StreamCompleted, FrameGenerated
-// - PriorityAdjusted, ErrorOccurred
-
-publisher.subscribe("SessionCreated", |event| {
-    println!("New session: {}", event.session_id());
-});
-```
+Implementation: ✅ Complete (500+ tests, zero clippy warnings)
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### Development Setup
+Contributions welcome! Please ensure:
 
 ```bash
-# Install development tools
-rustup component add clippy rustfmt
-
-# Run checks
-cargo clippy --workspace
-cargo fmt --check
-
-# Run all tests
+rustup override set nightly
+cargo clippy --workspace -- -D warnings
 cargo test --workspace --all-features
+cargo fmt --check
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
@@ -989,82 +223,13 @@ Licensed under either of:
 
 at your option.
 
-## Getting Started Right Now
+## Resources
 
-Want to try PJS immediately? Here's the fastest way:
-
-```bash
-# Clone and run
-git clone https://github.com/bug-ops/pjs
-cd pjs
-
-# Set nightly Rust (required)
-rustup override set nightly
-
-# Run the server
-cargo run --example axum_server
-
-# In another terminal, test the API
-curl -X POST http://localhost:3000/pjs/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"max_concurrent_streams": 5}'
-
-# Try Server-Sent Events streaming  
-curl -N -H "Accept: text/event-stream" \
-  http://localhost:3000/pjs/stream/{session_id}/sse
-```
-
-### Running Performance Benchmarks
-
-To verify the performance claims, run the comprehensive benchmark suite:
-
-```bash
-# Run all benchmarks
-cargo bench -p pjs-bench
-
-# Or run specific benchmarks:
-cargo bench -p pjs-bench --bench simple_throughput    # Core parsing speed
-cargo bench -p pjs-bench --bench memory_benchmarks    # Memory efficiency  
-cargo bench -p pjs-bench --bench streaming_benchmarks # Progressive loading
-```
-
-Results show PJS **6.3x faster** than serde_json and **1.06x faster** than sonic-rs on large JSON.
-
-The server will show:
-
-- 🚀 Server starting message
-- 📊 Health check endpoint
-- 📝 Available API endpoints
-- 🎯 Demo data streaming capabilities
-
-## Roadmap
-
-### Next Steps
-
-- [x] Connection lifecycle management ✅
-- [x] WebSocket real-time streaming ✅
-- [x] Performance benchmarks vs alternatives ✅
-- [x] JavaScript/TypeScript client library ✅
-- [ ] Universal framework integration layer
-- [ ] Schema validation engine  
-- [ ] Custom priority strategies
-
-## Acknowledgments
-
-Built with:
-
-- [sonic-rs](https://github.com/cloudwego/sonic-rs) - Lightning fast SIMD JSON parser
-- [axum](https://github.com/tokio-rs/axum) - Ergonomic web framework for Rust  
-- [tokio](https://github.com/tokio-rs/tokio) - Async runtime for Rust
-- [bytes](https://github.com/tokio-rs/bytes) - Efficient byte buffer management
-
-## Community
-
-- 📖 [Documentation](docs/architecture/SPECIFICATION.md) - Complete protocol specification
-- 📋 [Changelog](CHANGELOG.md) - Detailed version history
-- 📊 [Benchmarks](crates/pjs-bench/README.md) - Comprehensive performance results
-- 💬 [Discussions](https://github.com/bug-ops/pjs/discussions) - Questions and ideas
+- 📖 [Protocol Specification](docs/architecture/SPECIFICATION.md)
+- 📋 [Changelog](CHANGELOG.md)
+- 📊 [Benchmarks](crates/pjs-bench/README.md)
+- 💬 [Discussions](https://github.com/bug-ops/pjs/discussions)
 
 ---
 
-*PJS: Because users shouldn't wait for data they don't need yet.*
+*PJS: Priority-based JSON streaming for instant user experiences.*
