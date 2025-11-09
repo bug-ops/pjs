@@ -104,12 +104,9 @@ impl From<SchemaDefinitionDto> for Schema {
             } => Self::String {
                 min_length,
                 max_length,
-                pattern: pattern.map(|p| p.into()),
+                pattern,
                 allowed_values: enum_values.map(|values| {
-                    values
-                        .into_iter()
-                        .map(|v| v.into())
-                        .collect::<smallvec::SmallVec<[_; 8]>>()
+                    values.into_iter().collect::<smallvec::SmallVec<[_; 8]>>()
                 }),
             },
             SchemaDefinitionDto::Integer { minimum, maximum } => Self::Integer { minimum, maximum },
