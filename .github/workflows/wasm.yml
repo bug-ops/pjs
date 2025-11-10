@@ -245,7 +245,7 @@ jobs:
           path: crates/pjs-js-client/examples/browser-wasm/pkg
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '18'
 
@@ -279,7 +279,7 @@ jobs:
           path: wasm-pkg
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '18'
 
