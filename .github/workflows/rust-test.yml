@@ -138,8 +138,10 @@ jobs:
 
     - name: Generate coverage
       run: |
-        cargo llvm-cov --features "schema-validation,compression,http-server" --workspace --lcov \
-          --output-path lcov.info nextest
+        cargo llvm-cov nextest --features "schema-validation,compression,http-server" --workspace \
+          --exclude pjs-bench --exclude pjs-demo \
+          --ignore-filename-regex "(pjs-bench|pjs-demo)" \
+          --lcov --output-path lcov.info
 
     - name: Upload to codecov
       uses: codecov/codecov-action@v5
@@ -159,7 +161,10 @@ jobs:
         retention-days: 30
 
     - name: Generate HTML coverage report
-      run: cargo llvm-cov --features "schema-validation,compression,http-server" --workspace --html
+      run: |
+        cargo llvm-cov nextest --features "schema-validation,compression,http-server" --workspace \
+          --exclude pjs-bench --exclude pjs-demo \
+          --ignore-filename-regex "(pjs-bench|pjs-demo)" --html
 
     - name: Upload HTML coverage
       uses: actions/upload-artifact@v5
