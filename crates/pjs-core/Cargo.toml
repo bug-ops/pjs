@@ -37,7 +37,7 @@ smallvec = { workspace = true, features = ["serde", "union", "const_generics"] }
 sonic-rs = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "net", "parking_lot"] }
 tokio-tungstenite = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 typed-arena = { workspace = true }
