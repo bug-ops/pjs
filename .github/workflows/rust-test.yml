@@ -138,7 +138,7 @@ jobs:
 
     - name: Generate coverage
       run: |
-        cargo llvm-cov nextest --features "schema-validation,compression,http-server" --workspace \
+        cargo llvm-cov nextest --all-features --all-targets --workspace \
           --exclude pjs-bench --exclude pjs-demo \
           --ignore-filename-regex "(pjs-bench|pjs-demo)" \
           --lcov --output-path lcov.info
@@ -150,7 +150,7 @@ jobs:
         files: lcov.info
         fail_ci_if_error: false
         verbose: true
-        flags: unittests
+        flags: pjs-core,pjs-domain,pjs-wasm
         name: codecov-pjs
 
     - name: Archive coverage report
@@ -162,7 +162,7 @@ jobs:
 
     - name: Generate HTML coverage report
       run: |
-        cargo llvm-cov nextest --features "schema-validation,compression,http-server" --workspace \
+        cargo llvm-cov nextest --all-features --all-targets --workspace \
           --exclude pjs-bench --exclude pjs-demo \
           --ignore-filename-regex "(pjs-bench|pjs-demo)" --html
 
