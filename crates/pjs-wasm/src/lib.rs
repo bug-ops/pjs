@@ -10,19 +10,58 @@
 //!
 //! # Features
 //!
-//! - Zero-copy JSON parsing where possible
-//! - Priority-based streaming support
-//! - Schema validation
-//! - Optimized for minimal WASM bundle size
+//! - **PriorityStream API**: Callback-based streaming with progressive frame delivery
+//! - **SecurityConfig**: Built-in DoS protection (size limits, depth limits)
+//! - **Zero-copy JSON parsing** where possible
+//! - **Priority-based streaming** with semantic field prioritization
+//! - **Schema validation** support
+//! - **Optimized bundle size**: ~70KB gzipped
 //!
-//! # Example
+//! # Example: PriorityStream API (Recommended)
 //!
 //! ```javascript
-//! import { PjsParser } from 'pjs-wasm';
+//! import init, { PriorityStream, PriorityConstants } from 'pjs-wasm';
 //!
+//! await init();
+//!
+//! const stream = new PriorityStream();
+//! stream.setMinPriority(PriorityConstants.MEDIUM());
+//!
+//! stream.onFrame((frame) => {
+//!     console.log(`${frame.type} [${frame.priority}]: ${frame.payload}`);
+//! });
+//!
+//! stream.onComplete((stats) => {
+//!     console.log(`Completed: ${stats.totalFrames} frames`);
+//! });
+//!
+//! stream.start(JSON.stringify({ id: 123, name: "Alice" }));
+//! ```
+//!
+//! # Example: Simple Parser API
+//!
+//! ```javascript
+//! import init, { PjsParser, PriorityConstants } from 'pjs-wasm';
+//!
+//! await init();
 //! const parser = new PjsParser();
-//! const result = parser.parse('{"name": "test", "value": 42}');
-//! console.log(result);
+//! const frames = parser.generateFrames(
+//!     JSON.stringify({ name: "test", value: 42 }),
+//!     PriorityConstants.MEDIUM()
+//! );
+//! frames.forEach(frame => console.log(frame.priority, frame.data));
+//! ```
+//!
+//! # Security Configuration
+//!
+//! ```javascript
+//! import { PriorityStream, SecurityConfig } from 'pjs-wasm';
+//!
+//! const security = new SecurityConfig()
+//!     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB limit
+//!     .setMaxDepth(32);                  // 32 levels max
+//!
+//! const stream = PriorityStream.withSecurityConfig(security);
 //! ```
 
 use wasm_bindgen::prelude::*;

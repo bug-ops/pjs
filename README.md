@@ -11,14 +11,15 @@
 
 High-performance Rust library for priority-based JSON streaming with SIMD acceleration. Stream large JSON responses progressively, delivering critical data first while background data loads asynchronously.
 
-> **v0.3.0**: WebAssembly support, Clean Architecture compliance, 500+ tests passing, zero clippy warnings. Requires nightly Rust for zero-cost GAT abstractions.
+> **v0.4.0**: Enhanced WebAssembly with PriorityStream API, interactive browser demo, security limits, 519 tests passing, zero clippy warnings. Requires nightly Rust for zero-cost GAT abstractions.
 
 ## Features
 
 - **⚡ Blazing Fast** - SIMD-accelerated parsing with optimized performance
 - **🎯 Smart Streaming** - Priority-based delivery sends critical data first, skeleton-first rendering
 - **💾 Memory Efficient** - Optimized progressive loading, bounded memory usage, zero-copy operations
-- **🌐 WebAssembly** - Browser and Node.js support with compact bundle size
+- **🌐 WebAssembly** - Browser and Node.js support with compact bundle (~70KB gzipped)
+- **🔒 Secure** - Input size limits, depth limits, DoS protection built-in
 - **📊 Schema Aware** - Automatic compression and semantic analysis
 - **🔧 Production Ready** - Clean Architecture, comprehensive tests, Prometheus metrics
 
@@ -41,7 +42,7 @@ Or add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-pjson-rs = "0.3.0"
+pjson-rs = "0.4"
 ```
 
 ## Quick Start
@@ -80,6 +81,40 @@ curl http://localhost:3000/pjs/stream/{session_id}/sse
 npm install pjs-wasm
 ```
 
+#### PriorityStream API (Recommended)
+
+```html
+<script type="module">
+import init, { PriorityStream, PriorityConstants } from './pkg/pjs_wasm.js';
+
+async function main() {
+    await init();
+
+    const stream = new PriorityStream();
+    stream.setMinPriority(PriorityConstants.MEDIUM());
+
+    // Register callbacks
+    stream.onFrame((frame) => {
+        console.log(`${frame.type} [${frame.priority}]: ${frame.payload}`);
+        if (frame.priority >= 80) {
+            updateUI(JSON.parse(frame.payload)); // High priority first
+        }
+    });
+
+    stream.onComplete((stats) => {
+        console.log(`Completed: ${stats.totalFrames} frames in ${stats.durationMs}ms`);
+    });
+
+    // Start streaming
+    stream.start(JSON.stringify({ id: 123, name: "Alice", bio: "..." }));
+}
+
+main();
+</script>
+```
+
+#### Simple Parser API
+
 ```html
 <script type="module">
 import init, { PjsParser, PriorityConstants } from './pkg/pjs_wasm.js';
@@ -90,7 +125,7 @@ async function main() {
 
     const frames = parser.generateFrames(
         JSON.stringify({ user_id: 123, name: "Alice" }),
-        PriorityConstants.MEDIUM
+        PriorityConstants.MEDIUM()
     );
 
     frames.forEach(frame => {
@@ -103,6 +138,10 @@ async function main() {
 main();
 </script>
 ```
+
+#### Interactive Demo
+
+Try the [Browser Demo](crates/pjs-wasm/demo/) with transport switching, performance benchmarks, and real-time metrics.
 
 ### WebAssembly (Node.js)
 
@@ -188,18 +227,38 @@ websocket-server      # WebSocket streaming
 prometheus-metrics    # Prometheus integration
 ```
 
+## Security
+
+PJS includes built-in security features to prevent DoS attacks:
+
+```javascript
+import { PriorityStream, SecurityConfig } from 'pjs-wasm';
+
+const security = new SecurityConfig()
+    .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB limit
+    .setMaxDepth(32);                  // 32 levels max
+
+const stream = PriorityStream.withSecurityConfig(security);
+```
+
+**Default Limits:**
+- Max JSON size: 10 MB
+- Max nesting depth: 64 levels
+- Max array elements: 10,000
+- Max object keys: 10,000
+
 ## Architecture
 
 PJS follows Clean Architecture with Domain-Driven Design:
 
-- **pjs-domain** - Pure business logic, WASM-compatible (43 tests)
-- **pjs-wasm** - WebAssembly bindings for browsers & Node.js (25 tests)
-- **pjs-core** - Rust implementation with HTTP/WebSocket integration (400+ tests)
+- **pjs-domain** - Pure business logic, WASM-compatible
+- **pjs-wasm** - WebAssembly bindings with PriorityStream API, security limits (44 tests)
+- **pjs-core** - Rust implementation with HTTP/WebSocket integration (450+ tests)
 - **pjs-demo** - Interactive demo servers with real-time streaming
-- **pjs-js-client** - TypeScript/JavaScript client library
+- **pjs-js-client** - TypeScript/JavaScript client with WasmBackend transport
 - **pjs-bench** - Comprehensive performance benchmarks
 
-Implementation: ✅ Complete (500+ tests, zero clippy warnings)
+Implementation: ✅ Complete (519 tests, zero clippy warnings)
 
 ## Contributing
 
