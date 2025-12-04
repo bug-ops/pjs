@@ -1380,24 +1380,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "pjs-domain"
-version = "0.4.4"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "smallvec",
- "thiserror 2.0.17",
- "uuid",
-]
-
-[[package]]
 name = "pjs-wasm"
 version = "0.4.4"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
- "pjs-domain",
+ "pjson-rs-domain",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -1422,7 +1410,7 @@ dependencies = [
  "mimalloc",
  "once_cell",
  "parking_lot",
- "pjs-domain",
+ "pjson-rs-domain",
  "priority-queue",
  "prometheus",
  "rayon",
@@ -1443,6 +1431,18 @@ dependencies = [
  "tracing",
  "typed-arena",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "pjson-rs-domain"
+version = "0.4.4"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thiserror 2.0.17",
  "uuid",
 ]
 

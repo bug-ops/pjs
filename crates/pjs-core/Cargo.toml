@@ -27,7 +27,7 @@ maplit = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
-pjs-domain = { path = "../pjs-domain" }
+pjson-rs-domain = { path = "../pjs-domain" }
 priority-queue = { workspace = true }
 prometheus = { workspace = true, optional = true }
 rayon = { workspace = true }
