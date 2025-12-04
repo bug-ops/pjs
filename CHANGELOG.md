@@ -15,6 +15,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
 
+## [0.4.0] - 2025-12-04
+
+### 🚀 Major Features
+
+- **PriorityStream API**: New callback-based streaming API for WebAssembly
+  - `onFrame(callback)`: Register frame arrival callbacks
+  - `onComplete(callback)`: Get completion statistics
+  - `onError(callback)`: Handle errors gracefully
+  - `setMinPriority(priority)`: Filter frames by minimum priority
+  - `PriorityStream.withSecurityConfig(config)`: Configure security limits
+
+- **SecurityConfig**: Built-in DoS protection for WASM
+  - `setMaxJsonSize(bytes)`: Limit input size (default: 10 MB)
+  - `setMaxDepth(levels)`: Limit nesting depth (default: 64 levels)
+  - Max array elements: 10,000
+  - Max object keys: 10,000
+
+- **Enhanced Browser Demo**: Interactive demonstration with advanced features
+  - Transport switcher (WASM Local vs HTTP Mock)
+  - Performance comparison widget (PJS vs JSON.parse)
+  - Real-time metrics display (memory, throughput, TTFF, progress)
+  - Sample data presets (1KB, 10KB, 100KB)
+  - Mobile-responsive design with keyboard shortcuts
+
+### 🔧 Improvements
+
+- **WASM Streaming**: Progressive frame delivery with priority ordering
+  - Frame statistics tracking (totalFrames, durationMs, bytesProcessed)
+  - Priority constants: CRITICAL(100), HIGH(80), MEDIUM(50), LOW(25), BACKGROUND(10)
+  - Zero network latency with local WASM processing
+
+- **Browser Compatibility**: Tested on Chrome 90+, Firefox 88+, Safari 14+, Edge 90+
+
+### 🔒 Security
+
+- **XSS Fix**: Escaped error messages in browser demo (`escapeHtml()`)
+- **js-yaml Update**: Fixed prototype pollution vulnerability (GHSA-mh29-5h37-fv8m)
+  - js-yaml 4.1.0 → 4.1.1
+  - js-yaml 3.14.1 → 3.14.2
+
+### 📦 CI/CD Updates
+
+- `actions/checkout`: 4 → 6
+- `actions/download-artifact`: 4 → 6
+- `actions/setup-node`: 4 → 6
+- `actions/github-script`: 7 → 8
+- `google/osv-scanner-action`: Updated to 2.3.0
+
+### ✅ Testing
+
+- **519 tests passing** (475 unit + 44 WASM tests)
+- Zero clippy warnings
+- Bundle size: ~70KB gzipped
+
+### 📖 Documentation
+
+- Updated README with PriorityStream API examples
+- Added Security section with SecurityConfig usage
+- Browser demo documentation with troubleshooting guide
+
 ## [0.4.3] - 2025-11-08
 
 ### 📦 Dependency Updates
