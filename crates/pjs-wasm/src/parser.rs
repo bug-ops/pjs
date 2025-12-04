@@ -244,9 +244,13 @@ impl PjsParser {
         stream_id: StreamId,
         min_priority: Priority,
     ) -> Result<Vec<Frame>, String> {
-        let mut frames = Vec::new();
-        let mut sequence = 0u64;
         let max_depth = self.security_config.max_depth();
+
+        // Pre-allocate frames Vec with estimated capacity
+        // Typical: 1 skeleton + ~2-4 priority groups + 1 complete = ~4-6 frames
+        // Conservative estimate to avoid over-allocation
+        let mut frames = Vec::with_capacity(6);
+        let mut sequence = 0u64;
 
         // 1. Generate skeleton frame (always first, critical priority)
         let skeleton = Self::create_skeleton_with_depth(data, 0, max_depth);
@@ -272,13 +276,11 @@ impl PjsParser {
             }
 
             if let Some(fields) = grouped.get(&priority) {
-                // Create patches for this priority level
-                let patches: Result<Vec<FramePatch>, String> = fields
-                    .iter()
-                    .map(|field| Ok(FramePatch::set(field.path.clone(), field.value.clone())))
-                    .collect();
-
-                let patches = patches?;
+                // Pre-allocate patches Vec with exact capacity
+                let mut patches = Vec::with_capacity(fields.len());
+                for field in fields.iter() {
+                    patches.push(FramePatch::set(field.path.clone(), field.value.clone()));
+                }
 
                 if !patches.is_empty() {
                     // Create patch frame
@@ -310,7 +312,11 @@ impl PjsParser {
     ///
     /// Generates a skeleton with the same structure but null/empty values.
     /// Stops recursion at max_depth to prevent stack overflow.
-    fn create_skeleton_with_depth(data: &JsonData, current_depth: usize, max_depth: usize) -> JsonData {
+    fn create_skeleton_with_depth(
+        data: &JsonData,
+        current_depth: usize,
+        max_depth: usize,
+    ) -> JsonData {
         // Security: Stop at max depth
         if current_depth >= max_depth {
             return JsonData::Null;
@@ -318,23 +324,24 @@ impl PjsParser {
 
         match data {
             JsonData::Object(map) => {
-                let skeleton_map: HashMap<String, JsonData> = map
-                    .iter()
-                    .map(|(k, v)| {
-                        let skeleton_value = match v {
-                            JsonData::Object(_) => {
-                                Self::create_skeleton_with_depth(v, current_depth + 1, max_depth)
-                            }
-                            JsonData::Array(_) => JsonData::Array(vec![]),
-                            JsonData::String(_) => JsonData::Null,
-                            JsonData::Integer(_) => JsonData::Integer(0),
-                            JsonData::Float(_) => JsonData::Float(0.0),
-                            JsonData::Bool(_) => JsonData::Bool(false),
-                            JsonData::Null => JsonData::Null,
-                        };
-                        (k.clone(), skeleton_value)
-                    })
-                    .collect();
+                // Pre-allocate HashMap with exact capacity to avoid reallocations
+                let mut skeleton_map = HashMap::with_capacity(map.len());
+
+                for (k, v) in map.iter() {
+                    let skeleton_value = match v {
+                        JsonData::Object(_) => {
+                            Self::create_skeleton_with_depth(v, current_depth + 1, max_depth)
+                        }
+                        JsonData::Array(_) => JsonData::Array(vec![]),
+                        JsonData::String(_) => JsonData::Null,
+                        JsonData::Integer(_) => JsonData::Integer(0),
+                        JsonData::Float(_) => JsonData::Float(0.0),
+                        JsonData::Bool(_) => JsonData::Bool(false),
+                        JsonData::Null => JsonData::Null,
+                    };
+                    skeleton_map.insert(k.clone(), skeleton_value);
+                }
+
                 JsonData::Object(skeleton_map)
             }
             JsonData::Array(_) => JsonData::Array(vec![]),
@@ -562,18 +569,21 @@ mod tests {
         // Verify skeleton doesn't exceed depth limit
         fn count_depth(data: &JsonData, current: usize) -> usize {
             match data {
-                JsonData::Object(map) => {
-                    map.values()
-                        .map(|v| count_depth(v, current + 1))
-                        .max()
-                        .unwrap_or(current)
-                }
+                JsonData::Object(map) => map
+                    .values()
+                    .map(|v| count_depth(v, current + 1))
+                    .max()
+                    .unwrap_or(current),
                 _ => current,
             }
         }
 
         let skeleton_depth = count_depth(&skeleton, 0);
-        assert!(skeleton_depth <= 5, "Skeleton depth {} exceeds limit 5", skeleton_depth);
+        assert!(
+            skeleton_depth <= 5,
+            "Skeleton depth {} exceeds limit 5",
+            skeleton_depth
+        );
     }
 
     #[test]
@@ -603,8 +613,14 @@ mod tests {
     #[test]
     fn test_default_security_config() {
         let parser = PjsParser::new();
-        assert_eq!(parser.security_config.max_json_size(), crate::security::DEFAULT_MAX_JSON_SIZE);
-        assert_eq!(parser.security_config.max_depth(), crate::security::DEFAULT_MAX_DEPTH);
+        assert_eq!(
+            parser.security_config.max_json_size(),
+            crate::security::DEFAULT_MAX_JSON_SIZE
+        );
+        assert_eq!(
+            parser.security_config.max_depth(),
+            crate::security::DEFAULT_MAX_DEPTH
+        );
     }
 }
 
@@ -738,7 +754,11 @@ mod wasm_tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         let err_str = err.as_string().unwrap_or_default();
-        assert!(err_str.contains("Security error"), "Expected security error, got: {}", err_str);
+        assert!(
+            err_str.contains("Security error"),
+            "Expected security error, got: {}",
+            err_str
+        );
     }
 
     #[wasm_bindgen_test]
@@ -753,7 +773,11 @@ mod wasm_tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         let err_str = err.as_string().unwrap_or_default();
-        assert!(err_str.contains("Security error"), "Expected security error, got: {}", err_str);
+        assert!(
+            err_str.contains("Security error"),
+            "Expected security error, got: {}",
+            err_str
+        );
     }
 
     #[wasm_bindgen_test]

@@ -289,9 +289,7 @@ mod tests {
 
     #[test]
     fn test_config_ignores_zero_values() {
-        let config = SecurityConfig::new()
-            .set_max_json_size(0)
-            .set_max_depth(0);
+        let config = SecurityConfig::new().set_max_json_size(0).set_max_depth(0);
 
         // Should keep defaults when 0 is passed
         assert_eq!(config.max_json_size(), DEFAULT_MAX_JSON_SIZE);

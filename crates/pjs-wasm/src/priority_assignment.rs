@@ -318,10 +318,21 @@ impl PrioritizedField {
 pub fn group_by_priority(
     fields: Vec<PrioritizedField>,
 ) -> HashMap<Priority, Vec<PrioritizedField>> {
-    let mut groups: HashMap<Priority, Vec<PrioritizedField>> = HashMap::new();
+    // Pre-allocate HashMap with capacity for typical priority levels (max 5: CRITICAL, HIGH, MEDIUM, LOW, BACKGROUND)
+    let mut groups: HashMap<Priority, Vec<PrioritizedField>> = HashMap::with_capacity(5);
+
+    // Estimate average fields per priority for inner Vec pre-allocation
+    let avg_fields_per_priority = if fields.len() < 3 {
+        fields.len()
+    } else {
+        fields.len() / 3 // Heuristic: assume fields distributed across ~3 priority levels
+    };
 
     for field in fields {
-        groups.entry(field.priority).or_default().push(field);
+        groups
+            .entry(field.priority)
+            .or_insert_with(|| Vec::with_capacity(avg_fields_per_priority))
+            .push(field);
     }
 
     groups

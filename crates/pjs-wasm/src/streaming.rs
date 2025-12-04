@@ -30,8 +30,8 @@
 use crate::priority_assignment::PriorityAssigner;
 use crate::priority_config::PriorityConfigBuilder;
 use crate::security::{SecurityConfig, validate_input_size};
-use pjs_domain::entities::frame::FrameType;
 use pjs_domain::entities::Frame;
+use pjs_domain::entities::frame::FrameType;
 use pjs_domain::value_objects::{JsonData, Priority, StreamId};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
@@ -131,19 +131,19 @@ impl FrameData {
 
 impl From<&Frame> for FrameData {
     fn from(frame: &Frame) -> Self {
+        // Pre-allocate string to avoid reallocation during to_string()
         let frame_type = match frame.frame_type() {
-            FrameType::Skeleton => "skeleton",
-            FrameType::Patch => "patch",
-            FrameType::Complete => "complete",
-            FrameType::Error => "error",
+            FrameType::Skeleton => "skeleton".to_string(),
+            FrameType::Patch => "patch".to_string(),
+            FrameType::Complete => "complete".to_string(),
+            FrameType::Error => "error".to_string(),
         };
 
-        // Serialize frame payload to JSON
-        let payload = serde_json::to_string(frame.payload())
-            .unwrap_or_else(|_| "null".to_string());
+        // Serialize frame payload to JSON (single allocation)
+        let payload = serde_json::to_string(frame.payload()).unwrap_or_else(|_| "null".to_string());
 
         Self {
-            frame_type: frame_type.to_string(),
+            frame_type,
             sequence: frame.sequence(),
             priority: frame.priority().value(),
             payload,
@@ -431,7 +431,10 @@ impl PriorityStream {
 
         let max_depth = self.security_config.max_depth();
 
-        let mut frames = Vec::new();
+        // Pre-allocate frames Vec with estimated capacity
+        // Typical: 1 skeleton + ~2-4 priority groups + 1 complete = ~4-6 frames
+        // Conservative estimate to avoid over-allocation
+        let mut frames = Vec::with_capacity(6);
         let mut sequence = 0u64;
 
         // 1. Generate skeleton frame (with depth limit)
@@ -458,12 +461,11 @@ impl PriorityStream {
             }
 
             if let Some(fields) = grouped.get(&priority) {
-                let patches: Result<Vec<FramePatch>, String> = fields
-                    .iter()
-                    .map(|field| Ok(FramePatch::set(field.path.clone(), field.value.clone())))
-                    .collect();
-
-                let patches = patches?;
+                // Pre-allocate patches Vec with exact capacity
+                let mut patches = Vec::with_capacity(fields.len());
+                for field in fields.iter() {
+                    patches.push(FramePatch::set(field.path.clone(), field.value.clone()));
+                }
 
                 if !patches.is_empty() {
                     let frame = Frame::patch(stream_id, sequence, priority, patches)
@@ -482,7 +484,11 @@ impl PriorityStream {
     }
 
     /// Create skeleton structure from data (with depth limit)
-    fn create_skeleton_with_limit(data: &JsonData, current_depth: usize, max_depth: usize) -> JsonData {
+    fn create_skeleton_with_limit(
+        data: &JsonData,
+        current_depth: usize,
+        max_depth: usize,
+    ) -> JsonData {
         // Security: Stop recursion at max depth
         if current_depth >= max_depth {
             return JsonData::Null;
@@ -490,23 +496,24 @@ impl PriorityStream {
 
         match data {
             JsonData::Object(map) => {
-                let skeleton_map: HashMap<String, JsonData> = map
-                    .iter()
-                    .map(|(k, v)| {
-                        let skeleton_value = match v {
-                            JsonData::Object(_) => {
-                                Self::create_skeleton_with_limit(v, current_depth + 1, max_depth)
-                            }
-                            JsonData::Array(_) => JsonData::Array(vec![]),
-                            JsonData::String(_) => JsonData::Null,
-                            JsonData::Integer(_) => JsonData::Integer(0),
-                            JsonData::Float(_) => JsonData::Float(0.0),
-                            JsonData::Bool(_) => JsonData::Bool(false),
-                            JsonData::Null => JsonData::Null,
-                        };
-                        (k.clone(), skeleton_value)
-                    })
-                    .collect();
+                // Pre-allocate HashMap with exact capacity to avoid reallocations
+                let mut skeleton_map = HashMap::with_capacity(map.len());
+
+                for (k, v) in map.iter() {
+                    let skeleton_value = match v {
+                        JsonData::Object(_) => {
+                            Self::create_skeleton_with_limit(v, current_depth + 1, max_depth)
+                        }
+                        JsonData::Array(_) => JsonData::Array(vec![]),
+                        JsonData::String(_) => JsonData::Null,
+                        JsonData::Integer(_) => JsonData::Integer(0),
+                        JsonData::Float(_) => JsonData::Float(0.0),
+                        JsonData::Bool(_) => JsonData::Bool(false),
+                        JsonData::Null => JsonData::Null,
+                    };
+                    skeleton_map.insert(k.clone(), skeleton_value);
+                }
+
                 JsonData::Object(skeleton_map)
             }
             JsonData::Array(_) => JsonData::Array(vec![]),
