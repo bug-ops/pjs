@@ -6,6 +6,7 @@
 
 use crate::priority_assignment::{PriorityAssigner, group_by_priority, sort_priorities};
 use crate::priority_config::PriorityConfigBuilder;
+use crate::security::{SecurityConfig, validate_input_size};
 use pjs_domain::entities::Frame;
 use pjs_domain::entities::frame::FramePatch;
 use pjs_domain::value_objects::{JsonData, Priority, StreamId};
@@ -17,6 +18,12 @@ use wasm_bindgen::prelude::*;
 /// This struct provides a JavaScript-compatible interface for parsing JSON
 /// with priority support. It's designed to be instantiated from JavaScript
 /// and used to parse JSON strings.
+///
+/// # Security
+///
+/// The parser includes built-in security limits to prevent DoS attacks:
+/// - Maximum input size: 10 MB (configurable)
+/// - Maximum nesting depth: 64 levels (configurable)
 ///
 /// # Example
 ///
@@ -30,6 +37,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub struct PjsParser {
     priority_assigner: PriorityAssigner,
+    security_config: SecurityConfig,
 }
 
 #[wasm_bindgen]
@@ -49,6 +57,7 @@ impl PjsParser {
     pub fn new() -> Self {
         Self {
             priority_assigner: PriorityAssigner::new(),
+            security_config: SecurityConfig::default(),
         }
     }
 
@@ -80,6 +89,32 @@ impl PjsParser {
         let config = config_builder.build_internal();
         Self {
             priority_assigner: PriorityAssigner::with_config(config),
+            security_config: SecurityConfig::default(),
+        }
+    }
+
+    /// Create a parser with custom security configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `security_config` - A SecurityConfig with custom limits
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// import { PjsParser, SecurityConfig } from 'pjs-wasm';
+    ///
+    /// const security = new SecurityConfig()
+    ///     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB
+    ///     .setMaxDepth(32);
+    ///
+    /// const parser = PjsParser.withSecurityConfig(security);
+    /// ```
+    #[wasm_bindgen(js_name = withSecurityConfig)]
+    pub fn with_security_config(security_config: SecurityConfig) -> Self {
+        Self {
+            priority_assigner: PriorityAssigner::new(),
+            security_config,
         }
     }
 
@@ -117,6 +152,10 @@ impl PjsParser {
     /// ```
     #[wasm_bindgen]
     pub fn parse(&self, json_str: &str) -> Result<JsValue, JsValue> {
+        // Security: Validate input size
+        validate_input_size(json_str, &self.security_config)
+            .map_err(|e| JsValue::from_str(&format!("Security error: {}", e)))?;
+
         // Parse with serde_json (WASM-compatible, unlike sonic-rs)
         let value: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
@@ -170,6 +209,10 @@ impl PjsParser {
     /// ```
     #[wasm_bindgen(js_name = generateFrames)]
     pub fn generate_frames(&self, json_str: &str, min_priority: u8) -> Result<JsValue, JsValue> {
+        // Security: Validate input size
+        validate_input_size(json_str, &self.security_config)
+            .map_err(|e| JsValue::from_str(&format!("Security error: {}", e)))?;
+
         // Parse JSON
         let value: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
@@ -201,16 +244,23 @@ impl PjsParser {
         stream_id: StreamId,
         min_priority: Priority,
     ) -> Result<Vec<Frame>, String> {
-        let mut frames = Vec::new();
+        let max_depth = self.security_config.max_depth();
+
+        // Pre-allocate frames Vec with estimated capacity
+        // Typical: 1 skeleton + ~2-4 priority groups + 1 complete = ~4-6 frames
+        // Conservative estimate to avoid over-allocation
+        let mut frames = Vec::with_capacity(6);
         let mut sequence = 0u64;
 
         // 1. Generate skeleton frame (always first, critical priority)
-        let skeleton = Self::create_skeleton(data);
+        let skeleton = Self::create_skeleton_with_depth(data, 0, max_depth);
         frames.push(Frame::skeleton(stream_id, sequence, skeleton));
         sequence += 1;
 
-        // 2. Extract all fields with priorities
-        let prioritized_fields = self.priority_assigner.extract_prioritized_fields(data);
+        // 2. Extract all fields with priorities (depth-limited)
+        let prioritized_fields = self
+            .priority_assigner
+            .extract_prioritized_fields_with_limit(data, max_depth);
 
         // 3. Group fields by priority level
         let grouped = group_by_priority(prioritized_fields);
@@ -226,13 +276,11 @@ impl PjsParser {
             }
 
             if let Some(fields) = grouped.get(&priority) {
-                // Create patches for this priority level
-                let patches: Result<Vec<FramePatch>, String> = fields
-                    .iter()
-                    .map(|field| Ok(FramePatch::set(field.path.clone(), field.value.clone())))
-                    .collect();
-
-                let patches = patches?;
+                // Pre-allocate patches Vec with exact capacity
+                let mut patches = Vec::with_capacity(fields.len());
+                for field in fields.iter() {
+                    patches.push(FramePatch::set(field.path.clone(), field.value.clone()));
+                }
 
                 if !patches.is_empty() {
                     // Create patch frame
@@ -254,24 +302,46 @@ impl PjsParser {
     /// Create skeleton structure from data (internal helper)
     ///
     /// Generates a skeleton with the same structure but null/empty values.
+    /// Deprecated: Use create_skeleton_with_depth for security.
+    #[allow(dead_code)]
     fn create_skeleton(data: &JsonData) -> JsonData {
+        Self::create_skeleton_with_depth(data, 0, crate::security::DEFAULT_MAX_DEPTH)
+    }
+
+    /// Create skeleton structure with depth limit (security-safe)
+    ///
+    /// Generates a skeleton with the same structure but null/empty values.
+    /// Stops recursion at max_depth to prevent stack overflow.
+    fn create_skeleton_with_depth(
+        data: &JsonData,
+        current_depth: usize,
+        max_depth: usize,
+    ) -> JsonData {
+        // Security: Stop at max depth
+        if current_depth >= max_depth {
+            return JsonData::Null;
+        }
+
         match data {
             JsonData::Object(map) => {
-                let skeleton_map: HashMap<String, JsonData> = map
-                    .iter()
-                    .map(|(k, v)| {
-                        let skeleton_value = match v {
-                            JsonData::Object(_) => Self::create_skeleton(v),
-                            JsonData::Array(_) => JsonData::Array(vec![]),
-                            JsonData::String(_) => JsonData::Null,
-                            JsonData::Integer(_) => JsonData::Integer(0),
-                            JsonData::Float(_) => JsonData::Float(0.0),
-                            JsonData::Bool(_) => JsonData::Bool(false),
-                            JsonData::Null => JsonData::Null,
-                        };
-                        (k.clone(), skeleton_value)
-                    })
-                    .collect();
+                // Pre-allocate HashMap with exact capacity to avoid reallocations
+                let mut skeleton_map = HashMap::with_capacity(map.len());
+
+                for (k, v) in map.iter() {
+                    let skeleton_value = match v {
+                        JsonData::Object(_) => {
+                            Self::create_skeleton_with_depth(v, current_depth + 1, max_depth)
+                        }
+                        JsonData::Array(_) => JsonData::Array(vec![]),
+                        JsonData::String(_) => JsonData::Null,
+                        JsonData::Integer(_) => JsonData::Integer(0),
+                        JsonData::Float(_) => JsonData::Float(0.0),
+                        JsonData::Bool(_) => JsonData::Bool(false),
+                        JsonData::Null => JsonData::Null,
+                    };
+                    skeleton_map.insert(k.clone(), skeleton_value);
+                }
+
                 JsonData::Object(skeleton_map)
             }
             JsonData::Array(_) => JsonData::Array(vec![]),
@@ -470,6 +540,88 @@ mod tests {
     // Note: Additional parsing tests require WASM environment and should be run with
     // wasm-bindgen-test in a browser or Node.js environment.
     // See wasm-bindgen-test documentation for details.
+
+    // Security tests
+
+    #[test]
+    fn test_parser_with_security_config() {
+        let security = SecurityConfig::new()
+            .set_max_json_size(1024)
+            .set_max_depth(10);
+        let parser = PjsParser::with_security_config(security);
+        assert_eq!(parser.security_config.max_json_size(), 1024);
+        assert_eq!(parser.security_config.max_depth(), 10);
+    }
+
+    #[test]
+    fn test_create_skeleton_with_depth_limit() {
+        // Create deeply nested structure
+        let mut current = JsonData::String("deep".to_string());
+        for i in 0..10 {
+            let mut map = HashMap::new();
+            map.insert(format!("level_{}", i), current);
+            current = JsonData::Object(map);
+        }
+
+        // With depth limit of 5, deeper levels should be replaced with Null
+        let skeleton = PjsParser::create_skeleton_with_depth(&current, 0, 5);
+
+        // Verify skeleton doesn't exceed depth limit
+        fn count_depth(data: &JsonData, current: usize) -> usize {
+            match data {
+                JsonData::Object(map) => map
+                    .values()
+                    .map(|v| count_depth(v, current + 1))
+                    .max()
+                    .unwrap_or(current),
+                _ => current,
+            }
+        }
+
+        let skeleton_depth = count_depth(&skeleton, 0);
+        assert!(
+            skeleton_depth <= 5,
+            "Skeleton depth {} exceeds limit 5",
+            skeleton_depth
+        );
+    }
+
+    #[test]
+    fn test_generate_frames_internal_respects_depth_limit() {
+        // Create parser with shallow depth limit
+        let security = SecurityConfig::new().set_max_depth(3);
+        let parser = PjsParser::with_security_config(security);
+        let stream_id = StreamId::new();
+
+        // Create nested structure deeper than limit
+        let mut inner_inner = HashMap::new();
+        inner_inner.insert("deep".to_string(), JsonData::String("value".to_string()));
+
+        let mut inner = HashMap::new();
+        inner.insert("level2".to_string(), JsonData::Object(inner_inner));
+
+        let mut outer = HashMap::new();
+        outer.insert("level1".to_string(), JsonData::Object(inner));
+
+        let data = JsonData::Object(outer);
+
+        // Should succeed without stack overflow
+        let result = parser.generate_frames_internal(&data, stream_id, Priority::LOW);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_default_security_config() {
+        let parser = PjsParser::new();
+        assert_eq!(
+            parser.security_config.max_json_size(),
+            crate::security::DEFAULT_MAX_JSON_SIZE
+        );
+        assert_eq!(
+            parser.security_config.max_depth(),
+            crate::security::DEFAULT_MAX_DEPTH
+        );
+    }
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]
@@ -585,6 +737,59 @@ mod wasm_tests {
         }"#;
 
         let result = parser.generate_frames(json, 25); // LOW threshold
+        assert!(result.is_ok());
+    }
+
+    // Security tests for WASM environment
+
+    #[wasm_bindgen_test]
+    fn test_parse_input_too_large() {
+        let security = SecurityConfig::new().set_max_json_size(100);
+        let parser = PjsParser::with_security_config(security);
+
+        // Create input larger than 100 bytes
+        let large_input = format!(r#"{{"data": "{}"}}"#, "x".repeat(200));
+        let result = parser.parse(&large_input);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.as_string().unwrap_or_default();
+        assert!(
+            err_str.contains("Security error"),
+            "Expected security error, got: {}",
+            err_str
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn test_generate_frames_input_too_large() {
+        let security = SecurityConfig::new().set_max_json_size(50);
+        let parser = PjsParser::with_security_config(security);
+
+        // Create input larger than 50 bytes
+        let large_input = r#"{"id": 1, "name": "Alice", "bio": "This is a long biography"}"#;
+        let result = parser.generate_frames(large_input, 10);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.as_string().unwrap_or_default();
+        assert!(
+            err_str.contains("Security error"),
+            "Expected security error, got: {}",
+            err_str
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn test_parser_with_custom_security_config() {
+        let security = SecurityConfig::new()
+            .set_max_json_size(1024 * 1024) // 1 MB
+            .set_max_depth(32);
+
+        let parser = PjsParser::with_security_config(security);
+
+        // Small input should work
+        let result = parser.parse(r#"{"id": 1}"#);
         assert!(result.is_ok());
     }
 }

@@ -44,6 +44,8 @@ export { Transport } from './transport/base.js';
 export { HttpTransport } from './transport/http.js';
 export { WebSocketTransport } from './transport/websocket.js';
 export { SSETransport } from './transport/sse.js';
+export { WasmBackend, createWasmBackend } from './transport/wasm-backend.js';
+export type { WasmStreamOptions } from './transport/wasm-backend.js';
 
 // Type definitions
 export * from './types/index.js';
@@ -53,7 +55,7 @@ export { createPJSClient, validateFrame, parseJsonPath } from './utils/index.js'
 
 // Parser module (optional WASM support)
 export { WasmParser, createWasmParser } from './parser/index.js';
-export type { WasmParserOptions } from './parser/index.js';
+export type { WasmParserOptions, StreamingCallbacks } from './parser/index.js';
 
 /**
  * Library version

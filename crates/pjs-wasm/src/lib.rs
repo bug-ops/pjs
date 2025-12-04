@@ -31,11 +31,15 @@ mod parser;
 mod priority_assignment;
 mod priority_config;
 mod priority_constants;
+pub mod security;
+mod streaming;
 mod utils;
 
 pub use parser::PjsParser;
 pub use priority_config::PriorityConfigBuilder;
 pub use priority_constants::PriorityConstants;
+pub use security::SecurityConfig;
+pub use streaming::{FrameData, PriorityStream, StreamStats};
 
 /// Initialize WASM module.
 ///

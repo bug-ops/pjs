@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PJS WASM Demo - Priority JSON Streaming</title>
+    <style>
+        :root {
+            --critical: #ef4444;
+            --high: #f97316;
+            --medium: #eab308;
+            --low: #22c55e;
+            --background: #3b82f6;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: #64748b;
+            margin-bottom: 2rem;
+        }
+
+        .demo-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        @media (max-width: 768px) {
+            .demo-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid #334155;
+        }
+
+        .panel-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .input-area {
+            width: 100%;
+            min-height: 200px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 1rem;
+            color: #e2e8f0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+            resize: vertical;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+
+        .btn-secondary {
+            background: #334155;
+            color: #e2e8f0;
+        }
+
+        .btn-secondary:hover {
+            background: #475569;
+        }
+
+        .priority-select {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            background: #334155;
+            border: 1px solid #475569;
+            color: #e2e8f0;
+            cursor: pointer;
+        }
+
+        .output-area {
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .frame-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .frame {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            background: #0f172a;
+            border-left: 4px solid;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .frame.skeleton { border-color: #8b5cf6; }
+        .frame.critical { border-color: var(--critical); }
+        .frame.high { border-color: var(--high); }
+        .frame.medium { border-color: var(--medium); }
+        .frame.low { border-color: var(--low); }
+        .frame.background { border-color: var(--background); }
+        .frame.complete { border-color: #22c55e; background: #14532d20; }
+
+        .frame-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .frame-type {
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+        }
+
+        .frame-priority {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            background: #334155;
+        }
+
+        .frame-payload {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.75rem;
+            color: #94a3b8;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .stats-panel {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        @media (max-width: 768px) {
+            .stats-panel {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .stat-card {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+            border: 1px solid #334155;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #3b82f6;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-top: 0.25rem;
+        }
+
+        .legend {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #334155;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #64748b;
+        }
+
+        .error {
+            background: #450a0a;
+            border: 1px solid #dc2626;
+            border-radius: 8px;
+            padding: 1rem;
+            color: #fca5a5;
+        }
+
+        .version {
+            text-align: center;
+            margin-top: 2rem;
+            color: #64748b;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PJS WASM Demo</h1>
+        <p class="subtitle">Priority JSON Streaming Protocol - WebAssembly Edition</p>
+
+        <div class="demo-grid">
+            <div class="panel">
+                <div class="panel-title">
+                    <span>📝</span> JSON Input
+                </div>
+                <textarea id="jsonInput" class="input-area" placeholder="Enter JSON here...">{
+  "id": 12345,
+  "status": "active",
+  "name": "Alice Johnson",
+  "email": "alice@example.com",
+  "profile": {
+    "bio": "Software developer with 10 years of experience in building scalable applications.",
+    "avatar": "https://example.com/avatars/alice.jpg",
+    "location": "San Francisco, CA"
+  },
+  "analytics": {
+    "views": 15234,
+    "likes": 892,
+    "shares": 156
+  },
+  "posts": [
+    {"title": "Getting Started with Rust", "likes": 342},
+    {"title": "WebAssembly in Production", "likes": 521}
+  ],
+  "logs": [
+    {"timestamp": "2024-01-15", "action": "login"},
+    {"timestamp": "2024-01-14", "action": "update_profile"}
+  ]
+}</textarea>
+                <div class="controls">
+                    <button id="streamBtn" class="btn btn-primary">▶ Stream Frames</button>
+                    <button id="clearBtn" class="btn btn-secondary">Clear</button>
+                    <select id="prioritySelect" class="priority-select">
+                        <option value="10">All (Background+)</option>
+                        <option value="25">Low+</option>
+                        <option value="50" selected>Medium+</option>
+                        <option value="80">High+</option>
+                        <option value="100">Critical only</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">
+                    <span>📦</span> Streaming Frames
+                </div>
+                <div id="output" class="output-area">
+                    <div class="empty-state">
+                        Click "Stream Frames" to begin streaming
+                    </div>
+                </div>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #8b5cf6"></div>
+                        <span>Skeleton</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--critical)"></div>
+                        <span>Critical (100)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--high)"></div>
+                        <span>High (80)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--medium)"></div>
+                        <span>Medium (50)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--low)"></div>
+                        <span>Low (25)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--background)"></div>
+                        <span>Background (10)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-panel">
+            <div class="stat-card">
+                <div id="statFrames" class="stat-value">-</div>
+                <div class="stat-label">Total Frames</div>
+            </div>
+            <div class="stat-card">
+                <div id="statPatches" class="stat-value">-</div>
+                <div class="stat-label">Patch Frames</div>
+            </div>
+            <div class="stat-card">
+                <div id="statBytes" class="stat-value">-</div>
+                <div class="stat-label">Bytes Processed</div>
+            </div>
+            <div class="stat-card">
+                <div id="statTime" class="stat-value">-</div>
+                <div class="stat-label">Duration (ms)</div>
+            </div>
+        </div>
+
+        <div id="version" class="version">Loading PJS WASM...</div>
+    </div>
+
+    <script type="module">
+        import init, { PriorityStream, version, PriorityConstants } from '../pkg/pjs_wasm.js';
+
+        let stream;
+
+        async function main() {
+            try {
+                await init();
+                document.getElementById('version').textContent = `PJS WASM v${version()}`;
+
+                stream = new PriorityStream();
+
+                setupEventListeners();
+            } catch (error) {
+                console.error('Failed to initialize WASM:', error);
+                document.getElementById('version').textContent = `Error: ${error.message}`;
+            }
+        }
+
+        function setupEventListeners() {
+            document.getElementById('streamBtn').addEventListener('click', startStream);
+            document.getElementById('clearBtn').addEventListener('click', clearOutput);
+        }
+
+        function getPriorityClass(priority) {
+            if (priority >= 100) return 'critical';
+            if (priority >= 80) return 'high';
+            if (priority >= 50) return 'medium';
+            if (priority >= 25) return 'low';
+            return 'background';
+        }
+
+        function startStream() {
+            const jsonInput = document.getElementById('jsonInput').value;
+            const minPriority = parseInt(document.getElementById('prioritySelect').value);
+            const output = document.getElementById('output');
+
+            // Clear previous output
+            output.innerHTML = '<div class="frame-list" id="frameList"></div>';
+            const frameList = document.getElementById('frameList');
+
+            // Reset stats
+            updateStats(null);
+
+            try {
+                // Create new stream with min priority
+                stream = new PriorityStream();
+                stream.setMinPriority(minPriority);
+
+                // Register callbacks
+                stream.onFrame((frame) => {
+                    const frameEl = document.createElement('div');
+                    const priorityClass = frame.type === 'skeleton' ? 'skeleton' :
+                                         frame.type === 'complete' ? 'complete' :
+                                         getPriorityClass(frame.priority);
+
+                    frameEl.className = `frame ${priorityClass}`;
+
+                    let payload = frame.payload;
+                    try {
+                        const obj = JSON.parse(payload);
+                        payload = JSON.stringify(obj, null, 2);
+                        if (payload.length > 200) {
+                            payload = payload.substring(0, 200) + '...';
+                        }
+                    } catch {}
+
+                    frameEl.innerHTML = `
+                        <div class="frame-header">
+                            <span class="frame-type">${frame.type} #${frame.sequence}</span>
+                            <span class="frame-priority">Priority: ${frame.priority}</span>
+                        </div>
+                        <div class="frame-payload">${escapeHtml(payload)}</div>
+                    `;
+
+                    frameList.appendChild(frameEl);
+                    frameList.scrollTop = frameList.scrollHeight;
+                });
+
+                stream.onComplete((stats) => {
+                    updateStats(stats);
+                });
+
+                stream.onError((error) => {
+                    const errorEl = document.createElement('div');
+                    errorEl.className = 'error';
+                    errorEl.textContent = `Error: ${error}`;
+                    frameList.appendChild(errorEl);
+                });
+
+                // Start streaming
+                stream.start(jsonInput);
+
+            } catch (error) {
+                output.innerHTML = `<div class="error">Error: ${escapeHtml(error.message)}</div>`;
+            }
+        }
+
+        function updateStats(stats) {
+            if (stats) {
+                document.getElementById('statFrames').textContent = stats.totalFrames;
+                document.getElementById('statPatches').textContent = stats.patchFrames;
+                document.getElementById('statBytes').textContent = formatBytes(stats.bytesProcessed);
+                document.getElementById('statTime').textContent = stats.durationMs.toFixed(2);
+            } else {
+                document.getElementById('statFrames').textContent = '-';
+                document.getElementById('statPatches').textContent = '-';
+                document.getElementById('statBytes').textContent = '-';
+                document.getElementById('statTime').textContent = '-';
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = `
+                <div class="empty-state">
+                    Click "Stream Frames" to begin streaming
+                </div>
+            `;
+            updateStats(null);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        main();
+    </script>
+</body>
+</html>

@@ -268,6 +268,11 @@ export class PJSClient extends EventEmitter {
         return new WebSocketTransport(this.config);
       case TransportType.ServerSentEvents:
         return new SSETransport(this.config);
+      case TransportType.WASM: {
+        // Dynamic import to avoid bundling WASM backend if not needed
+        const { WasmBackend } = require('../transport/wasm-backend.js');
+        return new WasmBackend(this.config);
+      }
       default:
         throw new PJSError(
           PJSErrorType.ConfigurationError,

@@ -91,7 +91,8 @@ export type Frame = SkeletonFrame | PatchFrame | CompleteFrame;
 export enum TransportType {
   HTTP = 'http',
   WebSocket = 'websocket',
-  ServerSentEvents = 'sse'
+  ServerSentEvents = 'sse',
+  WASM = 'wasm'
 }
 
 /**
