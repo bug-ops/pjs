@@ -63,13 +63,13 @@ jobs:
       - name: Run pjs-wasm library tests
         run: cargo nextest run -p pjs-wasm --lib --no-fail-fast
 
-      - name: Run pjs-domain library tests
-        run: cargo nextest run -p pjs-domain --lib --no-fail-fast
+      - name: Run pjson-rs-domain library tests
+        run: cargo nextest run -p pjson-rs-domain --lib --no-fail-fast
 
       - name: Run doctests
         run: |
           cargo test -p pjs-wasm --doc
-          cargo test -p pjs-domain --doc
+          cargo test -p pjson-rs-domain --doc
 
   # Build WASM binaries for multiple targets
   wasm-build:
@@ -360,17 +360,17 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
-        run: cargo +nightly fmt --check -p pjs-wasm -p pjs-domain
+        run: cargo +nightly fmt --check -p pjs-wasm -p pjson-rs-domain
 
       - name: Run clippy for WASM
         run: |
           cargo clippy -p pjs-wasm --all-targets -- -D warnings
-          cargo clippy -p pjs-domain --all-targets -- -D warnings
+          cargo clippy -p pjson-rs-domain --all-targets -- -D warnings
 
       - name: Check documentation
         run: |
           cargo doc -p pjs-wasm --no-deps --release
-          cargo doc -p pjs-domain --no-deps --release
+          cargo doc -p pjson-rs-domain --no-deps --release
         env:
           RUSTDOCFLAGS: "-D warnings"
 
