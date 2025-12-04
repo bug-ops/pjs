@@ -29,6 +29,7 @@
 
 use crate::priority_assignment::PriorityAssigner;
 use crate::priority_config::PriorityConfigBuilder;
+use crate::security::{SecurityConfig, validate_input_size};
 use pjs_domain::entities::frame::FrameType;
 use pjs_domain::entities::Frame;
 use pjs_domain::value_objects::{JsonData, Priority, StreamId};
@@ -162,6 +163,7 @@ impl From<&Frame> for FrameData {
 /// - Configurable priority thresholds
 /// - Stream statistics tracking
 /// - Custom priority configuration support
+/// - **Security limits** to prevent DoS attacks
 ///
 /// # Example
 ///
@@ -182,6 +184,7 @@ impl From<&Frame> for FrameData {
 pub struct PriorityStream {
     priority_assigner: PriorityAssigner,
     min_priority: u8,
+    security_config: SecurityConfig,
     on_frame: Option<js_sys::Function>,
     on_complete: Option<js_sys::Function>,
     on_error: Option<js_sys::Function>,
@@ -201,6 +204,7 @@ impl PriorityStream {
         Self {
             priority_assigner: PriorityAssigner::new(),
             min_priority: 1,
+            security_config: SecurityConfig::default(),
             on_frame: None,
             on_complete: None,
             on_error: None,
@@ -226,10 +230,30 @@ impl PriorityStream {
         Self {
             priority_assigner: PriorityAssigner::with_config(config),
             min_priority: 1,
+            security_config: SecurityConfig::default(),
             on_frame: None,
             on_complete: None,
             on_error: None,
         }
+    }
+
+    /// Set custom security limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Security configuration with custom limits
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// const security = new SecurityConfig()
+    ///     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB
+    ///     .setMaxDepth(32);
+    /// stream.setSecurityConfig(security);
+    /// ```
+    #[wasm_bindgen(js_name = setSecurityConfig)]
+    pub fn set_security_config(&mut self, config: SecurityConfig) {
+        self.security_config = config;
     }
 
     /// Set the minimum priority threshold.
@@ -337,6 +361,13 @@ impl PriorityStream {
         let start_time = js_sys::Date::now();
         let bytes_processed = json_str.len() as u32;
 
+        // Security: Validate input size
+        if let Err(e) = validate_input_size(json_str, &self.security_config) {
+            let error_msg = e.to_string();
+            self.emit_error(&error_msg);
+            return Err(JsValue::from_str(&error_msg));
+        }
+
         // Parse JSON
         let value: serde_json::Value = match serde_json::from_str(json_str) {
             Ok(v) => v,
@@ -398,16 +429,20 @@ impl PriorityStream {
         use crate::priority_assignment::{group_by_priority, sort_priorities};
         use pjs_domain::entities::frame::FramePatch;
 
+        let max_depth = self.security_config.max_depth();
+
         let mut frames = Vec::new();
         let mut sequence = 0u64;
 
-        // 1. Generate skeleton frame
-        let skeleton = Self::create_skeleton(data);
+        // 1. Generate skeleton frame (with depth limit)
+        let skeleton = Self::create_skeleton_with_limit(data, 0, max_depth);
         frames.push(Frame::skeleton(stream_id, sequence, skeleton));
         sequence += 1;
 
-        // 2. Extract all fields with priorities
-        let prioritized_fields = self.priority_assigner.extract_prioritized_fields(data);
+        // 2. Extract all fields with priorities (with depth limit)
+        let prioritized_fields = self
+            .priority_assigner
+            .extract_prioritized_fields_with_limit(data, max_depth);
 
         // 3. Group fields by priority level
         let grouped = group_by_priority(prioritized_fields);
@@ -446,15 +481,22 @@ impl PriorityStream {
         Ok(frames)
     }
 
-    /// Create skeleton structure from data
-    fn create_skeleton(data: &JsonData) -> JsonData {
+    /// Create skeleton structure from data (with depth limit)
+    fn create_skeleton_with_limit(data: &JsonData, current_depth: usize, max_depth: usize) -> JsonData {
+        // Security: Stop recursion at max depth
+        if current_depth >= max_depth {
+            return JsonData::Null;
+        }
+
         match data {
             JsonData::Object(map) => {
                 let skeleton_map: HashMap<String, JsonData> = map
                     .iter()
                     .map(|(k, v)| {
                         let skeleton_value = match v {
-                            JsonData::Object(_) => Self::create_skeleton(v),
+                            JsonData::Object(_) => {
+                                Self::create_skeleton_with_limit(v, current_depth + 1, max_depth)
+                            }
                             JsonData::Array(_) => JsonData::Array(vec![]),
                             JsonData::String(_) => JsonData::Null,
                             JsonData::Integer(_) => JsonData::Integer(0),

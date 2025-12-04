@@ -216,19 +216,36 @@ impl PriorityAssigner {
     }
 
     /// Extract all fields with priorities from JSON data
+    #[allow(dead_code)]
     pub fn extract_prioritized_fields(&self, data: &JsonData) -> Vec<PrioritizedField> {
+        self.extract_prioritized_fields_with_limit(data, crate::security::DEFAULT_MAX_DEPTH)
+    }
+
+    /// Extract all fields with priorities from JSON data with custom depth limit
+    pub fn extract_prioritized_fields_with_limit(
+        &self,
+        data: &JsonData,
+        max_depth: usize,
+    ) -> Vec<PrioritizedField> {
         let mut fields = Vec::new();
-        self.extract_fields_recursive(data, &JsonPath::root(), &mut fields);
+        self.extract_fields_recursive(data, &JsonPath::root(), &mut fields, 0, max_depth);
         fields
     }
 
-    /// Recursively extract fields with priorities
+    /// Recursively extract fields with priorities (with depth tracking)
     fn extract_fields_recursive(
         &self,
         data: &JsonData,
         current_path: &JsonPath,
         fields: &mut Vec<PrioritizedField>,
+        current_depth: usize,
+        max_depth: usize,
     ) {
+        // Security: Check depth limit to prevent stack overflow
+        if current_depth >= max_depth {
+            return; // Stop recursion at max depth
+        }
+
         match data {
             JsonData::Object(map) => {
                 for (key, value) in map {
@@ -242,14 +259,26 @@ impl PriorityAssigner {
                         });
 
                         // Recursively process nested structures
-                        self.extract_fields_recursive(value, &field_path, fields);
+                        self.extract_fields_recursive(
+                            value,
+                            &field_path,
+                            fields,
+                            current_depth + 1,
+                            max_depth,
+                        );
                     }
                 }
             }
             JsonData::Array(arr) => {
                 for (index, item) in arr.iter().enumerate() {
                     let indexed_path = current_path.append_index(index);
-                    self.extract_fields_recursive(item, &indexed_path, fields);
+                    self.extract_fields_recursive(
+                        item,
+                        &indexed_path,
+                        fields,
+                        current_depth + 1,
+                        max_depth,
+                    );
                 }
             }
             _ => {
