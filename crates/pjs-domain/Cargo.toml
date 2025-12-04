@@ -1,36 +1,26 @@
 [package]
 name = "pjs-domain"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.89"
-license = "MIT OR Apache-2.0"
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
 description = "Pure domain logic for PJS - WASM-compatible core"
-repository = "https://github.com/bug-ops/pjs"
-authors = ["Andrei G. <k05h31@gmail.com>"]
+repository = { workspace = true }
+authors = { workspace = true }
 
 [lib]
 name = "pjs_domain"
 path = "src/lib.rs"
 
 [dependencies]
-# Error handling (no_std compatible)
-thiserror = { version = "2.0", default-features = false }
-
-# Serialization (for WASM interop, enabled by default)
-serde = { version = "1.0", features = ["derive"] }
+chrono = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-
-# Small vector optimization for schema validation
 smallvec = { workspace = true, features = ["serde"] }
-
-# UUID generation for IDs
+thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 
-# Timestamps
-chrono = { workspace = true, features = ["serde"] }
-
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# WASM-specific: uuid needs js feature for browser crypto
 uuid = { workspace = true, features = ["v4", "serde", "js"] }
 
 [features]
@@ -39,5 +29,4 @@ std = ["thiserror/std"]
 wasm = []
 
 [dev-dependencies]
-# For testing only
-serde_json = "1.0"
+serde_json = { workspace = true }

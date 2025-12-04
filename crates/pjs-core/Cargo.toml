@@ -14,7 +14,6 @@ exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
 
 [dependencies]
-pjs-domain = { path = "../pjs-domain" }
 async-trait = { workspace = true }
 axum = { workspace = true, optional = true, features = ["ws"] }
 bitflags = { workspace = true }
@@ -23,9 +22,12 @@ chrono = { workspace = true, features = ["serde"] }
 crossbeam = { workspace = true }
 dashmap = { workspace = true }
 futures = { workspace = true, optional = true }
+libmimalloc-sys = { workspace = true, optional = true }
 maplit = { workspace = true }
+mimalloc = { workspace = true, optional = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
+pjs-domain = { path = "../pjs-domain" }
 priority-queue = { workspace = true }
 prometheus = { workspace = true, optional = true }
 rayon = { workspace = true }
@@ -36,21 +38,17 @@ sha2 = { workspace = true }
 smallvec = { workspace = true, features = ["serde", "union", "const_generics"] }
 sonic-rs = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
+tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats"] }
+tikv-jemalloc-sys = { workspace = true, optional = true }
+tikv-jemallocator = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "net", "parking_lot"] }
 tokio-tungstenite = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
-typed-arena = { workspace = true }
 tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
+tracing = { workspace = true }
+typed-arena = { workspace = true }
 url = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
-
-# Memory allocator dependencies
-tikv-jemallocator = { workspace = true, optional = true }
-tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats"] }
-tikv-jemalloc-sys = { workspace = true, optional = true }
-mimalloc = { workspace = true, optional = true }
-libmimalloc-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -60,11 +58,11 @@ tokio = { workspace = true, features = ["test-util"] }
 default = ["simd-auto", "schema-validation"]
 
 # SIMD features
-simd-auto = []   # Auto-detect best SIMD
-simd-sse42 = []  # SSE 4.2 support
-simd-avx2 = []   # AVX2 support  
-simd-avx512 = [] # AVX-512 support
-simd-neon = []   # ARM NEON support
+simd-auto = []
+simd-avx2 = []
+simd-avx512 = []
+simd-neon = []
+simd-sse42 = []
 
 # Memory allocator features (mutually exclusive)
 jemalloc = [
@@ -73,21 +71,17 @@ jemalloc = [
     "dep:tikv-jemalloc-sys",
 ]
 mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
-# system allocator is the default (no deps needed)
 
-# Optional features (will be added later)
-# gpu = ["dep:cudarc", "dep:wgpu"]
-schema-validation = []
+# Optional features
 compression = []
+schema-validation = []
 
 # Infrastructure features
-http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:futures"]
-websocket-client = ["dep:tokio-tungstenite", "dep:url"]
-websocket-server = [
-    "http-server",
-] # WebSocket server requires HTTP server features
 http-client = ["dep:reqwest"]
+http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:futures"]
 prometheus-metrics = ["dep:prometheus"]
+websocket-client = ["dep:tokio-tungstenite", "dep:url"]
+websocket-server = ["http-server"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["axum", "tower", "tower-http", "hyper", "futures", "sha2"]
@@ -102,17 +96,3 @@ required-features = []
 [[example]]
 name = "zero_copy_demo"
 required-features = []
-
-# TODO: Fix websocket_streaming example after infrastructure module fixes
-# [[example]]
-# name = "websocket_streaming"
-# required-features = ["http-server"]
-
-# Benchmarks will be implemented later
-# [[bench]]
-# name = "simd_parsing"
-# harness = false
-# 
-# [[bench]]
-# name = "memory_pools"
-# harness = false
