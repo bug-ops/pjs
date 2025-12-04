@@ -18,7 +18,7 @@ use pjson_rs::application::services::{
     prioritization_service::PerformanceContext,
 };
 use pjson_rs::application::shared::AdjustmentUrgency;
-use pjson_rs::domain::Priority;
+use pjson_rs::domain::value_objects::{JsonData, Priority, StreamId};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
@@ -785,4 +785,377 @@ fn test_strategy_cloning() {
     assert_eq!(strategy1.batch_size, strategy2.batch_size);
     assert_eq!(strategy1.max_frame_size, strategy2.max_frame_size);
     assert_eq!(strategy1.priority_threshold, strategy2.priority_threshold);
+}
+
+// === Calculate Optimization Metrics Tests ===
+
+#[test]
+fn test_calculate_metrics_empty_frames() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+    let context = create_test_performance_context(100.0, 10.0, 0.01, 0.5);
+
+    let frames = vec![]; // Empty frames
+
+    let metrics = service
+        .calculate_optimization_metrics(&strategy, &frames, &context)
+        .unwrap();
+
+    assert_eq!(metrics.efficiency_score, 0.0);
+    assert_eq!(metrics.quality_score, 0.0);
+    assert!(metrics.latency_improvement >= 0.0);
+    assert!(metrics.throughput_improvement >= 0.0);
+}
+
+#[test]
+fn test_calculate_metrics_with_frames() {
+    use pjson_rs::domain::entities::Frame;
+
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+    let context = create_test_performance_context(100.0, 10.0, 0.01, 0.5);
+
+    let stream_id = StreamId::new();
+    let frames = vec![
+        Frame::skeleton(stream_id, 0, JsonData::Null),
+        Frame::complete(stream_id, 1, None),
+    ];
+
+    let metrics = service
+        .calculate_optimization_metrics(&strategy, &frames, &context)
+        .unwrap();
+
+    assert!(metrics.efficiency_score >= 0.0 && metrics.efficiency_score <= 1.0);
+    assert!(metrics.quality_score >= 0.0 && metrics.quality_score <= 1.0);
+    assert!(metrics.latency_improvement >= 0.0 && metrics.latency_improvement <= 1.0);
+    assert!(metrics.throughput_improvement >= 0.0 && metrics.throughput_improvement <= 1.0);
+    assert!(metrics.resource_utilization >= 0.0 && metrics.resource_utilization <= 1.0);
+}
+
+#[test]
+fn test_calculate_metrics_high_priority_frames() {
+    use pjson_rs::domain::entities::frame::{Frame, FramePatch};
+    use pjson_rs::domain::value_objects::JsonPath;
+
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+    let context = create_test_performance_context(100.0, 10.0, 0.01, 0.5);
+
+    let stream_id = StreamId::new();
+    let patch1 = FramePatch::set(JsonPath::root(), JsonData::String("value1".into()));
+    let patch2 = FramePatch::set(JsonPath::root(), JsonData::String("value2".into()));
+    let frames = vec![
+        Frame::skeleton(stream_id, 0, JsonData::Null),
+        Frame::patch(stream_id, 1, Priority::CRITICAL, vec![patch1]).unwrap(),
+        Frame::patch(stream_id, 2, Priority::HIGH, vec![patch2]).unwrap(),
+        Frame::complete(stream_id, 3, None),
+    ];
+
+    let metrics = service
+        .calculate_optimization_metrics(&strategy, &frames, &context)
+        .unwrap();
+
+    // High priority frames should result in good quality score
+    assert!(metrics.quality_score > 0.5);
+}
+
+#[test]
+fn test_calculate_metrics_latency_improvement_when_exceeding_target() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    // High latency exceeding target
+    let context = create_test_performance_context(500.0, 10.0, 0.01, 0.5);
+
+    let stream_id = StreamId::new();
+    let frames = vec![pjson_rs::domain::entities::Frame::skeleton(
+        stream_id,
+        0,
+        JsonData::Null,
+    )];
+
+    let metrics = service
+        .calculate_optimization_metrics(&strategy, &frames, &context)
+        .unwrap();
+
+    // Should show improvement potential when latency exceeds target
+    assert!(metrics.latency_improvement > 0.0);
+}
+
+#[test]
+fn test_calculate_metrics_throughput_improvement_low_bandwidth() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::BulkDataTransfer)
+        .unwrap();
+
+    // Low bandwidth compared to target
+    let context = create_test_performance_context(100.0, 2.0, 0.01, 0.5);
+
+    let stream_id = StreamId::new();
+    let frames = vec![pjson_rs::domain::entities::Frame::skeleton(
+        stream_id,
+        0,
+        JsonData::Null,
+    )];
+
+    let metrics = service
+        .calculate_optimization_metrics(&strategy, &frames, &context)
+        .unwrap();
+
+    assert!(metrics.throughput_improvement > 0.0);
+}
+
+#[test]
+fn test_calculate_metrics_resource_utilization_with_compression() {
+    let service = OptimizationService::new();
+    let mut strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+    strategy.compression_enabled = true;
+    strategy.adaptive_quality = true;
+
+    let context = create_test_performance_context(100.0, 10.0, 0.01, 0.5);
+
+    let stream_id = StreamId::new();
+    let frames = vec![pjson_rs::domain::entities::Frame::skeleton(
+        stream_id,
+        0,
+        JsonData::Null,
+    )];
+
+    let metrics = service
+        .calculate_optimization_metrics(&strategy, &frames, &context)
+        .unwrap();
+
+    // Compression and adaptive quality increase resource utilization
+    assert!(metrics.resource_utilization > context.cpu_usage);
+}
+
+// === Additional Recommendation Tests ===
+
+#[test]
+fn test_recommend_multiple_issues() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    // Multiple issues: high latency, low throughput, high error rate, high CPU
+    let report = create_test_performance_report(200.0, 3.0, 0.08, 0.85);
+
+    let recommendations = service
+        .recommend_strategy_adjustments(&strategy, &report)
+        .unwrap();
+
+    // Should have multiple recommendations
+    assert!(recommendations.len() >= 2);
+}
+
+#[test]
+fn test_recommend_latency_urgency() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    let report = create_test_performance_report(300.0, 10.0, 0.02, 0.5);
+
+    let recommendations = service
+        .recommend_strategy_adjustments(&strategy, &report)
+        .unwrap();
+
+    // High latency for real-time dashboard should have high urgency
+    if let Some(rec) = recommendations
+        .iter()
+        .find(|r| r.adjustment_type == AdjustmentType::PriorityIncrease)
+    {
+        assert_eq!(rec.urgency, AdjustmentUrgency::High);
+    }
+}
+
+#[test]
+fn test_recommend_throughput_urgency() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::BulkDataTransfer)
+        .unwrap();
+
+    let report = create_test_performance_report(500.0, 30.0, 0.02, 0.5);
+
+    let recommendations = service
+        .recommend_strategy_adjustments(&strategy, &report)
+        .unwrap();
+
+    if let Some(rec) = recommendations
+        .iter()
+        .find(|r| r.adjustment_type == AdjustmentType::BatchSizeIncrease)
+    {
+        assert_eq!(rec.urgency, AdjustmentUrgency::Medium);
+    }
+}
+
+#[test]
+fn test_recommend_cpu_urgency() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    let report = create_test_performance_report(200.0, 10.0, 0.02, 0.90);
+
+    let recommendations = service
+        .recommend_strategy_adjustments(&strategy, &report)
+        .unwrap();
+
+    if let Some(rec) = recommendations
+        .iter()
+        .find(|r| r.adjustment_type == AdjustmentType::CompressionDisable)
+    {
+        assert_eq!(rec.urgency, AdjustmentUrgency::Medium);
+    }
+}
+
+#[test]
+fn test_recommendation_descriptions() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    let report = create_test_performance_report(200.0, 10.0, 0.08, 0.5);
+
+    let recommendations = service
+        .recommend_strategy_adjustments(&strategy, &report)
+        .unwrap();
+
+    for rec in recommendations {
+        assert!(!rec.description.is_empty());
+        assert!(!rec.expected_impact.is_empty());
+    }
+}
+
+// === Optimization Context Boundary Tests ===
+
+#[test]
+fn test_optimize_with_minimum_latency() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    let context = create_test_performance_context(1.0, 10.0, 0.01, 0.5);
+
+    let optimized = service
+        .optimize_strategy_for_context(strategy, &context)
+        .unwrap();
+
+    assert!(optimized.batch_size > 0);
+}
+
+#[test]
+fn test_optimize_with_maximum_latency() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    let context = create_test_performance_context(10000.0, 10.0, 0.01, 0.5);
+
+    let optimized = service
+        .optimize_strategy_for_context(strategy.clone(), &context)
+        .unwrap();
+
+    // Very high latency should reduce batch size
+    assert!(optimized.batch_size < strategy.batch_size);
+}
+
+#[test]
+fn test_optimize_with_maximum_bandwidth() {
+    let service = OptimizationService::new();
+    let strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    let context = create_test_performance_context(100.0, 100.0, 0.01, 0.5);
+
+    let optimized = service
+        .optimize_strategy_for_context(strategy.clone(), &context)
+        .unwrap();
+
+    // Very high bandwidth should increase frame size
+    assert!(optimized.max_frame_size > strategy.max_frame_size);
+}
+
+#[test]
+fn test_optimize_multiple_times() {
+    let service = OptimizationService::new();
+    let base_strategy = service
+        .get_strategy_for_use_case(&StreamingUseCase::RealTimeDashboard)
+        .unwrap();
+
+    let context1 = create_test_performance_context(100.0, 10.0, 0.01, 0.5);
+    let strategy1 = service
+        .optimize_strategy_for_context(base_strategy.clone(), &context1)
+        .unwrap();
+
+    let context2 = create_test_performance_context(200.0, 5.0, 0.02, 0.6);
+    let strategy2 = service
+        .optimize_strategy_for_context(strategy1.clone(), &context2)
+        .unwrap();
+
+    // Multiple optimizations should produce valid strategies
+    // The batch_size may or may not change depending on context
+    assert!(strategy2.batch_size > 0);
+    assert!(strategy1.batch_size > 0);
+    assert!(base_strategy.batch_size > 0);
+}
+
+// === Use Case Variants Tests ===
+
+#[test]
+fn test_all_adjustment_types() {
+    let types = vec![
+        AdjustmentType::PriorityIncrease,
+        AdjustmentType::PriorityDecrease,
+        AdjustmentType::BatchSizeIncrease,
+        AdjustmentType::BatchSizeDecrease,
+        AdjustmentType::FrameSizeIncrease,
+        AdjustmentType::FrameSizeDecrease,
+        AdjustmentType::CompressionEnable,
+        AdjustmentType::CompressionDisable,
+        AdjustmentType::QualityIncrease,
+        AdjustmentType::QualityReduction,
+    ];
+
+    // All types should be usable
+    for adjustment_type in types {
+        let _ = format!("{:?}", adjustment_type);
+    }
+}
+
+#[test]
+fn test_streaming_use_case_debug() {
+    let use_cases = vec![
+        StreamingUseCase::RealTimeDashboard,
+        StreamingUseCase::BulkDataTransfer,
+        StreamingUseCase::MobileApp,
+        StreamingUseCase::ProgressiveWebApp,
+        StreamingUseCase::IoTDevice,
+        StreamingUseCase::LiveStreaming,
+        StreamingUseCase::Custom("test".to_string()),
+    ];
+
+    for use_case in use_cases {
+        let debug_str = format!("{:?}", use_case);
+        assert!(!debug_str.is_empty());
+    }
 }
