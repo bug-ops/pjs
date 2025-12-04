@@ -11,7 +11,7 @@
 use pjson_rs::parser::simd::{
     ArrayStats, KeyScanResult, SimdClassifier, SimdNumericOps, ValueClass,
 };
-use sonic_rs;
+
 
 // === Value Classification Tests ===
 

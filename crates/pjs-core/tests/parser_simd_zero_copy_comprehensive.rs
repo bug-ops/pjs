@@ -1083,6 +1083,369 @@ mod boundary_conditions_tests {
     }
 }
 
+mod additional_error_tests {
+    use super::*;
+
+    #[test]
+    fn test_invalid_json_start_character() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"$invalid";
+
+        let result = parser.parse_simd(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_number_empty() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"";
+
+        let result = parser.parse_simd(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_string_utf8() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Invalid UTF-8 sequence inside a string
+        let mut input = vec![b'"'];
+        input.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // Invalid UTF-8
+        input.push(b'"');
+
+        // Parser might accept or reject based on validation strictness
+        let _ = parser.parse_simd(&input);
+    }
+
+    #[test]
+    fn test_large_object_validation() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Create large object with many fields
+        let mut fields = Vec::new();
+        for i in 0..100 {
+            fields.push(format!(r#""field{}": {}"#, i, i));
+        }
+        let input = format!("{{{}}}", fields.join(", "));
+
+        let result = parser.parse_simd(input.as_bytes());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_large_array_validation() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Create large array
+        let items: Vec<String> = (0..100).map(|i| i.to_string()).collect();
+        let input = format!("[{}]", items.join(","));
+
+        let result = parser.parse_simd(input.as_bytes());
+        assert!(result.is_ok());
+    }
+}
+
+mod simd_friendly_tests {
+    use super::*;
+
+    #[test]
+    fn test_alignment_detection() {
+        let sizes = [31, 32, 33, 64, 100, 256];
+        for size in sizes {
+            let mut parser = SimdZeroCopyParser::new();
+            let input_string = format!(r#"{{"data":"{}"}}"#, "x".repeat(size));
+            let result = parser.parse_simd(input_string.as_bytes());
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_small_input_never_simd() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Small inputs should never use SIMD
+        let inputs: &[&[u8]] = &[b"1", b"true", b"null", b"\"hi\"", b"{}", b"[]"];
+
+        for input in inputs {
+            let result = parser.parse_simd(input).expect("should parse");
+            assert!(!result.simd_used, "Small input should not use SIMD");
+            parser.reset();
+        }
+    }
+}
+
+mod buffer_management_edge_cases {
+    use super::*;
+
+    #[test]
+    fn test_buffer_exact_capacity() {
+        let mut parser = SimdZeroCopyParser::new();
+        let buffer = parser.get_buffer(1024).expect("should get buffer");
+        assert!(buffer.capacity() >= 1024);
+    }
+
+    #[test]
+    fn test_buffer_sequential_releases() {
+        let mut parser = SimdZeroCopyParser::new();
+
+        let _ = parser.get_buffer(512).expect("first buffer");
+        parser.release_buffer();
+
+        let _ = parser.get_buffer(1024).expect("second buffer");
+        parser.release_buffer();
+
+        let _ = parser.get_buffer(256).expect("third buffer");
+        parser.release_buffer();
+    }
+
+    #[test]
+    fn test_buffer_size_upgrade() {
+        let mut parser = SimdZeroCopyParser::new();
+
+        let buffer1 = parser.get_buffer(512).expect("small buffer");
+        let cap1 = buffer1.capacity();
+
+        // Request larger buffer - should replace
+        let buffer2 = parser.get_buffer(2048).expect("large buffer");
+        let cap2 = buffer2.capacity();
+
+        assert!(cap2 >= 2048);
+        assert!(cap2 >= cap1);
+    }
+
+    #[test]
+    fn test_buffer_after_parse() {
+        let mut parser = SimdZeroCopyParser::new();
+
+        // Parse something
+        let _ = parser.parse_simd(b"42").expect("parse");
+
+        // Get buffer should still work
+        let _ = parser.get_buffer(1024).expect("buffer after parse");
+    }
+}
+
+mod escape_sequence_edge_cases {
+    use super::*;
+
+    #[test]
+    fn test_consecutive_escapes() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = br#""\\\\\\""#; // Triple backslash
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::StringOwned(s) => {
+                assert!(s.contains('\\'));
+            }
+            _ => panic!("Expected owned string"),
+        }
+    }
+
+    #[test]
+    fn test_mixed_escape_types() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = br#""a\nb\tc\rd\\"e""#;
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::StringOwned(s) => {
+                assert!(s.contains('\n'));
+                assert!(s.contains('\t'));
+                assert!(s.contains('\r'));
+                assert!(s.contains('\\'));
+            }
+            _ => panic!("Expected owned string"),
+        }
+    }
+
+    #[test]
+    fn test_escape_at_end() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = br#""test\n""#;
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::StringOwned(s) => {
+                assert!(s.contains('\n'));
+            }
+            _ => panic!("Expected owned string"),
+        }
+    }
+
+    #[test]
+    fn test_no_escape_passthrough() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = br#""plain text with no escapes at all""#;
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::StringBorrowed(s) => {
+                assert_eq!(s, b"plain text with no escapes at all");
+            }
+            _ => panic!("Expected borrowed string for no-escape case"),
+        }
+    }
+}
+
+mod number_format_edge_cases {
+    use super::*;
+
+    #[test]
+    fn test_negative_zero() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"-0";
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::NumberSlice(n) => {
+                assert_eq!(n, b"-0");
+            }
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_negative_float() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"-123.456";
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::NumberSlice(n) => {
+                assert_eq!(n, b"-123.456");
+            }
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_exponent_uppercase() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"1.5E10";
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::NumberSlice(n) => {
+                assert_eq!(n, b"1.5E10");
+            }
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_exponent_negative() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"2.5e-5";
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::NumberSlice(n) => {
+                assert_eq!(n, b"2.5e-5");
+            }
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_exponent_positive() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"3.0e+8";
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::NumberSlice(n) => {
+                assert_eq!(n, b"3.0e+8");
+            }
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_very_large_number() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"99999999999999999999999999999999";
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::NumberSlice(_) => {}
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_very_small_number() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"0.000000000000000000000001";
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::NumberSlice(_) => {}
+            _ => panic!("Expected number"),
+        }
+    }
+}
+
+mod object_array_nesting_tests {
+    use super::*;
+
+    #[test]
+    fn test_deeply_nested_objects() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = br#"{"a":{"b":{"c":{"d":{"e":"value"}}}}}"#;
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::ObjectSlice(_) => {}
+            _ => panic!("Expected object"),
+        }
+    }
+
+    #[test]
+    fn test_deeply_nested_arrays() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = b"[[[[[ 1 ]]]]]";
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::ArraySlice(_) => {}
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_mixed_nesting() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = br#"{"arr":[{"obj":[[1,2,3]],"x":true}]}"#;
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::ObjectSlice(_) => {}
+            _ => panic!("Expected object"),
+        }
+    }
+
+    #[test]
+    fn test_array_of_objects() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = br#"[{"a":1},{"b":2},{"c":3}]"#;
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::ArraySlice(_) => {}
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_object_of_arrays() {
+        let mut parser = SimdZeroCopyParser::new();
+        let input = br#"{"a":[1,2],"b":[3,4],"c":[5,6]}"#;
+
+        let result = parser.parse_simd(input).expect("should parse");
+        match result.value {
+            LazyJsonValue::ObjectSlice(_) => {}
+            _ => panic!("Expected object"),
+        }
+    }
+}
+
 mod reset_and_state_tests {
     use super::*;
 

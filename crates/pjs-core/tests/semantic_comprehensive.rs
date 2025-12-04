@@ -521,8 +521,10 @@ mod semantic_meta_tests {
 
     #[test]
     fn test_processing_strategy_gpu_preference() {
-        let mut hints = ProcessingHints::default();
-        hints.prefer_gpu = true;
+        let hints = ProcessingHints {
+            prefer_gpu: true,
+            ..Default::default()
+        };
 
         let meta = SemanticMeta::with_hints(SemanticType::Generic, hints);
         assert_eq!(meta.processing_strategy(), ProcessingStrategy::Gpu);
@@ -530,8 +532,10 @@ mod semantic_meta_tests {
 
     #[test]
     fn test_processing_strategy_simd_preference() {
-        let mut hints = ProcessingHints::default();
-        hints.prefer_simd = true;
+        let hints = ProcessingHints {
+            prefer_simd: true,
+            ..Default::default()
+        };
 
         let meta = SemanticMeta::with_hints(
             SemanticType::NumericArray {
@@ -818,8 +822,10 @@ mod edge_cases_tests {
 
     #[test]
     fn test_simd_preference_non_simd_friendly_type() {
-        let mut hints = ProcessingHints::default();
-        hints.prefer_simd = true;
+        let hints = ProcessingHints {
+            prefer_simd: true,
+            ..Default::default()
+        };
 
         // Generic is not SIMD-friendly, so preference is ignored
         let meta = SemanticMeta::with_hints(SemanticType::Generic, hints);
