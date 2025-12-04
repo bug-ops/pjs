@@ -11,7 +11,7 @@
 
 High-performance Rust library for priority-based JSON streaming with SIMD acceleration. Stream large JSON responses progressively, delivering critical data first while background data loads asynchronously.
 
-> **v0.4.0**: Enhanced WebAssembly with PriorityStream API, interactive browser demo, security limits, 519 tests passing, zero clippy warnings. Requires nightly Rust for zero-cost GAT abstractions.
+> **v0.4.4**: Enhanced WebAssembly with PriorityStream API, interactive browser demo, security limits, 519 tests passing, zero clippy warnings. Requires nightly Rust for zero-cost GAT abstractions.
 
 ## Features
 

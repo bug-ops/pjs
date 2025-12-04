@@ -15,6 +15,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
 
+## [0.4.4] - 2025-12-04
+
+### 🔧 Improvements
+
+- **Workspace Dependencies**: Centralized all dependency versions in root `Cargo.toml`
+  - All 52 dependencies sorted alphabetically
+  - All crates use `workspace = true` inheritance
+  - Simplified maintenance and version management
+
+- **WASM Dependencies**: Added to workspace
+  - `wasm-bindgen`, `js-sys`, `serde-wasm-bindgen`
+  - `console_error_panic_hook`, `wasm-bindgen-test`
+
+### 📖 Documentation
+
+- Updated README with v0.4.0 features (PriorityStream API, SecurityConfig)
+- Updated CHANGELOG with comprehensive release notes
+- Enhanced pjs-wasm crate documentation with API examples
+
+### ✅ Testing
+
+- All 519 tests passing
+- Zero clippy warnings
+- WASM build verified
+
 ## [0.4.0] - 2025-12-04
 
 ### 🚀 Major Features
