@@ -1,5 +1,5 @@
 [package]
-name = "pjs-domain"
+name = "pjson-rs-domain"
 version = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -7,6 +7,7 @@ license = { workspace = true }
 description = "Pure domain logic for PJS - WASM-compatible core"
 repository = { workspace = true }
 authors = { workspace = true }
+publish = true
 
 [lib]
 name = "pjs_domain"
