@@ -28,19 +28,9 @@ name = "interactive-demo-server"
 path = "src/servers/interactive_demo.rs"
 
 [[bin]]
-name = "websocket-streaming-server"
-path = "src/servers/websocket_streaming.rs"
-
-# TODO: Fix compilation errors
-# [[bin]]
-# name = "performance-comparison-server"
-# path = "src/servers/performance_comparison.rs"
-
-# TODO: Fix compilation errors  
-# [[bin]]
-# name = "websocket-client-demo"
-# path = "src/clients/websocket_demo.rs"
-
-[[bin]]
 name = "simple-demo-server"
 path = "src/servers/simple_demo.rs"
+
+[[bin]]
+name = "websocket-streaming-server"
+path = "src/servers/websocket_streaming.rs"

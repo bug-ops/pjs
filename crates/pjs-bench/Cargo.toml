@@ -1,15 +1,15 @@
 [package]
 name = "pjs-bench"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
 description = "Comprehensive benchmarking suite for PJS"
-keywords.workspace = true
-categories.workspace = true
-publish.workspace = true
+keywords = { workspace = true }
+categories = { workspace = true }
+publish = { workspace = true }
 
 [dependencies]
 bytes = { workspace = true }
@@ -20,10 +20,10 @@ sonic-rs = { workspace = true }
 
 [features]
 default = ["streaming"]
-streaming = []
 simd-auto = []
 simd-avx2 = []
 simd-sse42 = []
+streaming = []
 
 [[bench]]
 name = "simple_throughput"
@@ -32,24 +32,3 @@ harness = false
 [[bench]]
 name = "zero_copy_bench"
 harness = false
-
-# TODO: Fix benchmark compilation errors in future release
-# [[bench]]
-# name = "massive_data"
-# harness = false
-# 
-# [[bench]]
-# name = "time_to_first_data"
-# harness = false
-# 
-# [[bench]]
-# name = "network_simulation"
-# harness = false
-# 
-# [[bench]]
-# name = "memory_benchmarks"
-# harness = false
-# 
-# [[bench]]
-# name = "streaming_benchmarks"
-# harness = false
