@@ -476,7 +476,7 @@
                 stream.start(jsonInput);
 
             } catch (error) {
-                output.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                output.innerHTML = `<div class="error">Error: ${escapeHtml(error.message)}</div>`;
             }
         }
 
