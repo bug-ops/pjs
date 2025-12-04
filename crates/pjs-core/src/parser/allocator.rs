@@ -257,7 +257,8 @@ impl SimdAllocator {
         use libmimalloc_sys as mi;
 
         let alignment = _old_layout.align();
-        let new_ptr = unsafe { mi::mi_realloc_aligned(ptr.as_ptr() as *mut _, new_size, alignment) };
+        let new_ptr =
+            unsafe { mi::mi_realloc_aligned(ptr.as_ptr() as *mut _, new_size, alignment) };
 
         if new_ptr.is_null() {
             return Err(DomainError::ResourceExhausted(format!(

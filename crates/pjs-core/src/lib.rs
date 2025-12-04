@@ -14,10 +14,10 @@
 #![allow(dead_code)]
 
 // Allocator FFI dependencies
-#[cfg(feature = "jemalloc")]
-extern crate tikv_jemalloc_sys;
 #[cfg(feature = "mimalloc")]
 extern crate libmimalloc_sys;
+#[cfg(feature = "jemalloc")]
+extern crate tikv_jemalloc_sys;
 
 pub mod application;
 pub mod compression;
