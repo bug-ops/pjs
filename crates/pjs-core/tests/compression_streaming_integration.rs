@@ -4,11 +4,11 @@
 
 use pjson_rs::compression::CompressionStrategy;
 use pjson_rs::domain::value_objects::Priority;
+use pjson_rs::stream::StreamFrame;
 use pjson_rs::stream::compression_integration::{
-    CompressionStats, CompressedFrame, DecompressionMetadata, StreamingCompressor,
+    CompressedFrame, CompressionStats, DecompressionMetadata, StreamingCompressor,
     StreamingDecompressor,
 };
-use pjson_rs::stream::StreamFrame;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -33,9 +33,7 @@ fn test_streaming_compressor_with_custom_strategies() {
     let mut base_values = HashMap::new();
     base_values.insert("value".to_string(), 100.0);
 
-    let content_strategy = CompressionStrategy::Delta {
-        base_values,
-    };
+    let content_strategy = CompressionStrategy::Delta { base_values };
 
     let compressor =
         StreamingCompressor::with_strategies(skeleton_strategy, content_strategy.clone());
@@ -105,9 +103,17 @@ fn test_compress_multiple_frames_with_different_priorities() {
     assert_eq!(stats.frames_processed, 3);
 
     // Verify different priority levels were tracked
-    assert!(stats.priority_ratios.contains_key(&Priority::CRITICAL.value()));
+    assert!(
+        stats
+            .priority_ratios
+            .contains_key(&Priority::CRITICAL.value())
+    );
     assert!(stats.priority_ratios.contains_key(&Priority::LOW.value()));
-    assert!(stats.priority_ratios.contains_key(&Priority::MEDIUM.value()));
+    assert!(
+        stats
+            .priority_ratios
+            .contains_key(&Priority::MEDIUM.value())
+    );
 }
 
 #[test]
@@ -201,7 +207,10 @@ fn test_compression_stats_priority_ratio() {
         priority_ratios,
     };
 
-    assert_eq!(stats.priority_compression_ratio(Priority::HIGH.value()), 0.5);
+    assert_eq!(
+        stats.priority_compression_ratio(Priority::HIGH.value()),
+        0.5
+    );
     assert_eq!(stats.priority_compression_ratio(Priority::LOW.value()), 0.8);
     assert_eq!(stats.priority_compression_ratio(99), 1.0); // Non-existent priority
 }
