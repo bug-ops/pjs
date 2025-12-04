@@ -14,7 +14,7 @@ publish = { workspace = true }
 [dependencies]
 bytes = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
-pjson-rs = { path = "../pjs-core" }
+pjson-rs = { workspace = true }
 serde_json = { workspace = true }
 sonic-rs = { workspace = true }
 

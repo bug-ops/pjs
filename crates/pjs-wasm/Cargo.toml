@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 console_error_panic_hook = { workspace = true, optional = true }
 js-sys = { workspace = true }
-pjson-rs-domain = { path = "../pjs-domain", features = ["std", "wasm"] }
+pjson-rs-domain = { workspace = true, features = ["std", "wasm"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde-wasm-bindgen = { workspace = true }

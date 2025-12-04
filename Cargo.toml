@@ -1,5 +1,11 @@
 [workspace]
-members = ["crates/pjs-core", "crates/pjs-domain", "crates/pjs-wasm", "crates/pjs-bench", "crates/pjs-demo"]
+members = [
+    "crates/pjs-core",
+    "crates/pjs-domain",
+    "crates/pjs-wasm",
+    "crates/pjs-bench",
+    "crates/pjs-demo",
+]
 resolver = "2"
 
 [workspace.package]
@@ -41,6 +47,8 @@ memchr = "2.6"
 mimalloc = "0.1"
 once_cell = "1.21"
 parking_lot = "0.12"
+pjson-rs-domain = { path = "crates/pjs-domain" }
+pjson-rs = { path = "crates/pjs-core" }
 priority-queue = "2.0"
 prometheus = "0.14"
 proptest = "1.4"

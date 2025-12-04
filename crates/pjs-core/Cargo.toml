@@ -27,7 +27,7 @@ maplit = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
-pjson-rs-domain = { path = "../pjs-domain" }
+pjson-rs-domain = { workspace = true }
 priority-queue = { workspace = true }
 prometheus = { workspace = true, optional = true }
 rayon = { workspace = true }
@@ -41,7 +41,14 @@ thiserror = { workspace = true }
 tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats"] }
 tikv-jemalloc-sys = { workspace = true, optional = true }
 tikv-jemallocator = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "net", "parking_lot"] }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "macros",
+    "net",
+    "parking_lot",
+] }
 tokio-tungstenite = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
