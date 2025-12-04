@@ -228,7 +228,7 @@ fn test_stream_filter_clone() {
 
 #[test]
 fn test_stream_status_variants() {
-    let statuses = vec![
+    let statuses = [
         StreamStatus::Created,
         StreamStatus::Active,
         StreamStatus::Paused,
@@ -363,7 +363,7 @@ fn test_writer_config_debug() {
 
 #[test]
 fn test_backpressure_strategy_variants() {
-    let strategies = vec![
+    let strategies = [
         BackpressureStrategy::Block,
         BackpressureStrategy::DropLowPriority,
         BackpressureStrategy::DropOldest,
@@ -462,7 +462,7 @@ fn test_writer_metrics_debug() {
 
 #[test]
 fn test_connection_state_variants() {
-    let states = vec![
+    let states = [
         ConnectionState::Active,
         ConnectionState::Unavailable,
         ConnectionState::Closing,

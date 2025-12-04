@@ -498,11 +498,8 @@ mod memory_usage_tests {
 
         let result = parser.parse_simd(input).expect("parse should succeed");
         // Owned string due to escapes
-        match result.value {
-            LazyJsonValue::StringOwned(_) => {
-                // Memory usage tracking should reflect allocation
-            }
-            _ => {}
+        if let LazyJsonValue::StringOwned(_) = result.value {
+            // Memory usage tracking should reflect allocation
         }
     }
 

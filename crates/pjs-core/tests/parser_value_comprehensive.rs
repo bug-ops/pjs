@@ -288,7 +288,7 @@ mod field_range_tests {
 
         // Verify field range was created (no getters, so we can't check internals)
         // But at least ensure construction doesn't panic
-        drop(field_range);
+        let _ = field_range;
     }
 
     #[test]
@@ -299,8 +299,8 @@ mod field_range_tests {
         let field_range = FieldRange::new(key_range, value_range);
         let cloned = field_range.clone();
 
-        drop(field_range);
-        drop(cloned);
+        // Verify both exist
+        let _ = (field_range, cloned);
     }
 }
 
