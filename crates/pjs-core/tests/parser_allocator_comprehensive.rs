@@ -548,3 +548,244 @@ fn test_layout_from_size_align_validation() {
     assert!(Layout::from_size_align(1024, 0).is_err()); // Zero alignment
     assert!(Layout::from_size_align(1024, 3).is_err()); // Not power of 2
 }
+
+// === Additional Error Path Tests ===
+
+#[test]
+fn test_alloc_invalid_alignment_large_not_power_of_two() {
+    let allocator = SimdAllocator::new();
+    unsafe {
+        let result = allocator.alloc_aligned(1024, 100); // 100 is not power of 2
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("power of 2"));
+    }
+}
+
+#[test]
+fn test_realloc_invalid_new_size_with_layout() {
+    let allocator = SimdAllocator::new();
+    unsafe {
+        let ptr = allocator.alloc_aligned(1024, 64).unwrap();
+        let layout = Layout::from_size_align(1024, 64).unwrap();
+
+        // Try to realloc to extremely large size that might fail
+        // This tests error handling in realloc path
+        let new_size = usize::MAX / 2;
+        let result = allocator.realloc_aligned(ptr, layout, new_size);
+
+        // Clean up original allocation first
+        allocator.dealloc_aligned(ptr, layout);
+
+        // Result might succeed or fail depending on system, but shouldn't panic
+        let _ = result;
+    }
+}
+
+#[test]
+fn test_global_allocator_initialization() {
+    let allocator = global_allocator();
+    // Verify allocator is functional and returns valid stats
+    let stats = allocator.stats();
+    // Backend depends on how global_allocator() is implemented
+    // Just verify the allocator works and returns a valid backend
+    let _ = stats.backend.name();
+    // Verify stats fields are accessible
+    let _ = stats.allocated_bytes;
+}
+
+#[test]
+fn test_allocator_backend_debug_format() {
+    let backend = AllocatorBackend::System;
+    let debug_str = format!("{:?}", backend);
+    assert!(debug_str.contains("System"));
+}
+
+#[test]
+fn test_allocator_stats_backend_field() {
+    let stats = AllocatorStats {
+        allocated_bytes: 1000,
+        resident_bytes: 2000,
+        metadata_bytes: 100,
+        backend: AllocatorBackend::System,
+    };
+    assert_eq!(stats.backend, AllocatorBackend::System);
+    assert_eq!(stats.allocated_bytes, 1000);
+}
+
+#[test]
+fn test_simd_allocator_stats_debug() {
+    let allocator = SimdAllocator::new();
+    let stats = allocator.stats();
+    let debug_str = format!("{:?}", stats);
+    // Should contain backend information
+    assert!(debug_str.contains("AllocatorStats"));
+}
+
+#[test]
+fn test_alloc_dealloc_different_sizes() {
+    let allocator = SimdAllocator::new();
+    unsafe {
+        for size in [1, 8, 64, 256, 1024, 4096, 16384] {
+            let ptr = allocator.alloc_aligned(size, 64).unwrap();
+            assert_eq!(ptr.as_ptr() as usize % 64, 0);
+
+            let layout = Layout::from_size_align(size, 64).unwrap();
+            allocator.dealloc_aligned(ptr, layout);
+        }
+    }
+}
+
+#[test]
+fn test_realloc_zero_to_nonzero() {
+    let allocator = SimdAllocator::new();
+    unsafe {
+        // Start with small allocation
+        let ptr = allocator.alloc_aligned(1, 64).unwrap();
+        let layout = Layout::from_size_align(1, 64).unwrap();
+
+        // Grow to larger size
+        let new_ptr = allocator.realloc_aligned(ptr, layout, 1024).unwrap();
+        assert_eq!(new_ptr.as_ptr() as usize % 64, 0);
+
+        let new_layout = Layout::from_size_align(1024, 64).unwrap();
+        allocator.dealloc_aligned(new_ptr, new_layout);
+    }
+}
+
+#[test]
+fn test_multiple_backends_stats() {
+    let allocator_system = SimdAllocator::with_backend(AllocatorBackend::System);
+    let stats = allocator_system.stats();
+    assert_eq!(stats.backend, AllocatorBackend::System);
+}
+
+#[test]
+fn test_allocator_backend_equality_reflexive() {
+    let backend = AllocatorBackend::System;
+    assert_eq!(backend, backend);
+}
+
+#[cfg(feature = "jemalloc")]
+#[test]
+fn test_jemalloc_backend_equality() {
+    let backend1 = AllocatorBackend::Jemalloc;
+    let backend2 = AllocatorBackend::Jemalloc;
+    assert_eq!(backend1, backend2);
+}
+
+#[cfg(feature = "mimalloc")]
+#[test]
+fn test_mimalloc_backend_equality() {
+    let backend1 = AllocatorBackend::Mimalloc;
+    let backend2 = AllocatorBackend::Mimalloc;
+    assert_eq!(backend1, backend2);
+}
+
+#[test]
+fn test_alignment_boundary_values() {
+    let allocator = SimdAllocator::new();
+    unsafe {
+        // Test minimum alignment (1 byte)
+        let ptr1 = allocator.alloc_aligned(100, 1).unwrap();
+        let layout1 = Layout::from_size_align(100, 1).unwrap();
+        allocator.dealloc_aligned(ptr1, layout1);
+
+        // Test common alignments
+        for &align in &[2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+            let ptr = allocator.alloc_aligned(1024, align).unwrap();
+            assert_eq!(ptr.as_ptr() as usize % align, 0);
+
+            let layout = Layout::from_size_align(1024, align).unwrap();
+            allocator.dealloc_aligned(ptr, layout);
+        }
+    }
+}
+
+#[test]
+fn test_realloc_preserve_data_patterns() {
+    let allocator = SimdAllocator::new();
+    unsafe {
+        let alignment = 64;
+        let initial_size = 256;
+
+        let ptr = allocator.alloc_aligned(initial_size, alignment).unwrap();
+        let layout = Layout::from_size_align(initial_size, alignment).unwrap();
+
+        // Write specific pattern
+        for i in 0..initial_size {
+            std::ptr::write(ptr.as_ptr().add(i), ((i * 7) % 256) as u8);
+        }
+
+        // Reallocate to larger size
+        let new_size = 512;
+        let new_ptr = allocator.realloc_aligned(ptr, layout, new_size).unwrap();
+
+        // Verify pattern is preserved
+        for i in 0..initial_size {
+            let byte = std::ptr::read(new_ptr.as_ptr().add(i));
+            assert_eq!(
+                byte,
+                ((i * 7) % 256) as u8,
+                "Pattern corrupted at offset {}",
+                i
+            );
+        }
+
+        let new_layout = Layout::from_size_align(new_size, alignment).unwrap();
+        allocator.dealloc_aligned(new_ptr, new_layout);
+    }
+}
+
+#[test]
+fn test_concurrent_allocations_single_allocator() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let allocator = Arc::new(SimdAllocator::new());
+    let mut handles = vec![];
+
+    for _ in 0..4 {
+        let allocator_clone = Arc::clone(&allocator);
+        let handle = thread::spawn(move || {
+            unsafe {
+                let ptr = allocator_clone.alloc_aligned(1024, 64).unwrap();
+                let layout = Layout::from_size_align(1024, 64).unwrap();
+
+                // Write some data
+                std::ptr::write_bytes(ptr.as_ptr(), 0xFF, 1024);
+
+                // Read it back
+                let first_byte = std::ptr::read(ptr.as_ptr());
+                assert_eq!(first_byte, 0xFF);
+
+                allocator_clone.dealloc_aligned(ptr, layout);
+            }
+        });
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn test_allocator_stats_clone() {
+    let stats1 = AllocatorStats {
+        allocated_bytes: 1000,
+        resident_bytes: 2000,
+        metadata_bytes: 100,
+        backend: AllocatorBackend::System,
+    };
+
+    let stats2 = stats1.clone();
+    assert_eq!(stats1.allocated_bytes, stats2.allocated_bytes);
+    assert_eq!(stats1.backend, stats2.backend);
+}
+
+#[test]
+fn test_allocator_backend_copy_trait() {
+    let backend1 = AllocatorBackend::System;
+    let backend2 = backend1; // Tests Copy trait
+    assert_eq!(backend1, backend2);
+}
