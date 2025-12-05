@@ -79,30 +79,26 @@ jobs:
       with:
         tool: nextest
 
-    - name: Set allocator features
+    - name: Set test features
       id: features
-      run: |
-        if [ "${{ matrix.allocator }}" = "jemalloc" ]; then
-          echo "features=jemalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        elif [ "${{ matrix.allocator }}" = "mimalloc" ]; then
-          echo "features=mimalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        else
-          echo "features=schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        fi
       shell: bash
-
-    - name: Build workspace
-      run: cargo build --workspace --all-targets --features "${{ steps.features.outputs.features }}"
+      run: |
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          # jemalloc doesn't build on Windows MSVC
+          echo "flags=--features schema-validation,compression,http-server,mimalloc" >> $GITHUB_OUTPUT
+        else
+          echo "flags=--all-features" >> $GITHUB_OUTPUT
+        fi
 
     - name: Run tests (nextest)
       run: |
-        echo "Running tests with Rust nightly for GAT zero-cost abstractions"
+        echo "Running tests with Rust nightly"
         echo "Allocator: ${{ matrix.allocator }}"
         rustc --version
-        cargo nextest run --workspace --features "${{ steps.features.outputs.features }}" --no-fail-fast
+        cargo nextest run --workspace ${{ steps.features.outputs.flags }} --all-targets --no-fail-fast
 
     - name: Run doctests
-      run: cargo test --workspace --doc --features "${{ steps.features.outputs.features }}"
+      run: cargo test --workspace --doc ${{ steps.features.outputs.flags }}
 
     - name: sccache stats
       if: always()
@@ -154,17 +150,20 @@ jobs:
     - name: Generate coverage for pjs-core
       run: |
         cargo llvm-cov nextest --all-features --all-targets -p pjson-rs \
-          --lcov --output-path lcov-pjs-core.info
+          --lcov --output-path lcov-pjs-core.info \
+          --status-level fail --final-status-level skip
 
     - name: Generate coverage for pjs-domain
       run: |
         cargo llvm-cov nextest --all-features --all-targets -p pjson-rs-domain \
-          --lcov --output-path lcov-pjs-domain.info
+          --lcov --output-path lcov-pjs-domain.info \
+          --status-level fail --final-status-level skip
 
     - name: Generate coverage for pjs-wasm
       run: |
         cargo llvm-cov nextest --all-features --all-targets -p pjs-wasm \
-          --lcov --output-path lcov-pjs-wasm.info
+          --lcov --output-path lcov-pjs-wasm.info \
+          --status-level fail --final-status-level skip
 
     - name: Upload pjs-core coverage
       uses: codecov/codecov-action@v5
