@@ -65,16 +65,13 @@ jobs:
         save-if: ${{ github.ref == 'refs/heads/main' }}
         cache-targets: false  # sccache handles target/
 
-    - name: Build debug
+    - name: Build
       run: |
         echo "Using Rust nightly"
         echo "Allocator: ${{ matrix.allocator }}"
         echo "Features: ${{ matrix.features }}"
         rustc --version
         cargo build -p pjson-rs --features "${{ matrix.features }}" --all-targets
-
-    - name: Build release
-      run: cargo build -p pjson-rs --release --features "${{ matrix.features }}" --all-targets
 
     - name: sccache stats
       if: always()
