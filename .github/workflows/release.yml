@@ -124,37 +124,8 @@ jobs:
           shared-key: "publish"
           save-if: false
 
-      - name: Publish pjson-rs-domain to crates.io
-        run: cargo publish --manifest-path crates/pjs-domain/Cargo.toml --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
-
-      - name: Wait for pjson-rs-domain to be available (up to 2 minutes)
-        run: |
-          for i in {1..24}; do
-            if cargo search pjson-rs-domain --limit 1 2>/dev/null | grep -q "pjson-rs-domain"; then
-              echo "pjson-rs-domain is now available on crates.io"
-              exit 0
-            fi
-            echo "Waiting for pjson-rs-domain to be available... ($i/24)"
-            sleep 5
-          done
-          echo "Warning: pjson-rs-domain may not be immediately available"
-
-      - name: Publish pjson-rs to crates.io
-        run: cargo publish --manifest-path crates/pjs-core/Cargo.toml --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
-
-      - name: Wait for pjson-rs to be available (up to 2 minutes)
-        run: |
-          for i in {1..24}; do
-            if cargo search pjson-rs --limit 1 2>/dev/null | grep -q "pjson-rs"; then
-              echo "pjson-rs is now available on crates.io"
-              exit 0
-            fi
-            echo "Waiting for pjson-rs to be available... ($i/24)"
-            sleep 5
-          done
-          echo "Warning: pjson-rs may not be immediately available"
+      - name: Publish workspace to crates.io
+        run: cargo publish --workspace --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # Create GitHub release
   github-release:
