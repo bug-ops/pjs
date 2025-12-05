@@ -65,11 +65,14 @@ jobs:
         echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
       shell: bash
 
-    - name: Cache Cargo
+    - name: Cache Cargo dependencies
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: "test-${{ matrix.os }}"
+        # Separate cache per OS to avoid cross-platform conflicts
+        shared-key: "test-${{ matrix.os }}-${{ matrix.allocator }}"
         save-if: ${{ github.ref == 'refs/heads/main' }}
+        # Let sccache handle target/ directory, rust-cache only handles registry/git
+        cache-targets: false
 
     - name: Install nextest
       uses: taiki-e/install-action@v2
@@ -130,11 +133,13 @@ jobs:
       with:
         tool: nextest
 
-    - name: Cache Cargo
+    - name: Cache Cargo dependencies and build artifacts
       uses: Swatinem/rust-cache@v2
       with:
         shared-key: "coverage"
         save-if: ${{ github.ref == 'refs/heads/main' }}
+        # Coverage job doesn't use sccache, so cache everything including target/
+        cache-targets: true
 
     - name: Generate coverage for pjs-core
       run: |
