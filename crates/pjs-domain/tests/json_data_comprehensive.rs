@@ -3,7 +3,7 @@
 //! Tests cover all variants (Null, Bool, Number, String, Array, Object),
 //! conversions, edge cases, and memory operations.
 
-use pjs_domain::value_objects::JsonData;
+use pjson_rs_domain::value_objects::JsonData;
 use std::collections::HashMap;
 
 // ============================================================================

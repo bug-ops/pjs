@@ -7,9 +7,9 @@
 use crate::priority_assignment::{PriorityAssigner, group_by_priority, sort_priorities};
 use crate::priority_config::PriorityConfigBuilder;
 use crate::security::{SecurityConfig, validate_input_size};
-use pjs_domain::entities::Frame;
-use pjs_domain::entities::frame::FramePatch;
-use pjs_domain::value_objects::{JsonData, Priority, StreamId};
+use pjson_rs_domain::entities::Frame;
+use pjson_rs_domain::entities::frame::FramePatch;
+use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
@@ -359,7 +359,7 @@ impl Default for PjsParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pjs_domain::entities::frame::FrameType;
+    use pjson_rs_domain::entities::frame::FrameType;
 
     #[test]
     fn test_parser_creation() {

@@ -10,7 +10,7 @@
 //! - EventId generation
 
 use chrono::Utc;
-use pjs_domain::{
+use pjson_rs_domain::{
     events::{
         DomainEvent, EventStore, InMemoryEventStore, PerformanceMetrics, PriorityDistribution,
         SessionState,
@@ -692,7 +692,7 @@ mod session_state_tests {
 }
 
 mod event_id_tests {
-    use pjs_domain::events::EventId;
+    use pjson_rs_domain::events::EventId;
 
     #[test]
     fn test_event_id_new() {

@@ -4,7 +4,7 @@
 //! making it easier to use common priority levels without memorizing
 //! numeric values.
 
-use pjs_domain::value_objects::Priority;
+use pjson_rs_domain::value_objects::Priority;
 use wasm_bindgen::prelude::*;
 
 /// Priority constants for JavaScript.

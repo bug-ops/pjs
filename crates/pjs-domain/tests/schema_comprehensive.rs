@@ -3,7 +3,7 @@
 //! Tests cover schema creation, validation rules, type checking,
 //! cost estimation, and error handling.
 
-use pjs_domain::value_objects::{Schema, SchemaId, SchemaType, SchemaValidationError};
+use pjson_rs_domain::value_objects::{Schema, SchemaId, SchemaType, SchemaValidationError};
 use std::collections::HashMap;
 
 // ============================================================================

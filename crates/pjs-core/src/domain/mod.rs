@@ -4,7 +4,7 @@
 //! and domain events. No dependencies on infrastructure concerns.
 
 // Re-export domain types from pjs-domain crate (WASM-compatible)
-pub use pjs_domain::{DomainError, DomainResult, entities, events, value_objects};
+pub use pjson_rs_domain::{DomainError, DomainResult, entities, events, value_objects};
 
 // pjs-core specific domain modules
 pub mod aggregates;
