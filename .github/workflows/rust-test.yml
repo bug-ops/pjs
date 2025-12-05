@@ -79,30 +79,15 @@ jobs:
       with:
         tool: nextest
 
-    - name: Set allocator features
-      id: features
-      run: |
-        if [ "${{ matrix.allocator }}" = "jemalloc" ]; then
-          echo "features=jemalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        elif [ "${{ matrix.allocator }}" = "mimalloc" ]; then
-          echo "features=mimalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        else
-          echo "features=schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        fi
-      shell: bash
-
-    - name: Build workspace
-      run: cargo build --workspace --all-targets --features "${{ steps.features.outputs.features }}"
-
     - name: Run tests (nextest)
       run: |
-        echo "Running tests with Rust nightly for GAT zero-cost abstractions"
+        echo "Running tests with Rust nightly"
         echo "Allocator: ${{ matrix.allocator }}"
         rustc --version
-        cargo nextest run --workspace --features "${{ steps.features.outputs.features }}" --no-fail-fast
+        cargo nextest run --workspace --all-features --all-targets --no-fail-fast
 
     - name: Run doctests
-      run: cargo test --workspace --doc --features "${{ steps.features.outputs.features }}"
+      run: cargo test --workspace --doc --all-features
 
     - name: sccache stats
       if: always()

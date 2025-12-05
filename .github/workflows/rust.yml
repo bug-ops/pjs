@@ -59,26 +59,15 @@ jobs:
         save-if: ${{ github.ref == 'refs/heads/main' }}
         cache-targets: false  # sccache handles target/
 
-    - name: Set allocator features
-      id: features
+    - name: Build debug
       run: |
-        if [ "${{ matrix.allocator }}" = "jemalloc" ]; then
-          echo "features=jemalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        elif [ "${{ matrix.allocator }}" = "mimalloc" ]; then
-          echo "features=mimalloc,schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        else
-          echo "features=schema-validation,compression,http-server" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Build with nightly features
-      run: |
-        echo "Using Rust nightly for zero-cost GAT abstractions"
+        echo "Using Rust nightly"
         echo "Allocator: ${{ matrix.allocator }}"
         rustc --version
-        cargo build --verbose --features "${{ steps.features.outputs.features }}" --workspace
+        cargo build --workspace --all-features --all-targets
 
     - name: Build release
-      run: cargo build --release --verbose --features "${{ steps.features.outputs.features }}" --workspace
+      run: cargo build --workspace --release --all-features --all-targets
 
     - name: sccache stats
       if: always()

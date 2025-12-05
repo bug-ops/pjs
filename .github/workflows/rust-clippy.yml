@@ -60,15 +60,15 @@ jobs:
       # First check: strict workspace-wide clippy
       - name: Run clippy (strict mode)
         run: |
-          echo "Running clippy with Rust nightly for GAT zero-cost abstractions"
+          echo "Running clippy with Rust nightly"
           rustc --version
-          cargo clippy --workspace --all-targets --features "schema-validation,compression,http-server" -- -D warnings
+          cargo clippy --workspace --all-features --all-targets -- -D warnings
         continue-on-error: true
 
       # Second check: SARIF format for GitHub Security
       - name: Run rust-clippy (SARIF)
         run: |
-          cargo clippy --workspace --features "schema-validation,compression,http-server" --message-format=json | \
+          cargo clippy --workspace --all-features --all-targets --message-format=json | \
             clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
         continue-on-error: true
 
