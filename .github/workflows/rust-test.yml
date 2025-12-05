@@ -136,28 +136,53 @@ jobs:
         shared-key: "coverage"
         save-if: ${{ github.ref == 'refs/heads/main' }}
 
-    - name: Generate coverage
+    - name: Generate coverage for pjs-core
       run: |
-        cargo llvm-cov nextest --all-features --all-targets --workspace \
-          --exclude pjs-bench --exclude pjs-demo \
-          --ignore-filename-regex "(pjs-bench|pjs-demo)" \
-          --lcov --output-path lcov.info
+        cargo llvm-cov nextest --all-features --all-targets -p pjson-rs \
+          --lcov --output-path lcov-pjs-core.info
 
-    - name: Upload to codecov
+    - name: Generate coverage for pjs-domain
+      run: |
+        cargo llvm-cov nextest --all-features --all-targets -p pjson-rs-domain \
+          --lcov --output-path lcov-pjs-domain.info
+
+    - name: Generate coverage for pjs-wasm
+      run: |
+        cargo llvm-cov nextest --all-features --all-targets -p pjs-wasm \
+          --lcov --output-path lcov-pjs-wasm.info
+
+    - name: Upload pjs-core coverage
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        files: lcov.info
+        files: lcov-pjs-core.info
         fail_ci_if_error: false
-        verbose: true
-        flags: pjs-core,pjs-domain,pjs-wasm
-        name: codecov-pjs
+        flags: pjs-core
+        name: pjs-core
 
-    - name: Archive coverage report
+    - name: Upload pjs-domain coverage
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: lcov-pjs-domain.info
+        fail_ci_if_error: false
+        flags: pjs-domain
+        name: pjs-domain
+
+    - name: Upload pjs-wasm coverage
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: lcov-pjs-wasm.info
+        fail_ci_if_error: false
+        flags: pjs-wasm
+        name: pjs-wasm
+
+    - name: Archive coverage reports
       uses: actions/upload-artifact@v5
       with:
-        name: coverage-report
-        path: lcov.info
+        name: coverage-reports
+        path: lcov-*.info
         retention-days: 30
 
     - name: Generate HTML coverage report
