@@ -31,7 +31,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        allocator: [system, jemalloc, mimalloc]
+        include:
+          - allocator: system
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics"
+          - allocator: jemalloc
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics,jemalloc"
+          - allocator: mimalloc
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics,mimalloc"
 
     steps:
     - uses: actions/checkout@v6
@@ -63,11 +69,12 @@ jobs:
       run: |
         echo "Using Rust nightly"
         echo "Allocator: ${{ matrix.allocator }}"
+        echo "Features: ${{ matrix.features }}"
         rustc --version
-        cargo build --workspace --all-features --all-targets
+        cargo build -p pjson-rs --features "${{ matrix.features }}" --all-targets
 
     - name: Build release
-      run: cargo build --workspace --release --all-features --all-targets
+      run: cargo build -p pjson-rs --release --features "${{ matrix.features }}" --all-targets
 
     - name: sccache stats
       if: always()
