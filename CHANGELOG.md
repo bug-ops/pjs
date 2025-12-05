@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
 
+## [0.4.6] - 2025-12-05
+
+### 🔧 Refactoring
+
+- **Library Rename**: Rename `pjs_domain` lib to `pjson_rs_domain` for consistency with package naming
+- **Workspace Dependencies**: Add version to path dependencies for crates.io publishing
+
+### 🔧 CI/CD Improvements
+
+- **Simplified Release**: Use `cargo publish --workspace` instead of publishing crates individually
+
 ## [0.4.5] - 2025-12-05
 
 ### 🔧 CI/CD Improvements
