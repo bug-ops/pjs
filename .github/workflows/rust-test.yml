@@ -79,15 +79,26 @@ jobs:
       with:
         tool: nextest
 
+    - name: Set test features
+      id: features
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          # jemalloc doesn't build on Windows MSVC
+          echo "flags=--features schema-validation,compression,http-server,mimalloc" >> $GITHUB_OUTPUT
+        else
+          echo "flags=--all-features" >> $GITHUB_OUTPUT
+        fi
+
     - name: Run tests (nextest)
       run: |
         echo "Running tests with Rust nightly"
         echo "Allocator: ${{ matrix.allocator }}"
         rustc --version
-        cargo nextest run --workspace --all-features --all-targets --no-fail-fast
+        cargo nextest run --workspace ${{ steps.features.outputs.flags }} --all-targets --no-fail-fast
 
     - name: Run doctests
-      run: cargo test --workspace --doc --all-features
+      run: cargo test --workspace --doc ${{ steps.features.outputs.flags }}
 
     - name: sccache stats
       if: always()
