@@ -1,11 +1,7 @@
 [workspace]
-members = [
-    "crates/pjs-core",
-    "crates/pjs-domain",
-    "crates/pjs-wasm",
-    "crates/pjs-bench",
-    "crates/pjs-demo",
-]
+members = ["crates/*"]
+default-members = ["crates/pjs-core", "crates/pjs-domain", "crates/pjs-wasm"]
+exclude = ["crates/pjs-bench", "crates/pjs-demo", "crates/pjs-js-client"]
 resolver = "2"
 
 [workspace.package]
