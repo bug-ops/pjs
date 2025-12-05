@@ -8,7 +8,7 @@
 //! - Error conditions
 //! - Progress calculation
 
-use pjs_domain::{
+use pjson_rs_domain::{
     entities::{
         Stream,
         frame::FrameType,

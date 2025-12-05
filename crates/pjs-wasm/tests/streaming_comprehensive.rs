@@ -9,8 +9,8 @@
 //! Note: Core PriorityStream functionality is tested through WASM-bindgen-test in the source file.
 //! These tests focus on supporting infrastructure that can be tested in standard Rust.
 
-use pjs_domain::value_objects::{JsonData, Priority};
 use pjs_wasm::security::{SecurityConfig, validate_input_size};
+use pjson_rs_domain::value_objects::{JsonData, Priority};
 use std::collections::HashMap;
 
 // === SecurityConfig Tests ===

@@ -3,7 +3,7 @@
 //! This module provides WASM-compatible priority assignment for JSON paths.
 //! It analyzes JSON structure and assigns priorities based on configurable rules.
 
-use pjs_domain::value_objects::{JsonData, JsonPath, Priority};
+use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority};
 use std::collections::HashMap;
 
 /// Priority assignment rules configuration
@@ -130,7 +130,7 @@ impl PriorityAssigner {
         // Extract field name from path
         let field_name = if let Some(segment) = path.last_segment() {
             match segment {
-                pjs_domain::value_objects::PathSegment::Key(key) => Some(key),
+                pjson_rs_domain::value_objects::PathSegment::Key(key) => Some(key),
                 _ => None,
             }
         } else {
@@ -197,7 +197,7 @@ impl PriorityAssigner {
         }
 
         // Check field name patterns
-        if let Some(pjs_domain::value_objects::PathSegment::Key(key)) = path.last_segment() {
+        if let Some(pjson_rs_domain::value_objects::PathSegment::Key(key)) = path.last_segment() {
             if self
                 .config
                 .background_patterns

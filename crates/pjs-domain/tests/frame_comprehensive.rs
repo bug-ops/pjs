@@ -3,8 +3,8 @@
 //! Tests cover all frame types (Skeleton, Patch, Complete, Error),
 //! frame operations, validation, metadata, and edge cases.
 
-use pjs_domain::entities::frame::{Frame, FramePatch, FrameType, PatchOperation};
-use pjs_domain::value_objects::{JsonData, JsonPath, Priority, StreamId};
+use pjson_rs_domain::entities::frame::{Frame, FramePatch, FrameType, PatchOperation};
+use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority, StreamId};
 use std::collections::HashMap;
 
 // ============================================================================

@@ -30,9 +30,9 @@
 use crate::priority_assignment::PriorityAssigner;
 use crate::priority_config::PriorityConfigBuilder;
 use crate::security::{SecurityConfig, validate_input_size};
-use pjs_domain::entities::Frame;
-use pjs_domain::entities::frame::FrameType;
-use pjs_domain::value_objects::{JsonData, Priority, StreamId};
+use pjson_rs_domain::entities::Frame;
+use pjson_rs_domain::entities::frame::FrameType;
+use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
@@ -427,7 +427,7 @@ impl PriorityStream {
         min_priority: Priority,
     ) -> Result<Vec<Frame>, String> {
         use crate::priority_assignment::{group_by_priority, sort_priorities};
-        use pjs_domain::entities::frame::FramePatch;
+        use pjson_rs_domain::entities::frame::FramePatch;
 
         let max_depth = self.security_config.max_depth();
 

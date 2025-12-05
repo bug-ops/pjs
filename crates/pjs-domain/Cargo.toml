@@ -10,7 +10,7 @@ authors = { workspace = true }
 publish = true
 
 [lib]
-name = "pjs_domain"
+name = "pjson_rs_domain"
 path = "src/lib.rs"
 
 [dependencies]
