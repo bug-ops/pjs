@@ -133,13 +133,23 @@ jobs:
       with:
         tool: nextest
 
-    - name: Cache Cargo dependencies and build artifacts
+    - name: Setup sccache
+      id: sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
+      continue-on-error: true
+
+    - name: Configure sccache
+      if: steps.sccache.outcome == 'success'
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+
+    - name: Cache Cargo dependencies
       uses: Swatinem/rust-cache@v2
       with:
         shared-key: "coverage"
         save-if: ${{ github.ref == 'refs/heads/main' }}
-        # Coverage job doesn't use sccache, so cache everything including target/
-        cache-targets: true
+        cache-targets: false  # sccache handles target/
 
     - name: Generate coverage for pjs-core
       run: |
@@ -179,4 +189,9 @@ jobs:
         files: lcov-pjs-wasm.info
         flags: pjs-wasm
         fail_ci_if_error: false
+
+    - name: sccache stats
+      if: always()
+      run: sccache --show-stats || echo "sccache not available"
+      continue-on-error: true
 
