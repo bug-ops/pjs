@@ -46,33 +46,11 @@ jobs:
       with:
         components: llvm-tools-preview
 
-    - name: Setup sccache (Unix)
-      id: sccache-unix
-      if: matrix.os != 'windows-latest'
-      uses: mozilla-actions/sccache-action@v0.0.9
-      continue-on-error: true
-
-    - name: Setup sccache (Windows)
-      id: sccache-windows
-      if: matrix.os == 'windows-latest'
-      uses: mozilla-actions/sccache-action@v0.0.9
-      continue-on-error: true
-
-    - name: Configure sccache
-      if: steps.sccache-unix.outcome == 'success' || steps.sccache-windows.outcome == 'success'
-      run: |
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-      shell: bash
-
-    - name: Cache Cargo dependencies
+    - name: Cache Cargo
       uses: Swatinem/rust-cache@v2
       with:
-        # Separate cache per OS to avoid cross-platform conflicts
         shared-key: "test-${{ matrix.os }}-${{ matrix.allocator }}"
         save-if: ${{ github.ref == 'refs/heads/main' }}
-        # Let sccache handle target/ directory, rust-cache only handles registry/git
-        cache-targets: false
 
     - name: Install nextest
       uses: taiki-e/install-action@v2
@@ -100,12 +78,6 @@ jobs:
     - name: Run doctests
       run: cargo test --workspace --doc ${{ steps.features.outputs.flags }}
 
-    - name: sccache stats
-      if: always()
-      run: sccache --show-stats || echo "sccache not available"
-      continue-on-error: true
-      shell: bash
-
   # Code coverage (Linux only)
   coverage:
     name: Code Coverage
@@ -129,23 +101,11 @@ jobs:
       with:
         tool: nextest
 
-    - name: Setup sccache
-      id: sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
-      continue-on-error: true
-
-    - name: Configure sccache
-      if: steps.sccache.outcome == 'success'
-      run: |
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-
-    - name: Cache Cargo dependencies
+    - name: Cache Cargo
       uses: Swatinem/rust-cache@v2
       with:
         shared-key: "coverage"
         save-if: ${{ github.ref == 'refs/heads/main' }}
-        cache-targets: false  # sccache handles target/
 
     - name: Generate coverage for pjs-core
       run: |
@@ -188,9 +148,4 @@ jobs:
         files: lcov-pjs-wasm.info
         flags: pjs-wasm
         fail_ci_if_error: false
-
-    - name: sccache stats
-      if: always()
-      run: sccache --show-stats || echo "sccache not available"
-      continue-on-error: true
 
