@@ -16,7 +16,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use futures::StreamExt;
 use pjson_rs::{
     domain::entities::Frame,
-    domain::value_objects::{JsonData, Priority, StreamId},
+    domain::value_objects::{JsonData, StreamId},
     infrastructure::http::streaming::{
         AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamError, StreamFormat,
         create_streaming_response,

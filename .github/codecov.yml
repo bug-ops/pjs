@@ -35,12 +35,25 @@ ignore:
   - "**/tests.rs"
   - "**/test_*.rs"
 
-# File-level coverage flags
+# Flags for separating coverage by crate
 flags:
-  unittests:
+  pjs-core:
     paths:
       - "crates/pjs-core/src/"
     carryforward: true
+    after_n_builds: 1
+
+  pjs-domain:
+    paths:
+      - "crates/pjs-domain/src/"
+    carryforward: true
+    after_n_builds: 1
+
+  pjs-wasm:
+    paths:
+      - "crates/pjs-wasm/src/"
+    carryforward: true
+    after_n_builds: 1
 
 # Critical modules requiring high coverage
 component_management:
@@ -50,6 +63,7 @@ component_management:
       name: Domain Layer
       paths:
         - "crates/pjs-core/src/domain/**"
+        - "crates/pjs-domain/src/**"
 
     # Security modules - 100% required
     - component_id: security
@@ -69,3 +83,15 @@ component_management:
       name: Infrastructure Layer
       paths:
         - "crates/pjs-core/src/infrastructure/**"
+
+    # Parser - performance critical
+    - component_id: parser
+      name: Parser (SIMD)
+      paths:
+        - "crates/pjs-core/src/parser/**"
+
+    # WASM bindings
+    - component_id: wasm
+      name: WASM Bindings
+      paths:
+        - "crates/pjs-wasm/src/**"
