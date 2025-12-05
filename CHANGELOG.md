@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
 
+## [0.4.5] - 2025-12-05
+
+### 🔧 CI/CD Improvements
+
+- **Build Matrix**: Use explicit features per allocator instead of `--all-features`
+  - `system`: all features except allocator-specific
+  - `jemalloc`: all features + jemalloc
+  - `mimalloc`: all features + mimalloc
+- **Faster CI**: Remove release build from regular CI (only in release workflow)
+- **Simplified Caching**: Remove sccache, use rust-cache only
+- **Code Quality**: Add `cargo +nightly fmt --all --check` to clippy workflow
+
 ## [0.4.4] - 2025-12-04
 
 ### 🔧 Improvements
