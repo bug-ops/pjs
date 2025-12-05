@@ -156,27 +156,24 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         files: lcov-pjs-core.info
-        fail_ci_if_error: false
         flags: pjs-core
-        name: pjs-core
+        fail_ci_if_error: false
 
     - name: Upload pjs-domain coverage
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         files: lcov-pjs-domain.info
-        fail_ci_if_error: false
         flags: pjs-domain
-        name: pjs-domain
+        fail_ci_if_error: false
 
     - name: Upload pjs-wasm coverage
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         files: lcov-pjs-wasm.info
-        fail_ci_if_error: false
         flags: pjs-wasm
-        name: pjs-wasm
+        fail_ci_if_error: false
 
     - name: Archive coverage reports
       uses: actions/upload-artifact@v5
