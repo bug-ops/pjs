@@ -12,7 +12,6 @@ use pjson_rs::parser::simd::{
     ArrayStats, KeyScanResult, SimdClassifier, SimdNumericOps, ValueClass,
 };
 
-
 // === Value Classification Tests ===
 
 mod value_classification_tests {
