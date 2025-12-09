@@ -1,6 +1,13 @@
 # PJS WASM - WebAssembly Bindings for Priority JSON Streaming
 
+[![npm](https://img.shields.io/npm/v/pjs-wasm)](https://www.npmjs.com/package/pjs-wasm)
+[![Bundle Size](https://img.shields.io/bundlephobia/minzip/pjs-wasm)](https://bundlephobia.com/package/pjs-wasm)
+[![License](https://img.shields.io/crates/l/pjson-rs)](../../LICENSE-MIT)
+
 WebAssembly bindings for the PJS (Priority JSON Streaming) protocol, enabling high-performance JSON parsing and streaming in web browsers and Node.js environments.
+
+> [!NOTE]
+> This package is part of the [PJS workspace](https://github.com/bug-ops/pjs). For Rust usage, see the main `pjson-rs` crate.
 
 ## Overview
 
@@ -122,15 +129,19 @@ const parser = new PjsParser();
 Parse a JSON string and return the parsed object.
 
 **Parameters:**
+
 - `jsonStr` - The JSON string to parse
 
 **Returns:**
+
 - Parsed JSON value
 
 **Throws:**
+
 - Error if the JSON is invalid
 
 **Example:**
+
 ```javascript
 const parser = new PjsParser();
 const data = parser.parse('{"id": 1, "name": "test"}');
@@ -141,9 +152,11 @@ const data = parser.parse('{"id": 1, "name": "test"}');
 Get the parser version.
 
 **Returns:**
+
 - Version string
 
 **Example:**
+
 ```javascript
 const v = PjsParser.version();
 console.log(v); // "0.1.0"
@@ -154,16 +167,20 @@ console.log(v); // "0.1.0"
 Generate priority-based frames from JSON data.
 
 **Parameters:**
+
 - `jsonStr` - The JSON string to convert to frames
 - `minPriority` - Minimum priority threshold (1-255)
 
 **Returns:**
+
 - Array of frames ordered by priority (highest first)
 
 **Throws:**
+
 - Error if JSON is invalid or priority is out of range
 
 **Example:**
+
 ```javascript
 const parser = new PjsParser();
 const frames = parser.generateFrames('{"id": 1, "name": "Alice"}', 50);
@@ -175,12 +192,15 @@ const frames = parser.generateFrames('{"id": 1, "name": "Alice"}', 50);
 Create a parser with custom priority configuration.
 
 **Parameters:**
+
 - `config` - Priority configuration builder
 
 **Returns:**
+
 - New parser instance with custom configuration
 
 **Example:**
+
 ```javascript
 const config = new PriorityConfigBuilder()
     .addCriticalField('user_id');
@@ -192,9 +212,11 @@ const parser = PjsParser.withConfig(config);
 Get the WASM module version.
 
 **Returns:**
+
 - Version string
 
 **Example:**
+
 ```javascript
 import { version } from 'pjs-wasm';
 console.log(version()); // "0.1.0"
@@ -204,7 +226,10 @@ console.log(version()); // "0.1.0"
 
 ### Prerequisites
 
-- Rust nightly toolchain (required by parent project)
+> [!WARNING]
+> Building from source requires **nightly Rust** for GAT features.
+
+- Rust nightly toolchain: `rustup install nightly`
 - wasm-pack: `cargo install wasm-pack`
 
 ### Build Commands
@@ -241,28 +266,32 @@ wasm-pack test --node
 ### Bundle Size
 
 The WASM binary is optimized for size using:
+
 - `opt-level = "s"` - Optimize for small binary size
 - `lto = true` - Link-time optimization
 - `wasm-opt = ["-Os"]` - Additional post-processing optimization
 
 Typical bundle sizes:
+
 - **Uncompressed**: ~100-200 KB
 - **Gzip compressed**: ~40-80 KB
 - **Brotli compressed**: ~35-70 KB
 
 ### Parser Selection
 
-Note: This WASM build uses `serde_json` instead of `sonic-rs` (used in native builds) because `sonic-rs` is not WASM-compatible. While slightly slower, `serde_json` provides excellent performance and full WASM support.
+> [!NOTE]
+> This WASM build uses `serde_json` instead of `sonic-rs` (used in native builds) because `sonic-rs` is not WASM-compatible. While slightly slower, `serde_json` provides excellent performance and full WASM support.
 
 ## Architecture
 
 `pjs-wasm` is built on top of `pjs-domain`, a pure Rust domain layer with:
+
 - Zero external I/O dependencies
 - WASM-compatible error types
 - Clean architecture principles
 - Full test coverage
 
-```
+```text
 pjs-wasm (WebAssembly bindings)
     ↓
 pjs-domain (Pure domain logic)
@@ -273,6 +302,7 @@ Value objects, entities, services
 ## Browser Compatibility
 
 Requires browsers with WebAssembly support:
+
 - Chrome/Edge 57+
 - Firefox 52+
 - Safari 11+

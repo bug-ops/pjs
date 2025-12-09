@@ -1,6 +1,12 @@
 # PJS Benchmarking Suite
 
+[![CI](https://github.com/bug-ops/pjs/actions/workflows/rust.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/rust.yml)
+[![License](https://img.shields.io/crates/l/pjson-rs)](../../LICENSE-MIT)
+
 Comprehensive performance benchmarking for the Priority JSON Streaming Protocol (PJS).
+
+> [!NOTE]
+> This crate is part of the [PJS workspace](https://github.com/bug-ops/pjs). Run benchmarks with `cargo bench -p pjs-bench`.
 
 ## Overview
 

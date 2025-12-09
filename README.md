@@ -11,7 +11,8 @@
 
 High-performance Rust library for priority-based JSON streaming with SIMD acceleration. Stream large JSON responses progressively, delivering critical data first while background data loads asynchronously.
 
-> **v0.4.4**: Enhanced WebAssembly with PriorityStream API, interactive browser demo, security limits, 519 tests passing, zero clippy warnings. Requires nightly Rust for zero-cost GAT abstractions.
+> [!IMPORTANT]
+> **v0.4.6**: Enhanced WebAssembly with PriorityStream API, interactive browser demo, security limits, 519 tests passing, zero clippy warnings. Requires **nightly Rust** for zero-cost GAT abstractions.
 
 ## Features
 
@@ -184,8 +185,10 @@ wasm-pack build crates/pjs-wasm --target bundler --release  # Webpack/Rollup
 
 ### Prerequisites
 
+> [!WARNING]
+> This project requires **nightly Rust** for Generic Associated Types (GAT) features.
+
 ```bash
-# Requires nightly Rust for GAT features
 rustup install nightly
 rustup override set nightly
 ```
@@ -209,23 +212,21 @@ cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 
 ### Feature Flags
 
-```toml
-# SIMD optimization
-simd-auto      # Auto-detect (default)
-simd-avx2      # AVX2 support
-simd-neon      # ARM NEON
+> [!TIP]
+> Start with default features. Add extras only when needed to keep compile times fast.
 
-# Memory allocators (optional)
-jemalloc       # tikv-jemallocator
-mimalloc       # mimalloc
-
-# Features
-schema-validation     # Schema validation (default)
-compression           # Schema-based compression
-http-server           # Axum HTTP server
-websocket-server      # WebSocket streaming
-prometheus-metrics    # Prometheus integration
-```
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `simd-auto` | Auto-detect SIMD support | ✅ Yes |
+| `simd-avx2` | Force AVX2 SIMD | No |
+| `simd-neon` | Force ARM NEON | No |
+| `schema-validation` | Schema validation engine | ✅ Yes |
+| `compression` | Schema-based compression | No |
+| `http-server` | Axum HTTP server | No |
+| `websocket-server` | WebSocket streaming | No |
+| `prometheus-metrics` | Prometheus integration | No |
+| `jemalloc` | Use jemalloc allocator | No |
+| `mimalloc` | Use mimalloc allocator | No |
 
 ## Security
 
@@ -242,6 +243,7 @@ const stream = PriorityStream.withSecurityConfig(security);
 ```
 
 **Default Limits:**
+
 - Max JSON size: 10 MB
 - Max nesting depth: 64 levels
 - Max array elements: 10,000
