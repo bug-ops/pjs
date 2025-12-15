@@ -99,7 +99,7 @@ jobs:
         run: cat RELEASE_NOTES.md
 
       - name: Upload release notes as artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: release-notes
           path: RELEASE_NOTES.md
