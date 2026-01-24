@@ -9,6 +9,100 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Custom serde for SessionId within entities
+mod serde_session_id {
+    use crate::value_objects::SessionId;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(id: &SessionId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        id.as_uuid().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<SessionId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let uuid = uuid::Uuid::deserialize(deserializer)?;
+        Ok(SessionId::from_uuid(uuid))
+    }
+}
+
+/// Custom serde for StreamId within entities
+mod serde_stream_id {
+    use crate::value_objects::StreamId;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(id: &StreamId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        id.as_uuid().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<StreamId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let uuid = uuid::Uuid::deserialize(deserializer)?;
+        Ok(StreamId::from_uuid(uuid))
+    }
+}
+
+/// Custom serde for Priority within entities
+#[allow(dead_code)]
+mod serde_priority {
+    use crate::value_objects::Priority;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(priority: &Priority, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        priority.value().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Priority, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u8::deserialize(deserializer)?;
+        Priority::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Custom serde for HashMap<String, Priority>
+mod serde_priority_map {
+    use crate::value_objects::Priority;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::HashMap;
+
+    pub fn serialize<S>(map: &HashMap<String, Priority>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let u8_map: HashMap<String, u8> = map.iter().map(|(k, v)| (k.clone(), v.value())).collect();
+        u8_map.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<String, Priority>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let u8_map: HashMap<String, u8> = HashMap::deserialize(deserializer)?;
+        u8_map
+            .into_iter()
+            .map(|(k, v)| {
+                Priority::new(v)
+                    .map(|p| (k, p))
+                    .map_err(serde::de::Error::custom)
+            })
+            .collect()
+    }
+}
+
 /// Stream state in its lifecycle
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamState {
@@ -34,6 +128,7 @@ pub struct StreamConfig {
     /// Compression settings
     pub enable_compression: bool,
     /// Custom priority rules
+    #[serde(with = "serde_priority_map")]
     pub priority_rules: HashMap<String, Priority>,
 }
 
@@ -74,7 +169,9 @@ pub struct StreamStats {
 /// Priority data stream entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stream {
+    #[serde(with = "serde_stream_id")]
     id: StreamId,
+    #[serde(with = "serde_session_id")]
     session_id: SessionId,
     state: StreamState,
     config: StreamConfig,

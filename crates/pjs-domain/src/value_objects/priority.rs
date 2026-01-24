@@ -2,22 +2,21 @@
 //!
 //! Provides type-safe priority system with validation rules
 //! and compile-time constants for common priority levels.
-//!
-//! TODO: Remove serde derives once all serialization uses DTOs
 
 use crate::{DomainError, DomainResult};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::num::NonZeroU8;
 
 /// Type-safe priority value (1-255 range)
 ///
-/// This is a pure domain object. Serialization should be handled
-/// in the application layer via DTOs, but serde is temporarily kept
-/// for compatibility with existing code.
+/// This is a pure domain object with no serialization concerns.
+/// For serialization, use `PriorityDto` from the application layer:
 ///
-/// TODO: Remove Serialize, Deserialize derives once all serialization uses DTOs
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// ```rust
+/// use pjson_rs::application::dto::PriorityDto;
+/// let dto: PriorityDto = priority.to_dto();
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Priority(NonZeroU8);
 
 impl Priority {

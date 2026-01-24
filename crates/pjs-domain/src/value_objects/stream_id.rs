@@ -2,21 +2,15 @@
 //!
 //! Pure domain object for stream identification.
 //! Serialization is handled in the application layer via DTOs.
-//!
-//! TODO: Remove serde derives once domain events are refactored to use DTOs
 
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
 
 /// Unique identifier for streams within a session
 ///
-/// This is a pure domain object. Serialization should be handled
-/// in the application layer via DTOs, but serde is temporarily kept
-/// for compatibility with domain events.
-///
-/// TODO: Remove Serialize, Deserialize derives once domain events use DTOs
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// This is a pure domain object with no serialization concerns.
+/// For serialization, use `StreamIdDto` from the application layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StreamId(Uuid);
 
 impl StreamId {

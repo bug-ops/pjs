@@ -4,6 +4,70 @@ use crate::value_objects::{SessionId, StreamId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Custom serde for SessionId (domain purity)
+mod serde_session_id {
+    use crate::value_objects::SessionId;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(id: &SessionId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        id.as_uuid().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<SessionId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let uuid = uuid::Uuid::deserialize(deserializer)?;
+        Ok(SessionId::from_uuid(uuid))
+    }
+}
+
+/// Custom serde for StreamId (domain purity)
+mod serde_stream_id {
+    use crate::value_objects::StreamId;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(id: &StreamId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        id.as_uuid().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<StreamId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let uuid = uuid::Uuid::deserialize(deserializer)?;
+        Ok(StreamId::from_uuid(uuid))
+    }
+}
+
+/// Custom serde for Option<StreamId>
+#[allow(dead_code)]
+mod serde_option_stream_id {
+    use crate::value_objects::StreamId;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(id: &Option<StreamId>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        id.map(|i| i.as_uuid()).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<StreamId>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let uuid: Option<uuid::Uuid> = Option::deserialize(deserializer)?;
+        Ok(uuid.map(StreamId::from_uuid))
+    }
+}
+
 /// Session state in its lifecycle
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionState {
@@ -26,6 +90,7 @@ pub enum DomainEvent {
     /// Session was activated and is ready to accept streams
     SessionActivated {
         /// ID of the activated session
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// When the session was activated
         timestamp: DateTime<Utc>,
@@ -34,6 +99,7 @@ pub enum DomainEvent {
     /// Session was closed gracefully
     SessionClosed {
         /// ID of the closed session
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// When the session was closed
         timestamp: DateTime<Utc>,
@@ -42,6 +108,7 @@ pub enum DomainEvent {
     /// Session expired due to timeout
     SessionExpired {
         /// ID of the expired session
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// When the session expired
         timestamp: DateTime<Utc>,
@@ -50,6 +117,7 @@ pub enum DomainEvent {
     /// Session was forcefully closed due to timeout
     SessionTimedOut {
         /// ID of the timed out session
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// State the session was in before timeout
         original_state: SessionState,
@@ -62,6 +130,7 @@ pub enum DomainEvent {
     /// Session timeout was extended
     SessionTimeoutExtended {
         /// ID of the session with extended timeout
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// Additional seconds added to the timeout
         additional_seconds: u64,
@@ -74,8 +143,10 @@ pub enum DomainEvent {
     /// New stream was created in the session
     StreamCreated {
         /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// ID of the newly created stream
+        #[serde(with = "serde_stream_id")]
         stream_id: StreamId,
         /// When the stream was created
         timestamp: DateTime<Utc>,
@@ -84,8 +155,10 @@ pub enum DomainEvent {
     /// Stream started sending data
     StreamStarted {
         /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// ID of the stream that started
+        #[serde(with = "serde_stream_id")]
         stream_id: StreamId,
         /// When the stream started
         timestamp: DateTime<Utc>,
@@ -94,8 +167,10 @@ pub enum DomainEvent {
     /// Stream completed successfully
     StreamCompleted {
         /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// ID of the completed stream
+        #[serde(with = "serde_stream_id")]
         stream_id: StreamId,
         /// When the stream completed
         timestamp: DateTime<Utc>,
@@ -104,8 +179,10 @@ pub enum DomainEvent {
     /// Stream failed with error
     StreamFailed {
         /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// ID of the failed stream
+        #[serde(with = "serde_stream_id")]
         stream_id: StreamId,
         /// Error message describing the failure
         error: String,
@@ -116,8 +193,10 @@ pub enum DomainEvent {
     /// Stream was cancelled
     StreamCancelled {
         /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// ID of the cancelled stream
+        #[serde(with = "serde_stream_id")]
         stream_id: StreamId,
         /// When the stream was cancelled
         timestamp: DateTime<Utc>,
@@ -126,8 +205,10 @@ pub enum DomainEvent {
     /// Skeleton frame was generated for a stream
     SkeletonGenerated {
         /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// ID of the stream that generated the skeleton
+        #[serde(with = "serde_stream_id")]
         stream_id: StreamId,
         /// Size of the skeleton frame in bytes
         frame_size_bytes: u64,
@@ -138,8 +219,10 @@ pub enum DomainEvent {
     /// Patch frames were generated for a stream
     PatchFramesGenerated {
         /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// ID of the stream that generated patches
+        #[serde(with = "serde_stream_id")]
         stream_id: StreamId,
         /// Number of patch frames generated
         frame_count: usize,
@@ -154,6 +237,7 @@ pub enum DomainEvent {
     /// Multiple frames were batched for efficient sending
     FramesBatched {
         /// ID of the session containing the frames
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// Number of frames in the batch
         frame_count: usize,
@@ -164,6 +248,7 @@ pub enum DomainEvent {
     /// Priority threshold was adjusted for adaptive streaming
     PriorityThresholdAdjusted {
         /// ID of the session with adjusted threshold
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// Previous priority threshold value
         old_threshold: u8,
@@ -178,8 +263,10 @@ pub enum DomainEvent {
     /// Stream configuration was updated
     StreamConfigUpdated {
         /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// ID of the stream with updated configuration
+        #[serde(with = "serde_stream_id")]
         stream_id: StreamId,
         /// When the configuration was updated
         timestamp: DateTime<Utc>,
@@ -188,6 +275,7 @@ pub enum DomainEvent {
     /// Performance metrics were recorded
     PerformanceMetricsRecorded {
         /// ID of the session being measured
+        #[serde(with = "serde_session_id")]
         session_id: SessionId,
         /// Recorded performance metrics
         metrics: PerformanceMetrics,
