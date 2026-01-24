@@ -108,7 +108,7 @@ impl PriorityStreamer {
         self.extract_patches(json, &JsonPath::root(), &mut patches)?;
 
         // Group patches by priority
-        patches.sort_by(|a, b| b.priority.cmp(&a.priority));
+        patches.sort_by_key(|patch| std::cmp::Reverse(patch.priority));
 
         let mut current_priority = Priority::CRITICAL;
         let mut current_batch = Vec::new();

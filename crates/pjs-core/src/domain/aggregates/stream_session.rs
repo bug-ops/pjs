@@ -358,7 +358,7 @@ impl StreamSession {
         }
 
         // Sort by priority (descending)
-        stream_frames.sort_by(|a, b| b.0.cmp(&a.0));
+        stream_frames.sort_by_key(|frame| std::cmp::Reverse(frame.0));
 
         // Take up to batch_size frames
         for (_, _, frame) in stream_frames.into_iter().take(batch_size) {
