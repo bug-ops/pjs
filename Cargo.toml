@@ -2,7 +2,7 @@
 members = ["crates/*"]
 default-members = ["crates/pjs-core", "crates/pjs-domain", "crates/pjs-wasm"]
 exclude = ["crates/pjs-bench", "crates/pjs-demo", "crates/pjs-js-client"]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 homepage = "https://github.com/bug-ops/pjs"

@@ -116,16 +116,22 @@ impl MetricsHistory {
 /// Individual metric samples
 #[derive(Debug, Clone)]
 struct LatencySample {
+    #[allow(dead_code)] // Used for time-series analysis in future
     timestamp: SystemTime,
+    #[allow(dead_code)] // Used for per-session metrics in future
     session_id: SessionId,
+    #[allow(dead_code)] // Used for per-stream metrics in future
     stream_id: Option<StreamId>,
     latency_ms: f64,
+    #[allow(dead_code)] // Used for operation-specific analysis in future
     operation_type: String,
 }
 
 #[derive(Debug, Clone)]
 struct ThroughputSample {
+    #[allow(dead_code)] // Used for time-series analysis in future
     timestamp: SystemTime,
+    #[allow(dead_code)] // Used for per-session metrics in future
     session_id: SessionId,
     bytes_transferred: u64,
     duration: Duration,
@@ -134,8 +140,11 @@ struct ThroughputSample {
 
 #[derive(Debug, Clone)]
 struct ErrorSample {
+    #[allow(dead_code)] // Used for time-series analysis in future
     timestamp: SystemTime,
+    #[allow(dead_code)] // Used for per-session metrics in future
     session_id: SessionId,
+    #[allow(dead_code)] // Used for per-stream metrics in future
     stream_id: Option<StreamId>,
     error_type: String,
     error_severity: ErrorSeverity,
@@ -143,6 +152,7 @@ struct ErrorSample {
 
 #[derive(Debug, Clone)]
 struct ResourceSample {
+    #[allow(dead_code)] // Used for time-series analysis in future
     timestamp: SystemTime,
     cpu_usage: f64,
     memory_usage_bytes: u64,

@@ -580,8 +580,10 @@ impl MemoryUsage {
 
 /// Incremental parser for streaming scenarios
 pub struct IncrementalParser<'a> {
+    #[allow(dead_code)] // Future: base parser for incremental parsing
     base: ZeroCopyParser<'a>,
     buffer: Vec<u8>,
+    #[allow(dead_code)] // Future: storage for parsed values in stream
     complete_values: Vec<LazyJsonValue<'a>>,
 }
 

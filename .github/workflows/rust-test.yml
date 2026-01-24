@@ -125,6 +125,32 @@ jobs:
           --lcov --output-path lcov-pjs-wasm.info \
           --status-level fail --final-status-level skip
 
+    - name: Check pjs-domain coverage threshold
+      run: |
+        # Domain layer requires minimum 80% coverage
+        cargo llvm-cov nextest -p pjson-rs-domain --json --output-path domain-coverage.json
+        coverage=$(jq -r '.data[0].totals.lines.percent' domain-coverage.json)
+        echo "Domain coverage: ${coverage}%"
+        threshold=80
+        if (( $(echo "$coverage < $threshold" | bc -l) )); then
+          echo "::error::Domain coverage ${coverage}% is below required threshold of ${threshold}%"
+          exit 1
+        fi
+        echo "::notice::Domain coverage ${coverage}% meets threshold of ${threshold}%"
+
+    - name: Check pjs-core coverage threshold
+      run: |
+        # Core library requires minimum 70% coverage
+        cargo llvm-cov nextest -p pjson-rs --json --output-path core-coverage.json
+        coverage=$(jq -r '.data[0].totals.lines.percent' core-coverage.json)
+        echo "Core coverage: ${coverage}%"
+        threshold=70
+        if (( $(echo "$coverage < $threshold" | bc -l) )); then
+          echo "::warning::Core coverage ${coverage}% is below recommended threshold of ${threshold}%"
+        else
+          echo "::notice::Core coverage ${coverage}% meets threshold of ${threshold}%"
+        fi
+
     - name: Upload pjs-core coverage
       uses: codecov/codecov-action@v5
       with:

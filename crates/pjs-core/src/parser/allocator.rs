@@ -56,6 +56,7 @@ impl AllocatorBackend {
 
 /// SIMD-aware memory allocator with support for different backends
 pub struct SimdAllocator {
+    #[allow(dead_code)] // Future: backend-specific allocation strategies
     backend: AllocatorBackend,
 }
 

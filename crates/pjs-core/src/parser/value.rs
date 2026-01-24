@@ -31,6 +31,7 @@ pub struct LazyArray<'a> {
     /// Pre-computed element boundaries using SIMD scanning
     boundaries: SmallVec<[Range; 32]>,
     /// Cache for parsed elements
+    #[allow(dead_code)] // Future: caching for repeated element access
     cache: std::collections::HashMap<usize, JsonValue<'a>>,
 }
 
@@ -42,6 +43,7 @@ pub struct LazyObject<'a> {
     /// Pre-computed key-value boundaries
     fields: SmallVec<[FieldRange; 16]>,
     /// Cache for parsed fields
+    #[allow(dead_code)] // Future: caching for repeated field access
     cache: std::collections::HashMap<String, JsonValue<'a>>,
 }
 

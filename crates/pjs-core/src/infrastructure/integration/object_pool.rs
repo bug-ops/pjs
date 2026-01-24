@@ -16,6 +16,7 @@ pub struct ObjectPool<T> {
     /// Factory function to create new objects
     factory: Arc<dyn Fn() -> T + Send + Sync>,
     /// Maximum pool capacity
+    #[allow(dead_code)] // Future: used for pool size enforcement
     max_capacity: usize,
     /// Pool statistics
     stats: Arc<Mutex<PoolStats>>,
@@ -84,6 +85,7 @@ impl<T> ObjectPool<T> {
     }
 
     /// Clean object before returning to pool (default implementation)
+    #[allow(dead_code)] // Future: will be used for type-specific cleaning strategies
     fn clean_object(_obj: &mut T) {
         // Default implementation does nothing
         // Specialized implementations below for specific types
@@ -99,6 +101,7 @@ impl<T> ObjectPool<T> {
 }
 
 // Trait for cleanable objects
+#[allow(dead_code)] // Future: will be used for polymorphic cleaning
 trait Cleanable {
     fn clean(&mut self);
 }
@@ -185,6 +188,7 @@ pub struct GlobalPools {
 }
 
 impl GlobalPools {
+    #[allow(dead_code)] // Future: will be exposed for global pool initialization
     fn new() -> Self {
         Self {
             cow_hashmap: ObjectPool::new(50, || {
@@ -212,6 +216,7 @@ impl GlobalPools {
 }
 
 /// Global singleton pools
+#[allow(dead_code)] // Future: will be used for global pool access pattern
 static GLOBAL_POOLS: Lazy<GlobalPools> = Lazy::new(GlobalPools::new);
 
 /// Wrapper that ensures cleaning happens

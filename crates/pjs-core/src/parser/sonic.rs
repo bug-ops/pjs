@@ -426,6 +426,7 @@ impl SonicParser {
 /// Simplified lazy frame for future implementation
 pub struct LazyFrame<'a> {
     frame: Frame,
+    #[allow(dead_code)] // Future: lazy evaluation of frame components
     parser: &'a SonicParser,
 }
 
