@@ -60,18 +60,14 @@ pub use domain::{
 // Events exports
 pub use domain::events::{PriorityDistribution, PriorityPercentages};
 
-// Application layer exports (some temporarily disabled for GAT migration)
+// Application layer exports
 pub use application::{
-    ApplicationError,
-    ApplicationResult,
-    commands,
+    ApplicationError, ApplicationResult, commands,
     dto::{
         SchemaDefinitionDto, SchemaMetadataDto, SchemaRegistrationDto, ValidationErrorDto,
         ValidationRequestDto, ValidationResultDto,
     },
-    // handlers::{CommandHandler, QueryHandler}, // Disabled: migrate to GAT when implementing CQRS
     queries,
-    // services::{SessionService, StreamingService}, // Disabled: replaced by SessionManager
 };
 
 // Configuration exports
@@ -109,55 +105,15 @@ pub use stream::{
     JsonReconstructor, PriorityStreamer, ProcessResult, StreamConfig, StreamFrame, StreamProcessor,
     StreamStats, StreamingCompressor, StreamingDecompressor,
 };
-// Legacy stream exports (will be deprecated)
-// pub use stream::{
-//     JsonPath as StreamJsonPath, JsonReconstructor, Priority as StreamPriority, PriorityStreamer,
-//     ProcessResult, StreamFrame, StreamProcessor, StreamerConfig,
-// };
 
 /// Re-export commonly used types
 pub mod prelude {
     pub use super::{
-        ApplicationError,
-        // Application layer
-        ApplicationResult,
-        // CommandHandler, // TODO: migrate to GAT
-        DomainError,
-        DomainEvent,
-        DomainFrame,
-        // Domain layer
-        DomainResult,
-        // Core types
-        Error,
-        Frame,
-        FrameFlags,
-        FrameHeader,
-        JsonData,
-        JsonPath,
-        // TODO: Re-add when legacy modules are reconciled
-        JsonReconstructor,
-        Priority,
-        PriorityDistribution,
-        PriorityPercentages,
-        // PriorityStreamer,
-        ProcessResult,
-        // QueryHandler, // TODO: migrate to GAT
-        Result,
-        Schema,
-        SchemaId,
-        SchemaRepository,
-        SchemaType,
-        SchemaValidationError,
-        SemanticMeta,
-        SemanticType,
-        SessionId,
-        // SessionService, // TODO: migrate to GAT
-        Stream,
-        StreamId,
-        StreamProcessor,
-        StreamSession,
-        // StreamingService, // TODO: migrate to GAT
-        ValidationService,
+        ApplicationError, ApplicationResult, DomainError, DomainEvent, DomainFrame, DomainResult,
+        Error, Frame, FrameFlags, FrameHeader, JsonData, JsonPath, JsonReconstructor, Priority,
+        PriorityDistribution, PriorityPercentages, ProcessResult, Result, Schema, SchemaId,
+        SchemaRepository, SchemaType, SchemaValidationError, SemanticMeta, SemanticType, SessionId,
+        Stream, StreamId, StreamProcessor, StreamSession, ValidationService,
     };
 }
 

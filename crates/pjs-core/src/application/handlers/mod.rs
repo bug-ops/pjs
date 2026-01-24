@@ -43,26 +43,4 @@ pub trait QueryHandlerGat<TQuery> {
     fn handle(&self, query: TQuery) -> Self::HandleFuture<'_>;
 }
 
-// Legacy traits for backward compatibility during migration
-// These use async_trait and will be deprecated after full migration
-use async_trait::async_trait;
-
-#[deprecated(since = "0.5.0", note = "Use CommandHandlerGat for zero-cost async")]
-#[async_trait]
-pub trait CommandHandler<TCommand, TResponse>
-where
-    TCommand: Send + 'static,
-    TResponse: Send + 'static,
-{
-    async fn handle(&self, command: TCommand) -> ApplicationResult<TResponse>;
-}
-
-#[deprecated(since = "0.5.0", note = "Use QueryHandlerGat for zero-cost async")]
-#[async_trait]
-pub trait QueryHandler<TQuery, TResponse>
-where
-    TQuery: Send + 'static,
-    TResponse: Send + 'static,
-{
-    async fn handle(&self, query: TQuery) -> ApplicationResult<TResponse>;
-}
+// Legacy async_trait handlers removed - use GAT versions instead

@@ -1,7 +1,7 @@
 //! Query handlers for read operations
 
 use crate::{
-    application::{ApplicationError, ApplicationResult, handlers::QueryHandler, queries::*},
+    application::{ApplicationError, ApplicationResult, handlers::QueryHandlerGat, queries::*},
     domain::{
         aggregates::StreamSession,
         entities::Stream,
@@ -9,7 +9,6 @@ use crate::{
         ports::{StreamRepositoryGat, StreamStoreGat},
     },
 };
-// async_trait removed - using GAT traits
 use std::sync::Arc;
 
 /// Handler for session-related queries
@@ -30,12 +29,18 @@ where
     }
 }
 
-#[async_trait]
-impl<R> QueryHandler<GetSessionQuery, SessionResponse> for SessionQueryHandler<R>
+impl<R> QueryHandlerGat<GetSessionQuery> for SessionQueryHandler<R>
 where
-    R: StreamRepository + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
 {
-    async fn handle(&self, query: GetSessionQuery) -> ApplicationResult<SessionResponse> {
+    type Response = SessionResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetSessionQuery) -> Self::HandleFuture<'_> {
+        async move {
         let session = self
             .repository
             .find_session(query.session_id.into())
@@ -45,16 +50,23 @@ where
                 ApplicationError::NotFound(format!("Session {} not found", query.session_id))
             })?;
 
-        Ok(SessionResponse { session })
+            Ok(SessionResponse { session })
+        }
     }
 }
 
-#[async_trait]
-impl<R> QueryHandler<GetActiveSessionsQuery, SessionsResponse> for SessionQueryHandler<R>
+impl<R> QueryHandlerGat<GetActiveSessionsQuery> for SessionQueryHandler<R>
 where
-    R: StreamRepository + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
 {
-    async fn handle(&self, query: GetActiveSessionsQuery) -> ApplicationResult<SessionsResponse> {
+    type Response = SessionsResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetActiveSessionsQuery) -> Self::HandleFuture<'_> {
+        async move {
         let mut sessions = self
             .repository
             .find_active_sessions()
@@ -76,19 +88,26 @@ where
             sessions.truncate(limit);
         }
 
-        Ok(SessionsResponse {
-            sessions,
-            total_count,
-        })
+            Ok(SessionsResponse {
+                sessions,
+                total_count,
+            })
+        }
     }
 }
 
-#[async_trait]
-impl<R> QueryHandler<GetSessionHealthQuery, HealthResponse> for SessionQueryHandler<R>
+impl<R> QueryHandlerGat<GetSessionHealthQuery> for SessionQueryHandler<R>
 where
-    R: StreamRepository + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
 {
-    async fn handle(&self, query: GetSessionHealthQuery) -> ApplicationResult<HealthResponse> {
+    type Response = HealthResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetSessionHealthQuery) -> Self::HandleFuture<'_> {
+        async move {
         let session = self
             .repository
             .find_session(query.session_id.into())
@@ -100,16 +119,23 @@ where
 
         let health = session.health_check();
 
-        Ok(HealthResponse { health })
+            Ok(HealthResponse { health })
+        }
     }
 }
 
-#[async_trait]
-impl<R> QueryHandler<SearchSessionsQuery, SessionsResponse> for SessionQueryHandler<R>
+impl<R> QueryHandlerGat<SearchSessionsQuery> for SessionQueryHandler<R>
 where
-    R: StreamRepository + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
 {
-    async fn handle(&self, query: SearchSessionsQuery) -> ApplicationResult<SessionsResponse> {
+    type Response = SessionsResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: SearchSessionsQuery) -> Self::HandleFuture<'_> {
+        async move {
         // Load all active sessions (in production, this would be more efficient with database filtering)
         let mut sessions = self
             .repository
@@ -156,10 +182,11 @@ where
             sessions.truncate(limit);
         }
 
-        Ok(SessionsResponse {
-            sessions,
-            total_count,
-        })
+            Ok(SessionsResponse {
+                sessions,
+                total_count,
+            })
+        }
     }
 }
 
@@ -211,7 +238,7 @@ where
 pub struct StreamQueryHandler<R, S>
 where
     R: StreamRepositoryGat + 'static,
-    S: StreamStore,
+    S: StreamStoreGat + 'static,
 {
     session_repository: Arc<R>,
     #[allow(dead_code)]
@@ -221,7 +248,7 @@ where
 impl<R, S> StreamQueryHandler<R, S>
 where
     R: StreamRepositoryGat + 'static,
-    S: StreamStore,
+    S: StreamStoreGat + 'static,
 {
     pub fn new(session_repository: Arc<R>, stream_store: Arc<S>) -> Self {
         Self {
@@ -231,13 +258,19 @@ where
     }
 }
 
-#[async_trait]
-impl<R, S> QueryHandler<GetStreamQuery, StreamResponse> for StreamQueryHandler<R, S>
+impl<R, S> QueryHandlerGat<GetStreamQuery> for StreamQueryHandler<R, S>
 where
-    R: StreamRepository + Send + Sync,
-    S: StreamStore + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    S: StreamStoreGat + Send + Sync,
 {
-    async fn handle(&self, query: GetStreamQuery) -> ApplicationResult<StreamResponse> {
+    type Response = StreamResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetStreamQuery) -> Self::HandleFuture<'_> {
+        async move {
         let session = self
             .session_repository
             .find_session(query.session_id.into())
@@ -254,17 +287,24 @@ where
             })?
             .clone();
 
-        Ok(StreamResponse { stream })
+            Ok(StreamResponse { stream })
+        }
     }
 }
 
-#[async_trait]
-impl<R, S> QueryHandler<GetStreamsForSessionQuery, StreamsResponse> for StreamQueryHandler<R, S>
+impl<R, S> QueryHandlerGat<GetStreamsForSessionQuery> for StreamQueryHandler<R, S>
 where
-    R: StreamRepository + Send + Sync,
-    S: StreamStore + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    S: StreamStoreGat + Send + Sync,
 {
-    async fn handle(&self, query: GetStreamsForSessionQuery) -> ApplicationResult<StreamsResponse> {
+    type Response = StreamsResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetStreamsForSessionQuery) -> Self::HandleFuture<'_> {
+        async move {
         let session = self
             .session_repository
             .find_session(query.session_id.into())
@@ -281,7 +321,8 @@ where
             .cloned()
             .collect();
 
-        Ok(StreamsResponse { streams })
+            Ok(StreamsResponse { streams })
+        }
     }
 }
 
@@ -303,12 +344,18 @@ where
     }
 }
 
-#[async_trait]
-impl<E> QueryHandler<GetSessionEventsQuery, EventsResponse> for EventQueryHandler<E>
+impl<E> QueryHandlerGat<GetSessionEventsQuery> for EventQueryHandler<E>
 where
     E: EventStore + Send + Sync,
 {
-    async fn handle(&self, query: GetSessionEventsQuery) -> ApplicationResult<EventsResponse> {
+    type Response = EventsResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetSessionEventsQuery) -> Self::HandleFuture<'_> {
+        async move {
         let mut events = self
             .event_store
             .get_events_for_session(query.session_id.into())
@@ -331,19 +378,26 @@ where
             events.truncate(limit);
         }
 
-        Ok(EventsResponse {
-            events,
-            total_count,
-        })
+            Ok(EventsResponse {
+                events,
+                total_count,
+            })
+        }
     }
 }
 
-#[async_trait]
-impl<E> QueryHandler<GetStreamEventsQuery, EventsResponse> for EventQueryHandler<E>
+impl<E> QueryHandlerGat<GetStreamEventsQuery> for EventQueryHandler<E>
 where
     E: EventStore + Send + Sync,
 {
-    async fn handle(&self, query: GetStreamEventsQuery) -> ApplicationResult<EventsResponse> {
+    type Response = EventsResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetStreamEventsQuery) -> Self::HandleFuture<'_> {
+        async move {
         let mut events = self
             .event_store
             .get_events_for_stream(query.stream_id.into())
@@ -361,10 +415,11 @@ where
             events.truncate(limit);
         }
 
-        Ok(EventsResponse {
-            events,
-            total_count,
-        })
+            Ok(EventsResponse {
+                events,
+                total_count,
+            })
+        }
     }
 }
 
@@ -386,12 +441,18 @@ where
     }
 }
 
-#[async_trait]
-impl<R> QueryHandler<GetSystemStatsQuery, SystemStatsResponse> for SystemQueryHandler<R>
+impl<R> QueryHandlerGat<GetSystemStatsQuery> for SystemQueryHandler<R>
 where
-    R: StreamRepository + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
 {
-    async fn handle(&self, _query: GetSystemStatsQuery) -> ApplicationResult<SystemStatsResponse> {
+    type Response = SystemStatsResponse;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, _query: GetSystemStatsQuery) -> Self::HandleFuture<'_> {
+        async move {
         let sessions = self
             .repository
             .find_active_sessions()
@@ -432,18 +493,19 @@ where
         let frames_per_second = total_frames as f64 / uptime_seconds as f64;
         let bytes_per_second = total_bytes as f64 / uptime_seconds as f64;
 
-        Ok(SystemStatsResponse {
-            total_sessions,
-            active_sessions,
-            total_streams,
-            active_streams,
-            total_frames,
-            total_bytes,
-            average_session_duration_seconds,
-            frames_per_second,
-            bytes_per_second,
-            uptime_seconds: uptime_seconds as u64,
-        })
+            Ok(SystemStatsResponse {
+                total_sessions,
+                active_sessions,
+                total_streams,
+                active_streams,
+                total_frames,
+                total_bytes,
+                average_session_duration_seconds,
+                frames_per_second,
+                bytes_per_second,
+                uptime_seconds: uptime_seconds as u64,
+            })
+        }
     }
 }
 
@@ -458,63 +520,98 @@ mod tests {
 
     // Mock implementations for testing
     struct MockRepository {
-        sessions: std::sync::Mutex<HashMap<SessionId, StreamSession>>,
+        sessions: parking_lot::Mutex<HashMap<SessionId, StreamSession>>,
     }
 
     impl MockRepository {
         fn new() -> Self {
             Self {
-                sessions: std::sync::Mutex::new(HashMap::new()),
+                sessions: parking_lot::Mutex::new(HashMap::new()),
             }
         }
 
         fn add_session(&self, session: StreamSession) {
-            self.sessions.lock().unwrap().insert(session.id(), session);
+            self.sessions.lock().insert(session.id(), session);
         }
     }
 
-    #[async_trait]
-    impl StreamRepository for MockRepository {
-        async fn find_session(
-            &self,
-            session_id: SessionId,
-        ) -> crate::domain::DomainResult<Option<StreamSession>> {
-            Ok(self.sessions.lock().unwrap().get(&session_id).cloned())
+    impl StreamRepositoryGat for MockRepository {
+        type FindSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<Option<StreamSession>>> + Send + 'a
+        where
+            Self: 'a;
+
+        type SaveSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type RemoveSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type FindActiveSessionsFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<Vec<StreamSession>>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
+            async move {
+                Ok(self.sessions.lock().get(&session_id).cloned())
+            }
         }
 
-        async fn save_session(&self, session: StreamSession) -> crate::domain::DomainResult<()> {
-            self.sessions.lock().unwrap().insert(session.id(), session);
-            Ok(())
+        fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_> {
+            async move {
+                self.sessions.lock().insert(session.id(), session);
+                Ok(())
+            }
         }
 
-        async fn remove_session(&self, session_id: SessionId) -> crate::domain::DomainResult<()> {
-            self.sessions.lock().unwrap().remove(&session_id);
-            Ok(())
+        fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_> {
+            async move {
+                self.sessions.lock().remove(&session_id);
+                Ok(())
+            }
         }
 
-        async fn find_active_sessions(&self) -> crate::domain::DomainResult<Vec<StreamSession>> {
-            Ok(self.sessions.lock().unwrap().values().cloned().collect())
+        fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
+            async move {
+                Ok(self.sessions.lock().values().cloned().collect())
+            }
         }
     }
 
     struct MockStreamStore;
 
-    #[async_trait]
-    impl StreamStore for MockStreamStore {
-        async fn store_stream(&self, _stream: crate::domain::entities::Stream) -> crate::domain::DomainResult<()> {
-            Ok(())
+    impl StreamStoreGat for MockStreamStore {
+        type StoreStreamFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type GetStreamFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<Option<crate::domain::entities::Stream>>> + Send + 'a
+        where
+            Self: 'a;
+
+        type DeleteStreamFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type ListStreamsFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<Vec<crate::domain::entities::Stream>>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn store_stream(&self, _stream: crate::domain::entities::Stream) -> Self::StoreStreamFuture<'_> {
+            async move { Ok(()) }
         }
 
-        async fn get_stream(&self, _stream_id: StreamId) -> crate::domain::DomainResult<Option<crate::domain::entities::Stream>> {
-            Ok(None)
+        fn get_stream(&self, _stream_id: StreamId) -> Self::GetStreamFuture<'_> {
+            async move { Ok(None) }
         }
 
-        async fn delete_stream(&self, _stream_id: StreamId) -> crate::domain::DomainResult<()> {
-            Ok(())
+        fn delete_stream(&self, _stream_id: StreamId) -> Self::DeleteStreamFuture<'_> {
+            async move { Ok(()) }
         }
 
-        async fn list_streams_for_session(&self, _session_id: SessionId) -> crate::domain::DomainResult<Vec<crate::domain::entities::Stream>> {
-            Ok(vec![])
+        fn list_streams_for_session(&self, _session_id: SessionId) -> Self::ListStreamsFuture<'_> {
+            async move { Ok(vec![]) }
         }
     }
 

@@ -1,7 +1,7 @@
 //! Command handlers implementing business use cases
 
 use crate::{
-    application::{ApplicationError, ApplicationResult, commands::*, dto::JsonDataDto, handlers::CommandHandler},
+    application::{ApplicationError, ApplicationResult, commands::*, dto::JsonDataDto, handlers::CommandHandlerGat},
     domain::{
         aggregates::StreamSession,
         entities::Frame,
@@ -9,7 +9,6 @@ use crate::{
         value_objects::{JsonData, SessionId, StreamId},
     },
 };
-use async_trait::async_trait;
 use std::sync::Arc;
 
 /// Handler for session management commands
@@ -36,54 +35,67 @@ where
     }
 }
 
-#[async_trait]
-impl<R, P> CommandHandler<CreateSessionCommand, SessionId> for SessionCommandHandler<R, P>
+impl<R, P> CommandHandlerGat<CreateSessionCommand> for SessionCommandHandler<R, P>
 where
-    R: StreamRepository + Send + Sync,
-    P: EventPublisher + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    P: EventPublisherGat + Send + Sync,
 {
-    async fn handle(&self, command: CreateSessionCommand) -> ApplicationResult<SessionId> {
-        // Create new session
-        let mut session = StreamSession::new(command.config);
+    type Response = SessionId;
 
-        // Set client information
-        if let (Some(client_info), user_agent, ip_address) =
-            (command.client_info, command.user_agent, command.ip_address)
-        {
-            session.set_client_info(client_info, user_agent, ip_address);
-        }
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
 
-        // Activate session
-        session.activate().map_err(ApplicationError::Domain)?;
+    fn handle(&self, command: CreateSessionCommand) -> Self::HandleFuture<'_> {
+        async move {
+            // Create new session
+            let mut session = StreamSession::new(command.config);
 
-        let session_id = session.id();
+            // Set client information
+            if let (Some(client_info), user_agent, ip_address) =
+                (command.client_info, command.user_agent, command.ip_address)
+            {
+                session.set_client_info(client_info, user_agent, ip_address);
+            }
 
-        // Save to repository
-        self.repository
-            .save_session(session.clone())
-            .await
-            .map_err(ApplicationError::Domain)?;
+            // Activate session
+            session.activate().map_err(ApplicationError::Domain)?;
 
-        // Publish events
-        let events = session.take_events();
-        for event in events {
-            self.event_publisher
-                .publish(event)
+            let session_id = session.id();
+
+            // Save to repository
+            self.repository
+                .save_session(session.clone())
                 .await
                 .map_err(ApplicationError::Domain)?;
-        }
 
-        Ok(session_id)
+            // Publish events
+            let events = session.take_events();
+            for event in events {
+                self.event_publisher
+                    .publish(event)
+                    .await
+                    .map_err(ApplicationError::Domain)?;
+            }
+
+            Ok(session_id)
+        }
     }
 }
 
-#[async_trait]
-impl<R, P> CommandHandler<CreateStreamCommand, StreamId> for SessionCommandHandler<R, P>
+impl<R, P> CommandHandlerGat<CreateStreamCommand> for SessionCommandHandler<R, P>
 where
-    R: StreamRepository + Send + Sync,
-    P: EventPublisher + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    P: EventPublisherGat + Send + Sync,
 {
-    async fn handle(&self, command: CreateStreamCommand) -> ApplicationResult<StreamId> {
+    type Response = StreamId;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, command: CreateStreamCommand) -> Self::HandleFuture<'_> {
+        async move {
         // Load session
         let mut session = self
             .repository
@@ -123,17 +135,24 @@ where
                 .map_err(ApplicationError::Domain)?;
         }
 
-        Ok(stream_id)
+            Ok(stream_id)
+        }
     }
 }
 
-#[async_trait]
-impl<R, P> CommandHandler<StartStreamCommand, ()> for SessionCommandHandler<R, P>
+impl<R, P> CommandHandlerGat<StartStreamCommand> for SessionCommandHandler<R, P>
 where
-    R: StreamRepository + Send + Sync,
-    P: EventPublisher + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    P: EventPublisherGat + Send + Sync,
 {
-    async fn handle(&self, command: StartStreamCommand) -> ApplicationResult<()> {
+    type Response = ();
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, command: StartStreamCommand) -> Self::HandleFuture<'_> {
+        async move {
         // Load session
         let mut session = self
             .repository
@@ -164,17 +183,24 @@ where
                 .map_err(ApplicationError::Domain)?;
         }
 
-        Ok(())
+            Ok(())
+        }
     }
 }
 
-#[async_trait]
-impl<R, P> CommandHandler<CompleteStreamCommand, ()> for SessionCommandHandler<R, P>
+impl<R, P> CommandHandlerGat<CompleteStreamCommand> for SessionCommandHandler<R, P>
 where
-    R: StreamRepository + Send + Sync,
-    P: EventPublisher + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    P: EventPublisherGat + Send + Sync,
 {
-    async fn handle(&self, command: CompleteStreamCommand) -> ApplicationResult<()> {
+    type Response = ();
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, command: CompleteStreamCommand) -> Self::HandleFuture<'_> {
+        async move {
         // Load session
         let mut session = self
             .repository
@@ -205,17 +231,24 @@ where
                 .map_err(ApplicationError::Domain)?;
         }
 
-        Ok(())
+            Ok(())
+        }
     }
 }
 
-#[async_trait]
-impl<R, P> CommandHandler<GenerateFramesCommand, Vec<Frame>> for SessionCommandHandler<R, P>
+impl<R, P> CommandHandlerGat<GenerateFramesCommand> for SessionCommandHandler<R, P>
 where
-    R: StreamRepository + Send + Sync,
-    P: EventPublisher + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    P: EventPublisherGat + Send + Sync,
 {
-    async fn handle(&self, command: GenerateFramesCommand) -> ApplicationResult<Vec<Frame>> {
+    type Response = Vec<Frame>;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, command: GenerateFramesCommand) -> Self::HandleFuture<'_> {
+        async move {
         // Load session
         let mut session = self
             .repository
@@ -253,17 +286,24 @@ where
                 .map_err(ApplicationError::Domain)?;
         }
 
-        Ok(frames)
+            Ok(frames)
+        }
     }
 }
 
-#[async_trait]
-impl<R, P> CommandHandler<BatchGenerateFramesCommand, Vec<Frame>> for SessionCommandHandler<R, P>
+impl<R, P> CommandHandlerGat<BatchGenerateFramesCommand> for SessionCommandHandler<R, P>
 where
-    R: StreamRepository + Send + Sync,
-    P: EventPublisher + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    P: EventPublisherGat + Send + Sync,
 {
-    async fn handle(&self, command: BatchGenerateFramesCommand) -> ApplicationResult<Vec<Frame>> {
+    type Response = Vec<Frame>;
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, command: BatchGenerateFramesCommand) -> Self::HandleFuture<'_> {
+        async move {
         // Load session
         let mut session = self
             .repository
@@ -294,17 +334,24 @@ where
                 .map_err(ApplicationError::Domain)?;
         }
 
-        Ok(frames)
+            Ok(frames)
+        }
     }
 }
 
-#[async_trait]
-impl<R, P> CommandHandler<CloseSessionCommand, ()> for SessionCommandHandler<R, P>
+impl<R, P> CommandHandlerGat<CloseSessionCommand> for SessionCommandHandler<R, P>
 where
-    R: StreamRepository + Send + Sync,
-    P: EventPublisher + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    P: EventPublisherGat + Send + Sync,
 {
-    async fn handle(&self, command: CloseSessionCommand) -> ApplicationResult<()> {
+    type Response = ();
+
+    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, command: CloseSessionCommand) -> Self::HandleFuture<'_> {
+        async move {
         // Load session
         let mut session = self
             .repository
@@ -333,7 +380,8 @@ where
                 .map_err(ApplicationError::Domain)?;
         }
 
-        Ok(())
+            Ok(())
+        }
     }
 }
 
@@ -407,58 +455,78 @@ mod tests {
 
     // Mock implementations for testing
     struct MockRepository {
-        sessions: std::sync::Mutex<HashMap<SessionId, StreamSession>>,
+        sessions: parking_lot::Mutex<HashMap<SessionId, StreamSession>>,
     }
 
     impl MockRepository {
         fn new() -> Self {
             Self {
-                sessions: std::sync::Mutex::new(HashMap::new()),
+                sessions: parking_lot::Mutex::new(HashMap::new()),
             }
         }
     }
 
-    #[async_trait]
-    impl StreamRepository for MockRepository {
-        async fn find_session(
-            &self,
-            session_id: SessionId,
-        ) -> crate::domain::DomainResult<Option<StreamSession>> {
-            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
-            Ok(self.sessions.lock().unwrap().get(&session_id).cloned())
+    impl StreamRepositoryGat for MockRepository {
+        type FindSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<Option<StreamSession>>> + Send + 'a
+        where
+            Self: 'a;
+
+        type SaveSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type RemoveSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type FindActiveSessionsFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<Vec<StreamSession>>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
+            async move {
+                Ok(self.sessions.lock().get(&session_id).cloned())
+            }
         }
 
-        async fn save_session(&self, session: StreamSession) -> crate::domain::DomainResult<()> {
-            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
-            self.sessions.lock().unwrap().insert(session.id(), session);
-            Ok(())
+        fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_> {
+            async move {
+                self.sessions.lock().insert(session.id(), session);
+                Ok(())
+            }
         }
 
-        async fn remove_session(&self, session_id: SessionId) -> crate::domain::DomainResult<()> {
-            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
-            self.sessions.lock().unwrap().remove(&session_id);
-            Ok(())
+        fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_> {
+            async move {
+                self.sessions.lock().remove(&session_id);
+                Ok(())
+            }
         }
 
-        async fn find_active_sessions(&self) -> crate::domain::DomainResult<Vec<StreamSession>> {
-            // TODO: Handle unwrap() - add proper error handling for mutex poisoning
-            Ok(self.sessions.lock().unwrap().values().cloned().collect())
+        fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
+            async move {
+                Ok(self.sessions.lock().values().cloned().collect())
+            }
         }
     }
 
     struct MockEventPublisher;
 
-    #[async_trait]
-    impl EventPublisher for MockEventPublisher {
-        async fn publish(&self, _event: DomainEvent) -> crate::domain::DomainResult<()> {
-            Ok(())
+    impl EventPublisherGat for MockEventPublisher {
+        type PublishFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type PublishBatchFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn publish(&self, _event: DomainEvent) -> Self::PublishFuture<'_> {
+            async move { Ok(()) }
         }
 
-        async fn publish_batch(
-            &self,
-            _events: Vec<DomainEvent>,
-        ) -> crate::domain::DomainResult<()> {
-            Ok(())
+        fn publish_batch(&self, _events: Vec<DomainEvent>) -> Self::PublishBatchFuture<'_> {
+            async move { Ok(()) }
         }
     }
 
