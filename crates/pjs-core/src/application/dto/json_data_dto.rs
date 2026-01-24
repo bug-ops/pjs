@@ -143,10 +143,10 @@ mod tests {
         let int_domain: JsonData = int_dto.into();
         assert!(matches!(int_domain, JsonData::Integer(42)));
 
-        let float_dto = JsonDataDto::from(json!(3.14));
+        let float_dto = JsonDataDto::from(json!(2.5));
         let float_domain: JsonData = float_dto.into();
         if let JsonData::Float(f) = float_domain {
-            assert!((f - 3.14).abs() < 0.001);
+            assert!((f - 2.5).abs() < 0.001);
         } else {
             panic!("Expected Float");
         }
