@@ -5,6 +5,7 @@
 //! concerns out of the domain layer.
 
 pub mod event_dto;
+pub mod json_data_dto;
 pub mod json_path_dto;
 pub mod priority_dto;
 pub mod schema_dto;
@@ -12,6 +13,7 @@ pub mod session_id_dto;
 pub mod stream_id_dto;
 
 pub use event_dto::{DomainEventDto, EventIdDto, PerformanceMetricsDto, PriorityDistributionDto};
+pub use json_data_dto::JsonDataDto;
 pub use json_path_dto::JsonPathDto;
 pub use priority_dto::{FromDto, PriorityDto, ToDto};
 pub use schema_dto::{
