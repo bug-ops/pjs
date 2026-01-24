@@ -109,13 +109,21 @@ impl InMemoryMetricsCollector {
 
     /// Get time series data for the last N minutes
     pub fn get_time_series(&self, minutes: u32) -> Vec<TimestampedMetrics> {
-        let cutoff = Instant::now() - Duration::from_secs(minutes as u64 * 60);
-        self.time_series
-            .read()
-            .iter()
-            .filter(|entry| entry.timestamp > cutoff)
-            .cloned()
-            .collect()
+        let duration = Duration::from_secs(minutes as u64 * 60);
+        let now = Instant::now();
+
+        // Use checked_sub to handle Windows overflow when duration exceeds program uptime
+        if let Some(cutoff) = now.checked_sub(duration) {
+            self.time_series
+                .read()
+                .iter()
+                .filter(|entry| entry.timestamp > cutoff)
+                .cloned()
+                .collect()
+        } else {
+            // Duration exceeds program uptime, return all entries
+            self.time_series.read().clone()
+        }
     }
 
     /// Clear all metrics (for testing)
