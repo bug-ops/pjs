@@ -11,12 +11,26 @@ use crate::domain::{DomainResult, Priority};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
+/// Custom serde for Priority in stream module
+mod serde_priority {
+    use crate::domain::Priority;
+    use serde::{Serialize, Serializer};
+
+    pub fn serialize<S>(priority: &Priority, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        priority.value().serialize(serializer)
+    }
+}
+
 /// Stream frame with priority and metadata
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct StreamFrame {
     /// JSON data payload
     pub data: JsonValue,
     /// Frame priority for streaming order
+    #[serde(with = "serde_priority")]
     pub priority: Priority,
     /// Additional metadata for processing
     pub metadata: HashMap<String, String>,

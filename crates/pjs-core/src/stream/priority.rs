@@ -2,7 +2,7 @@
 //!
 //! This module implements the core Priority JSON Streaming protocol with:
 //! - Skeleton-first approach
-//! - JSON Path based patching  
+//! - JSON Path based patching
 //! - Priority-based field ordering
 //! - Incremental reconstruction
 
@@ -10,6 +10,19 @@ use crate::Result;
 use crate::domain::value_objects::Priority;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::VecDeque;
+
+/// Custom serde for Priority in stream module
+mod serde_priority {
+    use crate::domain::value_objects::Priority;
+    use serde::{Serialize, Serializer};
+
+    pub fn serialize<S>(priority: &Priority, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        priority.value().serialize(serializer)
+    }
+}
 
 /// JSON Path for addressing specific nodes in the JSON structure
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -30,6 +43,7 @@ pub enum PathSegment {
 pub struct JsonPatch {
     pub path: JsonPath,
     pub operation: PatchOperation,
+    #[serde(with = "serde_priority")]
     pub priority: Priority,
 }
 
@@ -46,11 +60,13 @@ pub enum PatchOperation {
 pub enum PriorityStreamFrame {
     Skeleton {
         data: JsonValue,
+        #[serde(with = "serde_priority")]
         priority: Priority,
         complete: bool,
     },
     Patch {
         patches: Vec<JsonPatch>,
+        #[serde(with = "serde_priority")]
         priority: Priority,
     },
     Complete {

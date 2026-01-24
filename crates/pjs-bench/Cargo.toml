@@ -13,10 +13,13 @@ publish = { workspace = true }
 
 [dependencies]
 bytes = { workspace = true }
+chrono = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 pjson-rs = { workspace = true }
+pjson-rs-domain = { workspace = true }
 serde_json = { workspace = true }
 sonic-rs = { workspace = true }
+uuid = { workspace = true }
 
 [features]
 default = ["streaming"]
@@ -31,4 +34,8 @@ harness = false
 
 [[bench]]
 name = "zero_copy_bench"
+harness = false
+
+[[bench]]
+name = "serde_overhead_bench"
 harness = false
