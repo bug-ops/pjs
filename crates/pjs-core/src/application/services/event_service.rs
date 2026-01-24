@@ -341,10 +341,12 @@ mod tests {
     };
 
     // Mock subscriber for testing
+    #[allow(dead_code)] // Future test utility
     struct MockSubscriber {
         received_events: std::sync::Mutex<Vec<DomainEvent>>,
     }
 
+    #[allow(dead_code)] // Future test utility
     impl MockSubscriber {
         fn new() -> Self {
             Self {
