@@ -8,6 +8,7 @@ use crate::{application::ApplicationResult, domain::value_objects::Priority};
 /// Service for optimization strategies and use case handling
 #[derive(Debug)]
 pub struct OptimizationService {
+    #[allow(dead_code)] // Future: will be used for default optimization selection
     default_strategy: OptimizationStrategy,
     custom_strategies: std::collections::HashMap<String, OptimizationStrategy>,
 }

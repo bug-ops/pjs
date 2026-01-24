@@ -182,6 +182,7 @@ pub trait WebSocketTransport: Send + Sync {
 /// Adaptive streaming controller
 pub struct AdaptiveStreamController {
     sessions: Arc<RwLock<HashMap<String, StreamSession>>>,
+    #[allow(dead_code)] // Future feature: PriorityStreamer integration
     streamer: PriorityStreamer,
     frame_tx: broadcast::Sender<(String, WsMessage)>,
 }

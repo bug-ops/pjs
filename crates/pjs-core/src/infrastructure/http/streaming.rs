@@ -57,6 +57,7 @@ pub struct AdaptiveFrameStream<S> {
     format: StreamFormat,
     compression: bool,
     buffer_size: usize,
+    #[allow(dead_code)] // Future feature: adaptive batching implementation
     current_buffer: Vec<String>,
 }
 

@@ -63,6 +63,7 @@ pub enum BufferSize {
 #[derive(Debug)]
 struct BufferBucket {
     buffers: Vec<AlignedBuffer>,
+    #[allow(dead_code)] // Future: size-based pool management
     size: BufferSize,
     last_access: Instant,
 }

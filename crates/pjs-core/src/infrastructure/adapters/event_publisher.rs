@@ -524,11 +524,13 @@ mod tests {
     };
     use std::sync::RwLock;
 
+    #[allow(dead_code)] // Future test utility
     #[derive(Debug, Clone)]
     struct TestSubscriber {
         received_events: Arc<RwLock<Vec<DomainEvent>>>,
     }
 
+    #[allow(dead_code)] // Future test utility
     impl TestSubscriber {
         fn new() -> Self {
             Self {

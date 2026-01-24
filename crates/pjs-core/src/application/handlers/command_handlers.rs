@@ -1,15 +1,15 @@
 //! Command handlers implementing business use cases
 
 use crate::{
-    application::{ApplicationError, ApplicationResult, commands::*, handlers::CommandHandler},
+    application::{ApplicationError, ApplicationResult, commands::*, dto::JsonDataDto, handlers::CommandHandler},
     domain::{
         aggregates::StreamSession,
         entities::Frame,
         ports::{EventPublisherGat, StreamRepositoryGat},
-        value_objects::{SessionId, StreamId},
+        value_objects::{JsonData, SessionId, StreamId},
     },
 };
-// async_trait removed - using GAT traits
+use async_trait::async_trait;
 use std::sync::Arc;
 
 /// Handler for session management commands
@@ -94,9 +94,10 @@ where
                 ApplicationError::NotFound(format!("Session {} not found", command.session_id))
             })?;
 
-        // Create stream in session
+        // Convert at application boundary (DTO -> Domain)
+        let domain_data: JsonData = JsonDataDto::from(command.source_data).into();
         let stream_id = session
-            .create_stream(command.source_data)
+            .create_stream(domain_data)
             .map_err(ApplicationError::Domain)?;
 
         // Update stream configuration if provided

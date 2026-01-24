@@ -7,11 +7,10 @@
 #![feature(impl_trait_in_assoc_type)]
 #![warn(rust_2018_idioms)]
 #![deny(unsafe_op_in_unsafe_fn)]
-// Allow some non-critical clippy warnings for production code
-#![allow(clippy::manual_div_ceil)]
-#![allow(clippy::only_used_in_recursion)]
-// Allow dead code for fields and methods that will be used in future features
-#![allow(dead_code)]
+// Allow specific clippy warnings that are intentional design choices
+#![allow(clippy::manual_div_ceil)] // Performance: manual div_ceil is faster
+#![allow(clippy::only_used_in_recursion)] // Recursive algorithms by design
+// Note: dead_code is now handled per-item with targeted annotations
 
 // Allocator FFI dependencies
 #[cfg(feature = "mimalloc")]

@@ -13,9 +13,8 @@ use pjson_rs::domain::{
     aggregates::{StreamSession, stream_session::SessionConfig},
     entities::stream::StreamConfig as EntityStreamConfig,
     events::{DomainEvent, SessionState},
-    value_objects::StreamId,
+    value_objects::{JsonData, StreamId},
 };
-use serde_json::json;
 use std::collections::HashMap;
 
 // Test fixtures
@@ -31,6 +30,25 @@ fn custom_config(max_streams: usize, timeout: u64) -> SessionConfig {
         enable_compression: true,
         metadata: HashMap::new(),
     }
+}
+
+/// Helper to create JsonData objects for tests
+fn json_data_object(pairs: &[(&str, JsonData)]) -> JsonData {
+    let map: HashMap<String, JsonData> = pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
+    JsonData::Object(map)
+}
+
+/// Helper to create simple string key-value JsonData
+fn json_str(key: &str, value: &str) -> JsonData {
+    json_data_object(&[(key, JsonData::String(value.to_string()))])
+}
+
+/// Helper to create simple integer key-value JsonData
+fn json_int(key: &str, value: i64) -> JsonData {
+    json_data_object(&[(key, JsonData::Integer(value))])
 }
 
 // ============================================================================
@@ -172,7 +190,7 @@ fn test_create_stream_in_active_session() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let data = json!({"key": "value"});
+    let data = json_str("key", "value");
     let result = session.create_stream(data);
 
     assert!(result.is_ok());
@@ -187,7 +205,7 @@ fn test_create_stream_updates_stats() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let data = json!({"test": "data"});
+    let data = json_str("test", "data");
     session.create_stream(data).unwrap();
 
     assert_eq!(session.stats().total_streams, 1);
@@ -200,7 +218,7 @@ fn test_create_stream_generates_event() {
     session.activate().unwrap();
     session.take_events(); // Clear activation event
 
-    let data = json!({"test": "data"});
+    let data = json_str("test", "data");
     session.create_stream(data).unwrap();
 
     let events = session.pending_events();
@@ -214,7 +232,7 @@ fn test_create_stream_generates_event() {
 fn test_create_stream_before_activation_fails() {
     let mut session = StreamSession::new(default_config());
 
-    let data = json!({"key": "value"});
+    let data = json_str("key", "value");
     let result = session.create_stream(data);
 
     assert!(result.is_err());
@@ -231,11 +249,11 @@ fn test_create_stream_respects_max_concurrent() {
     session.activate().unwrap();
 
     // Create max streams
-    session.create_stream(json!({"stream": 1})).unwrap();
-    session.create_stream(json!({"stream": 2})).unwrap();
+    session.create_stream(json_int("stream", 1)).unwrap();
+    session.create_stream(json_int("stream", 2)).unwrap();
 
     // Third should fail
-    let result = session.create_stream(json!({"stream": 3}));
+    let result = session.create_stream(json_int("stream", 3));
 
     assert!(result.is_err());
     assert!(matches!(
@@ -249,9 +267,9 @@ fn test_create_multiple_streams() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream1 = session.create_stream(json!({"id": 1})).unwrap();
-    let stream2 = session.create_stream(json!({"id": 2})).unwrap();
-    let stream3 = session.create_stream(json!({"id": 3})).unwrap();
+    let stream1 = session.create_stream(json_int("id", 1)).unwrap();
+    let stream2 = session.create_stream(json_int("id", 2)).unwrap();
+    let stream3 = session.create_stream(json_int("id", 3)).unwrap();
 
     assert_ne!(stream1, stream2);
     assert_ne!(stream2, stream3);
@@ -268,7 +286,7 @@ fn test_start_stream_success() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
 
     let result = session.start_stream(stream_id);
 
@@ -279,7 +297,7 @@ fn test_start_stream_success() {
 fn test_start_stream_generates_event() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
     session.take_events(); // Clear previous events
 
     session.start_stream(stream_id).unwrap();
@@ -311,7 +329,7 @@ fn test_complete_stream_success() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
     session.start_stream(stream_id).unwrap();
 
     let result = session.complete_stream(stream_id);
@@ -324,7 +342,7 @@ fn test_complete_stream_updates_stats() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
     session.start_stream(stream_id).unwrap();
 
     assert_eq!(session.stats().active_streams, 1);
@@ -340,7 +358,7 @@ fn test_complete_stream_updates_stats() {
 fn test_complete_stream_generates_event() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
     session.start_stream(stream_id).unwrap();
     session.take_events(); // Clear previous events
 
@@ -358,7 +376,7 @@ fn test_fail_stream_success() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
     session.start_stream(stream_id).unwrap();
 
     let result = session.fail_stream(stream_id, "test error".to_string());
@@ -371,7 +389,7 @@ fn test_fail_stream_updates_stats() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
     session.start_stream(stream_id).unwrap();
 
     assert_eq!(session.stats().active_streams, 1);
@@ -387,7 +405,7 @@ fn test_fail_stream_updates_stats() {
 fn test_fail_stream_generates_event() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
     session.start_stream(stream_id).unwrap();
     session.take_events(); // Clear previous events
 
@@ -452,8 +470,8 @@ fn test_close_cancels_active_streams() {
     session.activate().unwrap();
 
     // Create and start streams
-    let stream_id1 = session.create_stream(json!({"id": 1})).unwrap();
-    let stream_id2 = session.create_stream(json!({"id": 2})).unwrap();
+    let stream_id1 = session.create_stream(json_int("id", 1)).unwrap();
+    let stream_id2 = session.create_stream(json_int("id", 2)).unwrap();
     session.start_stream(stream_id1).unwrap();
     session.start_stream(stream_id2).unwrap();
 
@@ -542,7 +560,7 @@ fn test_force_close_expired_clears_streams() {
     session.activate().unwrap();
 
     // Create stream while session is still active
-    let _stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let _stream_id = session.create_stream(json_str("test", "data")).unwrap();
     assert_eq!(session.streams().len(), 1);
 
     // Wait for expiration
@@ -651,8 +669,8 @@ fn test_health_check_with_active_streams() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream1 = session.create_stream(json!({"id": 1})).unwrap();
-    let stream2 = session.create_stream(json!({"id": 2})).unwrap();
+    let stream1 = session.create_stream(json_int("id", 1)).unwrap();
+    let stream2 = session.create_stream(json_int("id", 2)).unwrap();
 
     // Start streams to make them active
     session.start_stream(stream1).unwrap();
@@ -788,7 +806,7 @@ fn test_create_priority_frames_updates_stats() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream_id = session.create_stream(json!({"test": "data"})).unwrap();
+    let stream_id = session.create_stream(json_str("test", "data")).unwrap();
     session.start_stream(stream_id).unwrap();
 
     let initial_frame_count = session.stats().total_frames;
@@ -809,9 +827,9 @@ fn test_multiple_stream_completions() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream1 = session.create_stream(json!({"id": 1})).unwrap();
-    let stream2 = session.create_stream(json!({"id": 2})).unwrap();
-    let stream3 = session.create_stream(json!({"id": 3})).unwrap();
+    let stream1 = session.create_stream(json_int("id", 1)).unwrap();
+    let stream2 = session.create_stream(json_int("id", 2)).unwrap();
+    let stream3 = session.create_stream(json_int("id", 3)).unwrap();
 
     session.start_stream(stream1).unwrap();
     session.start_stream(stream2).unwrap();
@@ -830,9 +848,9 @@ fn test_mixed_stream_outcomes() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let stream1 = session.create_stream(json!({"id": 1})).unwrap();
-    let stream2 = session.create_stream(json!({"id": 2})).unwrap();
-    let stream3 = session.create_stream(json!({"id": 3})).unwrap();
+    let stream1 = session.create_stream(json_int("id", 1)).unwrap();
+    let stream2 = session.create_stream(json_int("id", 2)).unwrap();
+    let stream3 = session.create_stream(json_int("id", 3)).unwrap();
 
     session.start_stream(stream1).unwrap();
     session.start_stream(stream2).unwrap();

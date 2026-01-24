@@ -8,37 +8,7 @@ use crate::domain::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as SerdeValue;
 use std::collections::{HashMap, VecDeque};
-
-/// Temporary converter function until full refactor is complete
-fn convert_serde_to_domain(value: &SerdeValue) -> JsonData {
-    match value {
-        SerdeValue::Null => JsonData::Null,
-        SerdeValue::Bool(b) => JsonData::Bool(*b),
-        SerdeValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                JsonData::Integer(i)
-            } else if let Some(f) = n.as_f64() {
-                JsonData::Float(f)
-            } else {
-                JsonData::Integer(0)
-            }
-        }
-        SerdeValue::String(s) => JsonData::String(s.clone()),
-        SerdeValue::Array(arr) => {
-            let values: Vec<JsonData> = arr.iter().map(convert_serde_to_domain).collect();
-            JsonData::Array(values)
-        }
-        SerdeValue::Object(obj) => {
-            let mut map = HashMap::new();
-            for (key, value) in obj {
-                map.insert(key.clone(), convert_serde_to_domain(value));
-            }
-            JsonData::Object(map)
-        }
-    }
-}
 
 /// Session configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,7 +186,7 @@ impl StreamSession {
     }
 
     /// Create new stream in this session
-    pub fn create_stream(&mut self, source_data: SerdeValue) -> DomainResult<StreamId> {
+    pub fn create_stream(&mut self, source_data: JsonData) -> DomainResult<StreamId> {
         if !self.is_active() {
             return Err(DomainError::InvalidSessionState(
                 "Session is not active".to_string(),
@@ -230,8 +200,8 @@ impl StreamSession {
             )));
         }
 
-        // Convert serde_json::Value to domain JsonData
-        let domain_data = convert_serde_to_domain(&source_data);
+        // source_data is now already JsonData (domain type)
+        let domain_data = source_data;
 
         let stream = Stream::new(
             self.id,
@@ -559,9 +529,9 @@ mod tests {
         let mut session = StreamSession::new(SessionConfig::default());
         assert!(session.activate().is_ok());
 
-        let source_data = serde_json::json!({
-            "test": "data"
-        });
+        let mut map = HashMap::new();
+        map.insert("test".to_string(), JsonData::String("data".to_string()));
+        let source_data = JsonData::Object(map);
 
         // Create stream
         let stream_id = session.create_stream(source_data).unwrap();
@@ -587,7 +557,7 @@ mod tests {
         let mut session = StreamSession::new(config);
         assert!(session.activate().is_ok());
 
-        let source_data = serde_json::json!({});
+        let source_data = JsonData::Object(HashMap::new());
 
         // Create max streams
         assert!(session.create_stream(source_data.clone()).is_ok());

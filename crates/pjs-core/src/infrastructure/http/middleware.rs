@@ -137,7 +137,9 @@ where
 /// Rate limiting middleware for PJS endpoints
 #[derive(Clone)]
 pub struct RateLimitMiddleware {
+    #[allow(dead_code)] // Future feature: rate limiting implementation
     requests_per_minute: u32,
+    #[allow(dead_code)] // Future feature: rate limiting implementation
     burst_size: u32,
 }
 

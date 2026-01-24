@@ -32,8 +32,10 @@ use crate::{Result, SemanticMeta};
 pub struct Parser {
     sonic: SonicParser,
     simple: SimpleParser,
+    #[allow(dead_code)] // Future: zero-copy SIMD parser integration
     zero_copy_simd: Option<SimdZeroCopyParser<'static>>,
     use_sonic: bool,
+    #[allow(dead_code)] // Future: zero-copy mode selection logic
     use_zero_copy: bool,
 }
 

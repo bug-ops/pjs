@@ -85,6 +85,7 @@ pub struct SchemaAnalyzer {
 #[derive(Debug, Clone)]
 struct PatternInfo {
     frequency: u32,
+    #[allow(dead_code)] // Future: used for compression ratio calculation
     total_size: usize,
     compression_potential: f32,
 }

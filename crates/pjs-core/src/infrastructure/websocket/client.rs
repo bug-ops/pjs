@@ -36,8 +36,11 @@ struct StreamSession {
 /// Frame received by client
 #[derive(Debug, Clone)]
 struct ReceivedFrame {
+    #[allow(dead_code)] // Future feature: frame verification and replay
     frame_id: u32,
+    #[allow(dead_code)] // Future feature: priority-based processing
     priority: u8,
+    #[allow(dead_code)] // Future feature: frame-level data access
     payload: Value,
     received_at: Instant,
     processed_at: Option<Instant>,
