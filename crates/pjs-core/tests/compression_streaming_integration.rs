@@ -402,7 +402,17 @@ fn test_decompress_nested_dictionary_values() {
 fn test_decompress_delta_strategy() {
     let mut decompressor = StreamingDecompressor::new();
 
-    let compressed_data = json!({"values": [1, 2, 3, 4, 5]});
+    // Delta-compressed format: first element is metadata, rest are deltas
+    let compressed_data = json!({
+        "values": [
+            {"delta_base": 100.0, "delta_type": "numeric_sequence"},
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0
+        ]
+    });
 
     let compressed_frame = CompressedFrame {
         frame: StreamFrame {
@@ -415,7 +425,7 @@ fn test_decompress_delta_strategy() {
                 base_values: HashMap::new(),
             },
             compressed_size: 30,
-            data: compressed_data.clone(),
+            data: compressed_data,
             compression_metadata: HashMap::new(),
         },
         decompression_metadata: DecompressionMetadata {
@@ -430,16 +440,26 @@ fn test_decompress_delta_strategy() {
 
     let result = decompressor.decompress_frame(compressed_frame);
     assert!(result.is_ok());
-    // Currently delta decompression is TODO, so it returns data as-is
+
     let decompressed = result.unwrap();
-    assert_eq!(decompressed.data, compressed_data);
+    assert_eq!(
+        decompressed.data,
+        json!({"values": [100.0, 101.0, 102.0, 103.0, 104.0]})
+    );
 }
 
 #[test]
 fn test_decompress_run_length_strategy() {
     let mut decompressor = StreamingDecompressor::new();
 
-    let compressed_data = json!({"data": [1, 1, 1, 2, 2, 3]});
+    // RLE-compressed format
+    let compressed_data = json!({
+        "data": [
+            {"rle_value": 1, "rle_count": 3},
+            {"rle_value": 2, "rle_count": 2},
+            3
+        ]
+    });
 
     let compressed_frame = CompressedFrame {
         frame: StreamFrame {
@@ -450,7 +470,7 @@ fn test_decompress_run_length_strategy() {
         compressed_data: pjson_rs::compression::CompressedData {
             strategy: CompressionStrategy::RunLength,
             compressed_size: 25,
-            data: compressed_data.clone(),
+            data: compressed_data,
             compression_metadata: HashMap::new(),
         },
         decompression_metadata: DecompressionMetadata {
@@ -463,9 +483,9 @@ fn test_decompress_run_length_strategy() {
 
     let result = decompressor.decompress_frame(compressed_frame);
     assert!(result.is_ok());
-    // Currently RLE decompression is TODO, so it returns data as-is
+
     let decompressed = result.unwrap();
-    assert_eq!(decompressed.data, compressed_data);
+    assert_eq!(decompressed.data, json!({"data": [1, 1, 1, 2, 2, 3]}));
 }
 
 #[test]
@@ -634,4 +654,299 @@ fn test_compression_preserves_frame_metadata() {
     let compressed = compressor.compress_frame(frame).unwrap();
 
     assert_eq!(compressed.frame.metadata, metadata);
+}
+
+#[test]
+fn test_delta_compression_round_trip() {
+    use pjson_rs::compression::SchemaCompressor;
+
+    let mut base_values = HashMap::new();
+    base_values.insert("values".to_string(), 100.0);
+
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+
+    let original_data = json!({
+        "values": [100.0, 101.0, 102.0, 103.0, 104.0]
+    });
+
+    let compressed = compressor.compress(&original_data).unwrap();
+
+    let decompressor = StreamingDecompressor::new();
+    let decompressed = decompressor.decompress_delta(&compressed.data).unwrap();
+
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_rle_compression_round_trip() {
+    use pjson_rs::compression::SchemaCompressor;
+
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::RunLength);
+
+    let original_data = json!({
+        "repeated_values": [1, 1, 1, 2, 2, 3, 3, 3, 3]
+    });
+
+    let compressed = compressor.compress(&original_data).unwrap();
+
+    let decompressor = StreamingDecompressor::new();
+    let decompressed = decompressor
+        .decompress_run_length(&compressed.data)
+        .unwrap();
+
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_delta_compression_negative_values_round_trip() {
+    use pjson_rs::compression::SchemaCompressor;
+
+    let mut base_values = HashMap::new();
+    base_values.insert("temps".to_string(), 0.0);
+
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+
+    let original_data = json!({
+        "temps": [-10.0, -5.0, 0.0, 5.0, 10.0]
+    });
+
+    let compressed = compressor.compress(&original_data).unwrap();
+
+    let decompressor = StreamingDecompressor::new();
+    let decompressed = decompressor.decompress_delta(&compressed.data).unwrap();
+
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_rle_compression_mixed_types_round_trip() {
+    use pjson_rs::compression::SchemaCompressor;
+
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::RunLength);
+
+    let original_data = json!({
+        "data": [
+            "a", "a", "a",
+            "b",
+            "c", "c", "c", "c"
+        ]
+    });
+
+    let compressed = compressor.compress(&original_data).unwrap();
+
+    let decompressor = StreamingDecompressor::new();
+    let decompressed = decompressor
+        .decompress_run_length(&compressed.data)
+        .unwrap();
+
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_delta_compression_fractional_values() {
+    use pjson_rs::compression::SchemaCompressor;
+
+    let mut base_values = HashMap::new();
+    base_values.insert("measurements".to_string(), 10.0);
+
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+
+    let original_data = json!({
+        "measurements": [10.5, 11.0, 11.5, 12.0, 12.5]
+    });
+
+    let compressed = compressor.compress(&original_data).unwrap();
+
+    let decompressor = StreamingDecompressor::new();
+    let decompressed = decompressor.decompress_delta(&compressed.data).unwrap();
+
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_rle_compression_nested_objects() {
+    use pjson_rs::compression::SchemaCompressor;
+
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::RunLength);
+
+    let original_data = json!({
+        "items": [
+            {"id": 1},
+            {"id": 1},
+            {"id": 1},
+            {"id": 2},
+            {"id": 2}
+        ]
+    });
+
+    let compressed = compressor.compress(&original_data).unwrap();
+
+    let decompressor = StreamingDecompressor::new();
+    let decompressed = decompressor
+        .decompress_run_length(&compressed.data)
+        .unwrap();
+
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_delta_compression_empty_array() {
+    use pjson_rs::compression::SchemaCompressor;
+
+    let mut base_values = HashMap::new();
+    base_values.insert("values".to_string(), 100.0);
+
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+
+    let original_data = json!({
+        "values": []
+    });
+
+    let compressed = compressor.compress(&original_data).unwrap();
+
+    let decompressor = StreamingDecompressor::new();
+    let decompressed = decompressor.decompress_delta(&compressed.data).unwrap();
+
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_rle_compression_empty_array() {
+    use pjson_rs::compression::SchemaCompressor;
+
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::RunLength);
+
+    let original_data = json!({
+        "data": []
+    });
+
+    let compressed = compressor.compress(&original_data).unwrap();
+
+    let decompressor = StreamingDecompressor::new();
+    let decompressed = decompressor
+        .decompress_run_length(&compressed.data)
+        .unwrap();
+
+    assert_eq!(decompressed, original_data);
+}
+
+#[test]
+fn test_full_frame_delta_round_trip() {
+    let mut base_values = HashMap::new();
+    base_values.insert("sequence".to_string(), 1000.0);
+
+    let mut compressor = StreamingCompressor::with_strategies(
+        CompressionStrategy::None,
+        CompressionStrategy::Delta { base_values },
+    );
+
+    let original_data = json!({
+        "sequence": [1000.0, 1001.0, 1002.0, 1003.0]
+    });
+
+    let frame = StreamFrame {
+        data: original_data.clone(),
+        priority: Priority::MEDIUM,
+        metadata: HashMap::new(),
+    };
+
+    let compressed_frame = compressor.compress_frame(frame).unwrap();
+
+    let mut decompressor = StreamingDecompressor::new();
+    let decompressed_frame = decompressor.decompress_frame(compressed_frame).unwrap();
+
+    assert_eq!(decompressed_frame.data, original_data);
+}
+
+#[test]
+fn test_full_frame_rle_round_trip() {
+    let mut compressor = StreamingCompressor::with_strategies(
+        CompressionStrategy::None,
+        CompressionStrategy::RunLength,
+    );
+
+    let original_data = json!({
+        "states": ["active", "active", "active", "inactive", "inactive"]
+    });
+
+    let frame = StreamFrame {
+        data: original_data.clone(),
+        priority: Priority::LOW,
+        metadata: HashMap::new(),
+    };
+
+    let compressed_frame = compressor.compress_frame(frame).unwrap();
+
+    let mut decompressor = StreamingDecompressor::new();
+    let decompressed_frame = decompressor.decompress_frame(compressed_frame).unwrap();
+
+    assert_eq!(decompressed_frame.data, original_data);
+}
+
+// SECURITY TESTS - Protection against decompression bombs
+
+#[test]
+fn test_rle_bomb_protection() {
+    let decompressor = StreamingDecompressor::new();
+
+    // Attempt to create RLE bomb with count exceeding MAX_RLE_COUNT
+    let bomb = json!([{"rle_value": "x", "rle_count": 100_000_001}]);
+
+    let result = decompressor.decompress_run_length(&bomb);
+    assert!(result.is_err());
+
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("exceeds maximum"));
+}
+
+#[test]
+fn test_delta_array_size_limit() {
+    let decompressor = StreamingDecompressor::new();
+
+    // Create delta array exceeding MAX_DELTA_ARRAY_SIZE
+    let mut huge_array = vec![json!({"delta_base": 0.0, "delta_type": "numeric_sequence"})];
+    huge_array.extend(vec![json!(1.0); 1_000_001]);
+
+    let result = decompressor.decompress_delta(&json!(huge_array));
+    assert!(result.is_err());
+
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("Delta array size"));
+    assert!(error_msg.contains("exceeds maximum"));
+}
+
+#[test]
+fn test_decompression_total_size_limit() {
+    let decompressor = StreamingDecompressor::new();
+
+    // Multiple RLE runs that individually pass MAX_RLE_COUNT (100k)
+    // but together exceed MAX_DECOMPRESSED_SIZE (10MB = 10,485,760 bytes)
+    // Create 110 runs of 100k each = 11M total
+    let mut runs = Vec::new();
+    for _ in 0..110 {
+        runs.push(json!({"rle_value": "x", "rle_count": 100_000}));
+    }
+    let data = json!(runs);
+
+    let result = decompressor.decompress_run_length(&data);
+    assert!(result.is_err());
+
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("Decompressed size"));
+    assert!(error_msg.contains("exceeds maximum"));
+}
+
+#[test]
+fn test_rle_count_platform_limit() {
+    let decompressor = StreamingDecompressor::new();
+
+    // Test with u64::MAX to trigger platform overflow protection
+    let overflow = json!([{"rle_value": "x", "rle_count": u64::MAX}]);
+
+    let result = decompressor.decompress_run_length(&overflow);
+    assert!(result.is_err());
+
+    let error_msg = result.unwrap_err().to_string();
+    // Should fail either on MAX_RLE_COUNT check or platform maximum check
+    assert!(error_msg.contains("exceeds"));
 }

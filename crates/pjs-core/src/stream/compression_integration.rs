@@ -11,6 +11,11 @@ use crate::{
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
+// Security limits to prevent decompression bomb attacks
+const MAX_RLE_COUNT: u64 = 100_000;
+const MAX_DELTA_ARRAY_SIZE: usize = 1_000_000;
+const MAX_DECOMPRESSED_SIZE: usize = 10_485_760; // 10MB
+
 /// Streaming compressor that maintains compression state across frames
 #[derive(Debug, Clone)]
 pub struct StreamingCompressor {
@@ -354,16 +359,161 @@ impl StreamingDecompressor {
     }
 
     /// Decompress delta-encoded values
-    fn decompress_delta(&self, data: &JsonValue) -> DomainResult<JsonValue> {
-        // TODO: Implement delta decompression for numeric sequences
-        // This would reconstruct original values from deltas and base values
-        Ok(data.clone())
+    pub fn decompress_delta(&self, data: &JsonValue) -> DomainResult<JsonValue> {
+        match data {
+            JsonValue::Object(obj) => {
+                let mut decompressed_obj = serde_json::Map::new();
+                for (key, value) in obj {
+                    decompressed_obj.insert(key.clone(), self.decompress_delta(value)?);
+                }
+                Ok(JsonValue::Object(decompressed_obj))
+            }
+            JsonValue::Array(arr) => {
+                if arr.is_empty() {
+                    return Ok(JsonValue::Array(arr.clone()));
+                }
+
+                // Check if this is a delta-compressed array
+                if let Some(first) = arr.first()
+                    && let Some(obj) = first.as_object()
+                    && obj.contains_key("delta_base")
+                    && obj.contains_key("delta_type")
+                {
+                    // This is a delta-compressed numeric sequence
+                    return self.decompress_delta_array(arr);
+                }
+
+                // Not a delta-compressed array, process elements recursively
+                let decompressed_arr: Result<Vec<_>, _> =
+                    arr.iter().map(|item| self.decompress_delta(item)).collect();
+                Ok(JsonValue::Array(decompressed_arr?))
+            }
+            _ => Ok(data.clone()),
+        }
+    }
+
+    /// Decompress delta-encoded array back to original values
+    fn decompress_delta_array(&self, arr: &[JsonValue]) -> DomainResult<JsonValue> {
+        if arr.is_empty() {
+            return Ok(JsonValue::Array(Vec::new()));
+        }
+
+        // VULN-002 FIX: Validate array size to prevent memory exhaustion
+        if arr.len() > MAX_DELTA_ARRAY_SIZE {
+            return Err(DomainError::CompressionError(format!(
+                "Delta array size {} exceeds maximum {}",
+                arr.len(),
+                MAX_DELTA_ARRAY_SIZE
+            )));
+        }
+
+        // Extract base value from metadata
+        let base_value = arr[0]
+            .get("delta_base")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| {
+                DomainError::CompressionError(
+                    "Missing or invalid delta_base in metadata".to_string(),
+                )
+            })?;
+
+        // Reconstruct original values from deltas
+        let mut original_values = Vec::new();
+        for delta_value in arr.iter().skip(1) {
+            let delta = delta_value.as_f64().ok_or_else(|| {
+                DomainError::CompressionError("Invalid delta value: expected number".to_string())
+            })?;
+
+            let original = base_value + delta;
+            original_values.push(JsonValue::from(original));
+        }
+
+        Ok(JsonValue::Array(original_values))
     }
 
     /// Decompress run-length encoded data
-    fn decompress_run_length(&self, data: &JsonValue) -> DomainResult<JsonValue> {
-        // TODO: Implement run-length decompression
-        Ok(data.clone())
+    pub fn decompress_run_length(&self, data: &JsonValue) -> DomainResult<JsonValue> {
+        match data {
+            JsonValue::Object(obj) => {
+                let mut decompressed_obj = serde_json::Map::new();
+                for (key, value) in obj {
+                    decompressed_obj.insert(key.clone(), self.decompress_run_length(value)?);
+                }
+                Ok(JsonValue::Object(decompressed_obj))
+            }
+            JsonValue::Array(arr) => {
+                let mut decompressed_values = Vec::new();
+                let mut total_size = 0usize;
+
+                for item in arr {
+                    if let Some(obj) = item.as_object() {
+                        // Check if this is an RLE-encoded run
+                        if obj.contains_key("rle_value") && obj.contains_key("rle_count") {
+                            let value = obj
+                                .get("rle_value")
+                                .ok_or_else(|| {
+                                    DomainError::CompressionError("Missing rle_value".to_string())
+                                })?
+                                .clone();
+
+                            let count =
+                                obj.get("rle_count")
+                                    .and_then(|v| v.as_u64())
+                                    .ok_or_else(|| {
+                                        DomainError::CompressionError(
+                                            "Invalid rle_count: expected positive integer"
+                                                .to_string(),
+                                        )
+                                    })?;
+
+                            // VULN-001 FIX: Validate RLE count to prevent decompression bomb
+                            if count > MAX_RLE_COUNT {
+                                return Err(DomainError::CompressionError(format!(
+                                    "RLE count {} exceeds maximum {}",
+                                    count, MAX_RLE_COUNT
+                                )));
+                            }
+
+                            // VULN-003 FIX: Convert u64 to usize safely to prevent overflow
+                            let count_usize = usize::try_from(count).map_err(|_| {
+                                DomainError::CompressionError(format!(
+                                    "RLE count {} exceeds platform maximum",
+                                    count
+                                ))
+                            })?;
+
+                            // Track total decompressed size across all RLE runs
+                            total_size = total_size.checked_add(count_usize).ok_or_else(|| {
+                                DomainError::CompressionError(
+                                    "Total decompressed size overflow".to_string(),
+                                )
+                            })?;
+
+                            if total_size > MAX_DECOMPRESSED_SIZE {
+                                return Err(DomainError::CompressionError(format!(
+                                    "Decompressed size {} exceeds maximum {}",
+                                    total_size, MAX_DECOMPRESSED_SIZE
+                                )));
+                            }
+
+                            // Expand the run
+                            for _ in 0..count {
+                                decompressed_values.push(value.clone());
+                            }
+                        } else {
+                            // Not an RLE object, process recursively
+                            decompressed_values.push(self.decompress_run_length(item)?);
+                        }
+                    } else {
+                        // Not an object, process recursively
+                        decompressed_values.push(self.decompress_run_length(item)?);
+                    }
+                }
+
+                Ok(JsonValue::Array(decompressed_values))
+            }
+            _ => Ok(data.clone()),
+        }
     }
 
     /// Update decompression statistics
@@ -523,5 +673,287 @@ mod tests {
         let stats = compressor.get_stats();
         assert_eq!(stats.frames_processed, 2);
         assert!(stats.total_input_bytes > 0);
+    }
+
+    #[test]
+    fn test_delta_decompression_basic() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"delta_base": 100.0, "delta_type": "numeric_sequence"},
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0
+        ]);
+
+        let result = decompressor.decompress_delta(&compressed_data).unwrap();
+        assert_eq!(result, json!([100.0, 101.0, 102.0, 103.0, 104.0]));
+    }
+
+    #[test]
+    fn test_delta_decompression_negative_deltas() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"delta_base": 50.0, "delta_type": "numeric_sequence"},
+            -10.0,
+            0.0,
+            10.0,
+            20.0
+        ]);
+
+        let result = decompressor.decompress_delta(&compressed_data).unwrap();
+        assert_eq!(result, json!([40.0, 50.0, 60.0, 70.0]));
+    }
+
+    #[test]
+    fn test_delta_decompression_fractional_deltas() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"delta_base": 10.0, "delta_type": "numeric_sequence"},
+            0.5,
+            1.0,
+            1.5,
+            2.0
+        ]);
+
+        let result = decompressor.decompress_delta(&compressed_data).unwrap();
+        assert_eq!(result, json!([10.5, 11.0, 11.5, 12.0]));
+    }
+
+    #[test]
+    fn test_delta_decompression_empty_array() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([]);
+
+        let result = decompressor.decompress_delta(&compressed_data).unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[test]
+    fn test_delta_decompression_single_element() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"delta_base": 100.0, "delta_type": "numeric_sequence"}
+        ]);
+
+        let result = decompressor.decompress_delta(&compressed_data).unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[test]
+    fn test_delta_decompression_nested_structure() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!({
+            "sequence": [
+                {"delta_base": 100.0, "delta_type": "numeric_sequence"},
+                0.0,
+                1.0,
+                2.0
+            ],
+            "other": "data"
+        });
+
+        let result = decompressor.decompress_delta(&compressed_data).unwrap();
+        assert_eq!(
+            result,
+            json!({
+                "sequence": [100.0, 101.0, 102.0],
+                "other": "data"
+            })
+        );
+    }
+
+    #[test]
+    fn test_delta_decompression_invalid_metadata() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"wrong_key": 100.0},
+            0.0,
+            1.0
+        ]);
+
+        let result = decompressor.decompress_delta(&compressed_data);
+        assert!(result.is_ok());
+        // Should return as-is if not valid delta format
+    }
+
+    #[test]
+    fn test_delta_decompression_invalid_delta_value() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"delta_base": 100.0, "delta_type": "numeric_sequence"},
+            "not_a_number"
+        ]);
+
+        let result = decompressor.decompress_delta(&compressed_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rle_decompression_basic() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_value": 1, "rle_count": 3},
+            {"rle_value": 2, "rle_count": 2},
+            {"rle_value": 3, "rle_count": 4}
+        ]);
+
+        let result = decompressor
+            .decompress_run_length(&compressed_data)
+            .unwrap();
+        assert_eq!(result, json!([1, 1, 1, 2, 2, 3, 3, 3, 3]));
+    }
+
+    #[test]
+    fn test_rle_decompression_mixed_runs() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_value": "a", "rle_count": 2},
+            "b",
+            {"rle_value": "c", "rle_count": 3}
+        ]);
+
+        let result = decompressor
+            .decompress_run_length(&compressed_data)
+            .unwrap();
+        assert_eq!(result, json!(["a", "a", "b", "c", "c", "c"]));
+    }
+
+    #[test]
+    fn test_rle_decompression_single_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_value": "x", "rle_count": 1}
+        ]);
+
+        let result = decompressor
+            .decompress_run_length(&compressed_data)
+            .unwrap();
+        assert_eq!(result, json!(["x"]));
+    }
+
+    #[test]
+    fn test_rle_decompression_zero_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_value": "x", "rle_count": 0}
+        ]);
+
+        let result = decompressor
+            .decompress_run_length(&compressed_data)
+            .unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[test]
+    fn test_rle_decompression_nested_values() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_value": {"name": "test"}, "rle_count": 3}
+        ]);
+
+        let result = decompressor
+            .decompress_run_length(&compressed_data)
+            .unwrap();
+        assert_eq!(
+            result,
+            json!([{"name": "test"}, {"name": "test"}, {"name": "test"}])
+        );
+    }
+
+    #[test]
+    fn test_rle_decompression_nested_structure() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!({
+            "data": [
+                {"rle_value": 1, "rle_count": 3},
+                {"rle_value": 2, "rle_count": 2}
+            ],
+            "other": "field"
+        });
+
+        let result = decompressor
+            .decompress_run_length(&compressed_data)
+            .unwrap();
+        assert_eq!(
+            result,
+            json!({
+                "data": [1, 1, 1, 2, 2],
+                "other": "field"
+            })
+        );
+    }
+
+    #[test]
+    fn test_rle_decompression_empty_array() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([]);
+
+        let result = decompressor
+            .decompress_run_length(&compressed_data)
+            .unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[test]
+    fn test_rle_decompression_invalid_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_value": "x", "rle_count": "not_a_number"}
+        ]);
+
+        let result = decompressor.decompress_run_length(&compressed_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rle_decompression_missing_value() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_count": 3}
+        ]);
+
+        let result = decompressor.decompress_run_length(&compressed_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rle_decompression_non_rle_objects() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"regular": "object"},
+            {"another": "one"}
+        ]);
+
+        let result = decompressor
+            .decompress_run_length(&compressed_data)
+            .unwrap();
+        // Should return as-is if objects don't have RLE format
+        assert_eq!(
+            result,
+            json!([
+                {"regular": "object"},
+                {"another": "one"}
+            ])
+        );
     }
 }

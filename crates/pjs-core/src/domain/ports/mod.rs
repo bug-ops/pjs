@@ -18,8 +18,8 @@ pub use writer::*;
 // Re-export GAT traits as main interfaces
 pub use gat::{
     EventPublisherGat as EventPublisher, FrameSinkGat as FrameSink, FrameSourceGat as FrameSource,
-    MetricsCollectorGat as MetricsCollector, StreamRepositoryGat as StreamRepository,
-    StreamStoreGat as StreamStore,
+    MetricsCollectorGat as MetricsCollector, SessionMetricsGat as SessionMetrics,
+    StreamRepositoryGat as StreamRepository, StreamStoreGat as StreamStore,
 };
 
 // Cleaned up unused imports

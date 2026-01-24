@@ -182,28 +182,74 @@ pub trait MetricsCollectorGat: Send + Sync {
         Self: 'a;
 
     /// Increment a counter metric
-    fn increment_counter(
-        &self,
-        name: &str,
+    fn increment_counter<'a>(
+        &'a self,
+        name: &'a str,
         value: u64,
         tags: std::collections::HashMap<String, String>,
-    ) -> Self::IncrementCounterFuture<'_>;
+    ) -> Self::IncrementCounterFuture<'a>;
 
     /// Set a gauge metric value
-    fn set_gauge(
-        &self,
-        name: &str,
+    fn set_gauge<'a>(
+        &'a self,
+        name: &'a str,
         value: f64,
         tags: std::collections::HashMap<String, String>,
-    ) -> Self::SetGaugeFuture<'_>;
+    ) -> Self::SetGaugeFuture<'a>;
 
     /// Record timing information
-    fn record_timing(
-        &self,
-        name: &str,
+    fn record_timing<'a>(
+        &'a self,
+        name: &'a str,
         duration: std::time::Duration,
         tags: std::collections::HashMap<String, String>,
-    ) -> Self::RecordTimingFuture<'_>;
+    ) -> Self::RecordTimingFuture<'a>;
+}
+
+/// Zero-cost session/stream metrics collector with GAT futures
+///
+/// Separate trait for session-level metrics following Interface Segregation Principle
+pub trait SessionMetricsGat: Send + Sync {
+    /// Future type for recording session creation
+    type RecordSessionCreatedFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for recording session end
+    type RecordSessionEndedFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for recording stream creation
+    type RecordStreamCreatedFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for recording stream completion
+    type RecordStreamCompletedFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Record session creation
+    fn record_session_created(
+        &self,
+        session_id: SessionId,
+        metadata: std::collections::HashMap<String, String>,
+    ) -> Self::RecordSessionCreatedFuture<'_>;
+
+    /// Record session end
+    fn record_session_ended(&self, session_id: SessionId) -> Self::RecordSessionEndedFuture<'_>;
+
+    /// Record stream creation
+    fn record_stream_created(
+        &self,
+        stream_id: StreamId,
+        session_id: SessionId,
+    ) -> Self::RecordStreamCreatedFuture<'_>;
+
+    /// Record stream completion
+    fn record_stream_completed(&self, stream_id: StreamId)
+    -> Self::RecordStreamCompletedFuture<'_>;
 }
 
 /// Helper trait for implementing common frame sink operations

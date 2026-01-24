@@ -1,7 +1,7 @@
 //! Query handlers for read operations
 
 use crate::{
-    application::{ApplicationError, ApplicationResult, handlers::QueryHandler, queries::*},
+    application::{ApplicationError, ApplicationResult, handlers::QueryHandlerGat, queries::*},
     domain::{
         aggregates::StreamSession,
         entities::Stream,
@@ -9,7 +9,6 @@ use crate::{
         ports::{StreamRepositoryGat, StreamStoreGat},
     },
 };
-// async_trait removed - using GAT traits
 use std::sync::Arc;
 
 /// Handler for session-related queries
@@ -30,136 +29,170 @@ where
     }
 }
 
-#[async_trait]
-impl<R> QueryHandler<GetSessionQuery, SessionResponse> for SessionQueryHandler<R>
+impl<R> QueryHandlerGat<GetSessionQuery> for SessionQueryHandler<R>
 where
-    R: StreamRepository + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
 {
-    async fn handle(&self, query: GetSessionQuery) -> ApplicationResult<SessionResponse> {
-        let session = self
-            .repository
-            .find_session(query.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", query.session_id))
-            })?;
+    type Response = SessionResponse;
 
-        Ok(SessionResponse { session })
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetSessionQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let session = self
+                .repository
+                .find_session(query.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", query.session_id))
+                })?;
+
+            Ok(SessionResponse { session })
+        }
     }
 }
 
-#[async_trait]
-impl<R> QueryHandler<GetActiveSessionsQuery, SessionsResponse> for SessionQueryHandler<R>
+impl<R> QueryHandlerGat<GetActiveSessionsQuery> for SessionQueryHandler<R>
 where
-    R: StreamRepository + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
 {
-    async fn handle(&self, query: GetActiveSessionsQuery) -> ApplicationResult<SessionsResponse> {
-        let mut sessions = self
-            .repository
-            .find_active_sessions()
-            .await
-            .map_err(ApplicationError::Domain)?;
+    type Response = SessionsResponse;
 
-        // Apply pagination
-        let total_count = sessions.len();
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
 
-        if let Some(offset) = query.offset {
-            if offset < sessions.len() {
-                sessions = sessions.into_iter().skip(offset).collect();
-            } else {
-                sessions.clear();
+    fn handle(&self, query: GetActiveSessionsQuery) -> Self::HandleFuture<'_> {
+        async move {
+            // TODO(CQ-010): Implement cursor-based pagination at repository layer
+            // Current implementation loads all sessions into memory - inefficient with large datasets
+            let mut sessions = self
+                .repository
+                .find_active_sessions()
+                .await
+                .map_err(ApplicationError::Domain)?;
+
+            // Apply pagination
+            let total_count = sessions.len();
+
+            if let Some(offset) = query.offset {
+                if offset < sessions.len() {
+                    sessions = sessions.into_iter().skip(offset).collect();
+                } else {
+                    sessions.clear();
+                }
             }
-        }
 
-        if let Some(limit) = query.limit {
-            sessions.truncate(limit);
-        }
-
-        Ok(SessionsResponse {
-            sessions,
-            total_count,
-        })
-    }
-}
-
-#[async_trait]
-impl<R> QueryHandler<GetSessionHealthQuery, HealthResponse> for SessionQueryHandler<R>
-where
-    R: StreamRepository + Send + Sync,
-{
-    async fn handle(&self, query: GetSessionHealthQuery) -> ApplicationResult<HealthResponse> {
-        let session = self
-            .repository
-            .find_session(query.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", query.session_id))
-            })?;
-
-        let health = session.health_check();
-
-        Ok(HealthResponse { health })
-    }
-}
-
-#[async_trait]
-impl<R> QueryHandler<SearchSessionsQuery, SessionsResponse> for SessionQueryHandler<R>
-where
-    R: StreamRepository + Send + Sync,
-{
-    async fn handle(&self, query: SearchSessionsQuery) -> ApplicationResult<SessionsResponse> {
-        // Load all active sessions (in production, this would be more efficient with database filtering)
-        let mut sessions = self
-            .repository
-            .find_active_sessions()
-            .await
-            .map_err(ApplicationError::Domain)?;
-
-        // Apply filters
-        sessions.retain(|session| self.matches_filters(session, &query.filters));
-
-        // Apply sorting
-        if let Some(sort_field) = &query.sort_by {
-            let ascending = query
-                .sort_order
-                .as_ref()
-                .is_none_or(|order| matches!(order, SortOrder::Ascending));
-
-            sessions.sort_by(|a, b| {
-                let cmp = match sort_field {
-                    SessionSortField::CreatedAt => a.created_at().cmp(&b.created_at()),
-                    SessionSortField::UpdatedAt => a.updated_at().cmp(&b.updated_at()),
-                    SessionSortField::StreamCount => a.streams().len().cmp(&b.streams().len()),
-                    SessionSortField::TotalBytes => {
-                        a.stats().total_bytes.cmp(&b.stats().total_bytes)
-                    }
-                };
-
-                if ascending { cmp } else { cmp.reverse() }
-            });
-        }
-
-        // Apply pagination
-        let total_count = sessions.len();
-
-        if let Some(offset) = query.offset {
-            if offset < sessions.len() {
-                sessions = sessions.into_iter().skip(offset).collect();
-            } else {
-                sessions.clear();
+            if let Some(limit) = query.limit {
+                sessions.truncate(limit);
             }
-        }
 
-        if let Some(limit) = query.limit {
-            sessions.truncate(limit);
+            Ok(SessionsResponse {
+                sessions,
+                total_count,
+            })
         }
+    }
+}
 
-        Ok(SessionsResponse {
-            sessions,
-            total_count,
-        })
+impl<R> QueryHandlerGat<GetSessionHealthQuery> for SessionQueryHandler<R>
+where
+    R: StreamRepositoryGat + Send + Sync,
+{
+    type Response = HealthResponse;
+
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetSessionHealthQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let session = self
+                .repository
+                .find_session(query.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", query.session_id))
+                })?;
+
+            let health = session.health_check();
+
+            Ok(HealthResponse { health })
+        }
+    }
+}
+
+impl<R> QueryHandlerGat<SearchSessionsQuery> for SessionQueryHandler<R>
+where
+    R: StreamRepositoryGat + Send + Sync,
+{
+    type Response = SessionsResponse;
+
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: SearchSessionsQuery) -> Self::HandleFuture<'_> {
+        async move {
+            // Load all active sessions (in production, this would be more efficient with database filtering)
+            let mut sessions = self
+                .repository
+                .find_active_sessions()
+                .await
+                .map_err(ApplicationError::Domain)?;
+
+            // Apply filters
+            sessions.retain(|session| self.matches_filters(session, &query.filters));
+
+            // Apply sorting
+            if let Some(sort_field) = &query.sort_by {
+                let ascending = query
+                    .sort_order
+                    .as_ref()
+                    .is_none_or(|order| matches!(order, SortOrder::Ascending));
+
+                sessions.sort_by(|a, b| {
+                    let cmp = match sort_field {
+                        SessionSortField::CreatedAt => a.created_at().cmp(&b.created_at()),
+                        SessionSortField::UpdatedAt => a.updated_at().cmp(&b.updated_at()),
+                        SessionSortField::StreamCount => a.streams().len().cmp(&b.streams().len()),
+                        SessionSortField::TotalBytes => {
+                            a.stats().total_bytes.cmp(&b.stats().total_bytes)
+                        }
+                    };
+
+                    if ascending { cmp } else { cmp.reverse() }
+                });
+            }
+
+            // Apply pagination
+            let total_count = sessions.len();
+
+            if let Some(offset) = query.offset {
+                if offset < sessions.len() {
+                    sessions = sessions.into_iter().skip(offset).collect();
+                } else {
+                    sessions.clear();
+                }
+            }
+
+            if let Some(limit) = query.limit {
+                sessions.truncate(limit);
+            }
+
+            Ok(SessionsResponse {
+                sessions,
+                total_count,
+            })
+        }
     }
 }
 
@@ -178,14 +211,16 @@ where
 
         // Date range filters
         if let Some(after) = filters.created_after
-            && session.created_at() <= after {
-                return false;
-            }
+            && session.created_at() <= after
+        {
+            return false;
+        }
 
         if let Some(before) = filters.created_before
-            && session.created_at() >= before {
-                return false;
-            }
+            && session.created_at() >= before
+        {
+            return false;
+        }
 
         // Client info filter
         if let Some(ref client_filter) = filters.client_info {
@@ -211,7 +246,7 @@ where
 pub struct StreamQueryHandler<R, S>
 where
     R: StreamRepositoryGat + 'static,
-    S: StreamStore,
+    S: StreamStoreGat + 'static,
 {
     session_repository: Arc<R>,
     #[allow(dead_code)]
@@ -221,7 +256,7 @@ where
 impl<R, S> StreamQueryHandler<R, S>
 where
     R: StreamRepositoryGat + 'static,
-    S: StreamStore,
+    S: StreamStoreGat + 'static,
 {
     pub fn new(session_repository: Arc<R>, stream_store: Arc<S>) -> Self {
         Self {
@@ -231,57 +266,73 @@ where
     }
 }
 
-#[async_trait]
-impl<R, S> QueryHandler<GetStreamQuery, StreamResponse> for StreamQueryHandler<R, S>
+impl<R, S> QueryHandlerGat<GetStreamQuery> for StreamQueryHandler<R, S>
 where
-    R: StreamRepository + Send + Sync,
-    S: StreamStore + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    S: StreamStoreGat + Send + Sync,
 {
-    async fn handle(&self, query: GetStreamQuery) -> ApplicationResult<StreamResponse> {
-        let session = self
-            .session_repository
-            .find_session(query.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", query.session_id))
-            })?;
+    type Response = StreamResponse;
 
-        let stream = session
-            .get_stream(query.stream_id.into())
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Stream {} not found", query.stream_id))
-            })?
-            .clone();
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
 
-        Ok(StreamResponse { stream })
+    fn handle(&self, query: GetStreamQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let session = self
+                .session_repository
+                .find_session(query.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", query.session_id))
+                })?;
+
+            let stream = session
+                .get_stream(query.stream_id.into())
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Stream {} not found", query.stream_id))
+                })?
+                .clone();
+
+            Ok(StreamResponse { stream })
+        }
     }
 }
 
-#[async_trait]
-impl<R, S> QueryHandler<GetStreamsForSessionQuery, StreamsResponse> for StreamQueryHandler<R, S>
+impl<R, S> QueryHandlerGat<GetStreamsForSessionQuery> for StreamQueryHandler<R, S>
 where
-    R: StreamRepository + Send + Sync,
-    S: StreamStore + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
+    S: StreamStoreGat + Send + Sync,
 {
-    async fn handle(&self, query: GetStreamsForSessionQuery) -> ApplicationResult<StreamsResponse> {
-        let session = self
-            .session_repository
-            .find_session(query.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", query.session_id))
-            })?;
+    type Response = StreamsResponse;
 
-        let streams: Vec<Stream> = session
-            .streams()
-            .values()
-            .filter(|stream| query.include_inactive || stream.is_active())
-            .cloned()
-            .collect();
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
 
-        Ok(StreamsResponse { streams })
+    fn handle(&self, query: GetStreamsForSessionQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let session = self
+                .session_repository
+                .find_session(query.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", query.session_id))
+                })?;
+
+            let streams: Vec<Stream> = session
+                .streams()
+                .values()
+                .filter(|stream| query.include_inactive || stream.is_active())
+                .cloned()
+                .collect();
+
+            Ok(StreamsResponse { streams })
+        }
     }
 }
 
@@ -303,68 +354,84 @@ where
     }
 }
 
-#[async_trait]
-impl<E> QueryHandler<GetSessionEventsQuery, EventsResponse> for EventQueryHandler<E>
+impl<E> QueryHandlerGat<GetSessionEventsQuery> for EventQueryHandler<E>
 where
     E: EventStore + Send + Sync,
 {
-    async fn handle(&self, query: GetSessionEventsQuery) -> ApplicationResult<EventsResponse> {
-        let mut events = self
-            .event_store
-            .get_events_for_session(query.session_id.into())
-            .map_err(ApplicationError::Logic)?;
+    type Response = EventsResponse;
 
-        // Apply time filter
-        if let Some(since) = query.since {
-            events.retain(|event| event.timestamp() > since);
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetSessionEventsQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let mut events = self
+                .event_store
+                .get_events_for_session(query.session_id.into())
+                .map_err(ApplicationError::Logic)?;
+
+            // Apply time filter
+            if let Some(since) = query.since {
+                events.retain(|event| event.timestamp() > since);
+            }
+
+            // Apply event type filter
+            if let Some(ref event_types) = query.event_types {
+                events.retain(|event| event_types.contains(&event.event_type().to_string()));
+            }
+
+            let total_count = events.len();
+
+            // Apply limit
+            if let Some(limit) = query.limit {
+                events.truncate(limit);
+            }
+
+            Ok(EventsResponse {
+                events,
+                total_count,
+            })
         }
-
-        // Apply event type filter
-        if let Some(ref event_types) = query.event_types {
-            events.retain(|event| event_types.contains(&event.event_type().to_string()));
-        }
-
-        let total_count = events.len();
-
-        // Apply limit
-        if let Some(limit) = query.limit {
-            events.truncate(limit);
-        }
-
-        Ok(EventsResponse {
-            events,
-            total_count,
-        })
     }
 }
 
-#[async_trait]
-impl<E> QueryHandler<GetStreamEventsQuery, EventsResponse> for EventQueryHandler<E>
+impl<E> QueryHandlerGat<GetStreamEventsQuery> for EventQueryHandler<E>
 where
     E: EventStore + Send + Sync,
 {
-    async fn handle(&self, query: GetStreamEventsQuery) -> ApplicationResult<EventsResponse> {
-        let mut events = self
-            .event_store
-            .get_events_for_stream(query.stream_id.into())
-            .map_err(ApplicationError::Logic)?;
+    type Response = EventsResponse;
 
-        // Apply time filter
-        if let Some(since) = query.since {
-            events.retain(|event| event.timestamp() > since);
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetStreamEventsQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let mut events = self
+                .event_store
+                .get_events_for_stream(query.stream_id.into())
+                .map_err(ApplicationError::Logic)?;
+
+            // Apply time filter
+            if let Some(since) = query.since {
+                events.retain(|event| event.timestamp() > since);
+            }
+
+            let total_count = events.len();
+
+            // Apply limit
+            if let Some(limit) = query.limit {
+                events.truncate(limit);
+            }
+
+            Ok(EventsResponse {
+                events,
+                total_count,
+            })
         }
-
-        let total_count = events.len();
-
-        // Apply limit
-        if let Some(limit) = query.limit {
-            events.truncate(limit);
-        }
-
-        Ok(EventsResponse {
-            events,
-            total_count,
-        })
     }
 }
 
@@ -386,64 +453,72 @@ where
     }
 }
 
-#[async_trait]
-impl<R> QueryHandler<GetSystemStatsQuery, SystemStatsResponse> for SystemQueryHandler<R>
+impl<R> QueryHandlerGat<GetSystemStatsQuery> for SystemQueryHandler<R>
 where
-    R: StreamRepository + Send + Sync,
+    R: StreamRepositoryGat + Send + Sync,
 {
-    async fn handle(&self, _query: GetSystemStatsQuery) -> ApplicationResult<SystemStatsResponse> {
-        let sessions = self
-            .repository
-            .find_active_sessions()
-            .await
-            .map_err(ApplicationError::Domain)?;
+    type Response = SystemStatsResponse;
 
-        let total_sessions = sessions.len() as u64;
-        let active_sessions = sessions.iter().filter(|s| s.is_active()).count() as u64;
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
 
-        let mut total_streams = 0u64;
-        let mut active_streams = 0u64;
-        let mut total_frames = 0u64;
-        let mut total_bytes = 0u64;
-        let mut total_duration_ms = 0f64;
-        let mut completed_sessions = 0u64;
+    fn handle(&self, _query: GetSystemStatsQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let sessions = self
+                .repository
+                .find_active_sessions()
+                .await
+                .map_err(ApplicationError::Domain)?;
 
-        for session in &sessions {
-            let stats = session.stats();
-            total_streams += stats.total_streams;
-            active_streams += stats.active_streams;
-            total_frames += stats.total_frames;
-            total_bytes += stats.total_bytes;
+            let total_sessions = sessions.len() as u64;
+            let active_sessions = sessions.iter().filter(|s| s.is_active()).count() as u64;
 
-            if let Some(duration) = session.duration() {
-                total_duration_ms += duration.num_milliseconds() as f64;
-                completed_sessions += 1;
+            let mut total_streams = 0u64;
+            let mut active_streams = 0u64;
+            let mut total_frames = 0u64;
+            let mut total_bytes = 0u64;
+            let mut total_duration_ms = 0f64;
+            let mut completed_sessions = 0u64;
+
+            for session in &sessions {
+                let stats = session.stats();
+                total_streams += stats.total_streams;
+                active_streams += stats.active_streams;
+                total_frames += stats.total_frames;
+                total_bytes += stats.total_bytes;
+
+                if let Some(duration) = session.duration() {
+                    total_duration_ms += duration.num_milliseconds() as f64;
+                    completed_sessions += 1;
+                }
             }
+
+            let average_session_duration_seconds = if completed_sessions > 0 {
+                total_duration_ms / completed_sessions as f64 / 1000.0
+            } else {
+                0.0
+            };
+
+            // Calculate rates (simplified - would need time-based tracking in production)
+            let uptime_seconds = 3600; // Placeholder - would track actual uptime
+            let frames_per_second = total_frames as f64 / uptime_seconds as f64;
+            let bytes_per_second = total_bytes as f64 / uptime_seconds as f64;
+
+            Ok(SystemStatsResponse {
+                total_sessions,
+                active_sessions,
+                total_streams,
+                active_streams,
+                total_frames,
+                total_bytes,
+                average_session_duration_seconds,
+                frames_per_second,
+                bytes_per_second,
+                uptime_seconds: uptime_seconds as u64,
+            })
         }
-
-        let average_session_duration_seconds = if completed_sessions > 0 {
-            total_duration_ms / completed_sessions as f64 / 1000.0
-        } else {
-            0.0
-        };
-
-        // Calculate rates (simplified - would need time-based tracking in production)
-        let uptime_seconds = 3600; // Placeholder - would track actual uptime
-        let frames_per_second = total_frames as f64 / uptime_seconds as f64;
-        let bytes_per_second = total_bytes as f64 / uptime_seconds as f64;
-
-        Ok(SystemStatsResponse {
-            total_sessions,
-            active_sessions,
-            total_streams,
-            active_streams,
-            total_frames,
-            total_bytes,
-            average_session_duration_seconds,
-            frames_per_second,
-            bytes_per_second,
-            uptime_seconds: uptime_seconds as u64,
-        })
     }
 }
 
@@ -458,63 +533,115 @@ mod tests {
 
     // Mock implementations for testing
     struct MockRepository {
-        sessions: std::sync::Mutex<HashMap<SessionId, StreamSession>>,
+        sessions: parking_lot::Mutex<HashMap<SessionId, StreamSession>>,
     }
 
     impl MockRepository {
         fn new() -> Self {
             Self {
-                sessions: std::sync::Mutex::new(HashMap::new()),
+                sessions: parking_lot::Mutex::new(HashMap::new()),
             }
         }
 
         fn add_session(&self, session: StreamSession) {
-            self.sessions.lock().unwrap().insert(session.id(), session);
+            self.sessions.lock().insert(session.id(), session);
         }
     }
 
-    #[async_trait]
-    impl StreamRepository for MockRepository {
-        async fn find_session(
-            &self,
-            session_id: SessionId,
-        ) -> crate::domain::DomainResult<Option<StreamSession>> {
-            Ok(self.sessions.lock().unwrap().get(&session_id).cloned())
+    impl StreamRepositoryGat for MockRepository {
+        type FindSessionFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<Option<StreamSession>>>
+            + Send
+            + 'a
+        where
+            Self: 'a;
+
+        type SaveSessionFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type RemoveSessionFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type FindActiveSessionsFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<Vec<StreamSession>>>
+            + Send
+            + 'a
+        where
+            Self: 'a;
+
+        fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
+            async move { Ok(self.sessions.lock().get(&session_id).cloned()) }
         }
 
-        async fn save_session(&self, session: StreamSession) -> crate::domain::DomainResult<()> {
-            self.sessions.lock().unwrap().insert(session.id(), session);
-            Ok(())
+        fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_> {
+            async move {
+                self.sessions.lock().insert(session.id(), session);
+                Ok(())
+            }
         }
 
-        async fn remove_session(&self, session_id: SessionId) -> crate::domain::DomainResult<()> {
-            self.sessions.lock().unwrap().remove(&session_id);
-            Ok(())
+        fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_> {
+            async move {
+                self.sessions.lock().remove(&session_id);
+                Ok(())
+            }
         }
 
-        async fn find_active_sessions(&self) -> crate::domain::DomainResult<Vec<StreamSession>> {
-            Ok(self.sessions.lock().unwrap().values().cloned().collect())
+        fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
+            async move { Ok(self.sessions.lock().values().cloned().collect()) }
         }
     }
 
     struct MockStreamStore;
 
-    #[async_trait]
-    impl StreamStore for MockStreamStore {
-        async fn store_stream(&self, _stream: crate::domain::entities::Stream) -> crate::domain::DomainResult<()> {
-            Ok(())
+    impl StreamStoreGat for MockStreamStore {
+        type StoreStreamFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type GetStreamFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<Option<crate::domain::entities::Stream>>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+
+        type DeleteStreamFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type ListStreamsFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<Vec<crate::domain::entities::Stream>>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+
+        fn store_stream(
+            &self,
+            _stream: crate::domain::entities::Stream,
+        ) -> Self::StoreStreamFuture<'_> {
+            async move { Ok(()) }
         }
 
-        async fn get_stream(&self, _stream_id: StreamId) -> crate::domain::DomainResult<Option<crate::domain::entities::Stream>> {
-            Ok(None)
+        fn get_stream(&self, _stream_id: StreamId) -> Self::GetStreamFuture<'_> {
+            async move { Ok(None) }
         }
 
-        async fn delete_stream(&self, _stream_id: StreamId) -> crate::domain::DomainResult<()> {
-            Ok(())
+        fn delete_stream(&self, _stream_id: StreamId) -> Self::DeleteStreamFuture<'_> {
+            async move { Ok(()) }
         }
 
-        async fn list_streams_for_session(&self, _session_id: SessionId) -> crate::domain::DomainResult<Vec<crate::domain::entities::Stream>> {
-            Ok(vec![])
+        fn list_streams_for_session(&self, _session_id: SessionId) -> Self::ListStreamsFuture<'_> {
+            async move { Ok(vec![]) }
         }
     }
 
@@ -527,19 +654,31 @@ mod tests {
     }
 
     impl EventStore for MockEventStore {
-        fn append_events(&mut self, _events: Vec<crate::domain::events::DomainEvent>) -> Result<(), String> {
+        fn append_events(
+            &mut self,
+            _events: Vec<crate::domain::events::DomainEvent>,
+        ) -> Result<(), String> {
             Ok(())
         }
 
-        fn get_events_for_session(&self, _session_id: SessionId) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
+        fn get_events_for_session(
+            &self,
+            _session_id: SessionId,
+        ) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
             Ok(vec![])
         }
 
-        fn get_events_for_stream(&self, _stream_id: StreamId) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
+        fn get_events_for_stream(
+            &self,
+            _stream_id: StreamId,
+        ) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
             Ok(vec![])
         }
 
-        fn get_events_since(&self, _since: chrono::DateTime<chrono::Utc>) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
+        fn get_events_since(
+            &self,
+            _since: chrono::DateTime<chrono::Utc>,
+        ) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
             Ok(vec![])
         }
     }
@@ -556,7 +695,9 @@ mod tests {
         repository.add_session(session);
 
         // Query the session
-        let query = GetSessionQuery { session_id: session_id.into() };
+        let query = GetSessionQuery {
+            session_id: session_id.into(),
+        };
         let result = handler.handle(query).await;
 
         assert!(result.is_ok());
@@ -645,7 +786,9 @@ mod tests {
         repository.add_session(session);
 
         // Query session health
-        let query = GetSessionHealthQuery { session_id: session_id.into() };
+        let query = GetSessionHealthQuery {
+            session_id: session_id.into(),
+        };
         let result = handler.handle(query).await;
 
         assert!(result.is_ok());
@@ -653,13 +796,16 @@ mod tests {
         assert!(response.health.is_healthy);
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_session_handler_creation() {
         let repository = Arc::new(MockRepository::new());
         let handler = SessionQueryHandler::new(repository.clone());
-        
+
         // Test that handlers can be created successfully
-        assert!(std::ptr::eq(handler.repository.as_ref(), repository.as_ref()));
+        assert!(std::ptr::eq(
+            handler.repository.as_ref(),
+            repository.as_ref()
+        ));
     }
 
     #[tokio::test]
@@ -669,7 +815,10 @@ mod tests {
         let handler = StreamQueryHandler::new(session_repository.clone(), stream_store.clone());
 
         // Test that handlers can be created successfully
-        assert!(std::ptr::eq(handler.session_repository.as_ref(), session_repository.as_ref()));
+        assert!(std::ptr::eq(
+            handler.session_repository.as_ref(),
+            session_repository.as_ref()
+        ));
     }
 
     #[tokio::test]
@@ -678,7 +827,10 @@ mod tests {
         let handler = EventQueryHandler::new(event_store.clone());
 
         // Test that handlers can be created successfully
-        assert!(std::ptr::eq(handler.event_store.as_ref(), event_store.as_ref()));
+        assert!(std::ptr::eq(
+            handler.event_store.as_ref(),
+            event_store.as_ref()
+        ));
     }
 
     #[tokio::test]
@@ -687,6 +839,105 @@ mod tests {
         let handler = SystemQueryHandler::new(repository.clone());
 
         // Test that handlers can be created successfully
-        assert!(std::ptr::eq(handler.repository.as_ref(), repository.as_ref()));
+        assert!(std::ptr::eq(
+            handler.repository.as_ref(),
+            repository.as_ref()
+        ));
+    }
+
+    // ===== Additional Query Handler Tests for CQ-003 (Coverage Improvement) =====
+
+    #[tokio::test]
+    async fn test_get_active_sessions_empty() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = GetActiveSessionsQuery {
+            limit: Some(10),
+            offset: Some(0),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 0);
+        assert_eq!(response.total_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_active_sessions_with_limit() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = GetActiveSessionsQuery {
+            limit: Some(5),
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_active_sessions_with_offset() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = GetActiveSessionsQuery {
+            limit: None,
+            offset: Some(10),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_active_sessions_offset_beyond_count() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = GetActiveSessionsQuery {
+            limit: Some(10),
+            offset: Some(1000),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_stream_not_found() {
+        use crate::domain::value_objects::{SessionId, StreamId};
+
+        let session_repository = Arc::new(MockRepository::new());
+        let stream_store = Arc::new(MockStreamStore);
+        let handler = StreamQueryHandler::new(session_repository, stream_store);
+
+        let query = GetStreamQuery {
+            session_id: SessionId::new().into(),
+            stream_id: StreamId::new().into(),
+        };
+
+        let result: ApplicationResult<StreamResponse> =
+            QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_session_query_not_found() {
+        use crate::domain::value_objects::SessionId;
+
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = GetSessionQuery {
+            session_id: SessionId::new().into(),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_err());
     }
 }
