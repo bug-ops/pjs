@@ -3,31 +3,31 @@
 [![Crates.io](https://img.shields.io/crates/v/pjson-rs.svg)](https://crates.io/crates/pjson-rs)
 [![Documentation](https://docs.rs/pjson-rs/badge.svg)](https://docs.rs/pjson-rs)
 [![Rust Build](https://github.com/bug-ops/pjs/actions/workflows/rust.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/rust.yml)
-[![WASM Build](https://github.com/bug-ops/pjs/actions/workflows/wasm.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/wasm.yml)
 [![codecov](https://codecov.io/gh/bug-ops/pjs/branch/main/graph/badge.svg)](https://codecov.io/gh/bug-ops/pjs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
-**🚀 Priority-based streaming | 🎯 Progressive loading | 💾 Zero-copy operations | 🌐 WebAssembly ready**
+**Priority-based streaming | Progressive loading | Zero-copy operations | WebAssembly ready**
 
 High-performance Rust library for priority-based JSON streaming with SIMD acceleration. Stream large JSON responses progressively, delivering critical data first while background data loads asynchronously.
 
 > [!IMPORTANT]
-> **v0.4.6**: Enhanced WebAssembly with PriorityStream API, interactive browser demo, security limits, 519 tests passing, zero clippy warnings. Requires **nightly Rust** for zero-cost GAT abstractions.
+> **v0.4.7**: GAT migration (1.82x faster), HTTP adapter with CQRS, decompression algorithms with security hardening. 2,158 tests passing. Requires **nightly Rust** for zero-cost async abstractions.
 
 ## Features
 
-- **⚡ Blazing Fast** - SIMD-accelerated parsing with optimized performance
-- **🎯 Smart Streaming** - Priority-based delivery sends critical data first, skeleton-first rendering
-- **💾 Memory Efficient** - Optimized progressive loading, bounded memory usage, zero-copy operations
-- **🌐 WebAssembly** - Browser and Node.js support with compact bundle (~70KB gzipped)
-- **🔒 Secure** - Input size limits, depth limits, DoS protection built-in
-- **📊 Schema Aware** - Automatic compression and semantic analysis
-- **🔧 Production Ready** - Clean Architecture, comprehensive tests, Prometheus metrics
+- **Blazing Fast** - SIMD-accelerated parsing, GAT-based zero-cost abstractions (1.82x faster than async_trait)
+- **Smart Streaming** - Priority-based delivery sends critical data first, skeleton-first rendering
+- **Memory Efficient** - Optimized progressive loading, bounded memory usage, zero-copy operations
+- **WebAssembly** - Browser and Node.js support with compact bundle (~70KB gzipped)
+- **Secure** - Defense-in-depth decompression protection, DoS prevention, input validation
+- **Schema Aware** - Automatic compression and semantic analysis
+- **Production Ready** - Clean Architecture, 87.35% test coverage, Prometheus metrics
 
 ## Performance
 
 | Benchmark | Performance Gain | Notes |
 |-----------|-----------------|-------|
+| **GAT Async** | **1.82x faster** | Static dispatch eliminates virtual calls |
 | **Small JSON** | Competitive | Comparable to industry standards |
 | **Medium JSON** | **~3x faster** | vs traditional parsers |
 | **Large JSON** | **~6x faster** | vs traditional parsers |
@@ -45,6 +45,9 @@ Or add to `Cargo.toml`:
 [dependencies]
 pjson-rs = "0.4"
 ```
+
+> [!NOTE]
+> Requires Rust 1.89+ (nightly). See [MSRV policy](#building) for details.
 
 ## Quick Start
 
@@ -73,7 +76,7 @@ curl -X POST http://localhost:3000/pjs/sessions \
   -d '{"max_concurrent_streams": 5}'
 
 # Stream data with priority
-curl http://localhost:3000/pjs/stream/{session_id}/sse
+curl http://localhost:3000/pjs/stream/SESSION_ID/sse
 ```
 
 ### WebAssembly (Browser)
@@ -113,6 +116,9 @@ async function main() {
 main();
 </script>
 ```
+
+> [!TIP]
+> Use the PriorityStream API for automatic frame handling and built-in security limits. Ideal for real-time dashboards and progressive loading.
 
 #### Simple Parser API
 
@@ -175,18 +181,18 @@ wasm-pack build crates/pjs-wasm --target bundler --release  # Webpack/Rollup
 
 ## Use Cases
 
-- **📊 Real-time Dashboards** - Show key metrics instantly, load details progressively
-- **📱 Mobile Apps** - Optimize for slow networks, critical data first
-- **🛍️ E-commerce** - Product essentials load immediately, reviews/images follow
-- **📈 Financial Platforms** - Trading data prioritized over historical charts
-- **🎮 Gaming Leaderboards** - Player rank appears instantly, full list streams in
+- **Real-time Dashboards** - Show key metrics instantly, load details progressively
+- **Mobile Apps** - Optimize for slow networks, critical data first
+- **E-commerce** - Product essentials load immediately, reviews/images follow
+- **Financial Platforms** - Trading data prioritized over historical charts
+- **Gaming Leaderboards** - Player rank appears instantly, full list streams in
 
 ## Building
 
 ### Prerequisites
 
 > [!WARNING]
-> This project requires **nightly Rust** for Generic Associated Types (GAT) features.
+> This project requires **nightly Rust** for Generic Associated Types (GAT) features. Stable Rust is not supported.
 
 ```bash
 rustup install nightly
@@ -199,8 +205,8 @@ rustup override set nightly
 # Standard build
 cargo build --release
 
-# Run tests
-cargo test --workspace
+# Run tests with nextest
+cargo nextest run --workspace
 
 # Run benchmarks
 cargo bench -p pjs-bench
@@ -249,18 +255,34 @@ const stream = PriorityStream.withSecurityConfig(security);
 - Max array elements: 10,000
 - Max object keys: 10,000
 
+> [!IMPORTANT]
+> **v0.4.7 Security**: Delta and RLE decompression now include 4-layer defense-in-depth protection against decompression bombs (CVSS 7.5 vulnerabilities fixed).
+
+**Decompression Security:**
+
+- **MAX_RLE_COUNT**: 100,000 items per run
+- **MAX_DELTA_ARRAY_SIZE**: 1,000,000 elements
+- **MAX_DECOMPRESSED_SIZE**: 10 MB total
+- **Integer overflow protection**: Checked arithmetic throughout
+
 ## Architecture
 
 PJS follows Clean Architecture with Domain-Driven Design:
 
 - **pjs-domain** - Pure business logic, WASM-compatible
 - **pjs-wasm** - WebAssembly bindings with PriorityStream API, security limits (44 tests)
-- **pjs-core** - Rust implementation with HTTP/WebSocket integration (450+ tests)
+- **pjs-core** - Rust implementation with HTTP/WebSocket integration (2,100+ tests)
 - **pjs-demo** - Interactive demo servers with real-time streaming
 - **pjs-js-client** - TypeScript/JavaScript client with WasmBackend transport
 - **pjs-bench** - Comprehensive performance benchmarks
 
-Implementation: ✅ Complete (519 tests, zero clippy warnings)
+**v0.4.7 Improvements:**
+
+- **GAT Migration**: Zero-cost async abstractions (1.82x faster)
+- **HTTP Adapter**: 8 REST endpoints with CQRS pattern
+- **Security Hardening**: Decompression bomb protection, input validation
+- **Test Coverage**: 87.35% (2,158 tests passing)
+- **Platform Support**: Windows, Linux, macOS validated
 
 ## Contributing
 
@@ -269,8 +291,8 @@ Contributions welcome! Please ensure:
 ```bash
 rustup override set nightly
 cargo clippy --workspace -- -D warnings
-cargo test --workspace --all-features
-cargo fmt --check
+cargo nextest run --workspace --all-features
+cargo +nightly fmt --check
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
@@ -286,10 +308,10 @@ at your option.
 
 ## Resources
 
-- 📖 [Protocol Specification](docs/architecture/SPECIFICATION.md)
-- 📋 [Changelog](CHANGELOG.md)
-- 📊 [Benchmarks](crates/pjs-bench/README.md)
-- 💬 [Discussions](https://github.com/bug-ops/pjs/discussions)
+- [Protocol Specification](docs/architecture/SPECIFICATION.md)
+- [Changelog](CHANGELOG.md)
+- [Benchmarks](crates/pjs-bench/README.md)
+- [Discussions](https://github.com/bug-ops/pjs/discussions)
 
 ---
 
