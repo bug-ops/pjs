@@ -91,7 +91,7 @@ async fn test_get_session_success() {
     let app = create_pjs_router().with_state(state);
 
     let request = Request::builder()
-        .uri(&format!("/pjs/sessions/{}", session_id))
+        .uri(format!("/pjs/sessions/{}", session_id))
         .method("GET")
         .body(Body::empty())
         .unwrap();
@@ -109,7 +109,7 @@ async fn test_get_session_not_found() {
     let non_existent_id = SessionId::new();
 
     let request = Request::builder()
-        .uri(&format!("/pjs/sessions/{}", non_existent_id))
+        .uri(format!("/pjs/sessions/{}", non_existent_id))
         .method("GET")
         .body(Body::empty())
         .unwrap();
@@ -144,7 +144,7 @@ async fn test_session_health_success() {
     let app = create_pjs_router().with_state(state);
 
     let request = Request::builder()
-        .uri(&format!("/pjs/sessions/{}/health", session_id))
+        .uri(format!("/pjs/sessions/{}/health", session_id))
         .method("GET")
         .body(Body::empty())
         .unwrap();
@@ -172,7 +172,7 @@ async fn test_session_health_not_found() {
     let non_existent_id = SessionId::new();
 
     let request = Request::builder()
-        .uri(&format!("/pjs/sessions/{}/health", non_existent_id))
+        .uri(format!("/pjs/sessions/{}/health", non_existent_id))
         .method("GET")
         .body(Body::empty())
         .unwrap();
@@ -225,7 +225,7 @@ async fn test_create_stream_success() {
     let app = create_pjs_router().with_state(state);
 
     let request = Request::builder()
-        .uri(&format!("/pjs/sessions/{}/streams", session_id))
+        .uri(format!("/pjs/sessions/{}/streams", session_id))
         .method("POST")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(r#"{"data":{"test":"value"}}"#))
@@ -255,7 +255,7 @@ async fn test_create_stream_invalid_session() {
     let non_existent_id = SessionId::new();
 
     let request = Request::builder()
-        .uri(&format!("/pjs/sessions/{}/streams", non_existent_id))
+        .uri(format!("/pjs/sessions/{}/streams", non_existent_id))
         .method("POST")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(r#"{"data":{"test":"value"}}"#))
@@ -275,7 +275,7 @@ async fn test_create_stream_invalid_json() {
     let app = create_pjs_router().with_state(state);
 
     let request = Request::builder()
-        .uri(&format!("/pjs/sessions/{}/streams", session_id))
+        .uri(format!("/pjs/sessions/{}/streams", session_id))
         .method("POST")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(r#"invalid json{"#))
@@ -304,7 +304,7 @@ async fn test_start_stream_success() {
     let app = create_pjs_router().with_state(state);
 
     let request = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/pjs/sessions/{}/streams/{}/start",
             session_id, stream_id
         ))
@@ -326,7 +326,7 @@ async fn test_start_stream_not_found() {
     let stream_id = StreamId::new();
 
     let request = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/pjs/sessions/{}/streams/{}/start",
             session_id, stream_id
         ))
@@ -348,7 +348,7 @@ async fn test_start_stream_invalid_stream_id() {
     let app = create_pjs_router().with_state(state);
 
     let request = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/pjs/sessions/{}/streams/invalid-uuid/start",
             session_id
         ))
@@ -381,7 +381,7 @@ async fn test_get_stream_success() {
     let app = create_pjs_router().with_state(state);
 
     let request = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/pjs/sessions/{}/streams/{}",
             session_id, stream_id
         ))
@@ -403,7 +403,7 @@ async fn test_get_stream_not_found() {
     let stream_id = StreamId::new();
 
     let request = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/pjs/sessions/{}/streams/{}",
             session_id, stream_id
         ))
@@ -501,7 +501,7 @@ async fn test_invalid_stream_id_returns_400() {
     let app = create_pjs_router().with_state(state);
 
     let request = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/pjs/sessions/{}/streams/not-a-valid-uuid",
             session_id
         ))

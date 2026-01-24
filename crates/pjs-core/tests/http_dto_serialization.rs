@@ -155,10 +155,10 @@ fn test_session_health_response_from_domain() {
     };
 
     let response: SessionHealthResponse = health.into();
-    assert_eq!(response.is_healthy, true);
+    assert!(response.is_healthy);
     assert_eq!(response.active_streams, 5);
     assert_eq!(response.failed_streams, 2);
-    assert_eq!(response.is_expired, false);
+    assert!(!response.is_expired);
     assert_eq!(response.uptime_seconds, 3600);
 }
 
@@ -191,8 +191,8 @@ fn test_session_health_response_expired_session() {
     };
 
     let response: SessionHealthResponse = health.into();
-    assert_eq!(response.is_healthy, false);
-    assert_eq!(response.is_expired, true);
+    assert!(!response.is_healthy);
+    assert!(response.is_expired);
 }
 
 // ===== PaginationParams Tests =====
