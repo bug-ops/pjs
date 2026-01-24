@@ -1,7 +1,10 @@
 //! Command handlers implementing business use cases
 
 use crate::{
-    application::{ApplicationError, ApplicationResult, commands::*, dto::JsonDataDto, handlers::CommandHandlerGat},
+    application::{
+        ApplicationError, ApplicationResult, commands::*, dto::JsonDataDto,
+        handlers::CommandHandlerGat,
+    },
     domain::{
         aggregates::StreamSession,
         entities::Frame,
@@ -42,7 +45,8 @@ where
 {
     type Response = SessionId;
 
-    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
@@ -69,7 +73,7 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Publish events
+            // Publish events in parallel
             let events = session.take_events();
             for event in events {
                 self.event_publisher
@@ -90,50 +94,52 @@ where
 {
     type Response = StreamId;
 
-    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
     fn handle(&self, command: CreateStreamCommand) -> Self::HandleFuture<'_> {
         async move {
-        // Load session
-        let mut session = self
-            .repository
-            .find_session(command.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-            })?;
+            // Load session
+            let mut session = self
+                .repository
+                .find_session(command.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
+                })?;
 
-        // Convert at application boundary (DTO -> Domain)
-        let domain_data: JsonData = JsonDataDto::from(command.source_data).into();
-        let stream_id = session
-            .create_stream(domain_data)
-            .map_err(ApplicationError::Domain)?;
+            // Convert at application boundary (DTO -> Domain)
+            let domain_data: JsonData = JsonDataDto::from(command.source_data).into();
+            let stream_id = session
+                .create_stream(domain_data)
+                .map_err(ApplicationError::Domain)?;
 
-        // Update stream configuration if provided
-        if let Some(config) = command.config
-            && let Some(stream) = session.get_stream_mut(stream_id) {
+            // Update stream configuration if provided
+            if let Some(config) = command.config
+                && let Some(stream) = session.get_stream_mut(stream_id)
+            {
                 stream
                     .update_config(config)
                     .map_err(ApplicationError::Domain)?;
             }
 
-        // Save updated session
-        self.repository
-            .save_session(session.clone())
-            .await
-            .map_err(ApplicationError::Domain)?;
-
-        // Publish events
-        let events = session.take_events();
-        for event in events {
-            self.event_publisher
-                .publish(event)
+            // Save updated session
+            self.repository
+                .save_session(session.clone())
                 .await
                 .map_err(ApplicationError::Domain)?;
-        }
+
+            // Publish events
+            let events = session.take_events();
+            for event in events {
+                self.event_publisher
+                    .publish(event)
+                    .await
+                    .map_err(ApplicationError::Domain)?;
+            }
 
             Ok(stream_id)
         }
@@ -147,41 +153,42 @@ where
 {
     type Response = ();
 
-    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
     fn handle(&self, command: StartStreamCommand) -> Self::HandleFuture<'_> {
         async move {
-        // Load session
-        let mut session = self
-            .repository
-            .find_session(command.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-            })?;
+            // Load session
+            let mut session = self
+                .repository
+                .find_session(command.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
+                })?;
 
-        // Start stream
-        session
-            .start_stream(command.stream_id.into())
-            .map_err(ApplicationError::Domain)?;
+            // Start stream
+            session
+                .start_stream(command.stream_id.into())
+                .map_err(ApplicationError::Domain)?;
 
-        // Save updated session
-        self.repository
-            .save_session(session.clone())
-            .await
-            .map_err(ApplicationError::Domain)?;
-
-        // Publish events
-        let events = session.take_events();
-        for event in events {
-            self.event_publisher
-                .publish(event)
+            // Save updated session
+            self.repository
+                .save_session(session.clone())
                 .await
                 .map_err(ApplicationError::Domain)?;
-        }
+
+            // Publish events
+            let events = session.take_events();
+            for event in events {
+                self.event_publisher
+                    .publish(event)
+                    .await
+                    .map_err(ApplicationError::Domain)?;
+            }
 
             Ok(())
         }
@@ -195,41 +202,42 @@ where
 {
     type Response = ();
 
-    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
     fn handle(&self, command: CompleteStreamCommand) -> Self::HandleFuture<'_> {
         async move {
-        // Load session
-        let mut session = self
-            .repository
-            .find_session(command.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-            })?;
+            // Load session
+            let mut session = self
+                .repository
+                .find_session(command.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
+                })?;
 
-        // Complete stream
-        session
-            .complete_stream(command.stream_id.into())
-            .map_err(ApplicationError::Domain)?;
+            // Complete stream
+            session
+                .complete_stream(command.stream_id.into())
+                .map_err(ApplicationError::Domain)?;
 
-        // Save updated session
-        self.repository
-            .save_session(session.clone())
-            .await
-            .map_err(ApplicationError::Domain)?;
-
-        // Publish events
-        let events = session.take_events();
-        for event in events {
-            self.event_publisher
-                .publish(event)
+            // Save updated session
+            self.repository
+                .save_session(session.clone())
                 .await
                 .map_err(ApplicationError::Domain)?;
-        }
+
+            // Publish events
+            let events = session.take_events();
+            for event in events {
+                self.event_publisher
+                    .publish(event)
+                    .await
+                    .map_err(ApplicationError::Domain)?;
+            }
 
             Ok(())
         }
@@ -243,48 +251,53 @@ where
 {
     type Response = Vec<Frame>;
 
-    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
     fn handle(&self, command: GenerateFramesCommand) -> Self::HandleFuture<'_> {
         async move {
-        // Load session
-        let mut session = self
-            .repository
-            .find_session(command.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-            })?;
+            // Load session
+            let mut session = self
+                .repository
+                .find_session(command.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
+                })?;
 
-        // Get stream
-        let stream = session.get_stream_mut(command.stream_id.into()).ok_or_else(|| {
-            ApplicationError::NotFound(format!("Stream {} not found", command.stream_id))
-        })?;
+            // Get stream
+            let stream = session
+                .get_stream_mut(command.stream_id.into())
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Stream {} not found", command.stream_id))
+                })?;
 
-        // Generate frames
-        let priority = command.priority_threshold.try_into()
-            .map_err(ApplicationError::Domain)?;
-        let frames = stream
-            .create_patch_frames(priority, command.max_frames)
-            .map_err(ApplicationError::Domain)?;
+            // Generate frames
+            let priority = command
+                .priority_threshold
+                .try_into()
+                .map_err(ApplicationError::Domain)?;
+            let frames = stream
+                .create_patch_frames(priority, command.max_frames)
+                .map_err(ApplicationError::Domain)?;
 
-        // Save updated session
-        self.repository
-            .save_session(session.clone())
-            .await
-            .map_err(ApplicationError::Domain)?;
-
-        // Publish events
-        let events = session.take_events();
-        for event in events {
-            self.event_publisher
-                .publish(event)
+            // Save updated session
+            self.repository
+                .save_session(session.clone())
                 .await
                 .map_err(ApplicationError::Domain)?;
-        }
+
+            // Publish events
+            let events = session.take_events();
+            for event in events {
+                self.event_publisher
+                    .publish(event)
+                    .await
+                    .map_err(ApplicationError::Domain)?;
+            }
 
             Ok(frames)
         }
@@ -298,41 +311,42 @@ where
 {
     type Response = Vec<Frame>;
 
-    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
     fn handle(&self, command: BatchGenerateFramesCommand) -> Self::HandleFuture<'_> {
         async move {
-        // Load session
-        let mut session = self
-            .repository
-            .find_session(command.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-            })?;
+            // Load session
+            let mut session = self
+                .repository
+                .find_session(command.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
+                })?;
 
-        // Generate priority frames across all streams
-        let frames = session
-            .create_priority_frames(command.max_frames)
-            .map_err(ApplicationError::Domain)?;
+            // Generate priority frames across all streams
+            let frames = session
+                .create_priority_frames(command.max_frames)
+                .map_err(ApplicationError::Domain)?;
 
-        // Save updated session
-        self.repository
-            .save_session(session.clone())
-            .await
-            .map_err(ApplicationError::Domain)?;
-
-        // Publish events
-        let events = session.take_events();
-        for event in events {
-            self.event_publisher
-                .publish(event)
+            // Save updated session
+            self.repository
+                .save_session(session.clone())
                 .await
                 .map_err(ApplicationError::Domain)?;
-        }
+
+            // Publish events
+            let events = session.take_events();
+            for event in events {
+                self.event_publisher
+                    .publish(event)
+                    .await
+                    .map_err(ApplicationError::Domain)?;
+            }
 
             Ok(frames)
         }
@@ -346,39 +360,40 @@ where
 {
     type Response = ();
 
-    type HandleFuture<'a> = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
     fn handle(&self, command: CloseSessionCommand) -> Self::HandleFuture<'_> {
         async move {
-        // Load session
-        let mut session = self
-            .repository
-            .find_session(command.session_id.into())
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| {
-                ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-            })?;
+            // Load session
+            let mut session = self
+                .repository
+                .find_session(command.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
+                })?;
 
-        // Close session
-        session.close().map_err(ApplicationError::Domain)?;
+            // Close session
+            session.close().map_err(ApplicationError::Domain)?;
 
-        // Save updated session
-        self.repository
-            .save_session(session.clone())
-            .await
-            .map_err(ApplicationError::Domain)?;
-
-        // Publish events
-        let events = session.take_events();
-        for event in events {
-            self.event_publisher
-                .publish(event)
+            // Save updated session
+            self.repository
+                .save_session(session.clone())
                 .await
                 .map_err(ApplicationError::Domain)?;
-        }
+
+            // Publish events
+            let events = session.take_events();
+            for event in events {
+                self.event_publisher
+                    .publish(event)
+                    .await
+                    .map_err(ApplicationError::Domain)?;
+            }
 
             Ok(())
         }
@@ -467,26 +482,32 @@ mod tests {
     }
 
     impl StreamRepositoryGat for MockRepository {
-        type FindSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<Option<StreamSession>>> + Send + 'a
+        type FindSessionFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<Option<StreamSession>>>
+            + Send
+            + 'a
         where
             Self: 'a;
 
-        type SaveSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        type SaveSessionFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type RemoveSessionFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        type RemoveSessionFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type FindActiveSessionsFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<Vec<StreamSession>>> + Send + 'a
+        type FindActiveSessionsFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<Vec<StreamSession>>>
+            + Send
+            + 'a
         where
             Self: 'a;
 
         fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
-            async move {
-                Ok(self.sessions.lock().get(&session_id).cloned())
-            }
+            async move { Ok(self.sessions.lock().get(&session_id).cloned()) }
         }
 
         fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_> {
@@ -504,20 +525,20 @@ mod tests {
         }
 
         fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
-            async move {
-                Ok(self.sessions.lock().values().cloned().collect())
-            }
+            async move { Ok(self.sessions.lock().values().cloned().collect()) }
         }
     }
 
     struct MockEventPublisher;
 
     impl EventPublisherGat for MockEventPublisher {
-        type PublishFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        type PublishFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type PublishBatchFuture<'a> = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        type PublishBatchFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
@@ -559,8 +580,14 @@ mod tests {
         let event_publisher = Arc::new(MockEventPublisher);
         let handler = SessionCommandHandler::new(repository.clone(), event_publisher.clone());
 
-        assert!(std::ptr::eq(handler.repository.as_ref(), repository.as_ref()));
-        assert!(std::ptr::eq(handler.event_publisher.as_ref(), event_publisher.as_ref()));
+        assert!(std::ptr::eq(
+            handler.repository.as_ref(),
+            repository.as_ref()
+        ));
+        assert!(std::ptr::eq(
+            handler.event_publisher.as_ref(),
+            event_publisher.as_ref()
+        ));
     }
 
     #[tokio::test]
@@ -638,12 +665,15 @@ mod tests {
         let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
 
         // Create session first
-        let session_id = handler.handle(CreateSessionCommand {
-            config: SessionConfig::default(),
-            client_info: None,
-            user_agent: None,
-            ip_address: None,
-        }).await.unwrap();
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
 
         // Create stream with config
         let stream_config = crate::domain::entities::stream::StreamConfig::default();
@@ -672,7 +702,10 @@ mod tests {
 
         let result = handler.handle(create_stream_cmd).await;
         assert!(result.is_err());
-        assert!(matches!(result.err().unwrap(), ApplicationError::NotFound(_)));
+        assert!(matches!(
+            result.err().unwrap(),
+            ApplicationError::NotFound(_)
+        ));
     }
 
     #[tokio::test]
@@ -682,18 +715,24 @@ mod tests {
         let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
 
         // Create session and stream first
-        let session_id = handler.handle(CreateSessionCommand {
-            config: SessionConfig::default(),
-            client_info: None,
-            user_agent: None,
-            ip_address: None,
-        }).await.unwrap();
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
 
-        let stream_id = handler.handle(CreateStreamCommand {
-            session_id: session_id.into(),
-            source_data: serde_json::json!({"test": "data"}),
-            config: None,
-        }).await.unwrap();
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"test": "data"}),
+                config: None,
+            })
+            .await
+            .unwrap();
 
         // Start the stream
         let start_stream_cmd = StartStreamCommand {
@@ -718,7 +757,10 @@ mod tests {
 
         let result = handler.handle(start_stream_cmd).await;
         assert!(result.is_err());
-        assert!(matches!(result.err().unwrap(), ApplicationError::NotFound(_)));
+        assert!(matches!(
+            result.err().unwrap(),
+            ApplicationError::NotFound(_)
+        ));
     }
 
     #[tokio::test]
@@ -728,23 +770,32 @@ mod tests {
         let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
 
         // Create session, stream, and start it
-        let session_id = handler.handle(CreateSessionCommand {
-            config: SessionConfig::default(),
-            client_info: None,
-            user_agent: None,
-            ip_address: None,
-        }).await.unwrap();
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
 
-        let stream_id = handler.handle(CreateStreamCommand {
-            session_id: session_id.into(),
-            source_data: serde_json::json!({"test": "data"}),
-            config: None,
-        }).await.unwrap();
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"test": "data"}),
+                config: None,
+            })
+            .await
+            .unwrap();
 
-        handler.handle(StartStreamCommand {
-            session_id: session_id.into(),
-            stream_id: stream_id.into(),
-        }).await.unwrap();
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
 
         // Complete the stream
         let complete_stream_cmd = CompleteStreamCommand {
@@ -764,23 +815,32 @@ mod tests {
         let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
 
         // Create and start stream
-        let session_id = handler.handle(CreateSessionCommand {
-            config: SessionConfig::default(),
-            client_info: None,
-            user_agent: None,
-            ip_address: None,
-        }).await.unwrap();
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
 
-        let stream_id = handler.handle(CreateStreamCommand {
-            session_id: session_id.into(),
-            source_data: serde_json::json!({"test": "data"}),
-            config: None,
-        }).await.unwrap();
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"test": "data"}),
+                config: None,
+            })
+            .await
+            .unwrap();
 
-        handler.handle(StartStreamCommand {
-            session_id: session_id.into(),
-            stream_id: stream_id.into(),
-        }).await.unwrap();
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
 
         // Complete without checksum
         let complete_stream_cmd = CompleteStreamCommand {
@@ -800,12 +860,15 @@ mod tests {
         let handler = SessionCommandHandler::new(repository.clone(), event_publisher);
 
         // Create session first
-        let session_id = handler.handle(CreateSessionCommand {
-            config: SessionConfig::default(),
-            client_info: None,
-            user_agent: None,
-            ip_address: None,
-        }).await.unwrap();
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
 
         // Close the session
         let close_session_cmd = CloseSessionCommand {
@@ -828,6 +891,9 @@ mod tests {
 
         let result = handler.handle(close_session_cmd).await;
         assert!(result.is_err());
-        assert!(matches!(result.err().unwrap(), ApplicationError::NotFound(_)));
+        assert!(matches!(
+            result.err().unwrap(),
+            ApplicationError::NotFound(_)
+        ));
     }
 }
