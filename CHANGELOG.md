@@ -15,6 +15,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
 
+## [0.4.7] - 2026-01-25
+
+### Performance
+
+- **GAT Migration**: Migrated to zero-cost async abstractions using Generic Associated Types
+  - 1.82x faster performance through static dispatch (removed async_trait overhead)
+  - Migrated 16 command and query handlers to native GAT implementation
+  - Created SessionMetricsGat trait following Interface Segregation Principle
+  - Deleted 3 obsolete adapter files (memory_repository.rs, repository_adapters.rs, tokio_writer.rs)
+
+### Infrastructure
+
+- **HTTP Adapter Re-enablement**: Complete REST API with CQRS integration
+  - 8 operational endpoints with GAT-based command/query handlers
+  - Security hardening: restrictive CORS, 10MB body limits, security headers
+  - Updated to Axum v0.8 route syntax (curly brace parameters)
+  - Added 70 new integration tests (29 endpoint + 21 DTO + 15 query handler + 5 common)
+
+### Security
+
+- **Decompression Algorithms**: Delta and RLE decompression with defense-in-depth security
+  - Fixed 3 critical vulnerabilities (CVSS 7.5 → 0.0):
+    - VULN-001: RLE Decompression Bomb protection (MAX_RLE_COUNT: 100K)
+    - VULN-002: Delta array size validation (MAX_DELTA_ARRAY_SIZE: 1M)
+    - VULN-003: Integer overflow prevention (checked arithmetic)
+  - 4-layer security: count bounds, type safety, arithmetic safety, cumulative tracking
+  - Added 36 comprehensive decompression tests including 4 security attack scenarios
+
+### Bug Fixes
+
+- **Platform Compatibility**: Fixed Windows-specific Instant overflow in metrics collector
+  - Used checked_sub() to handle duration exceeding program uptime
+  - Prevents panic on Windows when calculating time series cutoffs
+  - All 2158 tests passing on Linux, macOS, and Windows
+
+### Testing
+
+- **Coverage Improvement**: Test suite expanded from 196 to 2158 tests
+  - 87.35% code coverage (exceeds 80% target)
+  - Comprehensive HTTP integration testing
+  - Security vulnerability testing
+  - Cross-platform compatibility validation
+
+### Code Quality
+
+- **Clean Architecture Compliance**: Zero violations, all layers properly isolated
+  - Domain layer pure (no infrastructure dependencies)
+  - Application layer orchestrates via CQRS pattern
+  - Infrastructure implements domain ports with GAT traits
+- **Zero Clippy Warnings**: Fixed needless_borrows and bool_assert_comparison
+- **Minimal Comments**: Removed 46 lines of excessive phase/process comments
+
 ## [0.4.6] - 2025-12-05
 
 ### 🔧 Refactoring
