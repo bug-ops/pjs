@@ -10,11 +10,16 @@ use std::num::NonZeroU8;
 /// Type-safe priority value (1-255 range)
 ///
 /// This is a pure domain object with no serialization concerns.
-/// For serialization, use `PriorityDto` from the application layer:
+/// Custom serialization helpers are provided in `pjson_rs_domain::events::serde_priority`
+/// for domain events that need serialization.
 ///
-/// ```rust
-/// use pjson_rs::application::dto::PriorityDto;
-/// let dto: PriorityDto = priority.to_dto();
+/// # Example
+/// ```
+/// use pjson_rs_domain::value_objects::Priority;
+///
+/// let priority = Priority::new(100).unwrap();
+/// assert_eq!(priority.value(), 100);
+/// assert_eq!(priority, Priority::CRITICAL);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Priority(NonZeroU8);
