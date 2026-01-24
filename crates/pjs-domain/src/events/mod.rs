@@ -46,7 +46,7 @@ mod serde_stream_id {
     }
 }
 
-/// Custom serde for Option<StreamId>
+/// Custom serde for `Option<StreamId>`
 #[allow(dead_code)]
 mod serde_option_stream_id {
     use crate::value_objects::StreamId;
