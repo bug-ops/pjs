@@ -1,0 +1,104 @@
+# Auto-labeler configuration for PJS repository
+# See: https://github.com/actions/labeler
+
+# Workspace Crate Labels
+core:
+  - changed-files:
+    - any-glob-to-any-file: 'crates/pjs-core/**/*'
+
+domain:
+  - changed-files:
+    - any-glob-to-any-file: 'crates/pjs-domain/**/*'
+
+benchmarks:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/pjs-bench/**/*'
+      - 'benches/**/*'
+
+# Layer Labels (Clean Architecture)
+application:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/pjs-core/src/application/**/*'
+      - 'src/application/**/*'
+
+infrastructure:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/pjs-core/src/infrastructure/**/*'
+      - 'src/infrastructure/**/*'
+
+# Language and Format Labels
+rust:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+
+documentation:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/*.md'
+      - 'docs/**/*'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'CLAUDE.md'
+
+# CI/CD and Tooling
+ci/cd:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '.github/workflows/**/*'
+      - '.github/labeler.yml'
+      - '.github/dependabot.yml'
+      - '.github/codecov.yml'
+
+dependencies:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+
+# Security and Performance
+security:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/security/**/*'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - 'audit.toml'
+
+performance:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/pjs-bench/**/*'
+      - 'benches/**/*'
+      - '**/parser/**/*'
+      - '**/stream/**/*'
+
+# Testing
+testing:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/tests/**/*'
+      - '**/*_test.rs'
+      - '**/*_tests.rs'
+
+# WASM
+wasm:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/wasm/**/*'
+      - '**/*wasm*'
+      - 'crates/pjs-wasm/**/*'
+
+# Additional Crates
+pjs-demo:
+  - changed-files:
+    - any-glob-to-any-file: 'crates/pjs-demo/**/*'
+
+pjs-js-client:
+  - changed-files:
+    - any-glob-to-any-file: 'crates/pjs-js-client/**/*'

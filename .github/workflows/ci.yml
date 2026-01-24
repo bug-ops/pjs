@@ -1,0 +1,554 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  merge_group:
+    branches: [main]
+  schedule:
+    # Weekly security scan on Saturday at 17:39 UTC
+    - cron: '39 17 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+  security-events: write
+  actions: read
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings"
+  RUSTUP_MAX_RETRIES: 10
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Code quality checks - formatting and linting
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "quality"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check formatting
+        run: cargo +nightly fmt --all --check
+
+      - name: Run clippy (strict mode)
+        run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+
+  # Build verification with different allocators
+  build:
+    name: Build (${{ matrix.allocator }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [quality]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - allocator: system
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics"
+          - allocator: jemalloc
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics,jemalloc"
+          - allocator: mimalloc
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics,mimalloc"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "build-${{ matrix.allocator }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build
+        run: cargo build -p pjson-rs --features "${{ matrix.features }}" --all-targets
+
+  # Cross-platform testing
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.allocator }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    needs: [quality]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        allocator: [system, jemalloc, mimalloc]
+        exclude:
+          # jemalloc has limited Windows support
+          - os: windows-latest
+            allocator: jemalloc
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test-${{ matrix.os }}-${{ matrix.allocator }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Set test features
+        id: features
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # jemalloc doesn't build on Windows MSVC
+            echo "flags=--features schema-validation,compression,http-server,mimalloc" >> $GITHUB_OUTPUT
+          else
+            echo "flags=--all-features" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run tests (nextest)
+        run: cargo nextest run --workspace ${{ steps.features.outputs.flags }} --all-targets --no-fail-fast
+
+      - name: Run doctests
+        run: cargo test --workspace --doc ${{ steps.features.outputs.flags }}
+
+  # Code coverage with threshold enforcement
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Install llvm-cov and nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,nextest
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "coverage"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Generate coverage for pjs-core
+        run: |
+          cargo llvm-cov nextest --all-features --all-targets -p pjson-rs \
+            --lcov --output-path lcov-pjs-core.info \
+            --status-level fail --final-status-level skip
+
+      - name: Generate coverage for pjs-domain
+        run: |
+          cargo llvm-cov nextest --all-features --all-targets -p pjson-rs-domain \
+            --lcov --output-path lcov-pjs-domain.info \
+            --status-level fail --final-status-level skip
+
+      - name: Generate coverage for pjs-wasm
+        run: |
+          cargo llvm-cov nextest --all-features --all-targets -p pjs-wasm \
+            --lcov --output-path lcov-pjs-wasm.info \
+            --status-level fail --final-status-level skip
+
+      - name: Check pjs-domain coverage threshold
+        run: |
+          # Domain layer requires minimum 80% coverage
+          cargo llvm-cov nextest -p pjson-rs-domain --json --output-path domain-coverage.json
+          coverage=$(jq -r '.data[0].totals.lines.percent' domain-coverage.json)
+          echo "Domain coverage: ${coverage}%"
+          threshold=80
+          if (( $(echo "$coverage < $threshold" | bc -l) )); then
+            echo "::error::Domain coverage ${coverage}% is below required threshold of ${threshold}%"
+            exit 1
+          fi
+          echo "::notice::Domain coverage ${coverage}% meets threshold of ${threshold}%"
+
+      - name: Check pjs-core coverage threshold
+        run: |
+          # Core library requires minimum 70% coverage
+          cargo llvm-cov nextest -p pjson-rs --json --output-path core-coverage.json
+          coverage=$(jq -r '.data[0].totals.lines.percent' core-coverage.json)
+          echo "Core coverage: ${coverage}%"
+          threshold=70
+          if (( $(echo "$coverage < $threshold" | bc -l) )); then
+            echo "::warning::Core coverage ${coverage}% is below recommended threshold of ${threshold}%"
+          else
+            echo "::notice::Core coverage ${coverage}% meets threshold of ${threshold}%"
+          fi
+
+      - name: Upload pjs-core coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov-pjs-core.info
+          flags: pjs-core
+          fail_ci_if_error: false
+
+      - name: Upload pjs-domain coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov-pjs-domain.info
+          flags: pjs-domain
+          fail_ci_if_error: false
+
+      - name: Upload pjs-wasm coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov-pjs-wasm.info
+          flags: pjs-wasm
+          fail_ci_if_error: false
+
+  # WASM build and tests
+  wasm-test:
+    name: WASM Library Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [quality]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-domain/') ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wasm-test"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Run pjs-wasm library tests
+        run: cargo nextest run -p pjs-wasm --lib --no-fail-fast
+
+      - name: Run pjson-rs-domain library tests
+        run: cargo nextest run -p pjson-rs-domain --lib --no-fail-fast
+
+      - name: Run doctests
+        run: |
+          cargo test -p pjs-wasm --doc
+          cargo test -p pjson-rs-domain --doc
+
+  wasm-build:
+    name: Build WASM (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [quality, wasm-test]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-domain/') ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/')
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [web, nodejs, bundler]
+    env:
+      WASM_PACK_CACHE_DIR: ~/.wasm-pack
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wasm-build-${{ matrix.target }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Cache wasm-pack
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.WASM_PACK_CACHE_DIR }}
+          key: wasm-pack-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            wasm-pack-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@latest
+
+      - name: Build WASM for ${{ matrix.target }}
+        working-directory: crates/pjs-wasm
+        run: |
+          wasm-pack build \
+            --target ${{ matrix.target }} \
+            --release \
+            --out-dir pkg-${{ matrix.target }}
+
+
+      - name: Upload WASM build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: wasm-build-${{ matrix.target }}
+          path: crates/pjs-wasm/pkg-${{ matrix.target }}/
+          retention-days: 7
+
+  wasm-bundle-size:
+    name: WASM Bundle Size
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-domain/')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Analyze bundle sizes
+        id: bundle-size
+        run: |
+          echo "## WASM Bundle Size Report" > bundle-report.md
+          echo "" >> bundle-report.md
+          echo "| Target | Raw (KB) | Gzipped (KB) | Status |" >> bundle-report.md
+          echo "|--------|----------|-------------|--------|" >> bundle-report.md
+
+          for target in web nodejs bundler; do
+            if [ -f "artifacts/wasm-build-$target/pjs_wasm_bg.wasm" ]; then
+              raw_size=$(($(wc -c < "artifacts/wasm-build-$target/pjs_wasm_bg.wasm") / 1024))
+              gzipped_size=$(($(gzip -c < "artifacts/wasm-build-$target/pjs_wasm_bg.wasm" | wc -c) / 1024))
+
+              # Check size constraints (raw < 200 KB, gzipped < 80 KB)
+              status="✓ PASS"
+              if [ $raw_size -gt 200 ] || [ $gzipped_size -gt 80 ]; then
+                status="⚠ WARNING"
+              fi
+
+              echo "| $target | $raw_size | $gzipped_size | $status |" >> bundle-report.md
+
+              # Export for PR comment
+              echo "${target}_raw_kb=$raw_size" >> $GITHUB_OUTPUT
+              echo "${target}_gzipped_kb=$gzipped_size" >> $GITHUB_OUTPUT
+            fi
+          done
+
+          cat bundle-report.md
+
+      - name: Upload bundle size report
+        uses: actions/upload-artifact@v6
+        with:
+          name: bundle-size-report
+          path: bundle-report.md
+          retention-days: 30
+
+      - name: Comment PR with bundle sizes
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('bundle-report.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+  wasm-node-example:
+    name: Node.js Example Test
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download web build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: wasm-build-web
+          path: crates/pjs-js-client/examples/browser-wasm/pkg
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '18'
+
+      - name: Run Node.js example
+        working-directory: crates/pjs-js-client/examples/browser-wasm
+        run: |
+          echo "Running Node.js example with WASM..."
+          node example.js
+
+      - name: Verify example output
+        working-directory: crates/pjs-js-client/examples/browser-wasm
+        run: |
+          node example.js | grep -q "Example 1: Basic Usage" || (echo "Example failed" && exit 1)
+          node example.js | grep -q "Generated" || (echo "No frame generation detected" && exit 1)
+
+  wasm-package-validation:
+    name: NPM Package Validation
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download web build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: wasm-build-web
+          path: wasm-pkg
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '18'
+
+      - name: Validate package.json
+        run: |
+          node -e "
+            const pkg = require('./wasm-pkg/package.json');
+            const required = ['name', 'version', 'files', 'main', 'types'];
+            for (const field of required) {
+              if (!pkg[field]) {
+                console.error(\`Missing required field: \${field}\`);
+                process.exit(1);
+              }
+            }
+          "
+
+      - name: Validate TypeScript definitions
+        run: |
+          grep -q "class PjsParser" wasm-pkg/pjs_wasm.d.ts || (echo "Missing PjsParser class" && exit 1)
+          grep -q "class PriorityConstants" wasm-pkg/pjs_wasm.d.ts || (echo "Missing PriorityConstants" && exit 1)
+          grep -q "class PriorityConfigBuilder" wasm-pkg/pjs_wasm.d.ts || (echo "Missing PriorityConfigBuilder" && exit 1)
+          grep -q "export function version" wasm-pkg/pjs_wasm.d.ts || (echo "Missing version function" && exit 1)
+
+      - name: Upload validated package
+        uses: actions/upload-artifact@v6
+        with:
+          name: validated-wasm-package
+          path: wasm-pkg/
+          retention-days: 7
+
+  # Security scanning with OSV-Scanner
+  security-osv:
+    name: OSV Security Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    permissions:
+      actions: read
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: google/osv-scanner-action/osv-scanner-action@v2.3.2
+
+  # Final success indicator
+  ci-success:
+    name: CI Success
+    needs:
+      - quality
+      - build
+      - test
+      - coverage
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all CI jobs passed
+        run: |
+          if [[ "${{ needs.quality.result }}" != "success" ]] || \
+             [[ "${{ needs.build.result }}" != "success" ]] || \
+             [[ "${{ needs.test.result }}" != "success" ]] || \
+             [[ "${{ needs.coverage.result }}" != "success" ]]; then
+            echo "One or more CI jobs failed"
+            exit 1
+          fi
+
+  # WASM CI success (separate indicator)
+  wasm-ci-success:
+    name: WASM CI Success
+    needs: [wasm-test, wasm-build, wasm-bundle-size, wasm-node-example, wasm-package-validation]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'push' ||
+       contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
+       contains(github.event.pull_request.changed_files, 'crates/pjs-domain/') ||
+       contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/'))
+    steps:
+      - name: Check all WASM jobs passed
+        run: |
+          if [[ "${{ needs.wasm-test.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-build.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-bundle-size.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-node-example.result }}" != "success" ]] || \
+             [[ "${{ needs.wasm-package-validation.result }}" != "success" ]]; then
+            echo "One or more WASM CI jobs failed"
+            exit 1
+          fi
