@@ -5,11 +5,10 @@
 use pjson_rs::{
     compression::{CompressedData, CompressionStrategy},
     stream::{
-        compression_integration::{
-            CompressedFrame, DecompressionMetadata, StreamingCompressor,
-            StreamingDecompressor,
-        },
         StreamFrame,
+        compression_integration::{
+            CompressedFrame, DecompressionMetadata, StreamingCompressor, StreamingDecompressor,
+        },
     },
 };
 use pjson_rs_domain::value_objects::Priority;
@@ -184,7 +183,7 @@ fn test_decompress_delta_via_frame() {
 
     let result = decompressor.decompress_frame(frame).unwrap();
     let arr = result.data.as_array().unwrap();
-    assert_eq!(arr[0].as_f64().unwrap(), 90.0);  // 100 + (-10)
+    assert_eq!(arr[0].as_f64().unwrap(), 90.0); // 100 + (-10)
     assert_eq!(arr[1].as_f64().unwrap(), 105.0); // 100 + 5
 }
 
@@ -735,8 +734,14 @@ fn test_decompress_delta_number_values() {
 #[test]
 fn test_decompress_delta_bool_values() {
     let decompressor = StreamingDecompressor::new();
-    assert_eq!(decompressor.decompress_delta(&json!(true)).unwrap(), json!(true));
-    assert_eq!(decompressor.decompress_delta(&json!(false)).unwrap(), json!(false));
+    assert_eq!(
+        decompressor.decompress_delta(&json!(true)).unwrap(),
+        json!(true)
+    );
+    assert_eq!(
+        decompressor.decompress_delta(&json!(false)).unwrap(),
+        json!(false)
+    );
 }
 
 #[test]
@@ -833,8 +838,14 @@ fn test_decompress_run_length_number_value() {
 #[test]
 fn test_decompress_run_length_bool_values() {
     let decompressor = StreamingDecompressor::new();
-    assert_eq!(decompressor.decompress_run_length(&json!(true)).unwrap(), json!(true));
-    assert_eq!(decompressor.decompress_run_length(&json!(false)).unwrap(), json!(false));
+    assert_eq!(
+        decompressor.decompress_run_length(&json!(true)).unwrap(),
+        json!(true)
+    );
+    assert_eq!(
+        decompressor.decompress_run_length(&json!(false)).unwrap(),
+        json!(false)
+    );
 }
 
 #[test]
@@ -1024,7 +1035,22 @@ fn test_decompress_delta_deeply_nested_objects() {
         }
     });
     let result = decompressor.decompress_delta(&data).unwrap();
-    assert_eq!(result.get("l1").unwrap().get("l2").unwrap().get("l3").unwrap().get("l4").unwrap().get("value").unwrap().as_i64().unwrap(), 42);
+    assert_eq!(
+        result
+            .get("l1")
+            .unwrap()
+            .get("l2")
+            .unwrap()
+            .get("l3")
+            .unwrap()
+            .get("l4")
+            .unwrap()
+            .get("value")
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+        42
+    );
 }
 
 #[test]
@@ -1093,7 +1119,15 @@ fn test_decompress_run_length_deeply_nested_objects() {
         }
     });
     let result = decompressor.decompress_run_length(&data).unwrap();
-    let arr = result.get("l1").unwrap().get("l2").unwrap().get("l3").unwrap().as_array().unwrap();
+    let arr = result
+        .get("l1")
+        .unwrap()
+        .get("l2")
+        .unwrap()
+        .get("l3")
+        .unwrap()
+        .as_array()
+        .unwrap();
     assert_eq!(arr.len(), 2);
 }
 

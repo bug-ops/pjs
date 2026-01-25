@@ -1373,20 +1373,46 @@ mod tests {
     fn test_decompress_delta_with_primitive_values() {
         let decompressor = StreamingDecompressor::new();
 
-        assert_eq!(decompressor.decompress_delta(&json!("string")).unwrap(), json!("string"));
-        assert_eq!(decompressor.decompress_delta(&json!(42)).unwrap(), json!(42));
-        assert_eq!(decompressor.decompress_delta(&json!(true)).unwrap(), json!(true));
-        assert_eq!(decompressor.decompress_delta(&json!(null)).unwrap(), json!(null));
+        assert_eq!(
+            decompressor.decompress_delta(&json!("string")).unwrap(),
+            json!("string")
+        );
+        assert_eq!(
+            decompressor.decompress_delta(&json!(42)).unwrap(),
+            json!(42)
+        );
+        assert_eq!(
+            decompressor.decompress_delta(&json!(true)).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            decompressor.decompress_delta(&json!(null)).unwrap(),
+            json!(null)
+        );
     }
 
     #[test]
     fn test_decompress_run_length_with_primitive_values() {
         let decompressor = StreamingDecompressor::new();
 
-        assert_eq!(decompressor.decompress_run_length(&json!("string")).unwrap(), json!("string"));
-        assert_eq!(decompressor.decompress_run_length(&json!(123)).unwrap(), json!(123));
-        assert_eq!(decompressor.decompress_run_length(&json!(false)).unwrap(), json!(false));
-        assert_eq!(decompressor.decompress_run_length(&json!(null)).unwrap(), json!(null));
+        assert_eq!(
+            decompressor
+                .decompress_run_length(&json!("string"))
+                .unwrap(),
+            json!("string")
+        );
+        assert_eq!(
+            decompressor.decompress_run_length(&json!(123)).unwrap(),
+            json!(123)
+        );
+        assert_eq!(
+            decompressor.decompress_run_length(&json!(false)).unwrap(),
+            json!(false)
+        );
+        assert_eq!(
+            decompressor.decompress_run_length(&json!(null)).unwrap(),
+            json!(null)
+        );
     }
 
     #[test]
@@ -1416,7 +1442,9 @@ mod tests {
         bases.insert("value".to_string(), 100.0);
 
         let compressed_data = CompressedData {
-            strategy: CompressionStrategy::Delta { base_values: bases.clone() },
+            strategy: CompressionStrategy::Delta {
+                base_values: bases.clone(),
+            },
             compressed_size: 10,
             data: json!({
                 "sequence": [
@@ -1516,7 +1544,10 @@ mod tests {
         assert_eq!(stats.frames_processed, 1);
         assert_eq!(stats.total_input_bytes, 0);
         assert_eq!(stats.total_output_bytes, 10);
-        assert_eq!(stats.priority_compression_ratio(Priority::MEDIUM.value()), 1.0);
+        assert_eq!(
+            stats.priority_compression_ratio(Priority::MEDIUM.value()),
+            1.0
+        );
     }
 
     #[test]
@@ -1528,7 +1559,10 @@ mod tests {
         assert_eq!(stats.frames_processed, 1);
         assert_eq!(stats.total_input_bytes, 1000);
         assert_eq!(stats.total_output_bytes, 500);
-        assert_eq!(stats.priority_compression_ratio(Priority::HIGH.value()), 0.5);
+        assert_eq!(
+            stats.priority_compression_ratio(Priority::HIGH.value()),
+            0.5
+        );
     }
 
     #[test]
@@ -1640,7 +1674,10 @@ mod tests {
         let result = decompressor.update_context(&metadata);
         assert!(result.is_ok());
         assert_eq!(decompressor.active_dictionary.len(), 2);
-        assert_eq!(decompressor.active_dictionary.get(&0), Some(&"hello".to_string()));
+        assert_eq!(
+            decompressor.active_dictionary.get(&0),
+            Some(&"hello".to_string())
+        );
     }
 
     #[test]
@@ -1819,6 +1856,9 @@ mod tests {
 
         let result = decompressor.decompress_delta(&data);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), json!([1_100_000.0, 1_200_000.0, 1_300_000.0]));
+        assert_eq!(
+            result.unwrap(),
+            json!([1_100_000.0, 1_200_000.0, 1_300_000.0])
+        );
     }
 }

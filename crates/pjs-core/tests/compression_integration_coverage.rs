@@ -6,11 +6,11 @@
 use pjson_rs::{
     compression::{CompressedData, CompressionStrategy},
     stream::{
+        StreamFrame,
         compression_integration::{
             CompressedFrame, CompressionStats, DecompressionMetadata, StreamingCompressor,
             StreamingDecompressor,
         },
-        StreamFrame,
     },
 };
 use pjson_rs_domain::value_objects::Priority;
@@ -608,7 +608,10 @@ fn test_compress_frame_creates_metadata_for_dictionary() {
     assert!(result.is_ok());
     let compressed = result.unwrap();
     // Metadata should be present
-    assert_eq!(compressed.decompression_metadata.strategy, CompressionStrategy::Dictionary { dictionary: dict });
+    assert_eq!(
+        compressed.decompression_metadata.strategy,
+        CompressionStrategy::Dictionary { dictionary: dict }
+    );
 }
 
 #[test]
