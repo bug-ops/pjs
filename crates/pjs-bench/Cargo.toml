@@ -21,12 +21,16 @@ serde_json = { workspace = true }
 sonic-rs = { workspace = true }
 uuid = { workspace = true }
 
+[dev-dependencies]
+dhat = { workspace = true }
+
 [features]
 default = ["streaming"]
 simd-auto = []
 simd-avx2 = []
 simd-sse42 = []
 streaming = []
+dhat-heap = []
 
 [[bench]]
 name = "simple_throughput"

@@ -298,6 +298,144 @@ pub async fn health_check_middleware(request: Request, next: Next) -> Response {
     response
 }
 
+/// Content validation middleware configuration
+#[derive(Debug, Clone)]
+pub struct ContentValidationConfig {
+    /// Maximum allowed Content-Length in bytes (default: 10MB)
+    pub max_content_length: usize,
+
+    /// Allowed Content-Type values (default: application/json, application/pjs+json)
+    pub allowed_content_types: Vec<String>,
+
+    /// Require Content-Type header for POST/PUT/PATCH (default: true)
+    pub require_content_type: bool,
+}
+
+impl Default for ContentValidationConfig {
+    fn default() -> Self {
+        Self {
+            max_content_length: 10 * 1024 * 1024, // 10MB
+            allowed_content_types: vec![
+                "application/json".to_string(),
+                "application/pjs+json".to_string(),
+            ],
+            require_content_type: true,
+        }
+    }
+}
+
+/// Content validation middleware handler
+///
+/// Validates Content-Type and Content-Length headers to prevent:
+/// - Unsupported media types (415 error)
+/// - Oversized payloads (413 error)
+/// - DoS attacks via malformed headers
+pub async fn content_validation_middleware(
+    config: ContentValidationConfig,
+    req: Request,
+    next: Next,
+) -> Response {
+    // Extract method and headers
+    let method = req.method().clone();
+    let headers = req.headers();
+
+    // Validate Content-Length
+    if let Some(content_length_header) = headers.get(header::CONTENT_LENGTH) {
+        match content_length_header.to_str() {
+            Ok(content_length_str) => match content_length_str.parse::<usize>() {
+                Ok(content_length) => {
+                    if content_length > config.max_content_length {
+                        let error_body = serde_json::json!({
+                            "error": "Payload Too Large",
+                            "max_size": config.max_content_length,
+                            "received_size": content_length
+                        })
+                        .to_string();
+
+                        return Response::builder()
+                            .status(StatusCode::PAYLOAD_TOO_LARGE)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(error_body.into())
+                            .unwrap_or_else(|_| Response::new("Payload Too Large".into()));
+                    }
+                }
+                Err(_) => {
+                    let error_body = serde_json::json!({
+                        "error": "Invalid Content-Length header"
+                    })
+                    .to_string();
+
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(error_body.into())
+                        .unwrap_or_else(|_| Response::new("Bad Request".into()));
+                }
+            },
+            Err(_) => {
+                let error_body = serde_json::json!({
+                    "error": "Invalid Content-Length header encoding"
+                })
+                .to_string();
+
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(error_body.into())
+                    .unwrap_or_else(|_| Response::new("Bad Request".into()));
+            }
+        }
+    }
+
+    // Validate Content-Type for POST/PUT/PATCH requests
+    if config.require_content_type && (method == "POST" || method == "PUT" || method == "PATCH") {
+        match headers.get(header::CONTENT_TYPE) {
+            Some(content_type_header) => {
+                let content_type = content_type_header.to_str().unwrap_or("");
+
+                // Extract base content type (ignore charset and other parameters)
+                let base_content_type = content_type.split(';').next().unwrap_or("").trim();
+
+                if !config
+                    .allowed_content_types
+                    .iter()
+                    .any(|allowed| base_content_type.eq_ignore_ascii_case(allowed))
+                {
+                    let error_body = serde_json::json!({
+                        "error": "Unsupported Media Type",
+                        "accepted": config.allowed_content_types,
+                        "received": content_type
+                    })
+                    .to_string();
+
+                    return Response::builder()
+                        .status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(error_body.into())
+                        .unwrap_or_else(|_| Response::new("Unsupported Media Type".into()));
+                }
+            }
+            None => {
+                let error_body = serde_json::json!({
+                    "error": "Unsupported Media Type",
+                    "message": "Content-Type header is required for POST/PUT/PATCH requests",
+                    "accepted": config.allowed_content_types
+                })
+                .to_string();
+
+                return Response::builder()
+                    .status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(error_body.into())
+                    .unwrap_or_else(|_| Response::new("Unsupported Media Type".into()));
+            }
+        }
+    }
+
+    // All validations passed, continue to next middleware/handler
+    next.run(req).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +457,13 @@ mod tests {
         let rate_limit = RateLimitMiddleware::new(100);
         assert_eq!(rate_limit.requests_per_minute, 100);
         assert_eq!(rate_limit.burst_size, 25);
+    }
+
+    #[test]
+    fn test_content_validation_config_default() {
+        let config = ContentValidationConfig::default();
+        assert_eq!(config.max_content_length, 10 * 1024 * 1024);
+        assert_eq!(config.allowed_content_types.len(), 2);
+        assert!(config.require_content_type);
     }
 }
