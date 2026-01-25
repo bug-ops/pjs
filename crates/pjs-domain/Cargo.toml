@@ -32,3 +32,13 @@ wasm = []
 [dev-dependencies]
 proptest = { workspace = true }
 serde_json = { workspace = true }
+
+# Trusted publishing configuration for crates.io
+[package.metadata.release.publishers.crates-io]
+trusted-publishing = true
+# GitHub Actions OIDC issuer for trusted publishing
+# Repository: https://github.com/bug-ops/pjs
+# Workflow: .github/workflows/release.yml
+issuer = "https://token.actions.githubusercontent.com"
+repository = "bug-ops/pjs"
+workflow = "release.yml"

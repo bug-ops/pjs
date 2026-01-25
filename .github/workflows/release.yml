@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write  # Required for OIDC trusted publishing
 
 env:
   CARGO_TERM_COLOR: always
@@ -104,12 +105,18 @@ jobs:
           name: release-notes
           path: RELEASE_NOTES.md
 
-  # Publish to crates.io
+  # Publish to crates.io using trusted publishing (OIDC)
   publish:
     name: Publish to crates.io
     needs: [verify, generate-changelog]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      id-token: write  # Required for OIDC token generation
+      contents: read
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/pjson-rs
     steps:
       - uses: actions/checkout@v6
         with:
@@ -124,8 +131,32 @@ jobs:
           shared-key: "publish"
           save-if: false
 
-      - name: Publish workspace to crates.io
-        run: cargo publish --workspace --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Install cargo-release
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-release
+
+      - name: Authenticate with crates.io via OIDC
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish pjson-rs-domain to crates.io
+        working-directory: crates/pjs-domain
+        run: cargo publish --no-verify
+
+      - name: Wait for pjson-rs-domain to be indexed
+        run: sleep 30
+
+      - name: Publish pjson-rs to crates.io
+        working-directory: crates/pjs-core
+        run: cargo publish --no-verify
+
+      - name: Verify publications
+        run: |
+          echo "Verifying publications on crates.io..."
+          sleep 10
+          cargo search pjson-rs | grep -q "pjson-rs" && echo "✓ pjson-rs published successfully"
+          cargo search pjson-rs-domain | grep -q "pjson-rs-domain" && echo "✓ pjson-rs-domain published successfully"
 
   # Create GitHub release
   github-release:
