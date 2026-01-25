@@ -143,6 +143,8 @@ jobs:
       - name: Publish pjson-rs-domain to crates.io
         working-directory: crates/pjs-domain
         run: cargo publish --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       - name: Wait for pjson-rs-domain to be indexed
         run: sleep 30
@@ -150,6 +152,8 @@ jobs:
       - name: Publish pjson-rs to crates.io
         working-directory: crates/pjs-core
         run: cargo publish --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       - name: Verify publications
         run: |
