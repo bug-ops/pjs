@@ -1,10 +1,11 @@
 # PJS - Priority JSON Streaming Protocol
 
-[![Crates.io](https://img.shields.io/crates/v/pjson-rs.svg)](https://crates.io/crates/pjson-rs)
-[![Documentation](https://docs.rs/pjson-rs/badge.svg)](https://docs.rs/pjson-rs)
-[![Rust Build](https://github.com/bug-ops/pjs/actions/workflows/rust.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/rust.yml)
+[![Crates.io](https://img.shields.io/crates/v/pjson-rs)](https://crates.io/crates/pjson-rs)
+[![docs.rs](https://img.shields.io/docsrs/pjson-rs)](https://docs.rs/pjson-rs)
+[![CI](https://img.shields.io/github/actions/workflow/status/bug-ops/pjs/rust.yml?branch=main&label=CI)](https://github.com/bug-ops/pjs/actions)
 [![codecov](https://codecov.io/gh/bug-ops/pjs/branch/main/graph/badge.svg)](https://codecov.io/gh/bug-ops/pjs)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![MSRV](https://img.shields.io/crates/msrv/pjson-rs)](https://crates.io/crates/pjson-rs)
+[![License](https://img.shields.io/crates/l/pjson-rs)](LICENSE)
 
 **Priority-based streaming | Progressive loading | Zero-copy operations | WebAssembly ready**
 
