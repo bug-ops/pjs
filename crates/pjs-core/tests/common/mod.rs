@@ -209,7 +209,7 @@ impl StreamStoreGat for MockStreamStore {
     where
         Self: 'a;
 
-    type ListStreamsFuture<'a>
+    type ListStreamsForSessionFuture<'a>
         = impl std::future::Future<Output = pjson_rs::domain::DomainResult<Vec<Stream>>> + Send + 'a
     where
         Self: 'a;
@@ -232,7 +232,10 @@ impl StreamStoreGat for MockStreamStore {
         }
     }
 
-    fn list_streams_for_session(&self, _session_id: SessionId) -> Self::ListStreamsFuture<'_> {
+    fn list_streams_for_session(
+        &self,
+        _session_id: SessionId,
+    ) -> Self::ListStreamsForSessionFuture<'_> {
         async move { Ok(self.streams.lock().values().cloned().collect()) }
     }
 }

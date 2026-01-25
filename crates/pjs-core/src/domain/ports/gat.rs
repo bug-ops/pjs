@@ -3,6 +3,11 @@
 //! This module provides Generic Associated Type (GAT) versions of domain ports
 //! that eliminate the runtime overhead of async_trait while maintaining the same
 //! API contract. These implementations use true zero-cost futures.
+//!
+//! # Macro-Based Declarations
+//!
+//! Traits are declared using the `gat_port!` macro which converts ergonomic
+//! async fn syntax into proper GAT trait definitions with associated future types.
 
 use crate::domain::{
     DomainResult,
@@ -11,160 +16,115 @@ use crate::domain::{
     events::DomainEvent,
     value_objects::{SessionId, StreamId},
 };
+use crate::gat_port;
 use std::future::Future;
 
-/// Zero-cost frame source with GAT futures
-pub trait FrameSourceGat: Send + Sync {
-    /// Future type for receiving frames
-    type NextFrameFuture<'a>: Future<Output = DomainResult<Option<Frame>>> + Send + 'a
-    where
-        Self: 'a;
+// ============================================================================
+// Frame Source/Sink Ports
+// ============================================================================
 
-    /// Future type for checking frame availability
-    type HasFramesFuture<'a>: Future<Output = DomainResult<bool>> + Send + 'a
-    where
-        Self: 'a;
+gat_port! {
+    /// Zero-cost frame source with GAT futures
+    ///
+    /// Provides streaming access to frames with proper async iteration support.
+    pub trait FrameSourceGat {
+        /// Receive the next frame from the source
+        async fn next_frame(&mut self) -> Option<Frame>;
 
-    /// Future type for closing the source
-    type CloseFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+        /// Check if source has more frames available
+        async fn has_frames(&self) -> bool;
 
-    /// Receive the next frame from the source
-    fn next_frame(&mut self) -> Self::NextFrameFuture<'_>;
-
-    /// Check if source has more frames available
-    fn has_frames(&self) -> Self::HasFramesFuture<'_>;
-
-    /// Close the frame source
-    fn close(&mut self) -> Self::CloseFuture<'_>;
+        /// Close the frame source
+        async fn close(&mut self) -> ();
+    }
 }
 
-/// Zero-cost frame sink with GAT futures
-pub trait FrameSinkGat: Send + Sync {
-    /// Future type for sending a single frame
-    type SendFrameFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+gat_port! {
+    /// Zero-cost frame sink with GAT futures
+    ///
+    /// Provides efficient frame transmission with batching support.
+    pub trait FrameSinkGat {
+        /// Send a frame to the destination
+        async fn send_frame(&mut self, frame: Frame) -> ();
 
-    /// Future type for sending multiple frames
-    type SendFramesFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+        /// Send multiple frames efficiently
+        async fn send_frames(&mut self, frames: Vec<Frame>) -> ();
 
-    /// Future type for flushing
-    type FlushFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+        /// Flush any buffered frames
+        async fn flush(&mut self) -> ();
 
-    /// Future type for closing
-    type CloseFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    /// Send a frame to the destination
-    fn send_frame(&mut self, frame: Frame) -> Self::SendFrameFuture<'_>;
-
-    /// Send multiple frames efficiently
-    fn send_frames(&mut self, frames: Vec<Frame>) -> Self::SendFramesFuture<'_>;
-
-    /// Flush any buffered frames
-    fn flush(&mut self) -> Self::FlushFuture<'_>;
-
-    /// Close the frame sink
-    fn close(&mut self) -> Self::CloseFuture<'_>;
+        /// Close the frame sink
+        async fn close(&mut self) -> ();
+    }
 }
 
-/// Zero-cost stream repository with GAT futures
-pub trait StreamRepositoryGat: Send + Sync {
-    /// Future type for finding sessions
-    type FindSessionFuture<'a>: Future<Output = DomainResult<Option<StreamSession>>> + Send + 'a
-    where
-        Self: 'a;
+// ============================================================================
+// Repository Ports
+// ============================================================================
 
-    /// Future type for saving sessions
-    type SaveSessionFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+gat_port! {
+    /// Zero-cost stream repository with GAT futures
+    ///
+    /// Manages session persistence with async operations.
+    pub trait StreamRepositoryGat {
+        /// Find session by ID
+        async fn find_session(&self, session_id: SessionId) -> Option<StreamSession>;
 
-    /// Future type for removing sessions
-    type RemoveSessionFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+        /// Save session (insert or update)
+        async fn save_session(&self, session: StreamSession) -> ();
 
-    /// Future type for finding active sessions
-    type FindActiveSessionsFuture<'a>: Future<Output = DomainResult<Vec<StreamSession>>> + Send + 'a
-    where
-        Self: 'a;
+        /// Remove session
+        async fn remove_session(&self, session_id: SessionId) -> ();
 
-    /// Find session by ID
-    fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_>;
-
-    /// Save session (insert or update)
-    fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_>;
-
-    /// Remove session
-    fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_>;
-
-    /// Find all active sessions
-    fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_>;
+        /// Find all active sessions
+        async fn find_active_sessions(&self) -> Vec<StreamSession>;
+    }
 }
 
-/// Zero-cost stream store with GAT futures
-pub trait StreamStoreGat: Send + Sync {
-    /// Future type for storing streams
-    type StoreStreamFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+gat_port! {
+    /// Zero-cost stream store with GAT futures
+    ///
+    /// Provides stream-level storage operations.
+    pub trait StreamStoreGat {
+        /// Store a stream
+        async fn store_stream(&self, stream: Stream) -> ();
 
-    /// Future type for getting streams
-    type GetStreamFuture<'a>: Future<Output = DomainResult<Option<Stream>>> + Send + 'a
-    where
-        Self: 'a;
+        /// Retrieve stream by ID
+        async fn get_stream(&self, stream_id: StreamId) -> Option<Stream>;
 
-    /// Future type for deleting streams
-    type DeleteStreamFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+        /// Delete stream
+        async fn delete_stream(&self, stream_id: StreamId) -> ();
 
-    /// Future type for listing streams
-    type ListStreamsFuture<'a>: Future<Output = DomainResult<Vec<Stream>>> + Send + 'a
-    where
-        Self: 'a;
-
-    /// Store a stream
-    fn store_stream(&self, stream: Stream) -> Self::StoreStreamFuture<'_>;
-
-    /// Retrieve stream by ID
-    fn get_stream(&self, stream_id: StreamId) -> Self::GetStreamFuture<'_>;
-
-    /// Delete stream
-    fn delete_stream(&self, stream_id: StreamId) -> Self::DeleteStreamFuture<'_>;
-
-    /// List streams for session
-    fn list_streams_for_session(&self, session_id: SessionId) -> Self::ListStreamsFuture<'_>;
+        /// List streams for session
+        async fn list_streams_for_session(&self, session_id: SessionId) -> Vec<Stream>;
+    }
 }
 
-/// Zero-cost event publisher with GAT futures
-pub trait EventPublisherGat: Send + Sync {
-    /// Future type for publishing single event
-    type PublishFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+// ============================================================================
+// Event Publisher Port
+// ============================================================================
 
-    /// Future type for publishing multiple events
-    type PublishBatchFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+gat_port! {
+    /// Zero-cost event publisher with GAT futures
+    ///
+    /// Publishes domain events for system integration.
+    pub trait EventPublisherGat {
+        /// Publish a single domain event
+        async fn publish(&self, event: DomainEvent) -> ();
 
-    /// Publish a single domain event
-    fn publish(&self, event: DomainEvent) -> Self::PublishFuture<'_>;
-
-    /// Publish multiple domain events
-    fn publish_batch(&self, events: Vec<DomainEvent>) -> Self::PublishBatchFuture<'_>;
+        /// Publish multiple domain events
+        async fn publish_batch(&self, events: Vec<DomainEvent>) -> ();
+    }
 }
+
+// ============================================================================
+// Metrics Ports
+// ============================================================================
 
 /// Zero-cost metrics collector with GAT futures
+///
+/// Collects general metrics (counters, gauges, timings).
+/// Methods have explicit lifetime parameters for borrowed string names.
 pub trait MetricsCollectorGat: Send + Sync {
     /// Future type for incrementing counter
     type IncrementCounterFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
@@ -206,51 +166,32 @@ pub trait MetricsCollectorGat: Send + Sync {
     ) -> Self::RecordTimingFuture<'a>;
 }
 
-/// Zero-cost session/stream metrics collector with GAT futures
-///
-/// Separate trait for session-level metrics following Interface Segregation Principle
-pub trait SessionMetricsGat: Send + Sync {
-    /// Future type for recording session creation
-    type RecordSessionCreatedFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+gat_port! {
+    /// Zero-cost session/stream metrics collector with GAT futures
+    ///
+    /// Separate trait for session-level metrics following Interface Segregation Principle.
+    pub trait SessionMetricsGat {
+        /// Record session creation
+        async fn record_session_created(
+            &self,
+            session_id: SessionId,
+            metadata: std::collections::HashMap<String, String>
+        ) -> ();
 
-    /// Future type for recording session end
-    type RecordSessionEndedFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+        /// Record session end
+        async fn record_session_ended(&self, session_id: SessionId) -> ();
 
-    /// Future type for recording stream creation
-    type RecordStreamCreatedFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
+        /// Record stream creation
+        async fn record_stream_created(&self, stream_id: StreamId, session_id: SessionId) -> ();
 
-    /// Future type for recording stream completion
-    type RecordStreamCompletedFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    /// Record session creation
-    fn record_session_created(
-        &self,
-        session_id: SessionId,
-        metadata: std::collections::HashMap<String, String>,
-    ) -> Self::RecordSessionCreatedFuture<'_>;
-
-    /// Record session end
-    fn record_session_ended(&self, session_id: SessionId) -> Self::RecordSessionEndedFuture<'_>;
-
-    /// Record stream creation
-    fn record_stream_created(
-        &self,
-        stream_id: StreamId,
-        session_id: SessionId,
-    ) -> Self::RecordStreamCreatedFuture<'_>;
-
-    /// Record stream completion
-    fn record_stream_completed(&self, stream_id: StreamId)
-    -> Self::RecordStreamCompletedFuture<'_>;
+        /// Record stream completion
+        async fn record_stream_completed(&self, stream_id: StreamId) -> ();
+    }
 }
+
+// ============================================================================
+// Extension Traits
+// ============================================================================
 
 /// Helper trait for implementing common frame sink operations
 pub trait FrameSinkGatExt: FrameSinkGat + Sized {

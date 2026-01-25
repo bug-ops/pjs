@@ -27,6 +27,7 @@ maplit = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
+paste = { workspace = true }
 pjson-rs-domain = { workspace = true }
 priority-queue = { workspace = true }
 prometheus = { workspace = true, optional = true }
