@@ -918,4 +918,154 @@ mod tests {
         assert!(high_throughput.max_ratio > default_cfg.max_ratio);
         assert!(high_throughput.max_decompressed_size > default_cfg.max_decompressed_size);
     }
+
+    #[test]
+    fn test_protect_reader_basic_usage() {
+        let detector = CompressionBombDetector::default();
+        let data = b"test data for protect_reader";
+        let cursor = Cursor::new(data.as_slice());
+
+        let mut protector = detector.protect_reader(cursor, data.len());
+
+        let mut buffer = Vec::new();
+        let bytes_read = protector.read_to_end(&mut buffer).unwrap();
+
+        assert_eq!(bytes_read, data.len());
+        assert_eq!(buffer.as_slice(), data);
+
+        let stats = protector.stats();
+        assert_eq!(stats.compressed_size, data.len());
+        assert_eq!(stats.decompressed_size, data.len());
+    }
+
+    #[test]
+    fn test_protect_reader_with_size_limit() {
+        let config = CompressionBombConfig {
+            max_decompressed_size: 500,
+            check_interval_bytes: 100,
+            ..Default::default()
+        };
+        let detector = CompressionBombDetector::new(config);
+
+        let data = vec![0u8; 1000];
+        let cursor = Cursor::new(data);
+
+        let mut protector = detector.protect_reader(cursor, 50);
+
+        let mut buffer = [0u8; 200];
+        let mut error_occurred = false;
+
+        loop {
+            match protector.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(_) => {
+                    error_occurred = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(error_occurred, "protect_reader should detect size limit");
+    }
+
+    struct FailingReader {
+        fail_after: usize,
+        bytes_read: usize,
+    }
+
+    impl FailingReader {
+        fn new(fail_after: usize) -> Self {
+            Self {
+                fail_after,
+                bytes_read: 0,
+            }
+        }
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.bytes_read >= self.fail_after {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "simulated read failure",
+                ));
+            }
+            let to_read = std::cmp::min(buf.len(), self.fail_after - self.bytes_read);
+            for b in buf.iter_mut().take(to_read) {
+                *b = 0;
+            }
+            self.bytes_read += to_read;
+            Ok(to_read)
+        }
+    }
+
+    #[test]
+    fn test_inner_reader_error_propagation() {
+        let failing_reader = FailingReader::new(50);
+        let config = CompressionBombConfig::default();
+        let mut protector = CompressionBombProtector::new(failing_reader, config, 100);
+
+        let mut buffer = [0u8; 100];
+
+        let result1 = protector.read(&mut buffer);
+        assert!(result1.is_ok());
+        assert_eq!(result1.unwrap(), 50);
+
+        let result2 = protector.read(&mut buffer);
+        assert!(result2.is_err());
+        let err = result2.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+        assert!(err.to_string().contains("simulated read failure"));
+    }
+
+    #[test]
+    fn test_check_limits_with_zero_compressed_size_and_data_read() {
+        let config = CompressionBombConfig {
+            max_decompressed_size: 1000,
+            check_interval_bytes: 50,
+            ..Default::default()
+        };
+
+        let data = vec![0u8; 100];
+        let cursor = Cursor::new(data);
+
+        let mut protector = CompressionBombProtector::new(cursor, config, 0);
+
+        let mut buffer = [0u8; 60];
+
+        let result = protector.read(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 60);
+
+        let stats = protector.stats();
+        assert_eq!(stats.compressed_size, 0);
+        assert_eq!(stats.decompressed_size, 60);
+        assert_eq!(stats.ratio, 0.0);
+    }
+
+    #[test]
+    fn test_check_limits_ratio_ok_branch() {
+        let config = CompressionBombConfig {
+            max_ratio: 100.0,
+            max_decompressed_size: 10_000,
+            check_interval_bytes: 50,
+            ..Default::default()
+        };
+
+        let data = vec![0u8; 100];
+        let cursor = Cursor::new(data);
+
+        let mut protector = CompressionBombProtector::new(cursor, config, 50);
+
+        let mut buffer = [0u8; 60];
+
+        let result = protector.read(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 60);
+
+        let stats = protector.stats();
+        assert_eq!(stats.decompressed_size, 60);
+        assert!((stats.ratio - 1.2).abs() < 0.01);
+    }
 }

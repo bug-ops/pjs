@@ -288,4 +288,367 @@ mod tests {
         assert_eq!(timed_out.len(), 1);
         assert_eq!(timed_out[0], session_id);
     }
+
+    #[tokio::test]
+    async fn test_set_stream_success() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+        let stream_id = StreamId::new();
+
+        manager.register_connection(session_id).await.unwrap();
+
+        // Initially no stream
+        let state = manager.get_connection(&session_id).await.unwrap();
+        assert!(state.stream_id.is_none());
+
+        // Set stream
+        assert!(manager.set_stream(&session_id, stream_id).await.is_ok());
+
+        // Verify stream is set
+        let state = manager.get_connection(&session_id).await.unwrap();
+        assert_eq!(state.stream_id, Some(stream_id));
+    }
+
+    #[tokio::test]
+    async fn test_set_stream_connection_not_found() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+        let stream_id = StreamId::new();
+
+        let result = manager.set_stream(&session_id, stream_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(DomainError::ValidationError(msg)) => {
+                assert!(msg.contains("Connection not found"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_active_connections() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+
+        let session1 = SessionId::new();
+        let session2 = SessionId::new();
+        let session3 = SessionId::new();
+
+        manager.register_connection(session1).await.unwrap();
+        manager.register_connection(session2).await.unwrap();
+        manager.register_connection(session3).await.unwrap();
+
+        // All active initially
+        let active = manager.get_active_connections().await;
+        assert_eq!(active.len(), 3);
+
+        // Close one connection
+        manager.close_connection(&session2).await.unwrap();
+
+        // Only 2 active now
+        let active = manager.get_active_connections().await;
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|s| s.session_id != session2));
+    }
+
+    #[tokio::test]
+    async fn test_get_active_connections_empty() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+
+        let active = manager.get_active_connections().await;
+        assert!(active.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_process_timeouts() {
+        let manager = ConnectionManager::new(Duration::from_millis(50), 10);
+
+        let session1 = SessionId::new();
+        let session2 = SessionId::new();
+
+        manager.register_connection(session1).await.unwrap();
+        manager.register_connection(session2).await.unwrap();
+
+        // Wait for timeout
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Process timeouts
+        manager.process_timeouts().await;
+
+        // Both connections should be closed (inactive)
+        let state1 = manager.get_connection(&session1).await.unwrap();
+        let state2 = manager.get_connection(&session2).await.unwrap();
+        assert!(!state1.is_active);
+        assert!(!state2.is_active);
+    }
+
+    #[tokio::test]
+    async fn test_process_timeouts_no_timeouts() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 10);
+        let session_id = SessionId::new();
+
+        manager.register_connection(session_id).await.unwrap();
+
+        // No timeout should occur (60 seconds timeout)
+        manager.process_timeouts().await;
+
+        // Connection should still be active
+        let state = manager.get_connection(&session_id).await.unwrap();
+        assert!(state.is_active);
+    }
+
+    #[tokio::test]
+    async fn test_get_statistics() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+
+        let session1 = SessionId::new();
+        let session2 = SessionId::new();
+
+        manager.register_connection(session1).await.unwrap();
+        manager.register_connection(session2).await.unwrap();
+
+        // Update metrics for session1
+        manager.update_metrics(&session1, 100, 50).await.unwrap();
+        manager.update_metrics(&session1, 200, 100).await.unwrap();
+
+        // Update metrics for session2
+        manager.update_metrics(&session2, 50, 25).await.unwrap();
+
+        // Close session2
+        manager.close_connection(&session2).await.unwrap();
+
+        let stats = manager.get_statistics().await;
+
+        assert_eq!(stats.total_connections, 2);
+        assert_eq!(stats.active_connections, 1);
+        assert_eq!(stats.inactive_connections, 1);
+        assert_eq!(stats.total_bytes_sent, 350); // 300 + 50
+        assert_eq!(stats.total_bytes_received, 175); // 150 + 25
+    }
+
+    #[tokio::test]
+    async fn test_get_statistics_empty() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+
+        let stats = manager.get_statistics().await;
+
+        assert_eq!(stats.total_connections, 0);
+        assert_eq!(stats.active_connections, 0);
+        assert_eq!(stats.inactive_connections, 0);
+        assert_eq!(stats.total_bytes_sent, 0);
+        assert_eq!(stats.total_bytes_received, 0);
+    }
+
+    #[tokio::test]
+    async fn test_update_activity_not_found() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+
+        let result = manager.update_activity(&session_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(DomainError::ValidationError(msg)) => {
+                assert!(msg.contains("Connection not found"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_metrics_not_found() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+
+        let result = manager.update_metrics(&session_id, 100, 50).await;
+        assert!(result.is_err());
+        match result {
+            Err(DomainError::ValidationError(msg)) => {
+                assert!(msg.contains("Connection not found"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_close_connection_not_found() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+
+        let result = manager.close_connection(&session_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(DomainError::ValidationError(msg)) => {
+                assert!(msg.contains("Connection not found"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_connection_not_found() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+
+        let result = manager.remove_connection(&session_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(DomainError::ValidationError(msg)) => {
+                assert!(msg.contains("Connection not found"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connection_state_initial_values() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+
+        manager.register_connection(session_id).await.unwrap();
+
+        let state = manager.get_connection(&session_id).await.unwrap();
+        assert_eq!(state.session_id, session_id);
+        assert!(state.stream_id.is_none());
+        assert_eq!(state.bytes_sent, 0);
+        assert_eq!(state.bytes_received, 0);
+        assert!(state.is_active);
+    }
+
+    #[tokio::test]
+    async fn test_connection_event_variants() {
+        let session_id = SessionId::new();
+
+        // Test all event variants can be constructed
+        let connected = ConnectionEvent::Connected(session_id);
+        let disconnected = ConnectionEvent::Disconnected(session_id);
+        let timeout = ConnectionEvent::Timeout(session_id);
+        let error = ConnectionEvent::Error(session_id, "test error".to_string());
+
+        // Verify Debug trait
+        assert!(format!("{:?}", connected).contains("Connected"));
+        assert!(format!("{:?}", disconnected).contains("Disconnected"));
+        assert!(format!("{:?}", timeout).contains("Timeout"));
+        assert!(format!("{:?}", error).contains("Error"));
+        assert!(format!("{:?}", error).contains("test error"));
+    }
+
+    #[tokio::test]
+    async fn test_connection_event_clone() {
+        let session_id = SessionId::new();
+        let event = ConnectionEvent::Error(session_id, "clone test".to_string());
+        let cloned = event.clone();
+
+        match cloned {
+            ConnectionEvent::Error(id, msg) => {
+                assert_eq!(id, session_id);
+                assert_eq!(msg, "clone test");
+            }
+            _ => panic!("Expected Error variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_metrics_cumulative() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+
+        manager.register_connection(session_id).await.unwrap();
+
+        // Multiple updates should accumulate
+        manager.update_metrics(&session_id, 100, 50).await.unwrap();
+        manager.update_metrics(&session_id, 200, 100).await.unwrap();
+        manager.update_metrics(&session_id, 50, 25).await.unwrap();
+
+        let state = manager.get_connection(&session_id).await.unwrap();
+        assert_eq!(state.bytes_sent, 350);
+        assert_eq!(state.bytes_received, 175);
+    }
+
+    #[tokio::test]
+    async fn test_get_connection_not_found() {
+        let manager = ConnectionManager::new(Duration::from_secs(60), 100);
+        let session_id = SessionId::new();
+
+        let result = manager.get_connection(&session_id).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_connection_statistics_debug() {
+        let stats = ConnectionStatistics {
+            total_connections: 10,
+            active_connections: 8,
+            inactive_connections: 2,
+            total_bytes_sent: 1000,
+            total_bytes_received: 500,
+        };
+
+        let debug_str = format!("{:?}", stats);
+        assert!(debug_str.contains("total_connections: 10"));
+        assert!(debug_str.contains("active_connections: 8"));
+    }
+
+    #[tokio::test]
+    async fn test_connection_statistics_clone() {
+        let stats = ConnectionStatistics {
+            total_connections: 5,
+            active_connections: 3,
+            inactive_connections: 2,
+            total_bytes_sent: 500,
+            total_bytes_received: 250,
+        };
+
+        let cloned = stats.clone();
+        assert_eq!(cloned.total_connections, 5);
+        assert_eq!(cloned.active_connections, 3);
+        assert_eq!(cloned.inactive_connections, 2);
+        assert_eq!(cloned.total_bytes_sent, 500);
+        assert_eq!(cloned.total_bytes_received, 250);
+    }
+
+    #[tokio::test]
+    async fn test_timeout_check_excludes_inactive() {
+        let manager = ConnectionManager::new(Duration::from_millis(50), 10);
+
+        let session1 = SessionId::new();
+        let session2 = SessionId::new();
+
+        manager.register_connection(session1).await.unwrap();
+        manager.register_connection(session2).await.unwrap();
+
+        // Close session1 before timeout
+        manager.close_connection(&session1).await.unwrap();
+
+        // Wait for timeout
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Only session2 should be in timeout list (session1 is already inactive)
+        let timed_out = manager.check_timeouts().await;
+        assert_eq!(timed_out.len(), 1);
+        assert_eq!(timed_out[0], session2);
+    }
+
+    #[tokio::test]
+    async fn test_activity_update_prevents_timeout() {
+        let manager = ConnectionManager::new(Duration::from_millis(100), 10);
+        let session_id = SessionId::new();
+
+        manager.register_connection(session_id).await.unwrap();
+
+        // Wait 50ms, then update activity
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        manager.update_activity(&session_id).await.unwrap();
+
+        // Wait another 60ms (total 110ms from start, but only 60ms from last activity)
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        // Should not be timed out yet
+        let timed_out = manager.check_timeouts().await;
+        assert!(timed_out.is_empty());
+
+        // Wait more to trigger timeout
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let timed_out = manager.check_timeouts().await;
+        assert_eq!(timed_out.len(), 1);
+    }
 }

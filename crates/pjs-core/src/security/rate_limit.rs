@@ -751,4 +751,44 @@ mod tests {
         // but not create the client entry if it doesn't exist in clients map
         assert!(limiter.check_message(ip, 512).is_ok());
     }
+
+    #[test]
+    fn test_rate_limit_guard_check_message() {
+        let config = RateLimitConfig {
+            max_connections_per_ip: 5,
+            max_frame_size: 1024,
+            max_messages_per_second: 10,
+            burst_allowance: 5,
+            ..Default::default()
+        };
+
+        let limiter = Arc::new(WebSocketRateLimiter::new(config));
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        let guard = RateLimitGuard::new(limiter.clone(), ip).unwrap();
+
+        assert!(guard.check_message(512).is_ok());
+        assert!(guard.check_message(512).is_ok());
+        assert!(guard.check_message(2048).is_err());
+    }
+
+    #[test]
+    fn test_rate_limit_guard_check_message_rate_limit() {
+        let config = RateLimitConfig {
+            max_connections_per_ip: 5,
+            max_frame_size: 10_000,
+            max_messages_per_second: 2,
+            burst_allowance: 2,
+            ..Default::default()
+        };
+
+        let limiter = Arc::new(WebSocketRateLimiter::new(config));
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+
+        let guard = RateLimitGuard::new(limiter.clone(), ip).unwrap();
+
+        assert!(guard.check_message(512).is_ok());
+        assert!(guard.check_message(512).is_ok());
+        assert!(guard.check_message(512).is_err());
+    }
 }

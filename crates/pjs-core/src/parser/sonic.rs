@@ -620,4 +620,100 @@ mod tests {
         let result = parser.parse(json.as_bytes());
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_sonic_geojson_detection() {
+        let parser = SonicParser::new();
+        let json = br#"{
+            "type": "Point",
+            "coordinates": [125.6, 10.1]
+        }"#;
+
+        let result = parser.parse(json).unwrap();
+        assert!(result.semantics.is_some());
+        if let Some(semantics) = result.semantics {
+            assert!(matches!(
+                semantics.semantic_type,
+                SemanticType::Geospatial { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn test_sonic_timeseries_with_time_field() {
+        let parser = SonicParser::new();
+        let json = br#"{
+            "time": "2023-01-01T00:00:00Z",
+            "temperature": 25.5,
+            "humidity": 60.2
+        }"#;
+
+        let result = parser.parse(json).unwrap();
+        assert!(result.semantics.is_some());
+        if let Some(semantics) = result.semantics {
+            if let SemanticType::TimeSeries { timestamp_field, .. } = semantics.semantic_type {
+                assert_eq!(timestamp_field, "time");
+            } else {
+                panic!("Expected TimeSeries semantic type");
+            }
+        }
+    }
+
+    #[test]
+    fn test_sonic_large_input_skips_semantics() {
+        let parser = SonicParser::new();
+
+        // Create input larger than 100KB threshold
+        let large_value = "x".repeat(50_000);
+        let json = format!(
+            r#"{{
+            "timestamp": "2023-01-01T00:00:00Z",
+            "data": "{}"
+        }}"#,
+            large_value
+        );
+
+        let result = parser.parse(json.as_bytes()).unwrap();
+        // Semantic detection should be skipped for large inputs
+        assert!(result.semantics.is_none());
+    }
+
+    #[test]
+    fn test_sonic_tabular_data_detection() {
+        let parser = SonicParser::new();
+        let json = br#"[
+            {"id": 1, "name": "Alice", "age": 30},
+            {"id": 2, "name": "Bob", "age": 25},
+            {"id": 3, "name": "Charlie", "age": 35}
+        ]"#;
+
+        let result = parser.parse(json).unwrap();
+        assert!(result.semantics.is_some());
+        if let Some(semantics) = result.semantics {
+            assert!(matches!(
+                semantics.semantic_type,
+                SemanticType::Table { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn test_sonic_non_tabular_heterogeneous_array() {
+        let parser = SonicParser::new();
+        // Array with different structures - should not be detected as tabular
+        let json = br#"[
+            {"id": 1, "name": "Alice"},
+            {"id": 2, "name": "Bob", "extra": "field"},
+            {"completely": "different"}
+        ]"#;
+
+        let result = parser.parse(json).unwrap();
+        // Should not detect as tabular due to heterogeneous structure
+        if let Some(semantics) = result.semantics {
+            assert!(!matches!(
+                semantics.semantic_type,
+                SemanticType::Table { .. }
+            ));
+        }
+    }
 }
