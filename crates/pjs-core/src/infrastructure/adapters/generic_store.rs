@@ -1,13 +1,14 @@
 //! Generic in-memory store for thread-safe key-value storage
 //!
 //! Provides a reusable foundation for GAT repository implementations.
+//! Uses lock-free DashMap for concurrent access per infrastructure guidelines.
 
-use parking_lot::RwLock;
-use std::{collections::HashMap, hash::Hash, sync::Arc};
+use dashmap::DashMap;
+use std::{hash::Hash, sync::Arc};
 
 /// Generic thread-safe in-memory store
 ///
-/// Uses `parking_lot::RwLock` for better performance than std::sync::RwLock.
+/// Uses `DashMap` for lock-free concurrent access with sharded hash maps.
 /// Arc wrapper enables cheap cloning for shared ownership across async tasks.
 #[derive(Debug)]
 pub struct InMemoryStore<K, V>
@@ -15,7 +16,7 @@ where
     K: Eq + Hash + Clone + Send + Sync,
     V: Clone + Send + Sync,
 {
-    data: Arc<RwLock<HashMap<K, V>>>,
+    data: Arc<DashMap<K, V>>,
 }
 
 impl<K, V> InMemoryStore<K, V>
@@ -26,38 +27,38 @@ where
     /// Create empty store
     pub fn new() -> Self {
         Self {
-            data: Arc::new(RwLock::new(HashMap::new())),
+            data: Arc::new(DashMap::new()),
         }
     }
 
     /// Get number of entries
     pub fn count(&self) -> usize {
-        self.data.read().len()
+        self.data.len()
     }
 
     /// Remove all entries
     pub fn clear(&self) {
-        self.data.write().clear();
+        self.data.clear();
     }
 
     /// Get all keys
     pub fn all_keys(&self) -> Vec<K> {
-        self.data.read().keys().cloned().collect()
+        self.data.iter().map(|entry| entry.key().clone()).collect()
     }
 
     /// Get value by key
     pub fn get(&self, key: &K) -> Option<V> {
-        self.data.read().get(key).cloned()
+        self.data.get(key).map(|entry| entry.value().clone())
     }
 
     /// Insert or update value
     pub fn insert(&self, key: K, value: V) -> Option<V> {
-        self.data.write().insert(key, value)
+        self.data.insert(key, value)
     }
 
     /// Remove entry by key
     pub fn remove(&self, key: &K) -> Option<V> {
-        self.data.write().remove(key)
+        self.data.remove(key).map(|(_k, v)| v)
     }
 
     /// Filter values by predicate
@@ -66,21 +67,20 @@ where
         P: Fn(&V) -> bool,
     {
         self.data
-            .read()
-            .values()
-            .filter(|v| predicate(v))
-            .cloned()
+            .iter()
+            .filter(|entry| predicate(entry.value()))
+            .map(|entry| entry.value().clone())
             .collect()
     }
 
     /// Check if key exists
     pub fn contains_key(&self, key: &K) -> bool {
-        self.data.read().contains_key(key)
+        self.data.contains_key(key)
     }
 
     /// Check if store is empty
     pub fn is_empty(&self) -> bool {
-        self.data.read().is_empty()
+        self.data.is_empty()
     }
 }
 
