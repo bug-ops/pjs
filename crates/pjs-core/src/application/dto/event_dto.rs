@@ -5,9 +5,8 @@
 
 use crate::{
     application::dto::{
+        id_dto::{SessionIdDto, StreamIdDto},
         priority_dto::{FromDto, ToDto},
-        session_id_dto::SessionIdDto,
-        stream_id_dto::StreamIdDto,
     },
     domain::{
         DomainError,
