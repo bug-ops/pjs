@@ -651,7 +651,10 @@ mod tests {
         let result = parser.parse(json).unwrap();
         assert!(result.semantics.is_some());
         if let Some(semantics) = result.semantics {
-            if let SemanticType::TimeSeries { timestamp_field, .. } = semantics.semantic_type {
+            if let SemanticType::TimeSeries {
+                timestamp_field, ..
+            } = semantics.semantic_type
+            {
                 assert_eq!(timestamp_field, "time");
             } else {
                 panic!("Expected TimeSeries semantic type");
