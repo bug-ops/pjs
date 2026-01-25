@@ -1,6 +1,6 @@
 //! Domain events for event sourcing and integration
 
-use crate::value_objects::{SessionId, StreamId};
+use crate::value_objects::{BackpressureSignal, SessionId, StreamId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -282,6 +282,62 @@ pub enum DomainEvent {
         /// When the metrics were recorded
         timestamp: DateTime<Utc>,
     },
+
+    /// Backpressure signal received from client
+    BackpressureReceived {
+        /// ID of the session receiving backpressure
+        #[serde(with = "serde_session_id")]
+        session_id: SessionId,
+        /// ID of the stream if specific to a stream
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(with = "serde_option_stream_id")]
+        stream_id: Option<StreamId>,
+        /// Backpressure signal type
+        signal: BackpressureSignal,
+        /// When the signal was received
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream was paused due to flow control
+    StreamPaused {
+        /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
+        session_id: SessionId,
+        /// ID of the paused stream
+        #[serde(with = "serde_stream_id")]
+        stream_id: StreamId,
+        /// Reason for pausing
+        reason: String,
+        /// When the stream was paused
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream was resumed after pause
+    StreamResumed {
+        /// ID of the session containing the stream
+        #[serde(with = "serde_session_id")]
+        session_id: SessionId,
+        /// ID of the resumed stream
+        #[serde(with = "serde_stream_id")]
+        stream_id: StreamId,
+        /// Duration the stream was paused in milliseconds
+        paused_duration_ms: u64,
+        /// When the stream was resumed
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Flow control credits were updated
+    CreditsUpdated {
+        /// ID of the session with updated credits
+        #[serde(with = "serde_session_id")]
+        session_id: SessionId,
+        /// New available credits
+        available_credits: usize,
+        /// Maximum allowed credits
+        max_credits: usize,
+        /// When credits were updated
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// Performance metrics for monitoring and optimization
@@ -410,6 +466,10 @@ impl DomainEvent {
             Self::PerformanceMetricsRecorded { session_id, .. } => *session_id,
             Self::SessionTimedOut { session_id, .. } => *session_id,
             Self::SessionTimeoutExtended { session_id, .. } => *session_id,
+            Self::BackpressureReceived { session_id, .. } => *session_id,
+            Self::StreamPaused { session_id, .. } => *session_id,
+            Self::StreamResumed { session_id, .. } => *session_id,
+            Self::CreditsUpdated { session_id, .. } => *session_id,
         }
     }
 
@@ -424,6 +484,9 @@ impl DomainEvent {
             Self::SkeletonGenerated { stream_id, .. } => Some(*stream_id),
             Self::PatchFramesGenerated { stream_id, .. } => Some(*stream_id),
             Self::StreamConfigUpdated { stream_id, .. } => Some(*stream_id),
+            Self::StreamPaused { stream_id, .. } => Some(*stream_id),
+            Self::StreamResumed { stream_id, .. } => Some(*stream_id),
+            Self::BackpressureReceived { stream_id, .. } => *stream_id,
             _ => None,
         }
     }
@@ -447,6 +510,10 @@ impl DomainEvent {
             Self::PerformanceMetricsRecorded { timestamp, .. } => *timestamp,
             Self::SessionTimedOut { timestamp, .. } => *timestamp,
             Self::SessionTimeoutExtended { timestamp, .. } => *timestamp,
+            Self::BackpressureReceived { timestamp, .. } => *timestamp,
+            Self::StreamPaused { timestamp, .. } => *timestamp,
+            Self::StreamResumed { timestamp, .. } => *timestamp,
+            Self::CreditsUpdated { timestamp, .. } => *timestamp,
         }
     }
 
@@ -469,6 +536,10 @@ impl DomainEvent {
             Self::PerformanceMetricsRecorded { .. } => "performance_metrics_recorded",
             Self::SessionTimedOut { .. } => "session_timed_out",
             Self::SessionTimeoutExtended { .. } => "session_timeout_extended",
+            Self::BackpressureReceived { .. } => "backpressure_received",
+            Self::StreamPaused { .. } => "stream_paused",
+            Self::StreamResumed { .. } => "stream_resumed",
+            Self::CreditsUpdated { .. } => "credits_updated",
         }
     }
 
@@ -769,7 +840,11 @@ impl DomainEvent {
             | DomainEvent::StreamConfigUpdated { timestamp, .. }
             | DomainEvent::PerformanceMetricsRecorded { timestamp, .. }
             | DomainEvent::SessionTimedOut { timestamp, .. }
-            | DomainEvent::SessionTimeoutExtended { timestamp, .. } => *timestamp,
+            | DomainEvent::SessionTimeoutExtended { timestamp, .. }
+            | DomainEvent::BackpressureReceived { timestamp, .. }
+            | DomainEvent::StreamPaused { timestamp, .. }
+            | DomainEvent::StreamResumed { timestamp, .. }
+            | DomainEvent::CreditsUpdated { timestamp, .. } => *timestamp,
         }
     }
 

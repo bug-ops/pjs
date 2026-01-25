@@ -447,8 +447,23 @@ impl StreamingDecompressor {
 
                 for item in arr {
                     if let Some(obj) = item.as_object() {
+                        // Validate RLE object integrity: both keys must be present or both absent
+                        let has_rle_value = obj.contains_key("rle_value");
+                        let has_rle_count = obj.contains_key("rle_count");
+
+                        if has_rle_value && !has_rle_count {
+                            return Err(DomainError::CompressionError(
+                                "Malformed RLE object: rle_value without rle_count".to_string(),
+                            ));
+                        }
+                        if has_rle_count && !has_rle_value {
+                            return Err(DomainError::CompressionError(
+                                "Malformed RLE object: rle_count without rle_value".to_string(),
+                            ));
+                        }
+
                         // Check if this is an RLE-encoded run
-                        if obj.contains_key("rle_value") && obj.contains_key("rle_count") {
+                        if has_rle_value && has_rle_count {
                             let value = obj
                                 .get("rle_value")
                                 .ok_or_else(|| {
@@ -929,6 +944,18 @@ mod tests {
 
         let compressed_data = json!([
             {"rle_count": 3}
+        ]);
+
+        let result = decompressor.decompress_run_length(&compressed_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rle_decompression_missing_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_value": "x"}
         ]);
 
         let result = decompressor.decompress_run_length(&compressed_data);
