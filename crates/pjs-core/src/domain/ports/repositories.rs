@@ -643,7 +643,7 @@ mod tests {
     // Tests for StreamStatus
     #[test]
     fn test_stream_status_all_variants() {
-        let statuses = vec![
+        let statuses = [
             StreamStatus::Created,
             StreamStatus::Active,
             StreamStatus::Paused,
