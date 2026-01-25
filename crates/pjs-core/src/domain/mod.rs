@@ -8,6 +8,7 @@ pub use pjson_rs_domain::{DomainError, DomainResult, entities, events, value_obj
 
 // pjs-core specific domain modules
 pub mod aggregates;
+pub mod macros;
 pub mod ports;
 pub mod services;
 

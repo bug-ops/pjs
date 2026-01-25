@@ -132,7 +132,7 @@ impl StreamStoreGat for GatInMemoryStreamStore {
     where
         Self: 'a;
 
-    type ListStreamsFuture<'a>
+    type ListStreamsForSessionFuture<'a>
         = impl Future<Output = DomainResult<Vec<Stream>>> + Send + 'a
     where
         Self: 'a;
@@ -155,7 +155,10 @@ impl StreamStoreGat for GatInMemoryStreamStore {
         }
     }
 
-    fn list_streams_for_session(&self, session_id: SessionId) -> Self::ListStreamsFuture<'_> {
+    fn list_streams_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Self::ListStreamsForSessionFuture<'_> {
         async move { Ok(self.store.filter(|s| s.session_id() == session_id)) }
     }
 }
