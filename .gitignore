@@ -23,4 +23,5 @@ tasks
 **/node_modules/
 
 .local
-.claude
+.claude/settings.local.json
+CLAUDE.local.md

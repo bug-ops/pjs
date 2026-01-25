@@ -31,7 +31,7 @@ use crate::{
         ports::{EventPublisherGat, StreamRepositoryGat, StreamStoreGat},
         value_objects::{SessionId, StreamId},
     },
-    infrastructure::http::middleware::security_middleware,
+    infrastructure::http::middleware::{RateLimitMiddleware, security_middleware},
 };
 
 /// Axum application state with PJS GAT-based handlers
@@ -165,6 +165,59 @@ where
         )
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
         .route("/pjs/health", get(system_health))
+        .layer(middleware::from_fn(security_middleware))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(["http://localhost:3000"
+                    .parse::<axum::http::HeaderValue>()
+                    .unwrap()])
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers([CONTENT_TYPE, AUTHORIZATION])
+                .max_age(std::time::Duration::from_secs(3600)),
+        )
+        .layer(TraceLayer::new_for_http())
+}
+
+/// Create PJS-enabled Axum router with rate limiting
+///
+/// Adds rate limiting middleware to protect against DoS attacks.
+/// Default: 100 requests per minute per IP address.
+///
+/// # Security Note
+/// Rate limiting is applied globally to all endpoints.
+/// Returns 429 Too Many Requests with Retry-After header when limit exceeded.
+/// Adds X-RateLimit-* headers per RFC 6585.
+pub fn create_pjs_router_with_rate_limit<R, P, S>(
+    rate_limit_middleware: RateLimitMiddleware,
+) -> Router<PjsAppState<R, P, S>>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/pjs/sessions", post(create_session::<R, P, S>))
+        .route("/pjs/sessions/{session_id}", get(get_session::<R, P, S>))
+        .route(
+            "/pjs/sessions/{session_id}/health",
+            get(session_health::<R, P, S>),
+        )
+        .route(
+            "/pjs/sessions/{session_id}/streams",
+            post(create_stream::<R, P, S>),
+        )
+        .route(
+            "/pjs/sessions/{session_id}/streams/{stream_id}/start",
+            post(start_stream::<R, P, S>),
+        )
+        .route(
+            "/pjs/sessions/{session_id}/streams/{stream_id}",
+            get(get_stream::<R, P, S>),
+        )
+        .route("/pjs/sessions", get(list_sessions::<R, P, S>))
+        .route("/pjs/health", get(system_health))
+        .layer(rate_limit_middleware)
         .layer(middleware::from_fn(security_middleware))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(

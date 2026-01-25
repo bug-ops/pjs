@@ -447,8 +447,23 @@ impl StreamingDecompressor {
 
                 for item in arr {
                     if let Some(obj) = item.as_object() {
+                        // Validate RLE object integrity: both keys must be present or both absent
+                        let has_rle_value = obj.contains_key("rle_value");
+                        let has_rle_count = obj.contains_key("rle_count");
+
+                        if has_rle_value && !has_rle_count {
+                            return Err(DomainError::CompressionError(
+                                "Malformed RLE object: rle_value without rle_count".to_string(),
+                            ));
+                        }
+                        if has_rle_count && !has_rle_value {
+                            return Err(DomainError::CompressionError(
+                                "Malformed RLE object: rle_count without rle_value".to_string(),
+                            ));
+                        }
+
                         // Check if this is an RLE-encoded run
-                        if obj.contains_key("rle_value") && obj.contains_key("rle_count") {
+                        if has_rle_value && has_rle_count {
                             let value = obj
                                 .get("rle_value")
                                 .ok_or_else(|| {
@@ -936,6 +951,18 @@ mod tests {
     }
 
     #[test]
+    fn test_rle_decompression_missing_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = json!([
+            {"rle_value": "x"}
+        ]);
+
+        let result = decompressor.decompress_run_length(&compressed_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_rle_decompression_non_rle_objects() {
         let decompressor = StreamingDecompressor::new();
 
@@ -954,6 +981,884 @@ mod tests {
                 {"regular": "object"},
                 {"another": "one"}
             ])
+        );
+    }
+
+    // NEW TESTS FOR COVERAGE IMPROVEMENT (Task P2-TEST-002)
+
+    #[test]
+    fn test_compress_frame_with_custom_strategies() {
+        let mut dict = HashMap::new();
+        dict.insert("test".to_string(), 0);
+
+        let mut bases = HashMap::new();
+        bases.insert("value".to_string(), 100.0);
+
+        let mut compressor = StreamingCompressor::with_strategies(
+            CompressionStrategy::Dictionary { dictionary: dict },
+            CompressionStrategy::Delta { base_values: bases },
+        );
+
+        let frame = StreamFrame {
+            data: json!({"value": 123, "other": 456}),
+            priority: Priority::HIGH,
+            metadata: HashMap::new(),
+        };
+
+        let result = compressor.compress_frame(frame);
+        assert!(result.is_ok());
+        assert_eq!(compressor.stats.frames_processed, 1);
+    }
+
+    #[test]
+    fn test_optimize_for_data_with_samples() {
+        let mut compressor = StreamingCompressor::new();
+
+        let skeleton = json!({
+            "id": null,
+            "name": null
+        });
+
+        let samples = vec![
+            json!({"id": 1, "name": "test1"}),
+            json!({"id": 2, "name": "test2"}),
+            json!({"id": 3, "name": "test3"}),
+        ];
+
+        let result = compressor.optimize_for_data(&skeleton, &samples);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_optimize_for_data_empty_samples() {
+        let mut compressor = StreamingCompressor::new();
+
+        let skeleton = json!({"key": "value"});
+        let result = compressor.optimize_for_data(&skeleton, &[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_reset_stats() {
+        let mut compressor = StreamingCompressor::new();
+
+        compressor.stats.total_input_bytes = 1000;
+        compressor.stats.total_output_bytes = 500;
+        compressor.stats.frames_processed = 10;
+
+        compressor.reset_stats();
+
+        assert_eq!(compressor.stats.total_input_bytes, 0);
+        assert_eq!(compressor.stats.total_output_bytes, 0);
+        assert_eq!(compressor.stats.frames_processed, 0);
+    }
+
+    #[test]
+    fn test_compressor_critical_vs_low_priority() {
+        let mut compressor = StreamingCompressor::new();
+
+        let critical_frame = StreamFrame {
+            data: json!({"critical": "data"}),
+            priority: Priority::CRITICAL,
+            metadata: HashMap::new(),
+        };
+
+        let low_frame = StreamFrame {
+            data: json!({"low": "data"}),
+            priority: Priority::LOW,
+            metadata: HashMap::new(),
+        };
+
+        compressor.compress_frame(critical_frame).unwrap();
+        compressor.compress_frame(low_frame).unwrap();
+
+        assert_eq!(compressor.stats.frames_processed, 2);
+    }
+
+    #[test]
+    fn test_decompressor_hybrid_strategy() {
+        let mut decompressor = StreamingDecompressor::new();
+
+        // Setup delta bases and dictionary
+        decompressor.delta_bases.insert("value".to_string(), 100.0);
+        decompressor.active_dictionary.insert(0, "test".to_string());
+
+        let mut string_dict = HashMap::new();
+        string_dict.insert("test".to_string(), 0);
+
+        let mut numeric_deltas = HashMap::new();
+        numeric_deltas.insert("value".to_string(), 100.0);
+
+        let compressed_frame = CompressedFrame {
+            frame: StreamFrame {
+                data: json!({"test": "data"}),
+                priority: Priority::MEDIUM,
+                metadata: HashMap::new(),
+            },
+            compressed_data: CompressedData {
+                strategy: CompressionStrategy::Hybrid {
+                    string_dict: string_dict.clone(),
+                    numeric_deltas: numeric_deltas.clone(),
+                },
+                compressed_size: 20,
+                data: json!({"value": 5.0}), // Delta from base 100
+                compression_metadata: HashMap::new(),
+            },
+            decompression_metadata: DecompressionMetadata {
+                strategy: CompressionStrategy::Hybrid {
+                    string_dict,
+                    numeric_deltas,
+                },
+                dictionary_map: HashMap::new(),
+                delta_bases: HashMap::new(),
+                priority_hints: HashMap::new(),
+            },
+        };
+
+        let result = decompressor.decompress_frame(compressed_frame);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_decompress_dictionary_nested_arrays() {
+        let mut decompressor = StreamingDecompressor::new();
+        decompressor
+            .active_dictionary
+            .insert(0, "item1".to_string());
+        decompressor
+            .active_dictionary
+            .insert(1, "item2".to_string());
+
+        let data = json!([[0, 1], [1, 0]]);
+        let result = decompressor.decompress_dictionary(&data).unwrap();
+
+        assert_eq!(result, json!([["item1", "item2"], ["item2", "item1"]]));
+    }
+
+    #[test]
+    fn test_decompress_dictionary_non_index_numbers() {
+        let mut decompressor = StreamingDecompressor::new();
+        decompressor.active_dictionary.insert(0, "test".to_string());
+
+        // Number that doesn't map to dictionary
+        let data = json!({"value": 999});
+        let result = decompressor.decompress_dictionary(&data).unwrap();
+
+        // Should remain as number since not in dictionary
+        assert_eq!(result, json!({"value": 999}));
+    }
+
+    #[test]
+    fn test_decompress_delta_non_array() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Non-array delta encoding (passthrough)
+        let data = json!({"key": "value"});
+        let result = decompressor.decompress_delta(&data).unwrap();
+
+        assert_eq!(result, json!({"key": "value"}));
+    }
+
+    #[test]
+    fn test_decompress_delta_array_without_metadata() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Array without delta metadata
+        let data = json!([1, 2, 3, 4]);
+        let result = decompressor.decompress_delta(&data).unwrap();
+
+        assert_eq!(result, json!([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn test_decompress_run_length_nested_objects() {
+        let decompressor = StreamingDecompressor::new();
+
+        let data = json!({
+            "outer": {
+                "inner": [
+                    {"rle_value": {"nested": "obj"}, "rle_count": 2}
+                ]
+            }
+        });
+
+        let result = decompressor.decompress_run_length(&data).unwrap();
+        assert_eq!(
+            result,
+            json!({
+                "outer": {
+                    "inner": [{"nested": "obj"}, {"nested": "obj"}]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn test_decompression_stats_tracking() {
+        let mut decompressor = StreamingDecompressor::new();
+
+        assert_eq!(decompressor.stats.frames_decompressed, 0);
+
+        let frame = CompressedFrame {
+            frame: StreamFrame {
+                data: json!({"test": "data"}),
+                priority: Priority::MEDIUM,
+                metadata: HashMap::new(),
+            },
+            compressed_data: CompressedData {
+                strategy: CompressionStrategy::None,
+                compressed_size: 15,
+                data: json!({"test": "data"}),
+                compression_metadata: HashMap::new(),
+            },
+            decompression_metadata: DecompressionMetadata {
+                strategy: CompressionStrategy::None,
+                dictionary_map: HashMap::new(),
+                delta_bases: HashMap::new(),
+                priority_hints: HashMap::new(),
+            },
+        };
+
+        decompressor.decompress_frame(frame).unwrap();
+
+        assert_eq!(decompressor.stats.frames_decompressed, 1);
+        assert!(decompressor.stats.total_decompressed_bytes > 0);
+        assert!(decompressor.stats.avg_decompression_time_us > 0);
+    }
+
+    #[test]
+    fn test_decompress_delta_array_malformed_metadata() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Array with object but missing delta_base - passes through as-is
+        let data = json!([
+            {"delta_type": "numeric_sequence"},
+            1.0,
+            2.0
+        ]);
+
+        let result = decompressor.decompress_delta(&data);
+        // Without both delta_base and delta_type matching, it's treated as regular array
+        assert!(result.is_ok());
+        // Should return as-is since it doesn't match delta format
+        assert_eq!(result.unwrap(), data);
+    }
+
+    #[test]
+    fn test_decompress_run_length_large_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Within MAX_RLE_COUNT
+        let data = json!([
+            {"rle_value": "x", "rle_count": 1000}
+        ]);
+
+        let result = decompressor.decompress_run_length(&data);
+        assert!(result.is_ok());
+        let decompressed = result.unwrap();
+        if let Some(arr) = decompressed.as_array() {
+            assert_eq!(arr.len(), 1000);
+        }
+    }
+
+    #[test]
+    fn test_decompress_run_length_exceeds_max_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Exceeds MAX_RLE_COUNT (100_000)
+        let data = json!([
+            {"rle_value": "x", "rle_count": 200_000}
+        ]);
+
+        let result = decompressor.decompress_run_length(&data);
+        assert!(result.is_err()); // Should error
+    }
+
+    #[test]
+    fn test_decompress_run_length_cumulative_overflow() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Multiple runs that sum to exceed MAX_DECOMPRESSED_SIZE
+        let data = json!([
+            {"rle_value": "a", "rle_count": 5_000_000},
+            {"rle_value": "b", "rle_count": 6_000_000}
+        ]);
+
+        let result = decompressor.decompress_run_length(&data);
+        // Should error when cumulative size exceeds limit
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decompress_delta_array_size_limit() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Create very large array (exceeds MAX_DELTA_ARRAY_SIZE)
+        let mut large_array = vec![json!({"delta_base": 0.0, "delta_type": "numeric_sequence"})];
+        for _i in 0..1_000_001 {
+            large_array.push(json!(0.0));
+        }
+
+        let result = decompressor.decompress_delta(&JsonValue::Array(large_array));
+        assert!(result.is_err()); // Should error on size limit
+    }
+
+    #[test]
+    fn test_compression_stats_default() {
+        let stats = CompressionStats::default();
+        assert_eq!(stats.total_input_bytes, 0);
+        assert_eq!(stats.total_output_bytes, 0);
+        assert_eq!(stats.frames_processed, 0);
+        assert_eq!(stats.overall_compression_ratio(), 1.0);
+    }
+
+    #[test]
+    fn test_decompression_stats_default() {
+        let stats = DecompressionStats::default();
+        assert_eq!(stats.frames_decompressed, 0);
+        assert_eq!(stats.total_decompressed_bytes, 0);
+        assert_eq!(stats.avg_decompression_time_us, 0);
+    }
+
+    // ============================================================================
+    // Additional coverage tests for P2-TEST-002 (70%+ coverage target)
+    // ============================================================================
+
+    #[test]
+    fn test_decompress_dictionary_with_strings() {
+        let decompressor = StreamingDecompressor::new();
+        let data = json!({"key": "value", "nested": {"inner": "string"}});
+        let result = decompressor.decompress_dictionary(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), data);
+    }
+
+    #[test]
+    fn test_decompress_dictionary_with_null() {
+        let decompressor = StreamingDecompressor::new();
+        let data = json!(null);
+        let result = decompressor.decompress_dictionary(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), json!(null));
+    }
+
+    #[test]
+    fn test_decompress_dictionary_with_boolean() {
+        let decompressor = StreamingDecompressor::new();
+        let data = json!(true);
+        let result = decompressor.decompress_dictionary(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), json!(true));
+    }
+
+    #[test]
+    fn test_decompress_dictionary_with_string() {
+        let decompressor = StreamingDecompressor::new();
+        let data = json!("plain string");
+        let result = decompressor.decompress_dictionary(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), json!("plain string"));
+    }
+
+    #[test]
+    fn test_decompress_delta_with_object_no_array() {
+        let decompressor = StreamingDecompressor::new();
+        let data = json!({"key": "value"});
+        let result = decompressor.decompress_delta(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), json!({"key": "value"}));
+    }
+
+    #[test]
+    fn test_decompress_delta_with_primitive_values() {
+        let decompressor = StreamingDecompressor::new();
+
+        assert_eq!(
+            decompressor.decompress_delta(&json!("string")).unwrap(),
+            json!("string")
+        );
+        assert_eq!(
+            decompressor.decompress_delta(&json!(42)).unwrap(),
+            json!(42)
+        );
+        assert_eq!(
+            decompressor.decompress_delta(&json!(true)).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            decompressor.decompress_delta(&json!(null)).unwrap(),
+            json!(null)
+        );
+    }
+
+    #[test]
+    fn test_decompress_run_length_with_primitive_values() {
+        let decompressor = StreamingDecompressor::new();
+
+        assert_eq!(
+            decompressor
+                .decompress_run_length(&json!("string"))
+                .unwrap(),
+            json!("string")
+        );
+        assert_eq!(
+            decompressor.decompress_run_length(&json!(123)).unwrap(),
+            json!(123)
+        );
+        assert_eq!(
+            decompressor.decompress_run_length(&json!(false)).unwrap(),
+            json!(false)
+        );
+        assert_eq!(
+            decompressor.decompress_run_length(&json!(null)).unwrap(),
+            json!(null)
+        );
+    }
+
+    #[test]
+    fn test_decompress_data_strategy_dictionary() {
+        let mut decompressor = StreamingDecompressor::new();
+        decompressor.active_dictionary.insert(0, "test".to_string());
+
+        let mut dict = HashMap::new();
+        dict.insert("test".to_string(), 0);
+
+        let compressed_data = CompressedData {
+            strategy: CompressionStrategy::Dictionary { dictionary: dict },
+            compressed_size: 10,
+            data: json!({"field": 0}),
+            compression_metadata: HashMap::new(),
+        };
+
+        let result = decompressor.decompress_data(&compressed_data, &compressed_data.strategy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_decompress_data_strategy_delta() {
+        let decompressor = StreamingDecompressor::new();
+
+        let mut bases = HashMap::new();
+        bases.insert("value".to_string(), 100.0);
+
+        let compressed_data = CompressedData {
+            strategy: CompressionStrategy::Delta {
+                base_values: bases.clone(),
+            },
+            compressed_size: 10,
+            data: json!({
+                "sequence": [
+                    {"delta_base": 100.0, "delta_type": "numeric_sequence"},
+                    5.0,
+                    10.0
+                ]
+            }),
+            compression_metadata: HashMap::new(),
+        };
+
+        let result = decompressor.decompress_data(&compressed_data, &compressed_data.strategy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_decompress_data_strategy_run_length() {
+        let decompressor = StreamingDecompressor::new();
+
+        let compressed_data = CompressedData {
+            strategy: CompressionStrategy::RunLength,
+            compressed_size: 10,
+            data: json!([
+                {"rle_value": "x", "rle_count": 3}
+            ]),
+            compression_metadata: HashMap::new(),
+        };
+
+        let result = decompressor.decompress_data(&compressed_data, &compressed_data.strategy);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), json!(["x", "x", "x"]));
+    }
+
+    #[test]
+    fn test_decompress_data_strategy_hybrid_applies_delta_then_dict() {
+        let mut decompressor = StreamingDecompressor::new();
+        decompressor.active_dictionary.insert(0, "test".to_string());
+
+        let mut string_dict = HashMap::new();
+        string_dict.insert("test".to_string(), 0);
+
+        let mut numeric_deltas = HashMap::new();
+        numeric_deltas.insert("value".to_string(), 100.0);
+
+        let compressed_data = CompressedData {
+            strategy: CompressionStrategy::Hybrid {
+                string_dict,
+                numeric_deltas,
+            },
+            compressed_size: 10,
+            data: json!({
+                "field": 0
+            }),
+            compression_metadata: HashMap::new(),
+        };
+
+        let result = decompressor.decompress_data(&compressed_data, &compressed_data.strategy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_select_compressor_critical_priority() {
+        let mut compressor = StreamingCompressor::new();
+        let _skeleton_comp = compressor.select_compressor_for_priority(Priority::CRITICAL);
+    }
+
+    #[test]
+    fn test_select_compressor_high_priority() {
+        let mut compressor = StreamingCompressor::new();
+        let _skeleton_comp = compressor.select_compressor_for_priority(Priority::HIGH);
+    }
+
+    #[test]
+    fn test_select_compressor_medium_priority() {
+        let mut compressor = StreamingCompressor::new();
+        let _content_comp = compressor.select_compressor_for_priority(Priority::MEDIUM);
+    }
+
+    #[test]
+    fn test_select_compressor_low_priority() {
+        let mut compressor = StreamingCompressor::new();
+        let _content_comp = compressor.select_compressor_for_priority(Priority::LOW);
+    }
+
+    #[test]
+    fn test_select_compressor_background_priority() {
+        let mut compressor = StreamingCompressor::new();
+        let _content_comp = compressor.select_compressor_for_priority(Priority::BACKGROUND);
+    }
+
+    #[test]
+    fn test_update_stats_with_zero_original_size() {
+        let mut compressor = StreamingCompressor::new();
+        compressor.update_stats(Priority::MEDIUM, 0, 10);
+
+        let stats = compressor.get_stats();
+        assert_eq!(stats.frames_processed, 1);
+        assert_eq!(stats.total_input_bytes, 0);
+        assert_eq!(stats.total_output_bytes, 10);
+        assert_eq!(
+            stats.priority_compression_ratio(Priority::MEDIUM.value()),
+            1.0
+        );
+    }
+
+    #[test]
+    fn test_update_stats_with_normal_compression() {
+        let mut compressor = StreamingCompressor::new();
+        compressor.update_stats(Priority::HIGH, 1000, 500);
+
+        let stats = compressor.get_stats();
+        assert_eq!(stats.frames_processed, 1);
+        assert_eq!(stats.total_input_bytes, 1000);
+        assert_eq!(stats.total_output_bytes, 500);
+        assert_eq!(
+            stats.priority_compression_ratio(Priority::HIGH.value()),
+            0.5
+        );
+    }
+
+    #[test]
+    fn test_update_decompression_stats_first_frame() {
+        let mut decompressor = StreamingDecompressor::new();
+        let data = json!({"test": "data"});
+        let duration = std::time::Duration::from_micros(100);
+
+        decompressor.update_decompression_stats(&data, duration);
+
+        let stats = decompressor.get_stats();
+        assert_eq!(stats.frames_decompressed, 1);
+        assert_eq!(stats.avg_decompression_time_us, 100);
+    }
+
+    #[test]
+    fn test_update_decompression_stats_multiple_frames() {
+        let mut decompressor = StreamingDecompressor::new();
+        let data = json!({"test": "data"});
+
+        decompressor.update_decompression_stats(&data, std::time::Duration::from_micros(100));
+        decompressor.update_decompression_stats(&data, std::time::Duration::from_micros(200));
+        decompressor.update_decompression_stats(&data, std::time::Duration::from_micros(300));
+
+        let stats = decompressor.get_stats();
+        assert_eq!(stats.frames_decompressed, 3);
+        assert_eq!(stats.avg_decompression_time_us, 200); // (100 + 200 + 300) / 3
+    }
+
+    #[test]
+    fn test_create_decompression_metadata_with_dict() {
+        let compressor = StreamingCompressor::new();
+        let mut metadata = HashMap::new();
+        metadata.insert("dict_0".to_string(), json!("hello"));
+        metadata.insert("dict_1".to_string(), json!("world"));
+
+        let compressed_data = CompressedData {
+            strategy: CompressionStrategy::None,
+            compressed_size: 10,
+            data: json!({}),
+            compression_metadata: metadata,
+        };
+
+        let result = compressor.create_decompression_metadata(&compressed_data);
+        assert!(result.is_ok());
+        let meta = result.unwrap();
+        assert_eq!(meta.dictionary_map.len(), 2);
+        assert_eq!(meta.dictionary_map.get(&0), Some(&"hello".to_string()));
+        assert_eq!(meta.dictionary_map.get(&1), Some(&"world".to_string()));
+    }
+
+    #[test]
+    fn test_create_decompression_metadata_with_delta_bases() {
+        let compressor = StreamingCompressor::new();
+        let mut metadata = HashMap::new();
+        metadata.insert("base_value1".to_string(), json!(100.0));
+        metadata.insert("base_value2".to_string(), json!(200.0));
+
+        let compressed_data = CompressedData {
+            strategy: CompressionStrategy::None,
+            compressed_size: 10,
+            data: json!({}),
+            compression_metadata: metadata,
+        };
+
+        let result = compressor.create_decompression_metadata(&compressed_data);
+        assert!(result.is_ok());
+        let meta = result.unwrap();
+        assert_eq!(meta.delta_bases.len(), 2);
+        assert_eq!(meta.delta_bases.get("value1"), Some(&100.0));
+        assert_eq!(meta.delta_bases.get("value2"), Some(&200.0));
+    }
+
+    #[test]
+    fn test_create_decompression_metadata_with_invalid_dict_index() {
+        let compressor = StreamingCompressor::new();
+        let mut metadata = HashMap::new();
+        metadata.insert("dict_invalid".to_string(), json!("value"));
+        metadata.insert("dict_0".to_string(), json!("valid"));
+
+        let compressed_data = CompressedData {
+            strategy: CompressionStrategy::None,
+            compressed_size: 10,
+            data: json!({}),
+            compression_metadata: metadata,
+        };
+
+        let result = compressor.create_decompression_metadata(&compressed_data);
+        assert!(result.is_ok());
+        let meta = result.unwrap();
+        // Only valid index should be parsed
+        assert_eq!(meta.dictionary_map.len(), 1);
+        assert_eq!(meta.dictionary_map.get(&0), Some(&"valid".to_string()));
+    }
+
+    #[test]
+    fn test_update_context_updates_dictionary() {
+        let mut decompressor = StreamingDecompressor::new();
+
+        let mut metadata = DecompressionMetadata {
+            strategy: CompressionStrategy::None,
+            dictionary_map: HashMap::new(),
+            delta_bases: HashMap::new(),
+            priority_hints: HashMap::new(),
+        };
+        metadata.dictionary_map.insert(0, "hello".to_string());
+        metadata.dictionary_map.insert(1, "world".to_string());
+
+        let result = decompressor.update_context(&metadata);
+        assert!(result.is_ok());
+        assert_eq!(decompressor.active_dictionary.len(), 2);
+        assert_eq!(
+            decompressor.active_dictionary.get(&0),
+            Some(&"hello".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_context_updates_delta_bases() {
+        let mut decompressor = StreamingDecompressor::new();
+
+        let mut metadata = DecompressionMetadata {
+            strategy: CompressionStrategy::None,
+            dictionary_map: HashMap::new(),
+            delta_bases: HashMap::new(),
+            priority_hints: HashMap::new(),
+        };
+        metadata.delta_bases.insert("value1".to_string(), 100.0);
+        metadata.delta_bases.insert("value2".to_string(), 200.0);
+
+        let result = decompressor.update_context(&metadata);
+        assert!(result.is_ok());
+        assert_eq!(decompressor.delta_bases.len(), 2);
+        assert_eq!(decompressor.delta_bases.get("value1"), Some(&100.0));
+    }
+
+    #[test]
+    fn test_decompress_dictionary_with_float_that_is_not_u64() {
+        let mut decompressor = StreamingDecompressor::new();
+        decompressor.active_dictionary.insert(0, "test".to_string());
+
+        // Float that can't be represented as u64
+        let data = json!({"value": 1.5});
+        let result = decompressor.decompress_dictionary(&data);
+        assert!(result.is_ok());
+        // Should remain as float since not a valid index
+        assert_eq!(result.unwrap(), json!({"value": 1.5}));
+    }
+
+    #[test]
+    fn test_decompress_dictionary_with_negative_number() {
+        let mut decompressor = StreamingDecompressor::new();
+        decompressor.active_dictionary.insert(0, "test".to_string());
+
+        let data = json!({"value": -1});
+        let result = decompressor.decompress_dictionary(&data);
+        assert!(result.is_ok());
+        // Negative numbers can't be indices
+        assert_eq!(result.unwrap(), json!({"value": -1}));
+    }
+
+    #[test]
+    fn test_decompress_delta_array_checks_first_element_structure() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Array without proper metadata structure
+        let data = json!([
+            {"wrong_field": 100.0},
+            1.0,
+            2.0
+        ]);
+
+        let result = decompressor.decompress_delta(&data);
+        assert!(result.is_ok());
+        // Should be processed recursively, not as delta array
+        assert_eq!(result.unwrap(), data);
+    }
+
+    #[test]
+    fn test_decompress_delta_array_requires_both_base_and_type() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Has delta_base but not delta_type
+        let data1 = json!([
+            {"delta_base": 100.0},
+            1.0
+        ]);
+        let result1 = decompressor.decompress_delta(&data1);
+        assert!(result1.is_ok());
+
+        // Has delta_type but not delta_base
+        let data2 = json!([
+            {"delta_type": "numeric_sequence"},
+            1.0
+        ]);
+        let result2 = decompressor.decompress_delta(&data2);
+        assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn test_decompress_run_length_with_non_objects_in_array() {
+        let decompressor = StreamingDecompressor::new();
+
+        // Mix of RLE objects and plain values
+        let data = json!([
+            {"rle_value": "a", "rle_count": 2},
+            "plain",
+            42,
+            true
+        ]);
+
+        let result = decompressor.decompress_run_length(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), json!(["a", "a", "plain", 42, true]));
+    }
+
+    #[test]
+    fn test_decompress_run_length_integrity_check_rle_value_without_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        let data = json!([
+            {"rle_value": "x"}
+        ]);
+
+        let result = decompressor.decompress_run_length(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decompress_run_length_integrity_check_rle_count_without_value() {
+        let decompressor = StreamingDecompressor::new();
+
+        let data = json!([
+            {"rle_count": 3}
+        ]);
+
+        let result = decompressor.decompress_run_length(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decompress_run_length_non_number_count() {
+        let decompressor = StreamingDecompressor::new();
+
+        let data = json!([
+            {"rle_value": "x", "rle_count": "three"}
+        ]);
+
+        let result = decompressor.decompress_run_length(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compress_frame_with_large_data() {
+        let mut compressor = StreamingCompressor::new();
+
+        let large_data = json!({
+            "users": (0..100).map(|i| json!({
+                "id": i,
+                "name": format!("User{}", i),
+                "email": format!("user{}@example.com", i),
+                "age": 20 + (i % 50),
+                "active": i % 2 == 0
+            })).collect::<Vec<_>>()
+        });
+
+        let frame = StreamFrame {
+            data: large_data,
+            priority: Priority::MEDIUM,
+            metadata: HashMap::new(),
+        };
+
+        let result = compressor.compress_frame(frame);
+        assert!(result.is_ok());
+
+        let stats = compressor.get_stats();
+        assert_eq!(stats.frames_processed, 1);
+        assert!(stats.total_input_bytes > 1000);
+    }
+
+    #[test]
+    fn test_decompress_delta_with_very_large_deltas() {
+        let decompressor = StreamingDecompressor::new();
+
+        let data = json!([
+            {"delta_base": 1_000_000.0, "delta_type": "numeric_sequence"},
+            100_000.0,
+            200_000.0,
+            300_000.0
+        ]);
+
+        let result = decompressor.decompress_delta(&data);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            json!([1_100_000.0, 1_200_000.0, 1_300_000.0])
         );
     }
 }

@@ -73,14 +73,12 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Publish events in parallel
-            let events = session.take_events();
-            for event in events {
-                self.event_publisher
-                    .publish(event)
-                    .await
-                    .map_err(ApplicationError::Domain)?;
-            }
+            // Publish events in batch for better performance
+            let events: Vec<_> = session.take_events().into_iter().collect();
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             Ok(session_id)
         }
@@ -132,14 +130,12 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Publish events
-            let events = session.take_events();
-            for event in events {
-                self.event_publisher
-                    .publish(event)
-                    .await
-                    .map_err(ApplicationError::Domain)?;
-            }
+            // Publish events in batch for better performance
+            let events: Vec<_> = session.take_events().into_iter().collect();
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             Ok(stream_id)
         }
@@ -181,14 +177,12 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Publish events
-            let events = session.take_events();
-            for event in events {
-                self.event_publisher
-                    .publish(event)
-                    .await
-                    .map_err(ApplicationError::Domain)?;
-            }
+            // Publish events in batch for better performance
+            let events: Vec<_> = session.take_events().into_iter().collect();
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             Ok(())
         }
@@ -230,14 +224,12 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Publish events
-            let events = session.take_events();
-            for event in events {
-                self.event_publisher
-                    .publish(event)
-                    .await
-                    .map_err(ApplicationError::Domain)?;
-            }
+            // Publish events in batch for better performance
+            let events: Vec<_> = session.take_events().into_iter().collect();
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             Ok(())
         }
@@ -290,14 +282,12 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Publish events
-            let events = session.take_events();
-            for event in events {
-                self.event_publisher
-                    .publish(event)
-                    .await
-                    .map_err(ApplicationError::Domain)?;
-            }
+            // Publish events in batch for better performance
+            let events: Vec<_> = session.take_events().into_iter().collect();
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             Ok(frames)
         }
@@ -339,14 +329,12 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Publish events
-            let events = session.take_events();
-            for event in events {
-                self.event_publisher
-                    .publish(event)
-                    .await
-                    .map_err(ApplicationError::Domain)?;
-            }
+            // Publish events in batch for better performance
+            let events: Vec<_> = session.take_events().into_iter().collect();
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             Ok(frames)
         }
@@ -386,14 +374,12 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Publish events
-            let events = session.take_events();
-            for event in events {
-                self.event_publisher
-                    .publish(event)
-                    .await
-                    .map_err(ApplicationError::Domain)?;
-            }
+            // Publish events in batch for better performance
+            let events: Vec<_> = session.take_events().into_iter().collect();
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             Ok(())
         }

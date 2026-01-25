@@ -139,6 +139,38 @@ pub enum DomainEventDto {
         metrics: PerformanceMetricsDto,
         timestamp: DateTime<Utc>,
     },
+
+    /// Backpressure signal received from client
+    BackpressureReceived {
+        session_id: SessionIdDto,
+        stream_id: Option<StreamIdDto>,
+        signal: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream was paused due to flow control
+    StreamPaused {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        reason: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Stream was resumed after pause
+    StreamResumed {
+        session_id: SessionIdDto,
+        stream_id: StreamIdDto,
+        paused_duration_ms: u64,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Flow control credits were updated
+    CreditsUpdated {
+        session_id: SessionIdDto,
+        available_credits: usize,
+        max_credits: usize,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// Serializable representation of performance metrics
@@ -347,6 +379,50 @@ impl From<DomainEvent> for DomainEventDto {
                 new_expires_at,
                 timestamp,
             },
+            DomainEvent::BackpressureReceived {
+                session_id,
+                stream_id,
+                signal,
+                timestamp,
+            } => Self::BackpressureReceived {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.map(|id| id.to_dto()),
+                signal: format!("{:?}", signal),
+                timestamp,
+            },
+            DomainEvent::StreamPaused {
+                session_id,
+                stream_id,
+                reason,
+                timestamp,
+            } => Self::StreamPaused {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                reason,
+                timestamp,
+            },
+            DomainEvent::StreamResumed {
+                session_id,
+                stream_id,
+                paused_duration_ms,
+                timestamp,
+            } => Self::StreamResumed {
+                session_id: session_id.to_dto(),
+                stream_id: stream_id.to_dto(),
+                paused_duration_ms,
+                timestamp,
+            },
+            DomainEvent::CreditsUpdated {
+                session_id,
+                available_credits,
+                max_credits,
+                timestamp,
+            } => Self::CreditsUpdated {
+                session_id: session_id.to_dto(),
+                available_credits,
+                max_credits,
+                timestamp,
+            },
         }
     }
 }
@@ -534,6 +610,63 @@ impl FromDto<DomainEventDto> for DomainEvent {
                 session_id: SessionId::from_dto(session_id)?,
                 additional_seconds,
                 new_expires_at,
+                timestamp,
+            }),
+            DomainEventDto::BackpressureReceived {
+                session_id,
+                stream_id,
+                signal,
+                timestamp,
+            } => {
+                let backpressure_signal = match signal.as_str() {
+                    "Ok" => crate::domain::value_objects::BackpressureSignal::Ok,
+                    "SlowDown" => crate::domain::value_objects::BackpressureSignal::SlowDown,
+                    "Pause" => crate::domain::value_objects::BackpressureSignal::Pause,
+                    _ => {
+                        return Err(DomainError::InvalidInput(format!(
+                            "Invalid backpressure signal: {}",
+                            signal
+                        )));
+                    }
+                };
+                Ok(Self::BackpressureReceived {
+                    session_id: SessionId::from_dto(session_id)?,
+                    stream_id: stream_id.map(StreamId::from_dto).transpose()?,
+                    signal: backpressure_signal,
+                    timestamp,
+                })
+            }
+            DomainEventDto::StreamPaused {
+                session_id,
+                stream_id,
+                reason,
+                timestamp,
+            } => Ok(Self::StreamPaused {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                reason,
+                timestamp,
+            }),
+            DomainEventDto::StreamResumed {
+                session_id,
+                stream_id,
+                paused_duration_ms,
+                timestamp,
+            } => Ok(Self::StreamResumed {
+                session_id: SessionId::from_dto(session_id)?,
+                stream_id: StreamId::from_dto(stream_id)?,
+                paused_duration_ms,
+                timestamp,
+            }),
+            DomainEventDto::CreditsUpdated {
+                session_id,
+                available_credits,
+                max_credits,
+                timestamp,
+            } => Ok(Self::CreditsUpdated {
+                session_id: SessionId::from_dto(session_id)?,
+                available_credits,
+                max_credits,
                 timestamp,
             }),
         }

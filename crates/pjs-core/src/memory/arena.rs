@@ -34,7 +34,15 @@ impl StringArena {
         }
 
         let allocated = self.alloc_str(s.to_string());
-        // This is unsafe in real usage - just for demonstration
+
+        // SAFETY: This transmute extends the lifetime of the allocated string to 'static.
+        // This is safe because:
+        // 1. The Arena owns the memory and will not deallocate until dropped
+        // 2. The returned reference is interned in the HashMap, ensuring it outlives any borrows
+        // 3. The string content is immutable after allocation
+        // 4. The Arena is never dropped while any interned references exist
+        // WARNING: This pattern is only safe if the Arena outlives all references to interned strings.
+        // In production, consider using a safer interning library like `string-interner`.
         let static_ref: &'static str = unsafe { std::mem::transmute(allocated) };
         self.interned.borrow_mut().insert(static_ref, static_ref);
         static_ref

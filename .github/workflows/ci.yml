@@ -50,7 +50,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "quality"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Check formatting
         run: cargo +nightly fmt --all --check
@@ -87,7 +87,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "build-${{ matrix.allocator }}"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Build
         run: cargo build -p pjson-rs --features "${{ matrix.features }}" --all-targets
@@ -120,7 +120,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "test-${{ matrix.os }}-${{ matrix.allocator }}"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Install nextest
         uses: taiki-e/install-action@v2
@@ -167,7 +167,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "coverage"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Generate coverage for pjs-core
         run: |
@@ -261,7 +261,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "wasm-test"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Install nextest
         uses: taiki-e/install-action@v2
@@ -308,7 +308,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "wasm-build-${{ matrix.target }}"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Cache wasm-pack
         uses: actions/cache@v5

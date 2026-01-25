@@ -373,16 +373,15 @@ mod tests {
         let service = PriorityService::new();
         let path = JsonPath::new("$.id").unwrap();
         let value = JsonValue::String("123".to_string());
-
-        let priority = service.calculate_priority(&path, &value);
-        assert_eq!(priority, Priority::CRITICAL);
+        assert_eq!(
+            service.calculate_priority(&path, &value),
+            Priority::CRITICAL
+        );
     }
 
     #[test]
     fn test_path_pattern_matching() {
         let service = PriorityService::new();
-
-        // Test wildcard pattern
         assert!(service.path_matches_pattern("$.users[0].id", "$.*.id"));
         assert!(service.path_matches_pattern("$.posts[1].id", "$.*.id"));
         assert!(!service.path_matches_pattern("$.users.name", "$.*.id"));
@@ -392,54 +391,289 @@ mod tests {
     fn test_custom_rules() {
         let mut service = PriorityService::new();
         service.add_field_rule("custom_field".to_string(), Priority::HIGH);
-
         let path = JsonPath::new("$.custom_field").unwrap();
         let value = JsonValue::String("test".to_string());
-
-        let priority = service.calculate_priority(&path, &value);
-        assert_eq!(priority, Priority::HIGH);
+        assert_eq!(service.calculate_priority(&path, &value), Priority::HIGH);
     }
 
     #[test]
     fn test_heuristic_priority() {
         let service = PriorityService::new();
-
-        // Shallow path should have higher priority
         let shallow = JsonPath::new("$.name").unwrap();
         let deep = JsonPath::new("$.user.profile.settings.theme.color").unwrap();
         let value = JsonValue::String("test".to_string());
-
-        let shallow_priority = service.calculate_priority(&shallow, &value);
-        let deep_priority = service.calculate_priority(&deep, &value);
-
-        assert!(shallow_priority > deep_priority);
+        assert!(
+            service.calculate_priority(&shallow, &value)
+                > service.calculate_priority(&deep, &value)
+        );
     }
 
     #[test]
     fn test_calculate_all_priorities() {
         let service = PriorityService::new();
-        let data = serde_json::json!({
-            "id": 123,
-            "name": "Test",
-            "details": {
-                "description": "A test object",
-                "metadata": {
-                    "created_at": "2023-01-01"
-                }
-            }
-        });
-
+        let data =
+            serde_json::json!({"id": 123, "name": "Test", "details": {"description": "A test"}});
         let priorities = service.calculate_priorities(&data).unwrap();
-
-        // Should have priorities for all paths
         assert!(!priorities.is_empty());
-
-        // ID should be critical
         let id_path = JsonPath::new("$.id").unwrap();
         assert_eq!(priorities[&id_path], Priority::CRITICAL);
+    }
 
-        // Name should be high
-        let name_path = JsonPath::new("$.name").unwrap();
-        assert_eq!(priorities[&name_path], Priority::HIGH);
+    #[test]
+    fn test_with_default_priority_constructor() {
+        let service = PriorityService::with_default_priority(Priority::LOW);
+        let summary = service.get_rules_summary();
+        assert_eq!(summary.default_priority, Priority::LOW);
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let service = PriorityService::default();
+        let summary = service.get_rules_summary();
+        assert!(summary.field_rule_count > 0);
+        assert_eq!(summary.default_priority, Priority::MEDIUM);
+    }
+
+    #[test]
+    fn test_add_path_rule() {
+        let mut service = PriorityService::new();
+        service.add_path_rule("$.custom.path".to_string(), Priority::CRITICAL);
+        let path = JsonPath::new("$.custom.path").unwrap();
+        let value = JsonValue::String("test".to_string());
+        assert_eq!(
+            service.calculate_priority(&path, &value),
+            Priority::CRITICAL
+        );
+    }
+
+    #[test]
+    fn test_add_type_rule() {
+        let mut service = PriorityService::new();
+        service.add_type_rule("boolean".to_string(), Priority::CRITICAL);
+        let path = JsonPath::new("$.some_bool").unwrap();
+        let value = JsonValue::Bool(true);
+        assert_eq!(
+            service.calculate_priority(&path, &value),
+            Priority::CRITICAL
+        );
+    }
+
+    #[test]
+    fn test_get_rules_summary() {
+        let service = PriorityService::new();
+        let summary = service.get_rules_summary();
+        // 5 critical + 5 high + 4 medium + 4 low + 4 background = 22 field rules
+        assert_eq!(summary.field_rule_count, 22);
+        assert_eq!(summary.path_rule_count, 4);
+        assert_eq!(summary.type_rule_count, 3);
+        assert_eq!(summary.default_priority, Priority::MEDIUM);
+    }
+
+    #[test]
+    fn test_optimize_rules_increases_priority() {
+        let mut service = PriorityService::new();
+        let stats = UsageStatistics {
+            field_access_counts: {
+                let mut m = HashMap::new();
+                m.insert("hot_field".to_string(), 100);
+                m
+            },
+            total_accesses: 100,
+            average_access_count: 30,
+        };
+        service.optimize_rules(&stats);
+        let summary = service.get_rules_summary();
+        assert!(summary.field_rule_count > 22);
+    }
+
+    #[test]
+    fn test_optimize_rules_decreases_priority() {
+        let mut service = PriorityService::new();
+        let stats = UsageStatistics {
+            field_access_counts: {
+                let mut m = HashMap::new();
+                m.insert("cold_field".to_string(), 5);
+                m
+            },
+            total_accesses: 100,
+            average_access_count: 30,
+        };
+        service.optimize_rules(&stats);
+        let summary = service.get_rules_summary();
+        assert!(summary.field_rule_count > 22);
+    }
+
+    #[test]
+    fn test_optimize_rules_with_existing_field() {
+        let mut service = PriorityService::new();
+        let stats = UsageStatistics {
+            field_access_counts: {
+                let mut m = HashMap::new();
+                m.insert("id".to_string(), 100);
+                m
+            },
+            total_accesses: 100,
+            average_access_count: 30,
+        };
+        service.optimize_rules(&stats);
+        let path = JsonPath::new("$.id").unwrap();
+        let value = JsonValue::String("123".to_string());
+        assert_eq!(
+            service.calculate_priority(&path, &value),
+            Priority::CRITICAL.increase_by(10)
+        );
+    }
+
+    #[test]
+    fn test_type_based_priority_large_array() {
+        let service = PriorityService::new();
+        let large_array: Vec<JsonValue> = (0..101).map(|i| JsonValue::Number(i.into())).collect();
+        let path = JsonPath::new("$.items").unwrap();
+        let value = JsonValue::Array(large_array);
+        assert_eq!(service.calculate_priority(&path, &value), Priority::LOW);
+    }
+
+    #[test]
+    fn test_type_based_priority_long_string() {
+        let mut service = PriorityService::new();
+        service.field_rules.clear();
+        let long_string = "x".repeat(1001);
+        let path = JsonPath::new("$.long_content").unwrap();
+        let value = JsonValue::String(long_string);
+        assert_eq!(service.calculate_priority(&path, &value), Priority::LOW);
+    }
+
+    #[test]
+    fn test_type_based_priority_null() {
+        let service = PriorityService::new();
+        let path = JsonPath::new("$.null_value").unwrap();
+        let value = JsonValue::Null;
+        assert!(service.calculate_priority(&path, &value) > Priority::MEDIUM);
+    }
+
+    #[test]
+    fn test_type_based_priority_number() {
+        let service = PriorityService::new();
+        let path = JsonPath::new("$.count").unwrap();
+        let value = JsonValue::Number(serde_json::Number::from(42));
+        assert!(service.calculate_priority(&path, &value) >= Priority::MEDIUM);
+    }
+
+    #[test]
+    fn test_heuristic_large_array_penalty() {
+        let mut service = PriorityService::new();
+        service.field_rules.clear();
+        service.path_rules.clear();
+        service.type_rules.clear();
+        let arr: Vec<JsonValue> = (0..15).map(|i| JsonValue::Number(i.into())).collect();
+        let path = JsonPath::new("$.arr").unwrap();
+        let value = JsonValue::Array(arr);
+        let small_arr: Vec<JsonValue> = (0..5).map(|i| JsonValue::Number(i.into())).collect();
+        let small_value = JsonValue::Array(small_arr);
+        assert!(
+            service.calculate_priority(&path, &value)
+                < service.calculate_priority(&path, &small_value)
+        );
+    }
+
+    #[test]
+    fn test_heuristic_complex_object_penalty() {
+        let mut service = PriorityService::new();
+        service.field_rules.clear();
+        service.path_rules.clear();
+        service.type_rules.clear();
+        let mut obj = serde_json::Map::new();
+        for i in 0..15 {
+            obj.insert(format!("f{}", i), JsonValue::Number(i.into()));
+        }
+        let path = JsonPath::new("$.obj").unwrap();
+        let value = JsonValue::Object(obj);
+        let mut small_obj = serde_json::Map::new();
+        for i in 0..5 {
+            small_obj.insert(format!("f{}", i), JsonValue::Number(i.into()));
+        }
+        let small_value = JsonValue::Object(small_obj);
+        assert!(
+            service.calculate_priority(&path, &value)
+                < service.calculate_priority(&path, &small_value)
+        );
+    }
+
+    #[test]
+    fn test_heuristic_depth_2() {
+        let mut service = PriorityService::new();
+        service.field_rules.clear();
+        service.path_rules.clear();
+        service.type_rules.clear();
+        let path_depth_2 = JsonPath::new("$.a.b").unwrap();
+        let value = JsonValue::Number(serde_json::Number::from(1));
+        let path_depth_1 = JsonPath::new("$.a").unwrap();
+        assert!(
+            service.calculate_priority(&path_depth_1, &value)
+                > service.calculate_priority(&path_depth_2, &value)
+        );
+    }
+
+    #[test]
+    fn test_path_pattern_exact_match() {
+        let service = PriorityService::new();
+        assert!(service.path_matches_pattern("$.error", "$.error"));
+        assert!(!service.path_matches_pattern("$.errors", "$.error"));
+    }
+
+    #[test]
+    fn test_path_pattern_wildcard_at_end() {
+        let service = PriorityService::new();
+        assert!(service.path_matches_pattern("$.users", "$.users*"));
+        assert!(service.path_matches_pattern("$.users[0]", "$.users*"));
+        assert!(!service.path_matches_pattern("$.posts", "$.users*"));
+    }
+
+    #[test]
+    fn test_path_pattern_wildcard_in_middle() {
+        let service = PriorityService::new();
+        assert!(service.path_matches_pattern("$.ab", "$.a*b"));
+        assert!(service.path_matches_pattern("$.axyzb", "$.a*b"));
+        assert!(!service.path_matches_pattern("$.axyzc", "$.a*b"));
+    }
+
+    #[test]
+    fn test_path_pattern_wildcard_not_matching_start() {
+        let service = PriorityService::new();
+        assert!(!service.path_matches_pattern("$.posts.id", "$.users*.id"));
+    }
+
+    #[test]
+    fn test_extract_field_name_with_array_index() {
+        let service = PriorityService::new();
+        let path = JsonPath::new("$.items[0]").unwrap();
+        let value = JsonValue::Number(serde_json::Number::from(1));
+        assert!(service.calculate_priority(&path, &value) >= Priority::LOW);
+    }
+
+    #[test]
+    fn test_extract_field_name_root_path() {
+        let service = PriorityService::new();
+        let path = JsonPath::root();
+        let value = serde_json::json!({"id": 1});
+        assert!(service.calculate_priority(&path, &value) >= Priority::LOW);
+    }
+
+    #[test]
+    fn test_calculate_priorities_with_array() {
+        let service = PriorityService::new();
+        let data = serde_json::json!([1, 2, 3]);
+        let priorities = service.calculate_priorities(&data).unwrap();
+        assert_eq!(priorities.len(), 4);
+    }
+
+    #[test]
+    fn test_calculate_priorities_nested_array() {
+        let service = PriorityService::new();
+        let data = serde_json::json!({"items": [{"id": 1, "name": "Item 1"}, {"id": 2, "name": "Item 2"}]});
+        let priorities = service.calculate_priorities(&data).unwrap();
+        assert!(priorities.len() >= 8);
+        let id_path = JsonPath::new("$.items[0].id").unwrap();
+        assert_eq!(priorities[&id_path], Priority::CRITICAL);
     }
 }

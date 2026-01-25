@@ -177,28 +177,36 @@ async fn test_pjs_middleware_no_metrics_headers() {
 
 #[test]
 fn test_rate_limit_middleware_creation() {
-    let _rate_limit = RateLimitMiddleware::new(100);
+    use pjson_rs::infrastructure::http::RateLimitConfig;
+    let config = RateLimitConfig::new(100);
+    let _rate_limit = RateLimitMiddleware::new(config);
 
     // RateLimitMiddleware created successfully
 }
 
 #[test]
 fn test_rate_limit_middleware_burst_calculation() {
-    let _rate_limit = RateLimitMiddleware::new(200);
+    use pjson_rs::infrastructure::http::RateLimitConfig;
+    let config = RateLimitConfig::new(200);
+    let _rate_limit = RateLimitMiddleware::new(config);
 
     // RateLimitMiddleware created successfully
 }
 
 #[test]
 fn test_rate_limit_middleware_small_limit() {
-    let _rate_limit = RateLimitMiddleware::new(4);
+    use pjson_rs::infrastructure::http::RateLimitConfig;
+    let config = RateLimitConfig::new(4);
+    let _rate_limit = RateLimitMiddleware::new(config);
 
     // RateLimitMiddleware created successfully
 }
 
 #[test]
 fn test_rate_limit_middleware_clone() {
-    let rate_limit1 = RateLimitMiddleware::new(150);
+    use pjson_rs::infrastructure::http::RateLimitConfig;
+    let config = RateLimitConfig::new(150);
+    let rate_limit1 = RateLimitMiddleware::new(config);
     let _rate_limit2 = rate_limit1.clone();
 
     // Clone works - fields are private
