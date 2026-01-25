@@ -179,4 +179,49 @@ mod tests {
         store.insert("key".to_string(), 42);
         assert!(store.contains_key(&"key".to_string()));
     }
+
+    /// Test concurrent access from multiple threads
+    ///
+    /// Verifies DashMap's lock-free behavior under contention
+    #[test]
+    fn test_concurrent_access() {
+        use std::thread;
+
+        let store: InMemoryStore<i32, String> = InMemoryStore::new();
+        let store_clone = store.clone();
+
+        // Spawn thread to write concurrently
+        let write_handle = thread::spawn(move || {
+            for i in 0..100 {
+                store_clone.insert(i, format!("thread1-{}", i));
+            }
+        });
+
+        // Write from main thread concurrently
+        for i in 100..200 {
+            store.insert(i, format!("thread2-{}", i));
+        }
+
+        write_handle.join().unwrap();
+
+        // Verify all writes succeeded (DashMap handles concurrent writes)
+        assert_eq!(store.count(), 200);
+        assert_eq!(store.get(&50), Some("thread1-50".to_string()));
+        assert_eq!(store.get(&150), Some("thread2-150".to_string()));
+
+        // Test concurrent reads
+        let read_store = store.clone();
+        let read_handle = thread::spawn(move || {
+            for i in 0..200 {
+                read_store.get(&i); // Lock-free reads
+            }
+        });
+
+        // Read from main thread while other thread reads
+        for i in 0..200 {
+            store.get(&i);
+        }
+
+        read_handle.join().unwrap();
+    }
 }
