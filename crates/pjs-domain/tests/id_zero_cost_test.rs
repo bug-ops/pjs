@@ -161,19 +161,19 @@ fn test_id_is_copy() {
     assert_copy::<Uuid>();
 }
 
-/// Verify that Id<T> can be cloned without allocation
+/// Verify that Id<T> implements Copy (no allocation needed)
 #[test]
-fn test_id_clone_is_trivial() {
+fn test_id_copy_is_trivial() {
     let original = SessionId::new();
-    let cloned = original.clone();
+    let copied = original; // Copy happens implicitly
 
-    // Clone should be bitwise identical
-    assert_eq!(original.as_uuid(), cloned.as_uuid());
+    // Copy should be bitwise identical
+    assert_eq!(original.as_uuid(), copied.as_uuid());
 
-    // Since Id<T> is Copy, clone is just a memcpy
-    fn assert_clone<T: Clone>() {}
-    assert_clone::<SessionId>();
-    assert_clone::<StreamId>();
+    // Verify both Copy and Clone are implemented
+    fn assert_copy_clone<T: Copy + Clone>() {}
+    assert_copy_clone::<SessionId>();
+    assert_copy_clone::<StreamId>();
 }
 
 /// Verify that type safety is preserved despite zero-cost abstraction
