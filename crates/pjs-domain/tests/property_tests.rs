@@ -201,7 +201,7 @@ proptest! {
         let pb = Priority::new(b).unwrap();
 
         if pa < pb {
-            prop_assert!(!(pb < pa));
+            prop_assert!(pb >= pa);
         }
     }
 
@@ -297,7 +297,7 @@ proptest! {
     /// Priority constants are distinct
     #[test]
     fn priority_constants_are_distinct(_dummy in Just(0u8)) {
-        let priorities = vec![
+        let priorities = [
             Priority::CRITICAL,
             Priority::HIGH,
             Priority::MEDIUM,
@@ -316,7 +316,7 @@ proptest! {
     #[test]
     fn session_id_clone_equality(_seed in any::<u64>()) {
         let id = SessionId::new();
-        let cloned = id.clone();
+        let cloned = id;
         prop_assert_eq!(id, cloned);
         prop_assert_eq!(id.as_str(), cloned.as_str());
     }
@@ -325,7 +325,7 @@ proptest! {
     #[test]
     fn stream_id_clone_equality(_seed in any::<u64>()) {
         let id = StreamId::new();
-        let cloned = id.clone();
+        let cloned = id;
         prop_assert_eq!(id, cloned);
         prop_assert_eq!(id.as_str(), cloned.as_str());
     }
@@ -334,7 +334,7 @@ proptest! {
     #[test]
     fn priority_clone_equality(value in 1u8..=255) {
         let priority = Priority::new(value).unwrap();
-        let cloned = priority.clone();
+        let cloned = priority;
         prop_assert_eq!(priority, cloned);
         prop_assert_eq!(priority.value(), cloned.value());
     }
@@ -416,8 +416,8 @@ proptest! {
     #[test]
     fn session_id_equality_transitive(_seed in any::<u64>()) {
         let id1 = SessionId::new();
-        let id2 = id1.clone();
-        let id3 = id2.clone();
+        let id2 = id1;
+        let id3 = id2;
 
         prop_assert_eq!(id1, id2);
         prop_assert_eq!(id2, id3);
@@ -428,8 +428,8 @@ proptest! {
     #[test]
     fn stream_id_equality_transitive(_seed in any::<u64>()) {
         let id1 = StreamId::new();
-        let id2 = id1.clone();
-        let id3 = id2.clone();
+        let id2 = id1;
+        let id3 = id2;
 
         prop_assert_eq!(id1, id2);
         prop_assert_eq!(id2, id3);

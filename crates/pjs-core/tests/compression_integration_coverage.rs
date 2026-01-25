@@ -337,7 +337,7 @@ fn test_compress_background_priority_uses_content_compressor() {
 fn test_compress_multiple_priorities_tracks_stats() {
     let mut compressor = StreamingCompressor::new();
 
-    let priorities = vec![
+    let priorities = [
         Priority::CRITICAL,
         Priority::HIGH,
         Priority::MEDIUM,
@@ -488,8 +488,8 @@ fn test_decompress_multiple_frames_updates_stats() {
     let stats = decompressor.get_stats();
     assert_eq!(stats.frames_decompressed, 10);
     assert!(stats.total_decompressed_bytes > 0);
-    // avg_decompression_time_us might be 0 on very fast machines
-    assert!(stats.avg_decompression_time_us >= 0);
+    // avg_decompression_time_us is u64, always >= 0 (type guarantee)
+    // On very fast machines it might be 0 due to measurement precision
 }
 
 // ============================================================================
@@ -775,6 +775,5 @@ fn test_decompression_stats_running_average() {
     decompressor.decompress_frame(frame2).unwrap();
     let stats2 = decompressor.get_stats();
     assert_eq!(stats2.frames_decompressed, 2);
-    // Running average should be calculated (might be 0 on very fast machines)
-    assert!(stats2.avg_decompression_time_us >= 0);
+    // Running average calculated (u64 type always >= 0, might be 0 on very fast machines)
 }

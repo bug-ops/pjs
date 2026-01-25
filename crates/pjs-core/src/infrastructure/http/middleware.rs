@@ -283,24 +283,24 @@ fn extract_client_ip(request: &Request) -> std::net::IpAddr {
     use std::net::{IpAddr, Ipv4Addr};
 
     // Try X-Forwarded-For header
-    if let Some(forwarded_for) = request.headers().get("x-forwarded-for") {
-        if let Ok(forwarded_str) = forwarded_for.to_str() {
-            // Take first IP in the chain
-            if let Some(first_ip) = forwarded_str.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                    return ip;
-                }
-            }
-        }
+    if let Some(ip) = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .and_then(|first| first.trim().parse::<IpAddr>().ok())
+    {
+        return ip;
     }
 
     // Try X-Real-IP header
-    if let Some(real_ip) = request.headers().get("x-real-ip") {
-        if let Ok(ip_str) = real_ip.to_str() {
-            if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                return ip;
-            }
-        }
+    if let Some(ip) = request
+        .headers()
+        .get("x-real-ip")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<IpAddr>().ok())
+    {
+        return ip;
     }
 
     // Fallback to localhost
@@ -329,15 +329,15 @@ fn add_rate_limit_headers(
         .insert("X-RateLimit-Remaining", HeaderValue::from_static("99"));
 
     // Calculate reset time (current time + 60 seconds)
-    if let Ok(reset_time) = SystemTime::now()
+    if let Some(reset_value) = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
         .map(|d| d.as_secs() + 60)
+        .and_then(|time| HeaderValue::from_str(&time.to_string()).ok())
     {
-        if let Ok(reset_value) = HeaderValue::from_str(&reset_time.to_string()) {
-            response
-                .headers_mut()
-                .insert("X-RateLimit-Reset", reset_value);
-        }
+        response
+            .headers_mut()
+            .insert("X-RateLimit-Reset", reset_value);
     }
 
     // Suppress unused variable warning
