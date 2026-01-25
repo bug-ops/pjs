@@ -4,7 +4,6 @@
 //! Uses sealed trait pattern to prevent external marker implementations.
 
 use std::fmt;
-use std::hash::Hash;
 use std::marker::PhantomData;
 use uuid::Uuid;
 

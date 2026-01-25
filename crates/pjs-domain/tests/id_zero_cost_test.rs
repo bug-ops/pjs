@@ -131,12 +131,13 @@ fn test_array_layout() {
     );
 }
 
-/// Verify that Option<Id<T>> is correctly optimized (niche optimization)
+/// Verify that Option<Id<T>> has the same size as Option<Uuid>
 #[test]
-fn test_option_niche_optimization() {
-    // Option<Uuid> should have same size as Uuid due to niche optimization
-    // (Uuid has no invalid bit patterns that can be used for None,
-    // so Option adds the discriminant)
+fn test_option_size_preservation() {
+    // This test asserts that Option<Id<T>> has the same size as Option<Uuid>.
+    // Note: Uuid has no niche for None, so Option<Uuid> is typically larger
+    // than Uuid itself (it needs a discriminant). This test verifies that
+    // wrapping Uuid in Id<T> doesn't add any extra overhead to Option.
     let uuid_option_size = size_of::<Option<Uuid>>();
     let session_id_option_size = size_of::<Option<SessionId>>();
     let stream_id_option_size = size_of::<Option<StreamId>>();
