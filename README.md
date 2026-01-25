@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/pjson-rs)](https://crates.io/crates/pjson-rs)
 [![docs.rs](https://img.shields.io/docsrs/pjson-rs)](https://docs.rs/pjson-rs)
-[![CI](https://img.shields.io/github/actions/workflow/status/bug-ops/pjs/rust.yml?branch=main&label=CI)](https://github.com/bug-ops/pjs/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/bug-ops/pjs/ci.yml?branch=main&label=build)](https://github.com/bug-ops/pjs/actions)
 [![codecov](https://codecov.io/gh/bug-ops/pjs/branch/main/graph/badge.svg)](https://codecov.io/gh/bug-ops/pjs)
 [![MSRV](https://img.shields.io/crates/msrv/pjson-rs)](https://crates.io/crates/pjson-rs)
 [![License](https://img.shields.io/crates/l/pjson-rs)](LICENSE)
