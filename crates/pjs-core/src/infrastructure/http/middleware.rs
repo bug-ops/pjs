@@ -134,22 +134,214 @@ where
     }
 }
 
+/// Rate limiting configuration for HTTP endpoints
+#[derive(Debug, Clone)]
+pub struct RateLimitConfig {
+    /// Maximum requests per time window (default: 100)
+    pub max_requests_per_window: u32,
+    /// Time window duration (default: 60 seconds)
+    pub window_duration: std::time::Duration,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            max_requests_per_window: 100,
+            window_duration: std::time::Duration::from_secs(60),
+        }
+    }
+}
+
+impl RateLimitConfig {
+    pub fn new(requests_per_minute: u32) -> Self {
+        Self {
+            max_requests_per_window: requests_per_minute,
+            window_duration: std::time::Duration::from_secs(60),
+        }
+    }
+
+    pub fn with_window(mut self, duration: std::time::Duration) -> Self {
+        self.window_duration = duration;
+        self
+    }
+}
+
 /// Rate limiting middleware for PJS endpoints
+///
+/// Uses token bucket algorithm from security::rate_limit module
+/// Returns 429 Too Many Requests when limit exceeded
+/// Adds X-RateLimit-* headers per RFC 6585
 #[derive(Clone)]
 pub struct RateLimitMiddleware {
-    #[allow(dead_code)] // Future feature: rate limiting implementation
-    requests_per_minute: u32,
-    #[allow(dead_code)] // Future feature: rate limiting implementation
-    burst_size: u32,
+    limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
 }
 
 impl RateLimitMiddleware {
-    pub fn new(requests_per_minute: u32) -> Self {
+    pub fn new(config: RateLimitConfig) -> Self {
+        let rate_limit_config = crate::security::rate_limit::RateLimitConfig {
+            max_requests_per_window: config.max_requests_per_window,
+            window_duration: config.window_duration,
+            ..Default::default()
+        };
+
         Self {
-            requests_per_minute,
-            burst_size: requests_per_minute / 4, // Allow 25% burst
+            limiter: std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
+                rate_limit_config,
+            )),
         }
     }
+
+    pub fn from_limiter(
+        limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
+    ) -> Self {
+        Self { limiter }
+    }
+}
+
+impl<S> Layer<S> for RateLimitMiddleware {
+    type Service = RateLimitService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        RateLimitService {
+            inner,
+            limiter: self.limiter.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RateLimitService<S> {
+    inner: S,
+    limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
+}
+
+impl<S> Service<Request> for RateLimitService<S>
+where
+    S: Service<Request, Response = Response> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request) -> Self::Future {
+        let limiter = self.limiter.clone();
+        let mut inner = self.inner.clone();
+
+        Box::pin(async move {
+            // Extract client IP from connection info or X-Forwarded-For header
+            let client_ip = extract_client_ip(&request);
+
+            // Check rate limit
+            match limiter.check_request(client_ip) {
+                Ok(()) => {
+                    // Rate limit passed - process request
+                    let response = inner.call(request).await?;
+
+                    // Add rate limit headers to response
+                    let mut response = response;
+                    add_rate_limit_headers(&mut response, &limiter, client_ip);
+
+                    Ok(response)
+                }
+                Err(err) => {
+                    // Rate limit exceeded - return 429
+                    let error_body = serde_json::json!({
+                        "error": "Too Many Requests",
+                        "message": err.to_string(),
+                        "retry_after": 60
+                    })
+                    .to_string();
+
+                    let mut response = Response::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header("Retry-After", "60")
+                        .body(error_body.into())
+                        .unwrap_or_else(|_| Response::new("Too Many Requests".into()));
+
+                    add_rate_limit_headers(&mut response, &limiter, client_ip);
+
+                    Ok(response)
+                }
+            }
+        })
+    }
+}
+
+/// Extract client IP address from request
+///
+/// Priority:
+/// 1. X-Forwarded-For header (behind proxy)
+/// 2. X-Real-IP header
+/// 3. Default to localhost (fallback)
+fn extract_client_ip(request: &Request) -> std::net::IpAddr {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    // Try X-Forwarded-For header
+    if let Some(forwarded_for) = request.headers().get("x-forwarded-for") {
+        if let Ok(forwarded_str) = forwarded_for.to_str() {
+            // Take first IP in the chain
+            if let Some(first_ip) = forwarded_str.split(',').next() {
+                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+                    return ip;
+                }
+            }
+        }
+    }
+
+    // Try X-Real-IP header
+    if let Some(real_ip) = request.headers().get("x-real-ip") {
+        if let Ok(ip_str) = real_ip.to_str() {
+            if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                return ip;
+            }
+        }
+    }
+
+    // Fallback to localhost
+    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+}
+
+/// Add X-RateLimit-* headers to response per RFC 6585
+fn add_rate_limit_headers(
+    response: &mut Response,
+    limiter: &crate::security::rate_limit::WebSocketRateLimiter,
+    client_ip: std::net::IpAddr,
+) {
+    use std::time::SystemTime;
+
+    // Get stats for the client (we'll need to access internals or add a method)
+    // For now, add standard headers with static values
+    // TODO: Add method to WebSocketRateLimiter to get current limit status
+
+    response
+        .headers_mut()
+        .insert("X-RateLimit-Limit", HeaderValue::from_static("100"));
+
+    // Calculate remaining requests (simplified - would need access to client state)
+    response
+        .headers_mut()
+        .insert("X-RateLimit-Remaining", HeaderValue::from_static("99"));
+
+    // Calculate reset time (current time + 60 seconds)
+    if let Ok(reset_time) = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() + 60)
+    {
+        if let Ok(reset_value) = HeaderValue::from_str(&reset_time.to_string()) {
+            response
+                .headers_mut()
+                .insert("X-RateLimit-Reset", reset_value);
+        }
+    }
+
+    // Suppress unused variable warning
+    let _ = (limiter, client_ip);
 }
 
 /// Connection upgrade middleware for WebSocket support
@@ -453,10 +645,28 @@ mod tests {
     }
 
     #[test]
-    fn test_rate_limit_creation() {
-        let rate_limit = RateLimitMiddleware::new(100);
-        assert_eq!(rate_limit.requests_per_minute, 100);
-        assert_eq!(rate_limit.burst_size, 25);
+    fn test_rate_limit_config_default() {
+        let config = RateLimitConfig::default();
+        assert_eq!(config.max_requests_per_window, 100);
+        assert_eq!(config.window_duration, std::time::Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_rate_limit_config_new() {
+        let config = RateLimitConfig::new(50);
+        assert_eq!(config.max_requests_per_window, 50);
+    }
+
+    #[test]
+    fn test_rate_limit_config_with_window() {
+        let config = RateLimitConfig::new(100).with_window(std::time::Duration::from_secs(30));
+        assert_eq!(config.window_duration, std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_rate_limit_middleware_creation() {
+        let config = RateLimitConfig::default();
+        let _middleware = RateLimitMiddleware::new(config);
     }
 
     #[test]

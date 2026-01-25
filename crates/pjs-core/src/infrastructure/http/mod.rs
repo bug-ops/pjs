@@ -7,9 +7,10 @@ pub mod streaming;
 
 pub use axum_adapter::{
     CreateSessionRequest, CreateSessionResponse, PjsAppState, PjsError, StartStreamRequest,
-    StreamParams, create_pjs_router,
+    StreamParams, create_pjs_router, create_pjs_router_with_rate_limit,
 };
 pub use axum_extension::{PjsConfig, PjsExtension};
+pub use middleware::{RateLimitConfig, RateLimitMiddleware};
 pub use streaming::{
     AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamError, StreamFormat,
 };

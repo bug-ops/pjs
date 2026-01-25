@@ -597,4 +597,417 @@ mod tests {
         assert!(!reconstructor.is_complete());
         assert_eq!(reconstructor.stats().frames_processed, 0);
     }
+
+    // NEW TESTS FOR COVERAGE IMPROVEMENT (Task P2-TEST-003)
+
+    #[test]
+    fn test_deep_nesting_level_3() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let skeleton = json!({
+            "level1": {
+                "level2": {
+                    "level3": null
+                }
+            }
+        });
+
+        reconstructor.current_state = skeleton;
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("level1".to_string()),
+            PathSegment::Key("level2".to_string()),
+            PathSegment::Key("level3".to_string()),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Set {
+                value: json!("deep value"),
+            },
+            priority: Priority::MEDIUM,
+        };
+
+        let frame = PriorityStreamFrame::Patch {
+            patches: vec![patch],
+            priority: Priority::MEDIUM,
+        };
+
+        reconstructor.add_frame(frame);
+        reconstructor.process_next_frame().unwrap();
+
+        assert_eq!(
+            reconstructor.current_state()["level1"]["level2"]["level3"],
+            json!("deep value")
+        );
+    }
+
+    #[test]
+    fn test_deep_nesting_level_5() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let skeleton = json!({
+            "l1": {
+                "l2": {
+                    "l3": {
+                        "l4": {
+                            "l5": null
+                        }
+                    }
+                }
+            }
+        });
+
+        reconstructor.current_state = skeleton;
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("l1".to_string()),
+            PathSegment::Key("l2".to_string()),
+            PathSegment::Key("l3".to_string()),
+            PathSegment::Key("l4".to_string()),
+            PathSegment::Key("l5".to_string()),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Set {
+                value: json!({"final": "value"}),
+            },
+            priority: Priority::HIGH,
+        };
+
+        let frame = PriorityStreamFrame::Patch {
+            patches: vec![patch],
+            priority: Priority::HIGH,
+        };
+
+        reconstructor.add_frame(frame);
+        reconstructor.process_next_frame().unwrap();
+
+        assert_eq!(
+            reconstructor.current_state()["l1"]["l2"]["l3"]["l4"]["l5"],
+            json!({"final": "value"})
+        );
+    }
+
+    #[test]
+    fn test_out_of_order_patches() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let skeleton = json!({"a": null, "b": null, "c": null});
+        reconstructor.current_state = skeleton;
+
+        // Add patches in reverse order
+        let patch_c = JsonPatch {
+            path: JsonPath::from_segments(vec![
+                PathSegment::Root,
+                PathSegment::Key("c".to_string()),
+            ]),
+            operation: PatchOperation::Set {
+                value: json!("third"),
+            },
+            priority: Priority::LOW,
+        };
+
+        let patch_a = JsonPatch {
+            path: JsonPath::from_segments(vec![
+                PathSegment::Root,
+                PathSegment::Key("a".to_string()),
+            ]),
+            operation: PatchOperation::Set {
+                value: json!("first"),
+            },
+            priority: Priority::LOW,
+        };
+
+        let patch_b = JsonPatch {
+            path: JsonPath::from_segments(vec![
+                PathSegment::Root,
+                PathSegment::Key("b".to_string()),
+            ]),
+            operation: PatchOperation::Set {
+                value: json!("second"),
+            },
+            priority: Priority::LOW,
+        };
+
+        reconstructor.add_frame(PriorityStreamFrame::Patch {
+            patches: vec![patch_c],
+            priority: Priority::LOW,
+        });
+        reconstructor.add_frame(PriorityStreamFrame::Patch {
+            patches: vec![patch_a],
+            priority: Priority::LOW,
+        });
+        reconstructor.add_frame(PriorityStreamFrame::Patch {
+            patches: vec![patch_b],
+            priority: Priority::LOW,
+        });
+
+        reconstructor.process_all_frames().unwrap();
+
+        assert_eq!(reconstructor.current_state()["a"], json!("first"));
+        assert_eq!(reconstructor.current_state()["b"], json!("second"));
+        assert_eq!(reconstructor.current_state()["c"], json!("third"));
+    }
+
+    #[test]
+    fn test_object_field_set() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let skeleton = json!({"obj": {"field": null}});
+        reconstructor.current_state = skeleton;
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("obj".to_string()),
+            PathSegment::Key("field".to_string()),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Set {
+                value: json!("updated"),
+            },
+            priority: Priority::MEDIUM,
+        };
+
+        let frame = PriorityStreamFrame::Patch {
+            patches: vec![patch],
+            priority: Priority::MEDIUM,
+        };
+
+        reconstructor.add_frame(frame);
+        reconstructor.process_next_frame().unwrap();
+
+        assert_eq!(
+            reconstructor.current_state()["obj"]["field"],
+            json!("updated")
+        );
+    }
+
+    #[test]
+    fn test_array_append_multiple() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let skeleton = json!({"items": []});
+        reconstructor.current_state = skeleton;
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("items".to_string()),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Append {
+                values: vec![json!(1), json!(2), json!(3)],
+            },
+            priority: Priority::MEDIUM,
+        };
+
+        let frame = PriorityStreamFrame::Patch {
+            patches: vec![patch],
+            priority: Priority::MEDIUM,
+        };
+
+        reconstructor.add_frame(frame);
+        reconstructor.process_next_frame().unwrap();
+
+        assert_eq!(reconstructor.current_state()["items"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn test_remove_operation() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let skeleton = json!({"keep": "this", "remove": "me"});
+        reconstructor.current_state = skeleton;
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("remove".to_string()),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Remove,
+            priority: Priority::MEDIUM,
+        };
+
+        let frame = PriorityStreamFrame::Patch {
+            patches: vec![patch],
+            priority: Priority::MEDIUM,
+        };
+
+        reconstructor.add_frame(frame);
+        reconstructor.process_next_frame().unwrap();
+
+        assert_eq!(reconstructor.current_state(), &json!({"keep": "this"}));
+    }
+
+    #[test]
+    fn test_remove_nested_field() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let skeleton = json!({"outer": {"keep": "this", "remove": "me"}});
+        reconstructor.current_state = skeleton;
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("outer".to_string()),
+            PathSegment::Key("remove".to_string()),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Remove,
+            priority: Priority::MEDIUM,
+        };
+
+        let frame = PriorityStreamFrame::Patch {
+            patches: vec![patch],
+            priority: Priority::MEDIUM,
+        };
+
+        reconstructor.add_frame(frame);
+        reconstructor.process_next_frame().unwrap();
+
+        assert_eq!(
+            reconstructor.current_state()["outer"],
+            json!({"keep": "this"})
+        );
+    }
+
+    #[test]
+    fn test_replace_operation() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let skeleton = json!({"field": "old"});
+        reconstructor.current_state = skeleton;
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("field".to_string()),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Replace {
+                value: json!("new"),
+            },
+            priority: Priority::MEDIUM,
+        };
+
+        let frame = PriorityStreamFrame::Patch {
+            patches: vec![patch],
+            priority: Priority::MEDIUM,
+        };
+
+        reconstructor.add_frame(frame);
+        reconstructor.process_next_frame().unwrap();
+
+        assert_eq!(reconstructor.current_state()["field"], json!("new"));
+    }
+
+    #[test]
+    fn test_error_empty_path_set() {
+        let mut reconstructor = JsonReconstructor::new();
+        reconstructor.current_state = json!({"test": "data"});
+
+        let empty_path = JsonPath::from_segments(vec![]);
+
+        let patch = JsonPatch {
+            path: empty_path,
+            operation: PatchOperation::Set {
+                value: json!("new"),
+            },
+            priority: Priority::MEDIUM,
+        };
+
+        let result = reconstructor.apply_patch(patch);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_error_invalid_parent() {
+        let mut reconstructor = JsonReconstructor::new();
+        reconstructor.current_state = json!({"value": 123});
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("value".to_string()),
+            PathSegment::Key("nested".to_string()),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Set {
+                value: json!("new"),
+            },
+            priority: Priority::MEDIUM,
+        };
+
+        let result = reconstructor.apply_patch(patch);
+        // Should error because "value" is number, not object
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_error_array_index_out_of_bounds() {
+        let mut reconstructor = JsonReconstructor::new();
+        reconstructor.current_state = json!({"arr": [1, 2]});
+
+        let path = JsonPath::from_segments(vec![
+            PathSegment::Root,
+            PathSegment::Key("arr".to_string()),
+            PathSegment::Index(5),
+        ]);
+
+        let patch = JsonPatch {
+            path,
+            operation: PatchOperation::Set {
+                value: json!("value"),
+            },
+            priority: Priority::MEDIUM,
+        };
+
+        let result = reconstructor.apply_patch(patch);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_result_no_frames() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        let result = reconstructor.process_next_frame().unwrap();
+        assert!(matches!(result, ProcessResult::NoFrames));
+    }
+
+    #[test]
+    fn test_duration_tracking() {
+        let mut reconstructor = JsonReconstructor::new();
+
+        // Initially no duration
+        assert!(reconstructor.duration().is_none());
+
+        // Add and process frame
+        let skeleton = json!({"test": "data"});
+        reconstructor.add_frame(PriorityStreamFrame::Skeleton {
+            data: skeleton,
+            priority: Priority::CRITICAL,
+            complete: false,
+        });
+
+        // Process and complete
+        reconstructor.process_next_frame().unwrap();
+
+        reconstructor.add_frame(PriorityStreamFrame::Complete { checksum: None });
+        reconstructor.process_next_frame().unwrap();
+
+        // Should have duration now
+        assert!(reconstructor.duration().is_some());
+    }
 }
