@@ -2,14 +2,60 @@
 //!
 //! Provides a reusable foundation for GAT repository implementations.
 //! Uses lock-free DashMap for concurrent access per infrastructure guidelines.
+//!
+//! # Concurrency Model
+//!
+//! This store uses [`DashMap`] which provides lock-free concurrent access through
+//! sharded hash maps. Each shard has its own lock, enabling high concurrency for
+//! operations on different keys.
+//!
+//! # Iteration Consistency Guarantees
+//!
+//! **DashMap provides weakly consistent iteration:**
+//!
+//! - Individual items are always consistent (no torn reads)
+//! - Items added during iteration may or may not be included
+//! - Items removed during iteration may or may not be included
+//! - Overall result represents a "fuzzy" snapshot of the store
+//!
+//! This is a fundamental trade-off for lock-free performance. For operations
+//! requiring strong consistency:
+//!
+//! - Use single-key lookups (`get`, `contains_key`) for authoritative checks
+//! - Accept eventual consistency for bulk queries (filter, iteration)
+//!
+//! The weakly consistent iteration model enables lock-free concurrent access
+//! without the overhead of MVCC or snapshot isolation, which is appropriate
+//! for in-memory session management where eventual consistency is acceptable.
 
 use dashmap::DashMap;
 use std::{hash::Hash, sync::Arc};
+
+/// Maximum pre-allocation size for filter result vectors.
+///
+/// Prevents excessive memory allocation when result_limit is very large.
+/// Actual allocation is min(result_limit, MAX_PREALLOC_SIZE).
+const MAX_PREALLOC_SIZE: usize = 1024;
 
 /// Generic thread-safe in-memory store
 ///
 /// Uses `DashMap` for lock-free concurrent access with sharded hash maps.
 /// Arc wrapper enables cheap cloning for shared ownership across async tasks.
+///
+/// # Iteration Consistency
+///
+/// This store uses DashMap which provides **weakly consistent iteration**:
+/// - Individual items are always consistent (no torn reads)
+/// - Items added during iteration may or may not be included
+/// - Items removed during iteration may or may not be included
+/// - Overall result represents a "fuzzy" snapshot of the store
+///
+/// For operations requiring strong consistency:
+/// - Use single-key lookups (`get`, `contains_key`)
+/// - Accept eventual consistency for bulk queries
+///
+/// This trade-off enables lock-free concurrent access without the overhead
+/// of MVCC or snapshot isolation.
 #[derive(Debug)]
 pub struct InMemoryStore<K, V>
 where
@@ -42,11 +88,21 @@ where
     }
 
     /// Get all keys
+    ///
+    /// # Consistency
+    ///
+    /// Returns a weakly consistent snapshot. Keys added or removed during
+    /// iteration may or may not be included.
     pub fn all_keys(&self) -> Vec<K> {
         self.data.iter().map(|entry| entry.key().clone()).collect()
     }
 
     /// Get value by key
+    ///
+    /// # Consistency
+    ///
+    /// Single-key lookups are always consistent and provide the most recent
+    /// committed value for the key.
     pub fn get(&self, key: &K) -> Option<V> {
         self.data.get(key).map(|entry| entry.value().clone())
     }
@@ -62,6 +118,12 @@ where
     }
 
     /// Filter values by predicate
+    ///
+    /// # Consistency
+    ///
+    /// Results are weakly consistent. Items added or removed during iteration
+    /// may or may not be included. For authoritative checks, use single-key
+    /// lookups (`get`, `contains_key`).
     pub fn filter<P>(&self, predicate: P) -> Vec<V>
     where
         P: Fn(&V) -> bool,
@@ -73,7 +135,77 @@ where
             .collect()
     }
 
+    /// Filter with bounded results and scan limit
+    ///
+    /// Returns at most `result_limit` items matching predicate.
+    /// Stops iteration after scanning `scan_limit` items.
+    ///
+    /// # Consistency
+    ///
+    /// Results are weakly consistent. Items added or removed during iteration
+    /// may or may not be included. For authoritative checks, use single-key
+    /// lookups (`get`, `contains_key`).
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (results, limit_reached) where:
+    /// - `results`: Vec of matching items (at most `result_limit` items)
+    /// - `limit_reached`: true if either scan_limit or result_limit was hit,
+    ///   meaning the query stopped before examining all items. Results are
+    ///   still valid but potentially incomplete.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use super::limits::{MAX_SCAN_LIMIT, MAX_RESULTS_LIMIT};
+    ///
+    /// let (results, truncated) = store.filter_limited(
+    ///     |v| v.is_active(),
+    ///     MAX_RESULTS_LIMIT,
+    ///     MAX_SCAN_LIMIT,
+    /// );
+    ///
+    /// if truncated {
+    ///     // Results may be incomplete
+    /// }
+    /// ```
+    pub fn filter_limited<P>(
+        &self,
+        predicate: P,
+        result_limit: usize,
+        scan_limit: usize,
+    ) -> (Vec<V>, bool)
+    where
+        P: Fn(&V) -> bool,
+    {
+        let mut results = Vec::with_capacity(result_limit.min(MAX_PREALLOC_SIZE));
+        let mut limit_reached = false;
+
+        for (scanned, entry) in self.data.iter().enumerate() {
+            // Check limit to ensure exactly scan_limit items are scanned
+            if scanned >= scan_limit {
+                limit_reached = true;
+                break;
+            }
+
+            if predicate(entry.value()) {
+                results.push(entry.value().clone());
+                if results.len() >= result_limit {
+                    limit_reached = true;
+                    break;
+                }
+            }
+        }
+
+        (results, limit_reached)
+    }
+
     /// Check if key exists
+    ///
+    /// # Consistency
+    ///
+    /// Single-key lookups are always consistent and provide the most recent
+    /// committed state.
     pub fn contains_key(&self, key: &K) -> bool {
         self.data.contains_key(key)
     }
@@ -88,6 +220,12 @@ where
     /// Applies function to mutable value reference if key exists.
     /// Returns the result of the function or None if key not found.
     ///
+    /// # Consistency
+    ///
+    /// This operation is atomic with respect to the specific key. The function
+    /// is executed while holding the shard lock for that key, ensuring no
+    /// concurrent modifications to the same key.
+    ///
     /// # Example
     /// ```ignore
     /// store.update_with(&stream_id, |stream| {
@@ -99,6 +237,20 @@ where
         F: FnOnce(&mut V) -> R,
     {
         self.data.get_mut(key).map(|mut entry| f(entry.value_mut()))
+    }
+
+    /// Iterate over all entries
+    ///
+    /// Returns an iterator that yields references to each entry.
+    /// Useful for manual iteration with early abort.
+    ///
+    /// # Consistency
+    ///
+    /// Iteration is weakly consistent. Items added or removed during iteration
+    /// may or may not be included. This is a fundamental property of DashMap
+    /// that enables lock-free concurrent access.
+    pub fn iter(&self) -> impl Iterator<Item = dashmap::mapref::multiple::RefMulti<'_, K, V>> {
+        self.data.iter()
     }
 }
 
@@ -178,6 +330,86 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_limited_returns_at_most_limit_items() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..100 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|_| true, 10, 1000);
+
+        assert_eq!(results.len(), 10);
+        assert!(limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_sets_limit_reached_when_scan_exceeded() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..100 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|v| *v > 1000, 100, 50);
+
+        assert!(results.is_empty());
+        assert!(limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_sets_limit_reached_when_results_exceeded() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..100 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|_| true, 5, 1000);
+
+        assert_eq!(results.len(), 5);
+        assert!(limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_empty_store() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        let (results, limit_reached) = store.filter_limited(|_| true, 10, 100);
+
+        assert!(results.is_empty());
+        assert!(!limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_no_matches() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..10 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|v| *v > 100, 10, 100);
+
+        assert!(results.is_empty());
+        assert!(!limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_partial_match_within_limits() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..10 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|v| v % 2 == 0, 100, 100);
+
+        assert_eq!(results.len(), 5);
+        assert!(!limit_reached);
+    }
+
+    #[test]
     fn test_clone_shares_data() {
         let store1: InMemoryStore<String, i32> = InMemoryStore::new();
         store1.insert("key".to_string(), 42);
@@ -241,5 +473,35 @@ mod tests {
         }
 
         read_handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_iter() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        store.insert(1, 10);
+        store.insert(2, 20);
+        store.insert(3, 30);
+
+        let mut count = 0;
+        for entry in store.iter() {
+            assert!(entry.value() == &10 || entry.value() == &20 || entry.value() == &30);
+            count += 1;
+        }
+
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_max_prealloc_size_limits_allocation() {
+        // Verify that preallocation is bounded even with very large result_limit
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+        store.insert(1, 1);
+
+        // Even with huge result_limit, we only preallocate MAX_PREALLOC_SIZE
+        let (results, _) = store.filter_limited(|_| true, 1_000_000, 1_000_000);
+
+        // Should still work correctly
+        assert_eq!(results.len(), 1);
     }
 }

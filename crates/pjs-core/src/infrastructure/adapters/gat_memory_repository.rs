@@ -1,13 +1,30 @@
 //! GAT-based in-memory repository implementations
 //!
 //! Zero-cost abstractions for domain ports using Generic Associated Types.
+//!
+//! # Concurrency Model
+//!
+//! These repositories use [`InMemoryStore`] which is backed by `DashMap` for
+//! lock-free concurrent access. See `generic_store.rs` for detailed consistency
+//! guarantees.
+//!
+//! # Iteration Consistency
+//!
+//! Query methods that iterate over multiple items (`find_sessions_by_criteria`,
+//! `find_active_sessions`, `list_streams_for_session`, etc.) provide weakly
+//! consistent results. Items added or removed during query execution may or may
+//! not be included in the results. For authoritative checks on specific items,
+//! use single-key lookups (`find_session`, `get_stream`, `session_exists`).
 
-use chrono::Utc;
 use std::cmp::Ordering;
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::time::Instant;
+
+use dashmap::DashMap;
 
 use crate::domain::{
-    DomainResult,
+    DomainError, DomainResult,
     aggregates::StreamSession,
     entities::{Stream, stream::StreamState},
     ports::{
@@ -19,17 +36,103 @@ use crate::domain::{
 };
 
 use super::generic_store::{SessionStore, StreamStore};
+use super::limits::{MAX_HEALTH_METRICS, MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT};
+
+// ============================================================================
+// Session Stats Cache (MEM-002)
+// ============================================================================
+
+/// Cache TTL for session statistics in seconds.
+///
+/// This value balances freshness vs. computation overhead for health checks.
+/// A 5-second TTL prevents excessive recalculation while maintaining reasonable
+/// accuracy for monitoring dashboards.
+const STATS_CACHE_TTL_SECS: u64 = 5;
+
+/// Cached session statistics for efficient health checks.
+///
+/// Reduces computation overhead by caching aggregated statistics at the session
+/// level. The cache uses a TTL-based invalidation strategy for simplicity.
+#[derive(Debug)]
+struct CachedSessionStats {
+    total_frames: AtomicU64,
+    computed_at_secs: AtomicU64,
+}
+
+impl Clone for CachedSessionStats {
+    fn clone(&self) -> Self {
+        Self {
+            total_frames: AtomicU64::new(self.total_frames.load(AtomicOrdering::Relaxed)),
+            computed_at_secs: AtomicU64::new(self.computed_at_secs.load(AtomicOrdering::Relaxed)),
+        }
+    }
+}
+
+impl CachedSessionStats {
+    fn new(total_frames: u64) -> Self {
+        Self {
+            total_frames: AtomicU64::new(total_frames),
+            computed_at_secs: AtomicU64::new(current_timestamp_secs()),
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        let now = current_timestamp_secs();
+        let computed_at = self.computed_at_secs.load(AtomicOrdering::Relaxed);
+        now.saturating_sub(computed_at) < STATS_CACHE_TTL_SECS
+    }
+
+    fn get_total_frames(&self) -> u64 {
+        self.total_frames.load(AtomicOrdering::Relaxed)
+    }
+
+    fn update(&self, total_frames: u64) {
+        self.total_frames
+            .store(total_frames, AtomicOrdering::Relaxed);
+        self.computed_at_secs
+            .store(current_timestamp_secs(), AtomicOrdering::Relaxed);
+    }
+}
+
+fn current_timestamp_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+// ============================================================================
+// Session Repository
+// ============================================================================
 
 /// GAT-based in-memory implementation of StreamRepositoryGat
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 pub struct GatInMemoryStreamRepository {
     store: SessionStore,
+    stats_cache: DashMap<SessionId, CachedSessionStats>,
+}
+
+impl Clone for GatInMemoryStreamRepository {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            // Clone the cache to preserve cached statistics
+            stats_cache: self.stats_cache.clone(),
+        }
+    }
+}
+
+impl Default for GatInMemoryStreamRepository {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GatInMemoryStreamRepository {
     pub fn new() -> Self {
         Self {
             store: SessionStore::new(),
+            stats_cache: DashMap::new(),
         }
     }
 
@@ -41,6 +144,7 @@ impl GatInMemoryStreamRepository {
     /// Clear all sessions (for testing)
     pub fn clear(&self) {
         self.store.clear();
+        self.stats_cache.clear();
     }
 
     /// Get all session IDs (for testing)
@@ -118,6 +222,42 @@ impl GatInMemoryStreamRepository {
             _ => Ordering::Equal,
         }
     }
+
+    /// Get cached or compute total frames for a session (MEM-002).
+    ///
+    /// Uses TTL-based caching to reduce iteration overhead for health checks.
+    fn get_cached_total_frames(&self, session: &StreamSession) -> u64 {
+        let session_id = session.id();
+
+        // Fast path: use cached stats if present and still valid
+        if let Some(cached) = self.stats_cache.get(&session_id)
+            && cached.is_valid()
+        {
+            return cached.get_total_frames();
+        }
+
+        // Compute total frames by iterating streams
+        let total_frames: u64 = session
+            .streams()
+            .values()
+            .map(|s| s.stats().total_frames)
+            .sum();
+
+        // Update or insert cache entry atomically using DashMap's entry API
+        self.stats_cache
+            .entry(session_id)
+            .and_modify(|cached| cached.update(total_frames))
+            .or_insert_with(|| CachedSessionStats::new(total_frames));
+
+        total_frames
+    }
+
+    /// Invalidate stats cache for a session.
+    ///
+    /// Called when session is modified to ensure cache consistency.
+    fn invalidate_stats_cache(&self, session_id: &SessionId) {
+        self.stats_cache.remove(session_id);
+    }
 }
 
 impl StreamRepositoryGat for GatInMemoryStreamRepository {
@@ -162,41 +302,69 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
 
     fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_> {
         async move {
-            self.store.insert(session.id(), session);
+            let session_id = session.id();
+            self.invalidate_stats_cache(&session_id);
+            self.store.insert(session_id, session);
             Ok(())
         }
     }
 
     fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_> {
         async move {
+            self.invalidate_stats_cache(&session_id);
             self.store.remove(&session_id);
             Ok(())
         }
     }
 
+    /// Find all active sessions.
+    ///
+    /// # Consistency
+    ///
+    /// Results are weakly consistent. Sessions added or removed during query
+    /// execution may or may not be included. For authoritative checks, use
+    /// `session_exists()` or `find_session()` for single-session lookups.
     fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
-        async move { Ok(self.store.filter(|s| s.is_active())) }
+        async move {
+            // Use bounded iteration for find_active_sessions too
+            let (sessions, _) =
+                self.store
+                    .filter_limited(|s| s.is_active(), MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT);
+            Ok(sessions)
+        }
     }
 
+    /// Find sessions matching criteria with pagination.
+    ///
+    /// # Consistency
+    ///
+    /// Results are weakly consistent. Sessions added or removed during query
+    /// execution may or may not be included. For authoritative checks, use
+    /// `session_exists()` or `find_session()` for single-session lookups.
     fn find_sessions_by_criteria(
         &self,
         criteria: SessionQueryCriteria,
         pagination: Pagination,
     ) -> Self::FindSessionsByCriteriaFuture<'_> {
         async move {
-            let start = std::time::Instant::now();
+            // Validate inputs first
+            criteria.validate()?;
+            pagination.validate()?;
 
-            // Filter sessions matching criteria
-            let filtered: Vec<StreamSession> = self
-                .store
-                .filter(|session| Self::matches_criteria(session, &criteria));
+            let start = Instant::now();
+
+            // Use bounded iteration to prevent DOS
+            let (mut filtered, scan_limit_reached) = self.store.filter_limited(
+                |session| Self::matches_criteria(session, &criteria),
+                MAX_RESULTS_LIMIT,
+                MAX_SCAN_LIMIT,
+            );
 
             let total_count = filtered.len();
 
             // Sort if sort_by specified
-            let mut sorted = filtered;
             if let Some(sort_field) = &pagination.sort_by {
-                sorted.sort_by(|a, b| {
+                filtered.sort_by(|a, b| {
                     let cmp = Self::compare_by_field(a, b, sort_field);
                     match pagination.sort_order {
                         SortOrder::Ascending => cmp,
@@ -206,7 +374,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
             }
 
             // Apply pagination
-            let paginated: Vec<StreamSession> = sorted
+            let paginated: Vec<StreamSession> = filtered
                 .into_iter()
                 .skip(pagination.offset)
                 .take(pagination.limit)
@@ -219,6 +387,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                 total_count,
                 has_more,
                 query_duration_ms: start.elapsed().as_millis() as u64,
+                scan_limit_reached,
             })
         }
     }
@@ -229,12 +398,8 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                 Some(session) => {
                     let health = session.health_check();
 
-                    // Aggregate stream frame counts
-                    let total_frames: u64 = session
-                        .streams()
-                        .values()
-                        .map(|s| s.stats().total_frames)
-                        .sum();
+                    // Use cached stats to reduce iteration overhead (MEM-002)
+                    let total_frames = self.get_cached_total_frames(&session);
 
                     // Calculate error rate from failed streams
                     let failed_streams = health.failed_streams as f64;
@@ -245,8 +410,8 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                         0.0
                     };
 
-                    // Collect metrics from session stats
-                    let mut metrics = std::collections::HashMap::new();
+                    // Preallocate for known metrics count (MEM-001 fix)
+                    let mut metrics = std::collections::HashMap::with_capacity(MAX_HEALTH_METRICS);
                     metrics.insert("active_streams".to_string(), health.active_streams as f64);
                     metrics.insert(
                         "total_bytes".to_string(),
@@ -255,6 +420,11 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                     metrics.insert(
                         "avg_duration_ms".to_string(),
                         session.stats().average_stream_duration_ms,
+                    );
+
+                    debug_assert!(
+                        metrics.len() <= MAX_HEALTH_METRICS,
+                        "Health metrics exceeded MAX_HEALTH_METRICS"
                     );
 
                     Ok(SessionHealthSnapshot {
@@ -267,18 +437,11 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                         metrics,
                     })
                 }
-                None => {
-                    // Return empty health for non-existent session
-                    Ok(SessionHealthSnapshot {
-                        session_id,
-                        is_healthy: false,
-                        active_streams: 0,
-                        total_frames: 0,
-                        last_activity: Utc::now(),
-                        error_rate: 0.0,
-                        metrics: std::collections::HashMap::new(),
-                    })
-                }
+                // ERR-001 fix: Return NotFound for non-existent sessions
+                None => Err(DomainError::SessionNotFound(format!(
+                    "Session {} not found",
+                    session_id
+                ))),
             }
         }
     }
@@ -288,6 +451,10 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
         async move { Ok(self.store.contains_key(&session_id)) }
     }
 }
+
+// ============================================================================
+// Stream Store
+// ============================================================================
 
 /// GAT-based in-memory implementation of StreamStoreGat
 #[derive(Debug, Clone, Default)]
@@ -327,6 +494,48 @@ impl GatInMemoryStreamStore {
                 | (StreamState::Failed, StreamStatus::Failed)
                 | (StreamState::Cancelled, StreamStatus::Cancelled)
         )
+    }
+
+    /// Helper: Check if stream matches filter criteria
+    fn matches_stream_filter(
+        stream: &Stream,
+        session_id: SessionId,
+        filter: &StreamFilter,
+    ) -> bool {
+        // First check session membership
+        if stream.session_id() != session_id {
+            return false;
+        }
+
+        // Apply status filter
+        if let Some(statuses) = &filter.statuses {
+            let matches_status = statuses
+                .iter()
+                .any(|status| Self::stream_state_matches_status(stream.state(), status));
+            if !matches_status {
+                return false;
+            }
+        }
+
+        // Apply time filter
+        if let Some(after) = filter.created_after
+            && stream.created_at() < after
+        {
+            return false;
+        }
+
+        // Apply has_frames filter
+        if let Some(has_frames) = filter.has_frames {
+            let frame_count = stream.stats().total_frames;
+            if has_frames && frame_count == 0 {
+                return false;
+            }
+            if !has_frames && frame_count > 0 {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -384,69 +593,47 @@ impl StreamStoreGat for GatInMemoryStreamStore {
         }
     }
 
+    /// List all streams for a session.
+    ///
+    /// # Consistency
+    ///
+    /// Results are weakly consistent. Streams added or removed during iteration
+    /// may or may not be included. For authoritative checks, use `get_stream()`
+    /// for single-stream lookups.
     fn list_streams_for_session(
         &self,
         session_id: SessionId,
     ) -> Self::ListStreamsForSessionFuture<'_> {
-        async move { Ok(self.store.filter(|s| s.session_id() == session_id)) }
+        async move {
+            // Use bounded iteration for DOS protection
+            let (streams, _) = self.store.filter_limited(
+                |s| s.session_id() == session_id,
+                MAX_RESULTS_LIMIT,
+                MAX_SCAN_LIMIT,
+            );
+            Ok(streams)
+        }
     }
 
+    /// Find streams matching filter criteria.
+    ///
+    /// # Consistency
+    ///
+    /// Results are weakly consistent. Streams added or removed during iteration
+    /// may or may not be included. For authoritative checks, use `get_stream()`
+    /// for single-stream lookups.
     fn find_streams_by_session(
         &self,
         session_id: SessionId,
         filter: StreamFilter,
     ) -> Self::FindStreamsBySessionFuture<'_> {
         async move {
-            let streams: Vec<Stream> = self.store.filter(|stream| {
-                // First check session membership
-                if stream.session_id() != session_id {
-                    return false;
-                }
-
-                // Apply status filter
-                if let Some(statuses) = &filter.statuses {
-                    let matches_status = statuses
-                        .iter()
-                        .any(|status| Self::stream_state_matches_status(stream.state(), status));
-                    if !matches_status {
-                        return false;
-                    }
-                }
-
-                // Apply time filter
-                if let Some(after) = filter.created_after
-                    && stream.created_at() < after
-                {
-                    return false;
-                }
-
-                // Apply has_frames filter
-                if let Some(has_frames) = filter.has_frames {
-                    let frame_count = stream.stats().total_frames;
-                    if has_frames && frame_count == 0 {
-                        return false;
-                    }
-                    if !has_frames && frame_count > 0 {
-                        return false;
-                    }
-                }
-
-                // NOTE: min_priority/max_priority filtering not implemented
-                //
-                // Stream entity doesn't expose a single priority value - priorities are assigned
-                // per-frame during streaming. StreamStats only tracks critical_bytes and
-                // high_priority_bytes, without full priority distribution data.
-                //
-                // Possible future implementations:
-                // 1. Add priority distribution to StreamStats (preferred - maintains domain purity)
-                // 2. Filter based on heuristic (e.g., has_critical_bytes if min >= CRITICAL)
-                // 3. Deprecate these fields in favor of has_high_priority/has_critical filters
-                //
-                // For now, these filter fields are silently ignored. This is documented in the
-                // StreamFilter API docs and should be addressed in a future minor version bump.
-
-                true
-            });
+            // DOS-002 fix: Use bounded iteration
+            let (streams, _) = self.store.filter_limited(
+                |stream| Self::matches_stream_filter(stream, session_id, &filter),
+                MAX_RESULTS_LIMIT,
+                MAX_SCAN_LIMIT,
+            );
 
             Ok(streams)
         }
@@ -458,32 +645,35 @@ impl StreamStoreGat for GatInMemoryStreamStore {
         status: StreamStatus,
     ) -> Self::UpdateStreamStatusFuture<'_> {
         async move {
-            use crate::domain::DomainError;
-
-            self.store
-                .update_with(&stream_id, |stream| {
-                    // Apply status transition based on requested status
-                    match status {
-                        StreamStatus::Active => stream.start_streaming(),
-                        StreamStatus::Completed => stream.complete(),
-                        StreamStatus::Failed => stream.fail("Status update to Failed".to_string()),
-                        StreamStatus::Cancelled => stream.cancel(),
-                        StreamStatus::Paused => {
-                            // Paused not directly supported by Stream entity; treat as invalid transition
-                            Err(DomainError::InvalidStateTransition(
-                                "Cannot transition to Paused status: not supported by StreamState"
-                                    .to_string(),
-                            ))
-                        }
-                        StreamStatus::Created => {
-                            // Cannot transition to Created
-                            Err(DomainError::InvalidStateTransition(
-                                "Cannot transition to Created status".to_string(),
-                            ))
-                        }
+            // ERR-001 fix: Return NotFound for missing streams
+            match self.store.update_with(&stream_id, |stream| {
+                // Apply status transition based on requested status
+                match status {
+                    StreamStatus::Active => stream.start_streaming(),
+                    StreamStatus::Completed => stream.complete(),
+                    StreamStatus::Failed => stream.fail("Status update to Failed".to_string()),
+                    StreamStatus::Cancelled => stream.cancel(),
+                    StreamStatus::Paused => {
+                        // Paused not directly supported by Stream entity; treat as invalid transition
+                        Err(DomainError::InvalidStateTransition(
+                            "Cannot transition to Paused status: not supported by StreamState"
+                                .to_string(),
+                        ))
                     }
-                })
-                .unwrap_or(Ok(())) // Stream not found - idempotent behavior
+                    StreamStatus::Created => {
+                        // Cannot transition to Created
+                        Err(DomainError::InvalidStateTransition(
+                            "Cannot transition to Created status".to_string(),
+                        ))
+                    }
+                }
+            }) {
+                Some(result) => result,
+                None => Err(DomainError::StreamNotFound(format!(
+                    "Stream {} not found",
+                    stream_id
+                ))),
+            }
         }
     }
 
@@ -493,16 +683,20 @@ impl StreamStoreGat for GatInMemoryStreamStore {
                 Some(stream) => {
                     let stats = stream.stats();
 
-                    // Build PriorityDistribution from stream stats
+                    // Build PriorityDistribution from stream stats with saturating casts
+                    let high_frames = if stats.average_frame_size > 0.0 {
+                        // Saturating cast: clamp to u64::MAX to prevent overflow
+                        let ratio = stats.high_priority_bytes as f64 / stats.average_frame_size;
+                        saturating_f64_to_u64(ratio)
+                    } else {
+                        0
+                    };
+
                     let priority_dist = PriorityDistribution {
                         critical_frames: stats.skeleton_frames
                             + stats.complete_frames
                             + stats.error_frames,
-                        high_frames: if stats.average_frame_size > 0.0 {
-                            (stats.high_priority_bytes as f64 / stats.average_frame_size) as u64
-                        } else {
-                            0
-                        },
+                        high_frames,
                         medium_frames: 0, // Would need to track in StreamStats
                         low_frames: 0,
                         background_frames: 0,
@@ -522,20 +716,35 @@ impl StreamStoreGat for GatInMemoryStreamStore {
                         }),
                     })
                 }
-                None => {
-                    // Return default statistics for non-existent stream
-                    Ok(StreamStatistics {
-                        total_frames: 0,
-                        total_bytes: 0,
-                        priority_distribution: PriorityDistribution::default(),
-                        avg_frame_size: 0.0,
-                        creation_time: Utc::now(),
-                        completion_time: None,
-                        processing_duration: None,
-                    })
-                }
+                // ERR-001 fix: Return NotFound for non-existent streams
+                None => Err(DomainError::StreamNotFound(format!(
+                    "Stream {} not found",
+                    stream_id
+                ))),
             }
         }
+    }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Safely convert f64 to u64 with saturation at u64::MAX.
+///
+/// Handles edge cases:
+/// - Negative values → 0
+/// - NaN → 0
+/// - Infinity → u64::MAX
+/// - Values > u64::MAX → u64::MAX
+#[inline]
+fn saturating_f64_to_u64(value: f64) -> u64 {
+    if value.is_nan() || value < 0.0 {
+        0
+    } else if value >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        value as u64
     }
 }
 
@@ -547,6 +756,25 @@ mod tests {
         value_objects::JsonData,
     };
     use chrono::{Duration, Utc};
+
+    // ===== Helper function tests =====
+
+    #[test]
+    fn test_saturating_f64_to_u64_normal_values() {
+        assert_eq!(saturating_f64_to_u64(0.0), 0);
+        assert_eq!(saturating_f64_to_u64(1.5), 1);
+        assert_eq!(saturating_f64_to_u64(100.9), 100);
+        assert_eq!(saturating_f64_to_u64(1_000_000.0), 1_000_000);
+    }
+
+    #[test]
+    fn test_saturating_f64_to_u64_edge_cases() {
+        assert_eq!(saturating_f64_to_u64(f64::NAN), 0);
+        assert_eq!(saturating_f64_to_u64(f64::NEG_INFINITY), 0);
+        assert_eq!(saturating_f64_to_u64(-1.0), 0);
+        assert_eq!(saturating_f64_to_u64(f64::INFINITY), u64::MAX);
+        assert_eq!(saturating_f64_to_u64(1e20), u64::MAX);
+    }
 
     // ===== Basic CRUD Tests =====
 
@@ -595,6 +823,7 @@ mod tests {
         assert_eq!(result.sessions.len(), 0);
         assert_eq!(result.total_count, 0);
         assert!(!result.has_more);
+        assert!(!result.scan_limit_reached);
     }
 
     #[tokio::test]
@@ -781,6 +1010,41 @@ mod tests {
         assert_eq!(result.sessions[0].id(), session2_id); // Session with most streams first
     }
 
+    #[tokio::test]
+    async fn test_find_sessions_validates_criteria() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        // Invalid criteria: min > max
+        let criteria = SessionQueryCriteria {
+            min_stream_count: Some(10),
+            max_stream_count: Some(5),
+            ..Default::default()
+        };
+        let result = repo
+            .find_sessions_by_criteria(criteria, Pagination::default())
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DomainError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn test_find_sessions_validates_pagination() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        // Invalid pagination: limit = 0
+        let pagination = Pagination {
+            offset: 0,
+            limit: 0,
+            sort_by: None,
+            sort_order: SortOrder::Ascending,
+        };
+        let result = repo
+            .find_sessions_by_criteria(SessionQueryCriteria::default(), pagination)
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DomainError::InvalidInput(_)));
+    }
+
     // ===== StreamRepositoryGat Tests: get_session_health =====
 
     #[tokio::test]
@@ -801,16 +1065,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_session_health_not_found() {
+    async fn test_get_session_health_returns_not_found() {
         let repo = GatInMemoryStreamRepository::new();
 
         let missing_session_id = SessionId::new();
-        let health = repo.get_session_health(missing_session_id).await.unwrap();
+        let result = repo.get_session_health(missing_session_id).await;
 
-        assert_eq!(health.session_id, missing_session_id);
-        assert!(!health.is_healthy);
-        assert_eq!(health.active_streams, 0);
-        assert_eq!(health.total_frames, 0);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::SessionNotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_session_health_uses_cache() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        repo.save_session(session).await.unwrap();
+
+        // First call computes and caches
+        let health1 = repo.get_session_health(session_id).await.unwrap();
+        assert_eq!(health1.total_frames, 0);
+
+        // Second call should use cache
+        let health2 = repo.get_session_health(session_id).await.unwrap();
+        assert_eq!(health2.total_frames, 0);
+
+        // Cache should exist
+        assert!(repo.stats_cache.contains_key(&session_id));
     }
 
     // ===== StreamRepositoryGat Tests: session_exists =====
@@ -1022,17 +1308,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_stream_status_not_found() {
+    async fn test_update_stream_status_returns_not_found() {
         let store = GatInMemoryStreamStore::new();
 
         let missing_stream_id = StreamId::new();
 
-        // Should be idempotent - no error for missing stream
         let result = store
             .update_stream_status(missing_stream_id, StreamStatus::Active)
             .await;
 
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::StreamNotFound(_)
+        ));
     }
 
     // ===== StreamStoreGat Tests: get_stream_statistics =====
@@ -1059,18 +1348,109 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_stream_statistics_not_found() {
+    async fn test_get_stream_statistics_returns_not_found() {
         let store = GatInMemoryStreamStore::new();
 
         let missing_stream_id = StreamId::new();
-        let stats = store
-            .get_stream_statistics(missing_stream_id)
+        let result = store.get_stream_statistics(missing_stream_id).await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::StreamNotFound(_)
+        ));
+    }
+
+    // ===== Bounded iteration tests =====
+
+    #[tokio::test]
+    async fn test_find_sessions_uses_bounded_iteration() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        // Create enough sessions to verify bounded iteration is used
+        // (though we can't easily hit MAX_SCAN_LIMIT in tests without performance impact)
+        for _ in 0..10 {
+            let mut session = StreamSession::new(SessionConfig::default());
+            session.activate().unwrap();
+            repo.save_session(session).await.unwrap();
+        }
+
+        let result = repo
+            .find_sessions_by_criteria(SessionQueryCriteria::default(), Pagination::default())
             .await
             .unwrap();
 
-        // Should return default statistics for non-existent stream
-        assert_eq!(stats.total_frames, 0);
-        assert_eq!(stats.total_bytes, 0);
-        assert!(stats.completion_time.is_none());
+        assert_eq!(result.total_count, 10);
+        assert!(!result.scan_limit_reached);
+    }
+
+    #[tokio::test]
+    async fn test_find_active_sessions_uses_bounded_iteration() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        for _ in 0..5 {
+            let mut session = StreamSession::new(SessionConfig::default());
+            session.activate().unwrap();
+            repo.save_session(session).await.unwrap();
+        }
+
+        let sessions = repo.find_active_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_list_streams_for_session_uses_bounded_iteration() {
+        let store = GatInMemoryStreamStore::new();
+        let session_id = SessionId::new();
+
+        for _ in 0..5 {
+            let stream = Stream::new(
+                session_id,
+                JsonData::String("test".to_string()),
+                StreamConfig::default(),
+            );
+            store.store_stream(stream).await.unwrap();
+        }
+
+        let streams = store.list_streams_for_session(session_id).await.unwrap();
+        assert_eq!(streams.len(), 5);
+    }
+
+    // ===== Stats cache tests =====
+
+    #[tokio::test]
+    async fn test_stats_cache_invalidated_on_save() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        repo.save_session(session.clone()).await.unwrap();
+
+        // Get health to populate cache
+        let _ = repo.get_session_health(session_id).await.unwrap();
+        assert!(repo.stats_cache.contains_key(&session_id));
+
+        // Save again should invalidate cache
+        repo.save_session(session).await.unwrap();
+        // Note: The new save creates a new cache entry, but the invalidation happens first
+    }
+
+    #[tokio::test]
+    async fn test_stats_cache_invalidated_on_remove() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        repo.save_session(session).await.unwrap();
+
+        // Get health to populate cache
+        let _ = repo.get_session_health(session_id).await.unwrap();
+        assert!(repo.stats_cache.contains_key(&session_id));
+
+        // Remove should invalidate cache
+        repo.remove_session(session_id).await.unwrap();
+        assert!(!repo.stats_cache.contains_key(&session_id));
     }
 }

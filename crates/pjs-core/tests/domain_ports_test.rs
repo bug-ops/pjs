@@ -625,6 +625,7 @@ fn test_session_query_result_empty() {
         total_count: 0,
         has_more: false,
         query_duration_ms: 10,
+        scan_limit_reached: false,
     };
 
     assert_eq!(result.sessions.len(), 0);
@@ -639,6 +640,7 @@ fn test_session_query_result_clone() {
         total_count: 100,
         has_more: true,
         query_duration_ms: 50,
+        scan_limit_reached: false,
     };
 
     let cloned = result.clone();
@@ -653,6 +655,7 @@ fn test_session_query_result_debug() {
         total_count: 0,
         has_more: false,
         query_duration_ms: 10,
+        scan_limit_reached: false,
     };
 
     let debug_str = format!("{:?}", result);

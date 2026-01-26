@@ -78,6 +78,50 @@ pub struct SessionQueryCriteria {
     pub max_stream_count: Option<usize>,
 }
 
+impl SessionQueryCriteria {
+    /// Validate query criteria for logical consistency
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::InvalidInput` if:
+    /// - `min_stream_count > max_stream_count`
+    /// - `created_after > created_before`
+    /// - `states` is empty (use `None` for no filter)
+    pub fn validate(&self) -> DomainResult<()> {
+        use crate::domain::DomainError;
+
+        // Check min/max stream count consistency
+        if let (Some(min), Some(max)) = (self.min_stream_count, self.max_stream_count)
+            && min > max
+        {
+            return Err(DomainError::InvalidInput(format!(
+                "min_stream_count ({}) > max_stream_count ({})",
+                min, max
+            )));
+        }
+
+        // Check time range consistency
+        if let (Some(after), Some(before)) = (self.created_after, self.created_before)
+            && after > before
+        {
+            return Err(DomainError::InvalidInput(
+                "created_after cannot be after created_before".to_string(),
+            ));
+        }
+
+        // Reject empty states vec (ambiguous semantics)
+        if let Some(ref states) = self.states
+            && states.is_empty()
+        {
+            return Err(DomainError::InvalidInput(
+                "states filter cannot be empty (use None for no filter)".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 /// Pagination parameters
 #[derive(Debug, Clone)]
 pub struct Pagination {
@@ -98,6 +142,80 @@ impl Default for Pagination {
     }
 }
 
+impl Pagination {
+    /// Validate pagination parameters against security limits
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::InvalidInput` if:
+    /// - `limit` is 0
+    /// - `limit` exceeds `MAX_PAGINATION_LIMIT` (1000)
+    /// - `offset` exceeds `MAX_PAGINATION_OFFSET` (1_000_000)
+    /// - `offset + limit` would overflow
+    /// - `sort_by` contains an invalid field name
+    pub fn validate(&self) -> DomainResult<()> {
+        use crate::domain::DomainError;
+        use crate::domain::config::limits::{
+            ALLOWED_SORT_FIELDS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
+        };
+
+        if self.limit == 0 {
+            return Err(DomainError::InvalidInput(
+                "pagination limit must be at least 1".to_string(),
+            ));
+        }
+
+        if self.limit > MAX_PAGINATION_LIMIT {
+            return Err(DomainError::InvalidInput(format!(
+                "pagination limit {} exceeds maximum {}",
+                self.limit, MAX_PAGINATION_LIMIT
+            )));
+        }
+
+        if self.offset > MAX_PAGINATION_OFFSET {
+            return Err(DomainError::InvalidInput(format!(
+                "pagination offset {} exceeds maximum {}",
+                self.offset, MAX_PAGINATION_OFFSET
+            )));
+        }
+
+        // Overflow check for offset + limit (defense-in-depth)
+        if self.offset.checked_add(self.limit).is_none() {
+            return Err(DomainError::InvalidInput(
+                "pagination offset + limit would overflow".to_string(),
+            ));
+        }
+
+        // Whitelist sort_by values
+        if let Some(ref sort_by) = self.sort_by
+            && !ALLOWED_SORT_FIELDS.contains(&sort_by.as_str())
+        {
+            return Err(DomainError::InvalidInput(format!(
+                "invalid sort_by field: {}. allowed: {:?}",
+                sort_by, ALLOWED_SORT_FIELDS
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Create validated pagination with defaults
+    ///
+    /// # Errors
+    ///
+    /// Returns error if parameters fail validation
+    pub fn new_validated(offset: usize, limit: usize) -> DomainResult<Self> {
+        let pagination = Self {
+            offset,
+            limit,
+            sort_by: None,
+            sort_order: SortOrder::Ascending,
+        };
+        pagination.validate()?;
+        Ok(pagination)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SortOrder {
     Ascending,
@@ -111,6 +229,12 @@ pub struct SessionQueryResult {
     pub total_count: usize,
     pub has_more: bool,
     pub query_duration_ms: u64,
+    /// Indicates if MAX_SCAN_LIMIT was reached during query execution.
+    ///
+    /// When true, the query may have missed matching items because the scan
+    /// limit was exceeded before all items could be evaluated. Results are
+    /// still valid but potentially incomplete.
+    pub scan_limit_reached: bool,
 }
 
 /// Snapshot of session health
@@ -126,6 +250,11 @@ pub struct SessionHealthSnapshot {
 }
 
 /// Filter for stream queries
+///
+/// # Validation
+///
+/// Call `validate()` before using in queries to ensure constraints are met.
+/// Validation checks priority range consistency and empty statuses vec.
 #[derive(Debug, Clone, Default)]
 pub struct StreamFilter {
     /// Filter by stream status
@@ -150,6 +279,39 @@ pub struct StreamFilter {
 
     /// Filter by presence of frames
     pub has_frames: Option<bool>,
+}
+
+impl StreamFilter {
+    /// Validate filter constraints for logical consistency
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::InvalidInput` if:
+    /// - `min_priority > max_priority` (when both are Some)
+    /// - `statuses` is an empty vec (use `None` for no filter)
+    pub fn validate(&self) -> DomainResult<()> {
+        use crate::domain::DomainError;
+
+        // Validate priority range consistency
+        if let (Some(min), Some(max)) = (self.min_priority, self.max_priority)
+            && min.value() > max.value()
+        {
+            return Err(DomainError::InvalidInput(
+                "min_priority cannot exceed max_priority".to_string(),
+            ));
+        }
+
+        // Reject empty statuses vec (ambiguous semantics, consistent with SessionQueryCriteria)
+        if let Some(ref statuses) = self.statuses
+            && statuses.is_empty()
+        {
+            return Err(DomainError::InvalidInput(
+                "statuses filter cannot be empty (use None for no filter)".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 /// Stream status enumeration
@@ -395,6 +557,109 @@ mod tests {
         assert_eq!(cloned.sort_order, pagination.sort_order);
     }
 
+    // Tests for Pagination validation
+    #[test]
+    fn test_pagination_validate_zero_limit_rejected() {
+        let pagination = Pagination {
+            offset: 0,
+            limit: 0,
+            sort_by: None,
+            sort_order: SortOrder::Ascending,
+        };
+        let result = pagination.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, DomainError::InvalidInput(_)));
+        assert!(format!("{}", err).contains("at least 1"));
+    }
+
+    #[test]
+    fn test_pagination_validate_excessive_limit_rejected() {
+        let pagination = Pagination {
+            offset: 0,
+            limit: 10_000,
+            sort_by: None,
+            sort_order: SortOrder::Ascending,
+        };
+        let result = pagination.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn test_pagination_validate_excessive_offset_rejected() {
+        let pagination = Pagination {
+            offset: 2_000_000,
+            limit: 10,
+            sort_by: None,
+            sort_order: SortOrder::Ascending,
+        };
+        let result = pagination.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("offset"));
+    }
+
+    #[test]
+    fn test_pagination_validate_extreme_offset_rejected() {
+        // Test that extreme offset values (e.g., usize::MAX) are rejected.
+        // With bounded limits, this is caught by the offset check rather than overflow.
+        let pagination = Pagination {
+            offset: usize::MAX,
+            limit: 1,
+            sort_by: None,
+            sort_order: SortOrder::Ascending,
+        };
+        let result = pagination.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Caught by offset limit check (usize::MAX > MAX_PAGINATION_OFFSET)
+        assert!(format!("{}", err).contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn test_pagination_validate_invalid_sort_by_rejected() {
+        let pagination = Pagination {
+            offset: 0,
+            limit: 10,
+            sort_by: Some("invalid_field".to_string()),
+            sort_order: SortOrder::Ascending,
+        };
+        let result = pagination.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("invalid sort_by"));
+    }
+
+    #[test]
+    fn test_pagination_validate_valid_sort_by_accepted() {
+        for field in ["created_at", "updated_at", "stream_count"] {
+            let pagination = Pagination {
+                offset: 0,
+                limit: 10,
+                sort_by: Some(field.to_string()),
+                sort_order: SortOrder::Ascending,
+            };
+            assert!(pagination.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_pagination_new_validated_success() {
+        let result = Pagination::new_validated(0, 50);
+        assert!(result.is_ok());
+        let pagination = result.unwrap();
+        assert_eq!(pagination.offset, 0);
+        assert_eq!(pagination.limit, 50);
+    }
+
+    #[test]
+    fn test_pagination_new_validated_failure() {
+        let result = Pagination::new_validated(0, 0);
+        assert!(result.is_err());
+    }
+
     // Tests for SortOrder
     #[test]
     fn test_sort_order_equality() {
@@ -485,6 +750,60 @@ mod tests {
         assert_eq!(cloned.client_info_pattern, criteria.client_info_pattern);
     }
 
+    // Tests for SessionQueryCriteria validation
+    #[test]
+    fn test_criteria_validate_min_greater_than_max_rejected() {
+        let criteria = SessionQueryCriteria {
+            min_stream_count: Some(10),
+            max_stream_count: Some(5),
+            ..Default::default()
+        };
+        let result = criteria.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("min_stream_count"));
+    }
+
+    #[test]
+    fn test_criteria_validate_after_greater_than_before_rejected() {
+        let now = Utc::now();
+        let criteria = SessionQueryCriteria {
+            created_after: Some(now),
+            created_before: Some(now - chrono::Duration::hours(1)),
+            ..Default::default()
+        };
+        let result = criteria.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("created_after"));
+    }
+
+    #[test]
+    fn test_criteria_validate_empty_states_rejected() {
+        let criteria = SessionQueryCriteria {
+            states: Some(vec![]),
+            ..Default::default()
+        };
+        let result = criteria.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("empty"));
+    }
+
+    #[test]
+    fn test_criteria_validate_valid_criteria_accepted() {
+        let now = Utc::now();
+        let criteria = SessionQueryCriteria {
+            states: Some(vec!["active".to_string()]),
+            created_after: Some(now - chrono::Duration::hours(1)),
+            created_before: Some(now),
+            min_stream_count: Some(1),
+            max_stream_count: Some(10),
+            ..Default::default()
+        };
+        assert!(criteria.validate().is_ok());
+    }
+
     // Tests for StreamFilter
     #[test]
     fn test_stream_filter_default() {
@@ -529,6 +848,88 @@ mod tests {
         let cloned = filter.clone();
         assert_eq!(cloned.has_frames, filter.has_frames);
         assert_eq!(cloned.created_after, filter.created_after);
+    }
+
+    // Tests for StreamFilter validation (INPUT-003)
+    #[test]
+    fn test_stream_filter_validate_min_priority_exceeds_max_rejected() {
+        let filter = StreamFilter {
+            min_priority: Some(Priority::CRITICAL),
+            max_priority: Some(Priority::LOW),
+            ..Default::default()
+        };
+        let result = filter.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, DomainError::InvalidInput(_)));
+        assert!(format!("{}", err).contains("min_priority"));
+    }
+
+    #[test]
+    fn test_stream_filter_validate_empty_statuses_rejected() {
+        let filter = StreamFilter {
+            statuses: Some(vec![]),
+            ..Default::default()
+        };
+        let result = filter.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("empty"));
+    }
+
+    #[test]
+    fn test_stream_filter_validate_valid_priority_range_accepted() {
+        let filter = StreamFilter {
+            min_priority: Some(Priority::LOW),
+            max_priority: Some(Priority::CRITICAL),
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_equal_priority_accepted() {
+        let filter = StreamFilter {
+            min_priority: Some(Priority::MEDIUM),
+            max_priority: Some(Priority::MEDIUM),
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_only_min_priority_accepted() {
+        let filter = StreamFilter {
+            min_priority: Some(Priority::HIGH),
+            max_priority: None,
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_only_max_priority_accepted() {
+        let filter = StreamFilter {
+            min_priority: None,
+            max_priority: Some(Priority::HIGH),
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_default_accepted() {
+        let filter = StreamFilter::default();
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_non_empty_statuses_accepted() {
+        let filter = StreamFilter {
+            statuses: Some(vec![StreamStatus::Active]),
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
     }
 
     // Tests for StreamStatus
@@ -678,11 +1079,13 @@ mod tests {
             total_count: 100,
             has_more: true,
             query_duration_ms: 50,
+            scan_limit_reached: false,
         };
         assert!(result.sessions.is_empty());
         assert_eq!(result.total_count, 100);
         assert!(result.has_more);
         assert_eq!(result.query_duration_ms, 50);
+        assert!(!result.scan_limit_reached);
     }
 
     #[test]
@@ -692,6 +1095,7 @@ mod tests {
             total_count: 0,
             has_more: false,
             query_duration_ms: 0,
+            scan_limit_reached: false,
         };
         let debug = format!("{:?}", result);
         assert!(debug.contains("SessionQueryResult"));
@@ -704,11 +1108,13 @@ mod tests {
             total_count: 25,
             has_more: false,
             query_duration_ms: 10,
+            scan_limit_reached: true,
         };
         let cloned = result.clone();
         assert_eq!(cloned.total_count, result.total_count);
         assert_eq!(cloned.has_more, result.has_more);
         assert_eq!(cloned.query_duration_ms, result.query_duration_ms);
+        assert_eq!(cloned.scan_limit_reached, result.scan_limit_reached);
     }
 
     // Tests for SessionHealthSnapshot
