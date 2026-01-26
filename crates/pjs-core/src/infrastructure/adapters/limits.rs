@@ -67,5 +67,4 @@ mod tests {
         assert_eq!(MAX_HEALTH_METRICS, 16);
         const { assert!(MAX_HEALTH_METRICS >= 3) };
     }
-
 }
