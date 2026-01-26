@@ -83,6 +83,19 @@ pub enum SessionState {
     Failed,
 }
 
+impl SessionState {
+    /// Get string representation without allocation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionState::Initializing => "Initializing",
+            SessionState::Active => "Active",
+            SessionState::Closing => "Closing",
+            SessionState::Completed => "Completed",
+            SessionState::Failed => "Failed",
+        }
+    }
+}
+
 /// Domain events that represent business-relevant state changes
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]

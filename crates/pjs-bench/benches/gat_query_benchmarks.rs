@@ -109,18 +109,14 @@ fn bench_find_sessions_by_criteria(c: &mut Criterion) {
             .unwrap();
 
         let criteria = SessionQueryCriteria {
-            state: None,
             created_after: Some(Utc::now() - Duration::hours(1)),
-            created_before: None,
-            min_streams: None,
-            max_streams: None,
-            has_errors: None,
-            tags: None,
+            ..Default::default()
         };
 
         let pagination = Pagination {
             offset: 0,
             limit: 100,
+            ..Default::default()
         };
 
         group.bench_with_input(
@@ -382,18 +378,11 @@ fn measure_raw_performance() {
     );
 
     // find_sessions_by_criteria benchmark
-    let criteria = SessionQueryCriteria {
-        state: None,
-        created_after: None,
-        created_before: None,
-        min_streams: None,
-        max_streams: None,
-        has_errors: None,
-        tags: None,
-    };
+    let criteria = SessionQueryCriteria::default();
     let pagination = Pagination {
         offset: 0,
         limit: 100,
+        ..Default::default()
     };
 
     let start = Instant::now();

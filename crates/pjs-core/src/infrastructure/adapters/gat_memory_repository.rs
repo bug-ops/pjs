@@ -52,8 +52,8 @@ impl GatInMemoryStreamRepository {
     fn matches_criteria(session: &StreamSession, criteria: &SessionQueryCriteria) -> bool {
         // Check state filter
         if let Some(states) = &criteria.states {
-            let state_str = format!("{:?}", session.state());
-            if !states.iter().any(|s| s.eq_ignore_ascii_case(&state_str)) {
+            let state_str = session.state().as_str();
+            if !states.iter().any(|s| s.eq_ignore_ascii_case(state_str)) {
                 return false;
             }
         }
@@ -92,6 +92,18 @@ impl GatInMemoryStreamRepository {
             && stream_count > max
         {
             return false;
+        }
+
+        // Check client_info pattern filter
+        if let Some(pattern) = &criteria.client_info_pattern {
+            match session.client_info() {
+                Some(client_info) => {
+                    if !client_info.to_lowercase().contains(&pattern.to_lowercase()) {
+                        return false;
+                    }
+                }
+                None => return false, // No client_info means no match
+            }
         }
 
         true
@@ -419,6 +431,12 @@ impl StreamStoreGat for GatInMemoryStreamStore {
                     }
                 }
 
+                // NOTE: min_priority/max_priority filtering not implemented
+                // Stream entity doesn't expose a single priority value (priorities are per-frame).
+                // These filter fields are currently ignored.
+                // TODO: Either remove these fields from StreamFilter (breaking change)
+                // or implement by analyzing frame priority distribution in Stream::stats()
+
                 true
             });
 
@@ -443,8 +461,11 @@ impl StreamStoreGat for GatInMemoryStreamStore {
                         StreamStatus::Failed => stream.fail("Status update to Failed".to_string()),
                         StreamStatus::Cancelled => stream.cancel(),
                         StreamStatus::Paused => {
-                            // Paused not directly supported by Stream entity
-                            Ok(())
+                            // Paused not directly supported by Stream entity; treat as invalid transition
+                            Err(DomainError::InvalidStateTransition(
+                                "Cannot transition to Paused status: not supported by StreamState"
+                                    .to_string(),
+                            ))
                         }
                         StreamStatus::Created => {
                             // Cannot transition to Created
