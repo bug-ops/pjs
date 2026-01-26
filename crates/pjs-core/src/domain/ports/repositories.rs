@@ -250,6 +250,11 @@ pub struct SessionHealthSnapshot {
 }
 
 /// Filter for stream queries
+///
+/// # Validation
+///
+/// Call `validate()` before using in queries to ensure constraints are met.
+/// Validation checks priority range consistency and empty statuses vec.
 #[derive(Debug, Clone, Default)]
 pub struct StreamFilter {
     /// Filter by stream status
@@ -274,6 +279,39 @@ pub struct StreamFilter {
 
     /// Filter by presence of frames
     pub has_frames: Option<bool>,
+}
+
+impl StreamFilter {
+    /// Validate filter constraints for logical consistency
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::InvalidInput` if:
+    /// - `min_priority > max_priority` (when both are Some)
+    /// - `statuses` is an empty vec (use `None` for no filter)
+    pub fn validate(&self) -> DomainResult<()> {
+        use crate::domain::DomainError;
+
+        // Validate priority range consistency
+        if let (Some(min), Some(max)) = (self.min_priority, self.max_priority)
+            && min.value() > max.value()
+        {
+            return Err(DomainError::InvalidInput(
+                "min_priority cannot exceed max_priority".to_string(),
+            ));
+        }
+
+        // Reject empty statuses vec (ambiguous semantics, consistent with SessionQueryCriteria)
+        if let Some(ref statuses) = self.statuses
+            && statuses.is_empty()
+        {
+            return Err(DomainError::InvalidInput(
+                "statuses filter cannot be empty (use None for no filter)".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 /// Stream status enumeration
@@ -810,6 +848,88 @@ mod tests {
         let cloned = filter.clone();
         assert_eq!(cloned.has_frames, filter.has_frames);
         assert_eq!(cloned.created_after, filter.created_after);
+    }
+
+    // Tests for StreamFilter validation (INPUT-003)
+    #[test]
+    fn test_stream_filter_validate_min_priority_exceeds_max_rejected() {
+        let filter = StreamFilter {
+            min_priority: Some(Priority::CRITICAL),
+            max_priority: Some(Priority::LOW),
+            ..Default::default()
+        };
+        let result = filter.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, DomainError::InvalidInput(_)));
+        assert!(format!("{}", err).contains("min_priority"));
+    }
+
+    #[test]
+    fn test_stream_filter_validate_empty_statuses_rejected() {
+        let filter = StreamFilter {
+            statuses: Some(vec![]),
+            ..Default::default()
+        };
+        let result = filter.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("empty"));
+    }
+
+    #[test]
+    fn test_stream_filter_validate_valid_priority_range_accepted() {
+        let filter = StreamFilter {
+            min_priority: Some(Priority::LOW),
+            max_priority: Some(Priority::CRITICAL),
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_equal_priority_accepted() {
+        let filter = StreamFilter {
+            min_priority: Some(Priority::MEDIUM),
+            max_priority: Some(Priority::MEDIUM),
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_only_min_priority_accepted() {
+        let filter = StreamFilter {
+            min_priority: Some(Priority::HIGH),
+            max_priority: None,
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_only_max_priority_accepted() {
+        let filter = StreamFilter {
+            min_priority: None,
+            max_priority: Some(Priority::HIGH),
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_default_accepted() {
+        let filter = StreamFilter::default();
+        assert!(filter.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stream_filter_validate_non_empty_statuses_accepted() {
+        let filter = StreamFilter {
+            statuses: Some(vec![StreamStatus::Active]),
+            ..Default::default()
+        };
+        assert!(filter.validate().is_ok());
     }
 
     // Tests for StreamStatus

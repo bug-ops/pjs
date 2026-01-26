@@ -2,6 +2,31 @@
 //!
 //! Provides a reusable foundation for GAT repository implementations.
 //! Uses lock-free DashMap for concurrent access per infrastructure guidelines.
+//!
+//! # Concurrency Model
+//!
+//! This store uses [`DashMap`] which provides lock-free concurrent access through
+//! sharded hash maps. Each shard has its own lock, enabling high concurrency for
+//! operations on different keys.
+//!
+//! # Iteration Consistency Guarantees
+//!
+//! **DashMap provides weakly consistent iteration:**
+//!
+//! - Individual items are always consistent (no torn reads)
+//! - Items added during iteration may or may not be included
+//! - Items removed during iteration may or may not be included
+//! - Overall result represents a "fuzzy" snapshot of the store
+//!
+//! This is a fundamental trade-off for lock-free performance. For operations
+//! requiring strong consistency:
+//!
+//! - Use single-key lookups (`get`, `contains_key`) for authoritative checks
+//! - Accept eventual consistency for bulk queries (filter, iteration)
+//!
+//! The weakly consistent iteration model enables lock-free concurrent access
+//! without the overhead of MVCC or snapshot isolation, which is appropriate
+//! for in-memory session management where eventual consistency is acceptable.
 
 use dashmap::DashMap;
 use std::{hash::Hash, sync::Arc};
@@ -16,6 +41,21 @@ const MAX_PREALLOC_SIZE: usize = 1024;
 ///
 /// Uses `DashMap` for lock-free concurrent access with sharded hash maps.
 /// Arc wrapper enables cheap cloning for shared ownership across async tasks.
+///
+/// # Iteration Consistency
+///
+/// This store uses DashMap which provides **weakly consistent iteration**:
+/// - Individual items are always consistent (no torn reads)
+/// - Items added during iteration may or may not be included
+/// - Items removed during iteration may or may not be included
+/// - Overall result represents a "fuzzy" snapshot of the store
+///
+/// For operations requiring strong consistency:
+/// - Use single-key lookups (`get`, `contains_key`)
+/// - Accept eventual consistency for bulk queries
+///
+/// This trade-off enables lock-free concurrent access without the overhead
+/// of MVCC or snapshot isolation.
 #[derive(Debug)]
 pub struct InMemoryStore<K, V>
 where
@@ -48,11 +88,21 @@ where
     }
 
     /// Get all keys
+    ///
+    /// # Consistency
+    ///
+    /// Returns a weakly consistent snapshot. Keys added or removed during
+    /// iteration may or may not be included.
     pub fn all_keys(&self) -> Vec<K> {
         self.data.iter().map(|entry| entry.key().clone()).collect()
     }
 
     /// Get value by key
+    ///
+    /// # Consistency
+    ///
+    /// Single-key lookups are always consistent and provide the most recent
+    /// committed value for the key.
     pub fn get(&self, key: &K) -> Option<V> {
         self.data.get(key).map(|entry| entry.value().clone())
     }
@@ -68,6 +118,12 @@ where
     }
 
     /// Filter values by predicate
+    ///
+    /// # Consistency
+    ///
+    /// Results are weakly consistent. Items added or removed during iteration
+    /// may or may not be included. For authoritative checks, use single-key
+    /// lookups (`get`, `contains_key`).
     pub fn filter<P>(&self, predicate: P) -> Vec<V>
     where
         P: Fn(&V) -> bool,
@@ -83,6 +139,12 @@ where
     ///
     /// Returns at most `result_limit` items matching predicate.
     /// Stops iteration after scanning `scan_limit` items.
+    ///
+    /// # Consistency
+    ///
+    /// Results are weakly consistent. Items added or removed during iteration
+    /// may or may not be included. For authoritative checks, use single-key
+    /// lookups (`get`, `contains_key`).
     ///
     /// # Returns
     ///
@@ -140,6 +202,11 @@ where
     }
 
     /// Check if key exists
+    ///
+    /// # Consistency
+    ///
+    /// Single-key lookups are always consistent and provide the most recent
+    /// committed state.
     pub fn contains_key(&self, key: &K) -> bool {
         self.data.contains_key(key)
     }
@@ -153,6 +220,12 @@ where
     ///
     /// Applies function to mutable value reference if key exists.
     /// Returns the result of the function or None if key not found.
+    ///
+    /// # Consistency
+    ///
+    /// This operation is atomic with respect to the specific key. The function
+    /// is executed while holding the shard lock for that key, ensuring no
+    /// concurrent modifications to the same key.
     ///
     /// # Example
     /// ```ignore
@@ -171,6 +244,12 @@ where
     ///
     /// Returns an iterator that yields references to each entry.
     /// Useful for manual iteration with early abort.
+    ///
+    /// # Consistency
+    ///
+    /// Iteration is weakly consistent. Items added or removed during iteration
+    /// may or may not be included. This is a fundamental property of DashMap
+    /// that enables lock-free concurrent access.
     pub fn iter(&self) -> impl Iterator<Item = dashmap::mapref::multiple::RefMulti<'_, K, V>> {
         self.data.iter()
     }
