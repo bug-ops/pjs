@@ -2,18 +2,18 @@
 //!
 //! Zero-cost abstractions for domain ports using Generic Associated Types.
 
-use std::future::Future;
-use std::cmp::Ordering;
 use chrono::Utc;
+use std::cmp::Ordering;
+use std::future::Future;
 
 use crate::domain::{
     DomainResult,
     aggregates::StreamSession,
     entities::{Stream, stream::StreamState},
     ports::{
-        StreamRepositoryGat, StreamStoreGat,
-        SessionQueryCriteria, Pagination, SessionQueryResult, SessionHealthSnapshot, SortOrder,
-        StreamFilter, StreamStatus, StreamStatistics, PriorityDistribution,
+        Pagination, PriorityDistribution, SessionHealthSnapshot, SessionQueryCriteria,
+        SessionQueryResult, SortOrder, StreamFilter, StreamRepositoryGat, StreamStatistics,
+        StreamStatus, StreamStoreGat,
     },
     value_objects::{SessionId, StreamId},
 };
@@ -175,9 +175,9 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
             let start = std::time::Instant::now();
 
             // Filter sessions matching criteria
-            let filtered: Vec<StreamSession> = self.store.filter(|session| {
-                Self::matches_criteria(session, &criteria)
-            });
+            let filtered: Vec<StreamSession> = self
+                .store
+                .filter(|session| Self::matches_criteria(session, &criteria));
 
             let total_count = filtered.len();
 
@@ -458,10 +458,7 @@ impl StreamStoreGat for GatInMemoryStreamStore {
         }
     }
 
-    fn get_stream_statistics(
-        &self,
-        stream_id: StreamId,
-    ) -> Self::GetStreamStatisticsFuture<'_> {
+    fn get_stream_statistics(&self, stream_id: StreamId) -> Self::GetStreamStatisticsFuture<'_> {
         async move {
             match self.store.get(&stream_id) {
                 Some(stream) => {
@@ -469,7 +466,9 @@ impl StreamStoreGat for GatInMemoryStreamStore {
 
                     // Build PriorityDistribution from stream stats
                     let priority_dist = PriorityDistribution {
-                        critical_frames: stats.skeleton_frames + stats.complete_frames + stats.error_frames,
+                        critical_frames: stats.skeleton_frames
+                            + stats.complete_frames
+                            + stats.error_frames,
                         high_frames: if stats.average_frame_size > 0.0 {
                             (stats.high_priority_bytes as f64 / stats.average_frame_size) as u64
                         } else {
@@ -515,8 +514,7 @@ impl StreamStoreGat for GatInMemoryStreamStore {
 mod tests {
     use super::*;
     use crate::domain::{
-        aggregates::stream_session::SessionConfig,
-        entities::stream::StreamConfig,
+        aggregates::stream_session::SessionConfig, entities::stream::StreamConfig,
         value_objects::JsonData,
     };
     use chrono::{Duration, Utc};
@@ -560,7 +558,10 @@ mod tests {
         let criteria = SessionQueryCriteria::default();
         let pagination = Pagination::default();
 
-        let result = repo.find_sessions_by_criteria(criteria, pagination).await.unwrap();
+        let result = repo
+            .find_sessions_by_criteria(criteria, pagination)
+            .await
+            .unwrap();
 
         assert_eq!(result.sessions.len(), 0);
         assert_eq!(result.total_count, 0);
@@ -587,7 +588,10 @@ mod tests {
         };
         let pagination = Pagination::default();
 
-        let result = repo.find_sessions_by_criteria(criteria, pagination).await.unwrap();
+        let result = repo
+            .find_sessions_by_criteria(criteria, pagination)
+            .await
+            .unwrap();
 
         assert_eq!(result.total_count, 1);
         assert_eq!(result.sessions[0].id(), active_id);
@@ -611,7 +615,10 @@ mod tests {
         };
         let pagination = Pagination::default();
 
-        let result = repo.find_sessions_by_criteria(criteria, pagination).await.unwrap();
+        let result = repo
+            .find_sessions_by_criteria(criteria, pagination)
+            .await
+            .unwrap();
 
         assert_eq!(result.total_count, 1);
 
@@ -620,7 +627,10 @@ mod tests {
             created_after: Some(now + Duration::hours(1)),
             ..Default::default()
         };
-        let result_future = repo.find_sessions_by_criteria(criteria_future, Pagination::default()).await.unwrap();
+        let result_future = repo
+            .find_sessions_by_criteria(criteria_future, Pagination::default())
+            .await
+            .unwrap();
 
         assert_eq!(result_future.total_count, 0);
     }
@@ -632,8 +642,12 @@ mod tests {
         // Create session with streams
         let mut session_with_streams = StreamSession::new(SessionConfig::default());
         session_with_streams.activate().unwrap();
-        session_with_streams.create_stream(JsonData::String("test1".to_string())).unwrap();
-        session_with_streams.create_stream(JsonData::String("test2".to_string())).unwrap();
+        session_with_streams
+            .create_stream(JsonData::String("test1".to_string()))
+            .unwrap();
+        session_with_streams
+            .create_stream(JsonData::String("test2".to_string()))
+            .unwrap();
         let session_with_streams_id = session_with_streams.id();
         repo.save_session(session_with_streams).await.unwrap();
 
@@ -647,7 +661,10 @@ mod tests {
             min_stream_count: Some(2),
             ..Default::default()
         };
-        let result = repo.find_sessions_by_criteria(criteria, Pagination::default()).await.unwrap();
+        let result = repo
+            .find_sessions_by_criteria(criteria, Pagination::default())
+            .await
+            .unwrap();
 
         assert_eq!(result.total_count, 1);
         assert_eq!(result.sessions[0].id(), session_with_streams_id);
@@ -657,7 +674,10 @@ mod tests {
             max_stream_count: Some(1),
             ..Default::default()
         };
-        let result_max = repo.find_sessions_by_criteria(criteria_max, Pagination::default()).await.unwrap();
+        let result_max = repo
+            .find_sessions_by_criteria(criteria_max, Pagination::default())
+            .await
+            .unwrap();
 
         assert_eq!(result_max.total_count, 1);
     }
@@ -680,7 +700,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = repo.find_sessions_by_criteria(SessionQueryCriteria::default(), pagination).await.unwrap();
+        let result = repo
+            .find_sessions_by_criteria(SessionQueryCriteria::default(), pagination)
+            .await
+            .unwrap();
 
         assert_eq!(result.sessions.len(), 2);
         assert_eq!(result.total_count, 5);
@@ -694,14 +717,22 @@ mod tests {
         // Create sessions with different stream counts
         let mut session1 = StreamSession::new(SessionConfig::default());
         session1.activate().unwrap();
-        session1.create_stream(JsonData::String("s1".to_string())).unwrap();
+        session1
+            .create_stream(JsonData::String("s1".to_string()))
+            .unwrap();
         repo.save_session(session1).await.unwrap();
 
         let mut session2 = StreamSession::new(SessionConfig::default());
         session2.activate().unwrap();
-        session2.create_stream(JsonData::String("s2".to_string())).unwrap();
-        session2.create_stream(JsonData::String("s3".to_string())).unwrap();
-        session2.create_stream(JsonData::String("s4".to_string())).unwrap();
+        session2
+            .create_stream(JsonData::String("s2".to_string()))
+            .unwrap();
+        session2
+            .create_stream(JsonData::String("s3".to_string()))
+            .unwrap();
+        session2
+            .create_stream(JsonData::String("s4".to_string()))
+            .unwrap();
         let session2_id = session2.id();
         repo.save_session(session2).await.unwrap();
 
@@ -712,7 +743,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = repo.find_sessions_by_criteria(SessionQueryCriteria::default(), pagination).await.unwrap();
+        let result = repo
+            .find_sessions_by_criteria(SessionQueryCriteria::default(), pagination)
+            .await
+            .unwrap();
 
         assert_eq!(result.sessions.len(), 2);
         assert_eq!(result.sessions[0].id(), session2_id); // Session with most streams first
@@ -784,7 +818,10 @@ mod tests {
         let session_id = SessionId::new();
         let filter = StreamFilter::default();
 
-        let result = store.find_streams_by_session(session_id, filter).await.unwrap();
+        let result = store
+            .find_streams_by_session(session_id, filter)
+            .await
+            .unwrap();
 
         assert!(result.is_empty());
     }
@@ -796,7 +833,11 @@ mod tests {
         let session_id = SessionId::new();
 
         // Create a stream in Preparing state
-        let stream = Stream::new(session_id, JsonData::String("test".to_string()), StreamConfig::default());
+        let stream = Stream::new(
+            session_id,
+            JsonData::String("test".to_string()),
+            StreamConfig::default(),
+        );
         let stream_id = stream.id();
         store.store_stream(stream).await.unwrap();
 
@@ -806,7 +847,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = store.find_streams_by_session(session_id, filter).await.unwrap();
+        let result = store
+            .find_streams_by_session(session_id, filter)
+            .await
+            .unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].id(), stream_id);
@@ -817,7 +861,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result_active = store.find_streams_by_session(session_id, filter_active).await.unwrap();
+        let result_active = store
+            .find_streams_by_session(session_id, filter_active)
+            .await
+            .unwrap();
 
         assert!(result_active.is_empty());
     }
@@ -827,7 +874,11 @@ mod tests {
         let store = GatInMemoryStreamStore::new();
 
         let session_id = SessionId::new();
-        let stream = Stream::new(session_id, JsonData::String("test".to_string()), StreamConfig::default());
+        let stream = Stream::new(
+            session_id,
+            JsonData::String("test".to_string()),
+            StreamConfig::default(),
+        );
         store.store_stream(stream).await.unwrap();
 
         let now = Utc::now();
@@ -838,7 +889,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = store.find_streams_by_session(session_id, filter).await.unwrap();
+        let result = store
+            .find_streams_by_session(session_id, filter)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
 
         // Filter by created_after in the future - should find nothing
@@ -847,7 +901,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result_future = store.find_streams_by_session(session_id, filter_future).await.unwrap();
+        let result_future = store
+            .find_streams_by_session(session_id, filter_future)
+            .await
+            .unwrap();
         assert!(result_future.is_empty());
     }
 
@@ -856,7 +913,11 @@ mod tests {
         let store = GatInMemoryStreamStore::new();
 
         let session_id = SessionId::new();
-        let stream = Stream::new(session_id, JsonData::String("test".to_string()), StreamConfig::default());
+        let stream = Stream::new(
+            session_id,
+            JsonData::String("test".to_string()),
+            StreamConfig::default(),
+        );
         store.store_stream(stream).await.unwrap();
 
         // Filter by has_frames = false (new stream has no frames)
@@ -865,7 +926,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = store.find_streams_by_session(session_id, filter).await.unwrap();
+        let result = store
+            .find_streams_by_session(session_id, filter)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
 
         // Filter by has_frames = true (should find nothing)
@@ -874,7 +938,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result_with_frames = store.find_streams_by_session(session_id, filter_with_frames).await.unwrap();
+        let result_with_frames = store
+            .find_streams_by_session(session_id, filter_with_frames)
+            .await
+            .unwrap();
         assert!(result_with_frames.is_empty());
     }
 
@@ -885,11 +952,18 @@ mod tests {
         let store = GatInMemoryStreamStore::new();
 
         let session_id = SessionId::new();
-        let stream = Stream::new(session_id, JsonData::String("test".to_string()), StreamConfig::default());
+        let stream = Stream::new(
+            session_id,
+            JsonData::String("test".to_string()),
+            StreamConfig::default(),
+        );
         let stream_id = stream.id();
         store.store_stream(stream).await.unwrap();
 
-        store.update_stream_status(stream_id, StreamStatus::Active).await.unwrap();
+        store
+            .update_stream_status(stream_id, StreamStatus::Active)
+            .await
+            .unwrap();
 
         let updated = store.get_stream(stream_id).await.unwrap().unwrap();
         assert!(matches!(updated.state(), StreamState::Streaming));
@@ -900,12 +974,19 @@ mod tests {
         let store = GatInMemoryStreamStore::new();
 
         let session_id = SessionId::new();
-        let mut stream = Stream::new(session_id, JsonData::String("test".to_string()), StreamConfig::default());
+        let mut stream = Stream::new(
+            session_id,
+            JsonData::String("test".to_string()),
+            StreamConfig::default(),
+        );
         stream.start_streaming().unwrap(); // Must be streaming to complete
         let stream_id = stream.id();
         store.store_stream(stream).await.unwrap();
 
-        store.update_stream_status(stream_id, StreamStatus::Completed).await.unwrap();
+        store
+            .update_stream_status(stream_id, StreamStatus::Completed)
+            .await
+            .unwrap();
 
         let updated = store.get_stream(stream_id).await.unwrap().unwrap();
         assert!(matches!(updated.state(), StreamState::Completed));
@@ -918,7 +999,9 @@ mod tests {
         let missing_stream_id = StreamId::new();
 
         // Should be idempotent - no error for missing stream
-        let result = store.update_stream_status(missing_stream_id, StreamStatus::Active).await;
+        let result = store
+            .update_stream_status(missing_stream_id, StreamStatus::Active)
+            .await;
 
         assert!(result.is_ok());
     }
@@ -930,7 +1013,11 @@ mod tests {
         let store = GatInMemoryStreamStore::new();
 
         let session_id = SessionId::new();
-        let stream = Stream::new(session_id, JsonData::String("test".to_string()), StreamConfig::default());
+        let stream = Stream::new(
+            session_id,
+            JsonData::String("test".to_string()),
+            StreamConfig::default(),
+        );
         let stream_id = stream.id();
         store.store_stream(stream).await.unwrap();
 
@@ -947,7 +1034,10 @@ mod tests {
         let store = GatInMemoryStreamStore::new();
 
         let missing_stream_id = StreamId::new();
-        let stats = store.get_stream_statistics(missing_stream_id).await.unwrap();
+        let stats = store
+            .get_stream_statistics(missing_stream_id)
+            .await
+            .unwrap();
 
         // Should return default statistics for non-existent stream
         assert_eq!(stats.total_frames, 0);

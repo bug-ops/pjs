@@ -642,10 +642,7 @@ mod tests {
             }
         }
 
-        fn get_session_health(
-            &self,
-            session_id: SessionId,
-        ) -> Self::GetSessionHealthFuture<'_> {
+        fn get_session_health(&self, session_id: SessionId) -> Self::GetSessionHealthFuture<'_> {
             async move {
                 Ok(SessionHealthSnapshot {
                     session_id,

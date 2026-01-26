@@ -208,19 +208,23 @@ impl Default for AxumWebSocketTransport {
 impl WebSocketTransport for AxumWebSocketTransport {
     type Connection = String; // Use connection ID instead of WebSocket
 
-    type StartStreamFuture<'a> = impl Future<Output = PjsResult<String>> + Send + 'a
+    type StartStreamFuture<'a>
+        = impl Future<Output = PjsResult<String>> + Send + 'a
     where
         Self: 'a;
 
-    type SendFrameFuture<'a> = impl Future<Output = PjsResult<()>> + Send + 'a
+    type SendFrameFuture<'a>
+        = impl Future<Output = PjsResult<()>> + Send + 'a
     where
         Self: 'a;
 
-    type HandleMessageFuture<'a> = impl Future<Output = PjsResult<()>> + Send + 'a
+    type HandleMessageFuture<'a>
+        = impl Future<Output = PjsResult<()>> + Send + 'a
     where
         Self: 'a;
 
-    type CloseStreamFuture<'a> = impl Future<Output = PjsResult<()>> + Send + 'a
+    type CloseStreamFuture<'a>
+        = impl Future<Output = PjsResult<()>> + Send + 'a
     where
         Self: 'a;
 
@@ -243,8 +247,8 @@ impl WebSocketTransport for AxumWebSocketTransport {
         message: WsMessage,
     ) -> Self::SendFrameFuture<'_> {
         async move {
-            let json_str =
-                serde_json::to_string(&message).map_err(|e| PjsError::Serialization(e.to_string()))?;
+            let json_str = serde_json::to_string(&message)
+                .map_err(|e| PjsError::Serialization(e.to_string()))?;
 
             // Note: In practice, this would need to be handled differently
             // since we can't directly send through Arc<WebSocket>

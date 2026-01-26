@@ -451,8 +451,8 @@ mod tests {
         aggregates::stream_session::SessionConfig,
         events::DomainEvent,
         ports::{
-            EventPublisherGat, StreamRepositoryGat,
-            Pagination, SessionQueryCriteria, SessionQueryResult, SessionHealthSnapshot,
+            EventPublisherGat, Pagination, SessionHealthSnapshot, SessionQueryCriteria,
+            SessionQueryResult, StreamRepositoryGat,
         },
     };
     use chrono::Utc;

@@ -11,7 +11,12 @@
 //! - `EventStoreGat` - Event sourcing
 //! - `CacheGat` - Caching operations
 
-use crate::domain::{DomainResult, aggregates::StreamSession, entities::Frame, value_objects::{Priority, SessionId}};
+use crate::domain::{
+    DomainResult,
+    aggregates::StreamSession,
+    entities::Frame,
+    value_objects::{Priority, SessionId},
+};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
@@ -199,8 +204,8 @@ impl Default for CacheStatistics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::gat::CacheGat;
+    use super::*;
     use crate::domain::DomainError;
     use std::future::Future;
     use std::sync::Arc;
@@ -244,23 +249,28 @@ mod tests {
     }
 
     impl super::super::gat::CacheGat for MockCacheGat {
-        type GetBytesFuture<'a> = impl Future<Output = DomainResult<Option<Vec<u8>>>> + Send + 'a
+        type GetBytesFuture<'a>
+            = impl Future<Output = DomainResult<Option<Vec<u8>>>> + Send + 'a
         where
             Self: 'a;
 
-        type SetBytesFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type SetBytesFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type RemoveFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type RemoveFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type ClearPrefixFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        type ClearPrefixFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
         where
             Self: 'a;
 
-        type GetStatsFuture<'a> = impl Future<Output = DomainResult<CacheStatistics>> + Send + 'a
+        type GetStatsFuture<'a>
+            = impl Future<Output = DomainResult<CacheStatistics>> + Send + 'a
         where
             Self: 'a;
 

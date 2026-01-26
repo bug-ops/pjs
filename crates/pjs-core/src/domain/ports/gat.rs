@@ -444,18 +444,29 @@ pub trait ConnectionMonitorGat: Send + Sync {
     where
         Self: 'a;
 
-    type GetConnectionMetricsFuture<'a>: Future<Output = DomainResult<ConnectionMetrics>> + Send + 'a
+    type GetConnectionMetricsFuture<'a>: Future<Output = DomainResult<ConnectionMetrics>>
+        + Send
+        + 'a
     where
         Self: 'a;
 
     /// Get connection state
-    fn get_connection_state<'a>(&'a self, connection_id: &'a str) -> Self::GetConnectionStateFuture<'a>;
+    fn get_connection_state<'a>(
+        &'a self,
+        connection_id: &'a str,
+    ) -> Self::GetConnectionStateFuture<'a>;
 
     /// Check if connection is healthy
-    fn is_connection_healthy<'a>(&'a self, connection_id: &'a str) -> Self::IsConnectionHealthyFuture<'a>;
+    fn is_connection_healthy<'a>(
+        &'a self,
+        connection_id: &'a str,
+    ) -> Self::IsConnectionHealthyFuture<'a>;
 
     /// Get connection metrics
-    fn get_connection_metrics<'a>(&'a self, connection_id: &'a str) -> Self::GetConnectionMetricsFuture<'a>;
+    fn get_connection_metrics<'a>(
+        &'a self,
+        connection_id: &'a str,
+    ) -> Self::GetConnectionMetricsFuture<'a>;
 }
 
 // ============================================================================
