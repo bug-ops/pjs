@@ -3,7 +3,6 @@
 #[cfg(feature = "http-server")]
 use super::{AdaptiveStreamController, StreamOptions, WebSocketTransport, WsMessage};
 use crate::{Error as PjsError, Result as PjsResult};
-use async_trait::async_trait;
 #[cfg(feature = "http-server")]
 use axum::{
     extract::{
@@ -14,6 +13,7 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -205,86 +205,110 @@ impl Default for AxumWebSocketTransport {
     }
 }
 
-#[async_trait]
 impl WebSocketTransport for AxumWebSocketTransport {
     type Connection = String; // Use connection ID instead of WebSocket
 
-    async fn start_stream(
+    type StartStreamFuture<'a> = impl Future<Output = PjsResult<String>> + Send + 'a
+    where
+        Self: 'a;
+
+    type SendFrameFuture<'a> = impl Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type HandleMessageFuture<'a> = impl Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type CloseStreamFuture<'a> = impl Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn start_stream(
         &self,
         _connection: Arc<Self::Connection>,
         data: Value,
         options: StreamOptions,
-    ) -> PjsResult<String> {
-        let session_id = self.controller.create_session(data, options).await?;
-        self.controller.start_streaming(&session_id).await?;
-        Ok(session_id)
-    }
-
-    async fn send_frame(
-        &self,
-        _connection: Arc<Self::Connection>,
-        message: WsMessage,
-    ) -> PjsResult<()> {
-        let json_str =
-            serde_json::to_string(&message).map_err(|e| PjsError::Serialization(e.to_string()))?;
-
-        // Note: In practice, this would need to be handled differently
-        // since we can't directly send through Arc<WebSocket>
-        // The actual sending is handled in handle_socket via frame subscription
-
-        debug!("Frame queued for transmission: {}", json_str);
-        Ok(())
-    }
-
-    async fn handle_message(
-        &self,
-        _connection: Arc<Self::Connection>,
-        message: WsMessage,
-    ) -> PjsResult<()> {
-        match message {
-            WsMessage::StreamInit { data, options, .. } => {
-                info!("Initializing new stream");
-                let session_id = self.controller.create_session(data, options).await?;
-                self.controller.start_streaming(&session_id).await?;
-            }
-            WsMessage::FrameAck {
-                session_id,
-                frame_id,
-                processing_time_ms,
-            } => {
-                debug!(
-                    "Received frame ack: session={}, frame={}, time={}ms",
-                    session_id, frame_id, processing_time_ms
-                );
-                self.controller
-                    .handle_frame_ack(&session_id, frame_id, processing_time_ms)
-                    .await?;
-            }
-            WsMessage::Ping { timestamp } => {
-                debug!("Received ping with timestamp: {}", timestamp);
-                // Pong is handled automatically in handle_socket
-            }
-            WsMessage::Error {
-                session_id,
-                error,
-                code,
-            } => {
-                warn!(
-                    "Received error from client: session={:?}, error={}, code={}",
-                    session_id, error, code
-                );
-            }
-            _ => {
-                warn!("Unhandled message type: {:?}", message);
-            }
+    ) -> Self::StartStreamFuture<'_> {
+        async move {
+            let session_id = self.controller.create_session(data, options).await?;
+            self.controller.start_streaming(&session_id).await?;
+            Ok(session_id)
         }
-        Ok(())
     }
 
-    async fn close_stream(&self, session_id: &str) -> PjsResult<()> {
-        // TODO: Implement session cleanup
-        info!("Closing stream session: {}", session_id);
-        Ok(())
+    fn send_frame(
+        &self,
+        _connection: Arc<Self::Connection>,
+        message: WsMessage,
+    ) -> Self::SendFrameFuture<'_> {
+        async move {
+            let json_str =
+                serde_json::to_string(&message).map_err(|e| PjsError::Serialization(e.to_string()))?;
+
+            // Note: In practice, this would need to be handled differently
+            // since we can't directly send through Arc<WebSocket>
+            // The actual sending is handled in handle_socket via frame subscription
+
+            debug!("Frame queued for transmission: {}", json_str);
+            Ok(())
+        }
+    }
+
+    fn handle_message(
+        &self,
+        _connection: Arc<Self::Connection>,
+        message: WsMessage,
+    ) -> Self::HandleMessageFuture<'_> {
+        async move {
+            match message {
+                WsMessage::StreamInit { data, options, .. } => {
+                    info!("Initializing new stream");
+                    let session_id = self.controller.create_session(data, options).await?;
+                    self.controller.start_streaming(&session_id).await?;
+                }
+                WsMessage::FrameAck {
+                    session_id,
+                    frame_id,
+                    processing_time_ms,
+                } => {
+                    debug!(
+                        "Received frame ack: session={}, frame={}, time={}ms",
+                        session_id, frame_id, processing_time_ms
+                    );
+                    self.controller
+                        .handle_frame_ack(&session_id, frame_id, processing_time_ms)
+                        .await?;
+                }
+                WsMessage::Ping { timestamp } => {
+                    debug!("Received ping with timestamp: {}", timestamp);
+                    // Pong is handled automatically in handle_socket
+                }
+                WsMessage::Error {
+                    session_id,
+                    error,
+                    code,
+                } => {
+                    warn!(
+                        "Received error from client: session={:?}, error={}, code={}",
+                        session_id, error, code
+                    );
+                }
+                _ => {
+                    warn!("Unhandled message type: {:?}", message);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn close_stream(&self, session_id: &str) -> Self::CloseStreamFuture<'_> {
+        let session_id = session_id.to_string();
+        async move {
+            // TODO: Implement session cleanup
+            info!("Closing stream session: {}", session_id);
+            Ok(())
+        }
     }
 }
 

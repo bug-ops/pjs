@@ -8,7 +8,11 @@ use pjson_rs::domain::{
     aggregates::StreamSession,
     entities::Stream,
     events::DomainEvent,
-    ports::{EventPublisherGat, StreamRepositoryGat, StreamStoreGat},
+    ports::{
+        EventPublisherGat, Pagination, PriorityDistribution, SessionHealthSnapshot,
+        SessionQueryCriteria, SessionQueryResult, StreamFilter, StreamRepositoryGat,
+        StreamStatistics, StreamStatus, StreamStoreGat,
+    },
     value_objects::{SessionId, StreamId},
 };
 use std::collections::HashMap;
@@ -78,6 +82,25 @@ impl StreamRepositoryGat for MockRepository {
     where
         Self: 'a;
 
+    type FindSessionsByCriteriaFuture<'a>
+        = impl std::future::Future<Output = pjson_rs::domain::DomainResult<SessionQueryResult>>
+        + Send
+        + 'a
+    where
+        Self: 'a;
+
+    type GetSessionHealthFuture<'a>
+        = impl std::future::Future<Output = pjson_rs::domain::DomainResult<SessionHealthSnapshot>>
+        + Send
+        + 'a
+    where
+        Self: 'a;
+
+    type SessionExistsFuture<'a>
+        = impl std::future::Future<Output = pjson_rs::domain::DomainResult<bool>> + Send + 'a
+    where
+        Self: 'a;
+
     fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
         async move { Ok(self.sessions.lock().get(&session_id).cloned()) }
     }
@@ -98,6 +121,47 @@ impl StreamRepositoryGat for MockRepository {
 
     fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
         async move { Ok(self.sessions.lock().values().cloned().collect()) }
+    }
+
+    fn find_sessions_by_criteria(
+        &self,
+        _criteria: SessionQueryCriteria,
+        pagination: Pagination,
+    ) -> Self::FindSessionsByCriteriaFuture<'_> {
+        async move {
+            let sessions: Vec<_> = self.sessions.lock().values().cloned().collect();
+            let total_count = sessions.len();
+            let paginated: Vec<_> = sessions
+                .into_iter()
+                .skip(pagination.offset)
+                .take(pagination.limit)
+                .collect();
+            let has_more = pagination.offset + paginated.len() < total_count;
+            Ok(SessionQueryResult {
+                sessions: paginated,
+                total_count,
+                has_more,
+                query_duration_ms: 0,
+            })
+        }
+    }
+
+    fn get_session_health(&self, session_id: SessionId) -> Self::GetSessionHealthFuture<'_> {
+        async move {
+            Ok(SessionHealthSnapshot {
+                session_id,
+                is_healthy: true,
+                active_streams: 0,
+                total_frames: 0,
+                last_activity: chrono::Utc::now(),
+                error_rate: 0.0,
+                metrics: HashMap::new(),
+            })
+        }
+    }
+
+    fn session_exists(&self, session_id: SessionId) -> Self::SessionExistsFuture<'_> {
+        async move { Ok(self.sessions.lock().contains_key(&session_id)) }
     }
 }
 
@@ -214,6 +278,23 @@ impl StreamStoreGat for MockStreamStore {
     where
         Self: 'a;
 
+    type FindStreamsBySessionFuture<'a>
+        = impl std::future::Future<Output = pjson_rs::domain::DomainResult<Vec<Stream>>> + Send + 'a
+    where
+        Self: 'a;
+
+    type UpdateStreamStatusFuture<'a>
+        = impl std::future::Future<Output = pjson_rs::domain::DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type GetStreamStatisticsFuture<'a>
+        = impl std::future::Future<Output = pjson_rs::domain::DomainResult<StreamStatistics>>
+        + Send
+        + 'a
+    where
+        Self: 'a;
+
     fn store_stream(&self, stream: Stream) -> Self::StoreStreamFuture<'_> {
         async move {
             self.streams.lock().insert(stream.id(), stream);
@@ -237,6 +318,36 @@ impl StreamStoreGat for MockStreamStore {
         _session_id: SessionId,
     ) -> Self::ListStreamsForSessionFuture<'_> {
         async move { Ok(self.streams.lock().values().cloned().collect()) }
+    }
+
+    fn find_streams_by_session(
+        &self,
+        _session_id: SessionId,
+        _filter: StreamFilter,
+    ) -> Self::FindStreamsBySessionFuture<'_> {
+        async move { Ok(self.streams.lock().values().cloned().collect()) }
+    }
+
+    fn update_stream_status(
+        &self,
+        _stream_id: StreamId,
+        _status: StreamStatus,
+    ) -> Self::UpdateStreamStatusFuture<'_> {
+        async move { Ok(()) }
+    }
+
+    fn get_stream_statistics(&self, _stream_id: StreamId) -> Self::GetStreamStatisticsFuture<'_> {
+        async move {
+            Ok(StreamStatistics {
+                total_frames: 0,
+                total_bytes: 0,
+                priority_distribution: PriorityDistribution::default(),
+                avg_frame_size: 0.0,
+                creation_time: chrono::Utc::now(),
+                completion_time: None,
+                processing_duration: None,
+            })
+        }
     }
 }
 

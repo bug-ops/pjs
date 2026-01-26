@@ -200,18 +200,24 @@ impl Default for CacheStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::gat::CacheGat;
+    use crate::domain::DomainError;
+    use std::future::Future;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
 
-    // Mock cache repository for testing CacheExtensions
-    struct MockCacheRepository {
+    // ========================================================================
+    // MockCacheGat - GAT-based mock for testing CacheExtensions
+    // ========================================================================
+
+    struct MockCacheGat {
         store: Arc<Mutex<HashMap<String, Vec<u8>>>>,
         fail_on_get: bool,
         fail_on_set: bool,
     }
 
-    impl MockCacheRepository {
+    impl MockCacheGat {
         fn new() -> Self {
             Self {
                 store: Arc::new(Mutex::new(HashMap::new())),
@@ -237,7 +243,82 @@ mod tests {
         }
     }
 
-    // TODO Phase 2: Migrate MockCacheRepository to CacheGat and restore cache tests
+    impl super::super::gat::CacheGat for MockCacheGat {
+        type GetBytesFuture<'a> = impl Future<Output = DomainResult<Option<Vec<u8>>>> + Send + 'a
+        where
+            Self: 'a;
+
+        type SetBytesFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type RemoveFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type ClearPrefixFuture<'a> = impl Future<Output = DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type GetStatsFuture<'a> = impl Future<Output = DomainResult<CacheStatistics>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn get_bytes<'a>(&'a self, key: &'a str) -> Self::GetBytesFuture<'a> {
+            async move {
+                if self.fail_on_get {
+                    return Err(DomainError::Logic("Mock get failure".to_string()));
+                }
+                let store = self.store.lock().await;
+                Ok(store.get(key).cloned())
+            }
+        }
+
+        fn set_bytes<'a>(
+            &'a self,
+            key: &'a str,
+            value: Vec<u8>,
+            _ttl: Option<Duration>,
+        ) -> Self::SetBytesFuture<'a> {
+            async move {
+                if self.fail_on_set {
+                    return Err(DomainError::Logic("Mock set failure".to_string()));
+                }
+                let mut store = self.store.lock().await;
+                store.insert(key.to_string(), value);
+                Ok(())
+            }
+        }
+
+        fn remove<'a>(&'a self, key: &'a str) -> Self::RemoveFuture<'a> {
+            async move {
+                let mut store = self.store.lock().await;
+                store.remove(key);
+                Ok(())
+            }
+        }
+
+        fn clear_prefix<'a>(&'a self, prefix: &'a str) -> Self::ClearPrefixFuture<'a> {
+            async move {
+                let mut store = self.store.lock().await;
+                store.retain(|k, _| !k.starts_with(prefix));
+                Ok(())
+            }
+        }
+
+        fn get_stats(&self) -> Self::GetStatsFuture<'_> {
+            async move {
+                let store = self.store.lock().await;
+                Ok(CacheStatistics {
+                    hit_rate: 0.0,
+                    miss_rate: 0.0,
+                    total_keys: store.len() as u64,
+                    memory_usage_bytes: 0,
+                    eviction_count: 0,
+                })
+            }
+        }
+    }
 
     // Tests for Pagination
     #[test]
@@ -760,12 +841,13 @@ mod tests {
         assert_eq!(cloned.avg_frame_size, stats.avg_frame_size);
     }
 
-    // TODO Phase 2: Restore cache tests after migrating to CacheGat
-    /*
-    // Tests for CacheExtensions trait
+    // ========================================================================
+    // Tests for CacheExtensions trait with MockCacheGat
+    // ========================================================================
+
     #[tokio::test]
     async fn test_cache_extensions_set_and_get_typed() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
 
         #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
         struct TestData {
@@ -787,14 +869,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_extensions_get_typed_not_found() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
         let result: Option<String> = cache.get_typed::<String>("nonexistent").await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn test_cache_extensions_set_typed_with_ttl() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
         let ttl = Some(Duration::from_secs(60));
         cache.set_typed("key", &"value", ttl).await.unwrap();
         let result: Option<String> = cache.get_typed("key").await.unwrap();
@@ -803,7 +885,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_extensions_get_typed_invalid_json() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
         cache
             .set_bytes("key", b"invalid json{{{".to_vec(), None)
             .await
@@ -817,21 +899,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_extensions_get_bytes_failure() {
-        let cache = MockCacheRepository::with_get_failure();
+        let cache = MockCacheGat::with_get_failure();
         let result: DomainResult<Option<String>> = cache.get_typed("key").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_cache_extensions_set_bytes_failure() {
-        let cache = MockCacheRepository::with_set_failure();
+        let cache = MockCacheGat::with_set_failure();
         let result = cache.set_typed("key", &"value", None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_cache_extensions_complex_type() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
 
         #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
         struct ComplexData {
@@ -857,10 +939,13 @@ mod tests {
         assert_eq!(retrieved.metadata.get("count"), Some(&100));
     }
 
-    // Tests for MockCacheRepository (to ensure test infrastructure works)
+    // ========================================================================
+    // Tests for MockCacheGat operations
+    // ========================================================================
+
     #[tokio::test]
-    async fn test_mock_cache_repository_remove() {
-        let cache = MockCacheRepository::new();
+    async fn test_mock_cache_gat_remove() {
+        let cache = MockCacheGat::new();
         cache
             .set_bytes("key", b"value".to_vec(), None)
             .await
@@ -871,8 +956,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_cache_repository_clear_prefix() {
-        let cache = MockCacheRepository::new();
+    async fn test_mock_cache_gat_clear_prefix() {
+        let cache = MockCacheGat::new();
         cache
             .set_bytes("prefix:key1", b"value1".to_vec(), None)
             .await
@@ -894,8 +979,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_cache_repository_get_stats() {
-        let cache = MockCacheRepository::new();
+    async fn test_mock_cache_gat_get_stats() {
+        let cache = MockCacheGat::new();
         cache
             .set_bytes("key1", b"value1".to_vec(), None)
             .await
@@ -908,5 +993,4 @@ mod tests {
         let stats = cache.get_stats().await.unwrap();
         assert_eq!(stats.total_keys, 2);
     }
-    */
 }

@@ -7,12 +7,12 @@ use crate::{
     Error as PjsError, PriorityStreamer, Result as PjsResult, StreamFrame, domain::Priority,
     security::RateLimitGuard,
 };
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    future::Future,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -148,35 +148,54 @@ impl ClientMetrics {
     }
 }
 
-/// WebSocket transport trait for different implementations
-#[async_trait]
+/// WebSocket transport trait for different implementations (GAT-based)
 pub trait WebSocketTransport: Send + Sync {
     type Connection: Send + Sync;
 
+    /// Future type for starting stream
+    type StartStreamFuture<'a>: Future<Output = PjsResult<String>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for sending frame
+    type SendFrameFuture<'a>: Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for handling message
+    type HandleMessageFuture<'a>: Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for closing stream
+    type CloseStreamFuture<'a>: Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
     /// Start streaming session
-    async fn start_stream(
+    fn start_stream(
         &self,
         connection: Arc<Self::Connection>,
         data: Value,
         options: StreamOptions,
-    ) -> PjsResult<String>;
+    ) -> Self::StartStreamFuture<'_>;
 
     /// Send frame to client
-    async fn send_frame(
+    fn send_frame(
         &self,
         connection: Arc<Self::Connection>,
         message: WsMessage,
-    ) -> PjsResult<()>;
+    ) -> Self::SendFrameFuture<'_>;
 
     /// Handle incoming message
-    async fn handle_message(
+    fn handle_message(
         &self,
         connection: Arc<Self::Connection>,
         message: WsMessage,
-    ) -> PjsResult<()>;
+    ) -> Self::HandleMessageFuture<'_>;
 
     /// Close streaming session
-    async fn close_stream(&self, session_id: &str) -> PjsResult<()>;
+    fn close_stream(&self, session_id: &str) -> Self::CloseStreamFuture<'_>;
 }
 
 /// Adaptive streaming controller

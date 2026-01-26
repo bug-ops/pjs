@@ -347,8 +347,12 @@ mod tests {
     use crate::domain::{
         entities::Frame,
         events::DomainEvent,
+        ports::{Pagination, SessionHealthSnapshot, SessionQueryCriteria, SessionQueryResult},
         value_objects::{JsonData, StreamId},
     };
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use std::future::Future;
     use std::sync::{Arc, Mutex};
     use tokio::sync::RwLock;
 
@@ -390,6 +394,21 @@ mod tests {
         where
             Self: 'a;
 
+        type FindSessionsByCriteriaFuture<'a>
+            = impl Future<Output = DomainResult<SessionQueryResult>> + Send + 'a
+        where
+            Self: 'a;
+
+        type GetSessionHealthFuture<'a>
+            = impl Future<Output = DomainResult<SessionHealthSnapshot>> + Send + 'a
+        where
+            Self: 'a;
+
+        type SessionExistsFuture<'a>
+            = impl Future<Output = DomainResult<bool>> + Send + 'a
+        where
+            Self: 'a;
+
         fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
             async move {
                 let sessions = self.sessions.read().await;
@@ -416,6 +435,51 @@ mod tests {
             async move {
                 let sessions = self.sessions.read().await;
                 Ok(sessions.iter().filter(|s| s.is_active()).cloned().collect())
+            }
+        }
+
+        fn find_sessions_by_criteria(
+            &self,
+            _criteria: SessionQueryCriteria,
+            pagination: Pagination,
+        ) -> Self::FindSessionsByCriteriaFuture<'_> {
+            async move {
+                let sessions = self.sessions.read().await;
+                let all_sessions: Vec<_> = sessions.clone();
+                let total_count = all_sessions.len();
+                let paginated: Vec<_> = all_sessions
+                    .into_iter()
+                    .skip(pagination.offset)
+                    .take(pagination.limit)
+                    .collect();
+                let has_more = pagination.offset + paginated.len() < total_count;
+                Ok(SessionQueryResult {
+                    sessions: paginated,
+                    total_count,
+                    has_more,
+                    query_duration_ms: 0,
+                })
+            }
+        }
+
+        fn get_session_health(&self, session_id: SessionId) -> Self::GetSessionHealthFuture<'_> {
+            async move {
+                Ok(SessionHealthSnapshot {
+                    session_id,
+                    is_healthy: true,
+                    active_streams: 0,
+                    total_frames: 0,
+                    last_activity: Utc::now(),
+                    error_rate: 0.0,
+                    metrics: HashMap::new(),
+                })
+            }
+        }
+
+        fn session_exists(&self, session_id: SessionId) -> Self::SessionExistsFuture<'_> {
+            async move {
+                let sessions = self.sessions.read().await;
+                Ok(sessions.iter().any(|s| s.id() == session_id))
             }
         }
     }
