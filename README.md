@@ -12,7 +12,7 @@
 High-performance Rust library for priority-based JSON streaming with SIMD acceleration. Stream large JSON responses progressively, delivering critical data first while background data loads asynchronously.
 
 > [!IMPORTANT]
-> **v0.4.7**: GAT migration (1.82x faster), HTTP adapter with CQRS, decompression algorithms with security hardening. 2,158 tests passing. Requires **nightly Rust** for zero-cost async abstractions.
+> GAT migration (1.82x faster), HTTP adapter with CQRS, comprehensive security hardening with bounded iteration and input validation. Requires **nightly Rust** for zero-cost async abstractions.
 
 ## Features
 
@@ -22,7 +22,7 @@ High-performance Rust library for priority-based JSON streaming with SIMD accele
 - **WebAssembly** - Browser and Node.js support with compact bundle (~70KB gzipped)
 - **Secure** - Defense-in-depth decompression protection, DoS prevention, input validation
 - **Schema Aware** - Automatic compression and semantic analysis
-- **Production Ready** - Clean Architecture, 87.35% test coverage, Prometheus metrics
+- **Production Ready** - Clean Architecture, comprehensive test suite, Prometheus metrics
 
 ## Performance
 
@@ -257,7 +257,7 @@ const stream = PriorityStream.withSecurityConfig(security);
 - Max object keys: 10,000
 
 > [!IMPORTANT]
-> **v0.4.7 Security**: Delta and RLE decompression now include 4-layer defense-in-depth protection against decompression bombs (CVSS 7.5 vulnerabilities fixed).
+> **Security**: Comprehensive multi-layer protection including bounded iteration (DoS prevention), input validation, and 4-layer defense-in-depth decompression protection against compression bombs (CVSS 7.5 vulnerabilities fixed).
 
 **Decompression Security:**
 
@@ -271,18 +271,18 @@ const stream = PriorityStream.withSecurityConfig(security);
 PJS follows Clean Architecture with Domain-Driven Design:
 
 - **pjs-domain** - Pure business logic, WASM-compatible
-- **pjs-wasm** - WebAssembly bindings with PriorityStream API, security limits (44 tests)
-- **pjs-core** - Rust implementation with HTTP/WebSocket integration (2,100+ tests)
+- **pjs-wasm** - WebAssembly bindings with PriorityStream API, security limits
+- **pjs-core** - Rust implementation with HTTP/WebSocket integration
 - **pjs-demo** - Interactive demo servers with real-time streaming
 - **pjs-js-client** - TypeScript/JavaScript client with WasmBackend transport
 - **pjs-bench** - Comprehensive performance benchmarks
 
-**v0.4.7 Improvements:**
+**Key Features:**
 
-- **GAT Migration**: Zero-cost async abstractions (1.82x faster)
+- **GAT Migration**: Zero-cost async abstractions (1.82x faster than async_trait)
 - **HTTP Adapter**: 8 REST endpoints with CQRS pattern
-- **Security Hardening**: Decompression bomb protection, input validation
-- **Test Coverage**: 87.35% (2,158 tests passing)
+- **Security Hardening**: Bounded iteration, input validation, decompression bomb protection
+- **Generic Type System**: Type-safe Id<T> wrappers, generic InMemoryStore<K, V>
 - **Platform Support**: Windows, Linux, macOS validated
 
 ## Contributing
