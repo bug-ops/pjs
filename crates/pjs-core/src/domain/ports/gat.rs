@@ -14,10 +14,22 @@ use crate::domain::{
     aggregates::StreamSession,
     entities::{Frame, Stream},
     events::DomainEvent,
-    value_objects::{SessionId, StreamId},
+    value_objects::{JsonPath, Priority, SessionId, StreamId},
 };
 use crate::gat_port;
+use chrono::{DateTime, Utc};
 use std::future::Future;
+use std::time::Duration;
+
+// Re-export supporting types for convenience
+pub use super::repositories::{
+    CacheExtensions, CacheStatistics, FrameQueryResult, Pagination, PriorityDistribution,
+    SessionHealthSnapshot, SessionQueryCriteria, SessionQueryResult, SortOrder, StreamFilter,
+    StreamMetadata, StreamStatistics, StreamStatus,
+};
+pub use super::writer::{
+    BackpressureStrategy, ConnectionMetrics, ConnectionState, WriterConfig, WriterMetrics,
+};
 
 // ============================================================================
 // Frame Source/Sink Ports
@@ -78,6 +90,19 @@ gat_port! {
 
         /// Find all active sessions
         async fn find_active_sessions(&self) -> Vec<StreamSession>;
+
+        /// Find sessions by criteria
+        async fn find_sessions_by_criteria(
+            &self,
+            criteria: SessionQueryCriteria,
+            pagination: Pagination
+        ) -> SessionQueryResult;
+
+        /// Get session health snapshot
+        async fn get_session_health(&self, session_id: SessionId) -> SessionHealthSnapshot;
+
+        /// Check if session exists
+        async fn session_exists(&self, session_id: SessionId) -> bool;
     }
 }
 
@@ -97,6 +122,15 @@ gat_port! {
 
         /// List streams for session
         async fn list_streams_for_session(&self, session_id: SessionId) -> Vec<Stream>;
+
+        /// Find streams by session with filter
+        async fn find_streams_by_session(&self, session_id: SessionId, filter: StreamFilter) -> Vec<Stream>;
+
+        /// Update stream status
+        async fn update_stream_status(&self, stream_id: StreamId, status: StreamStatus) -> ();
+
+        /// Get stream statistics
+        async fn get_stream_statistics(&self, stream_id: StreamId) -> StreamStatistics;
     }
 }
 
@@ -187,6 +221,241 @@ gat_port! {
         /// Record stream completion
         async fn record_stream_completed(&self, stream_id: StreamId) -> ();
     }
+}
+
+// ============================================================================
+// Additional Repository Ports
+// ============================================================================
+
+/// Zero-cost session transaction with GAT futures
+///
+/// Provides transactional operations for session management.
+pub trait SessionTransactionGat: Send + Sync {
+    type SaveSessionFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type RemoveSessionFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type AddStreamFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type CommitFuture: Future<Output = DomainResult<()>> + Send;
+
+    type RollbackFuture: Future<Output = DomainResult<()>> + Send;
+
+    fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_>;
+
+    fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_>;
+
+    fn add_stream(&self, session_id: SessionId, stream: Stream) -> Self::AddStreamFuture<'_>;
+
+    fn commit(self: Box<Self>) -> Self::CommitFuture;
+
+    fn rollback(self: Box<Self>) -> Self::RollbackFuture;
+}
+
+gat_port! {
+    /// Zero-cost frame repository with GAT futures
+    ///
+    /// Manages frame persistence with priority indexing.
+    pub trait FrameRepositoryGat {
+        /// Store a single frame
+        async fn store_frame(&self, frame: Frame) -> ();
+
+        /// Store multiple frames efficiently
+        async fn store_frames(&self, frames: Vec<Frame>) -> ();
+
+        /// Get frames by stream with priority filtering
+        async fn get_frames_by_stream(
+            &self,
+            stream_id: StreamId,
+            priority_filter: Option<Priority>,
+            pagination: Pagination
+        ) -> FrameQueryResult;
+
+        /// Get frames by JSON path
+        async fn get_frames_by_path(&self, stream_id: StreamId, path: JsonPath) -> Vec<Frame>;
+
+        /// Delete old frames
+        async fn cleanup_old_frames(&self, older_than: DateTime<Utc>) -> u64;
+
+        /// Get priority distribution
+        async fn get_frame_priority_distribution(&self, stream_id: StreamId) -> PriorityDistribution;
+    }
+}
+
+gat_port! {
+    /// Zero-cost event store with GAT futures
+    ///
+    /// Event sourcing support for domain events.
+    pub trait EventStoreGat {
+        /// Store a single event with sequence number
+        async fn store_event(&self, event: DomainEvent, sequence: u64) -> ();
+
+        /// Store multiple events atomically
+        async fn store_events(&self, events: Vec<DomainEvent>) -> ();
+
+        /// Get events for session
+        async fn get_events_for_session(
+            &self,
+            session_id: SessionId,
+            from_sequence: Option<u64>,
+            limit: Option<usize>
+        ) -> Vec<DomainEvent>;
+
+        /// Get events for stream
+        async fn get_events_for_stream(
+            &self,
+            stream_id: StreamId,
+            from_sequence: Option<u64>,
+            limit: Option<usize>
+        ) -> Vec<DomainEvent>;
+
+        /// Get events by type
+        async fn get_events_by_type(
+            &self,
+            event_types: Vec<String>,
+            time_range: Option<(DateTime<Utc>, DateTime<Utc>)>
+        ) -> Vec<DomainEvent>;
+
+        /// Get latest sequence number
+        async fn get_latest_sequence(&self) -> u64;
+
+        /// Replay session events
+        async fn replay_session_events(&self, session_id: SessionId) -> Vec<DomainEvent>;
+    }
+}
+
+/// Zero-cost cache with GAT futures
+///
+/// Provides caching operations with borrowed string keys for performance.
+pub trait CacheGat: Send + Sync {
+    type GetBytesFuture<'a>: Future<Output = DomainResult<Option<Vec<u8>>>> + Send + 'a
+    where
+        Self: 'a;
+
+    type SetBytesFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type RemoveFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type ClearPrefixFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type GetStatsFuture<'a>: Future<Output = DomainResult<CacheStatistics>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Get cached bytes
+    fn get_bytes<'a>(&'a self, key: &'a str) -> Self::GetBytesFuture<'a>;
+
+    /// Set cached bytes with TTL
+    fn set_bytes<'a>(
+        &'a self,
+        key: &'a str,
+        value: Vec<u8>,
+        ttl: Option<Duration>,
+    ) -> Self::SetBytesFuture<'a>;
+
+    /// Remove cached value
+    fn remove<'a>(&'a self, key: &'a str) -> Self::RemoveFuture<'a>;
+
+    /// Clear all values with prefix
+    fn clear_prefix<'a>(&'a self, prefix: &'a str) -> Self::ClearPrefixFuture<'a>;
+
+    /// Get cache statistics
+    fn get_stats(&self) -> Self::GetStatsFuture<'_>;
+}
+
+// ============================================================================
+// Writer Ports
+// ============================================================================
+
+gat_port! {
+    /// Zero-cost frame writer with GAT futures
+    ///
+    /// Advanced frame writing with priority handling.
+    pub trait FrameWriterGat {
+        /// Write frame with priority handling
+        async fn write_prioritized_frame(&mut self, frame: Frame) -> ();
+
+        /// Write frames in priority order
+        async fn write_frames_by_priority(&mut self, frames: Vec<Frame>) -> ();
+
+        /// Set backpressure threshold
+        async fn set_backpressure_threshold(&mut self, threshold: usize) -> ();
+
+        /// Get writer metrics
+        async fn get_metrics(&self) -> WriterMetrics;
+    }
+}
+
+/// Zero-cost writer factory with GAT futures
+///
+/// Factory for creating frame sink and writer instances.
+/// Note: Returns associated types instead of Box<dyn Trait> for zero-cost.
+pub trait WriterFactoryGat: Send + Sync {
+    /// Associated type for stream writer implementation
+    type StreamWriter: FrameSinkGat + Send;
+
+    /// Associated type for frame writer implementation
+    type FrameWriter: FrameWriterGat + Send;
+
+    type CreateStreamWriterFuture<'a>: Future<Output = DomainResult<Self::StreamWriter>> + Send + 'a
+    where
+        Self: 'a;
+
+    type CreateFrameWriterFuture<'a>: Future<Output = DomainResult<Self::FrameWriter>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Create stream writer (FrameSinkGat implementation)
+    fn create_stream_writer<'a>(
+        &'a self,
+        connection_id: &'a str,
+        config: WriterConfig,
+    ) -> Self::CreateStreamWriterFuture<'a>;
+
+    /// Create frame writer with advanced features
+    fn create_frame_writer<'a>(
+        &'a self,
+        connection_id: &'a str,
+        config: WriterConfig,
+    ) -> Self::CreateFrameWriterFuture<'a>;
+}
+
+/// Zero-cost connection monitor with GAT futures
+///
+/// Monitors connection health and state.
+pub trait ConnectionMonitorGat: Send + Sync {
+    type GetConnectionStateFuture<'a>: Future<Output = DomainResult<ConnectionState>> + Send + 'a
+    where
+        Self: 'a;
+
+    type IsConnectionHealthyFuture<'a>: Future<Output = DomainResult<bool>> + Send + 'a
+    where
+        Self: 'a;
+
+    type GetConnectionMetricsFuture<'a>: Future<Output = DomainResult<ConnectionMetrics>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Get connection state
+    fn get_connection_state<'a>(&'a self, connection_id: &'a str) -> Self::GetConnectionStateFuture<'a>;
+
+    /// Check if connection is healthy
+    fn is_connection_healthy<'a>(&'a self, connection_id: &'a str) -> Self::IsConnectionHealthyFuture<'a>;
+
+    /// Get connection metrics
+    fn get_connection_metrics<'a>(&'a self, connection_id: &'a str) -> Self::GetConnectionMetricsFuture<'a>;
 }
 
 // ============================================================================
