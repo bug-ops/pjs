@@ -432,10 +432,18 @@ impl StreamStoreGat for GatInMemoryStreamStore {
                 }
 
                 // NOTE: min_priority/max_priority filtering not implemented
-                // Stream entity doesn't expose a single priority value (priorities are per-frame).
-                // These filter fields are currently ignored.
-                // TODO: Either remove these fields from StreamFilter (breaking change)
-                // or implement by analyzing frame priority distribution in Stream::stats()
+                //
+                // Stream entity doesn't expose a single priority value - priorities are assigned
+                // per-frame during streaming. StreamStats only tracks critical_bytes and
+                // high_priority_bytes, without full priority distribution data.
+                //
+                // Possible future implementations:
+                // 1. Add priority distribution to StreamStats (preferred - maintains domain purity)
+                // 2. Filter based on heuristic (e.g., has_critical_bytes if min >= CRITICAL)
+                // 3. Deprecate these fields in favor of has_high_priority/has_critical filters
+                //
+                // For now, these filter fields are silently ignored. This is documented in the
+                // StreamFilter API docs and should be addressed in a future minor version bump.
 
                 true
             });

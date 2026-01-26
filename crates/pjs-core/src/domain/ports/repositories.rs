@@ -128,10 +128,27 @@ pub struct SessionHealthSnapshot {
 /// Filter for stream queries
 #[derive(Debug, Clone, Default)]
 pub struct StreamFilter {
+    /// Filter by stream status
     pub statuses: Option<Vec<StreamStatus>>,
+
+    /// Minimum priority level (currently not implemented - silently ignored)
+    ///
+    /// NOTE: Stream entities don't expose a single priority value. This field is
+    /// reserved for future implementation when priority distribution tracking is added
+    /// to StreamStats.
     pub min_priority: Option<Priority>,
+
+    /// Maximum priority level (currently not implemented - silently ignored)
+    ///
+    /// NOTE: Stream entities don't expose a single priority value. This field is
+    /// reserved for future implementation when priority distribution tracking is added
+    /// to StreamStats.
     pub max_priority: Option<Priority>,
+
+    /// Filter by creation time
     pub created_after: Option<DateTime<Utc>>,
+
+    /// Filter by presence of frames
     pub has_frames: Option<bool>,
 }
 
