@@ -640,6 +640,7 @@ mod tests {
                     total_count,
                     has_more,
                     query_duration_ms: 0,
+                    scan_limit_reached: false,
                 })
             }
         }

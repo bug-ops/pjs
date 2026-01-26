@@ -6,6 +6,12 @@
 use dashmap::DashMap;
 use std::{hash::Hash, sync::Arc};
 
+/// Maximum pre-allocation size for filter result vectors.
+///
+/// Prevents excessive memory allocation when result_limit is very large.
+/// Actual allocation is min(result_limit, MAX_PREALLOC_SIZE).
+const MAX_PREALLOC_SIZE: usize = 1024;
+
 /// Generic thread-safe in-memory store
 ///
 /// Uses `DashMap` for lock-free concurrent access with sharded hash maps.
@@ -73,6 +79,66 @@ where
             .collect()
     }
 
+    /// Filter with bounded results and scan limit
+    ///
+    /// Returns at most `result_limit` items matching predicate.
+    /// Stops iteration after scanning `scan_limit` items.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (results, limit_reached) where:
+    /// - `results`: Vec of matching items (at most `result_limit` items)
+    /// - `limit_reached`: true if either scan_limit or result_limit was hit,
+    ///   meaning the query stopped before examining all items. Results are
+    ///   still valid but potentially incomplete.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use super::limits::{MAX_SCAN_LIMIT, MAX_RESULTS_LIMIT};
+    ///
+    /// let (results, truncated) = store.filter_limited(
+    ///     |v| v.is_active(),
+    ///     MAX_RESULTS_LIMIT,
+    ///     MAX_SCAN_LIMIT,
+    /// );
+    ///
+    /// if truncated {
+    ///     // Results may be incomplete
+    /// }
+    /// ```
+    pub fn filter_limited<P>(
+        &self,
+        predicate: P,
+        result_limit: usize,
+        scan_limit: usize,
+    ) -> (Vec<V>, bool)
+    where
+        P: Fn(&V) -> bool,
+    {
+        let mut results = Vec::with_capacity(result_limit.min(MAX_PREALLOC_SIZE));
+        let mut scanned = 0usize;
+        let mut limit_reached = false;
+
+        for entry in self.data.iter() {
+            scanned += 1;
+            if scanned > scan_limit {
+                limit_reached = true;
+                break;
+            }
+
+            if predicate(entry.value()) {
+                results.push(entry.value().clone());
+                if results.len() >= result_limit {
+                    limit_reached = true;
+                    break;
+                }
+            }
+        }
+
+        (results, limit_reached)
+    }
+
     /// Check if key exists
     pub fn contains_key(&self, key: &K) -> bool {
         self.data.contains_key(key)
@@ -99,6 +165,14 @@ where
         F: FnOnce(&mut V) -> R,
     {
         self.data.get_mut(key).map(|mut entry| f(entry.value_mut()))
+    }
+
+    /// Iterate over all entries
+    ///
+    /// Returns an iterator that yields references to each entry.
+    /// Useful for manual iteration with early abort.
+    pub fn iter(&self) -> impl Iterator<Item = dashmap::mapref::multiple::RefMulti<'_, K, V>> {
+        self.data.iter()
     }
 }
 
@@ -178,6 +252,86 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_limited_returns_at_most_limit_items() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..100 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|_| true, 10, 1000);
+
+        assert_eq!(results.len(), 10);
+        assert!(limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_sets_limit_reached_when_scan_exceeded() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..100 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|v| *v > 1000, 100, 50);
+
+        assert!(results.is_empty());
+        assert!(limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_sets_limit_reached_when_results_exceeded() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..100 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|_| true, 5, 1000);
+
+        assert_eq!(results.len(), 5);
+        assert!(limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_empty_store() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        let (results, limit_reached) = store.filter_limited(|_| true, 10, 100);
+
+        assert!(results.is_empty());
+        assert!(!limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_no_matches() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..10 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|v| *v > 100, 10, 100);
+
+        assert!(results.is_empty());
+        assert!(!limit_reached);
+    }
+
+    #[test]
+    fn test_filter_limited_partial_match_within_limits() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        for i in 0..10 {
+            store.insert(i, i);
+        }
+
+        let (results, limit_reached) = store.filter_limited(|v| v % 2 == 0, 100, 100);
+
+        assert_eq!(results.len(), 5);
+        assert!(!limit_reached);
+    }
+
+    #[test]
     fn test_clone_shares_data() {
         let store1: InMemoryStore<String, i32> = InMemoryStore::new();
         store1.insert("key".to_string(), 42);
@@ -241,5 +395,35 @@ mod tests {
         }
 
         read_handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_iter() {
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+
+        store.insert(1, 10);
+        store.insert(2, 20);
+        store.insert(3, 30);
+
+        let mut count = 0;
+        for entry in store.iter() {
+            assert!(entry.value() == &10 || entry.value() == &20 || entry.value() == &30);
+            count += 1;
+        }
+
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_max_prealloc_size_limits_allocation() {
+        // Verify that preallocation is bounded even with very large result_limit
+        let store: InMemoryStore<i32, i32> = InMemoryStore::new();
+        store.insert(1, 1);
+
+        // Even with huge result_limit, we only preallocate MAX_PREALLOC_SIZE
+        let (results, _) = store.filter_limited(|_| true, 1_000_000, 1_000_000);
+
+        // Should still work correctly
+        assert_eq!(results.len(), 1);
     }
 }

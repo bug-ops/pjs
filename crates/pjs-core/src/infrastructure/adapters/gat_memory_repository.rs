@@ -2,12 +2,11 @@
 //!
 //! Zero-cost abstractions for domain ports using Generic Associated Types.
 
-use chrono::Utc;
 use std::cmp::Ordering;
 use std::future::Future;
 
 use crate::domain::{
-    DomainResult,
+    DomainError, DomainResult,
     aggregates::StreamSession,
     entities::{Stream, stream::StreamState},
     ports::{
@@ -19,6 +18,7 @@ use crate::domain::{
 };
 
 use super::generic_store::{SessionStore, StreamStore};
+use super::limits::{MAX_HEALTH_METRICS, MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT};
 
 /// GAT-based in-memory implementation of StreamRepositoryGat
 #[derive(Debug, Clone, Default)]
@@ -175,7 +175,13 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
     }
 
     fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
-        async move { Ok(self.store.filter(|s| s.is_active())) }
+        async move {
+            // Use bounded iteration for find_active_sessions too
+            let (sessions, _) =
+                self.store
+                    .filter_limited(|s| s.is_active(), MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT);
+            Ok(sessions)
+        }
     }
 
     fn find_sessions_by_criteria(
@@ -184,19 +190,24 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
         pagination: Pagination,
     ) -> Self::FindSessionsByCriteriaFuture<'_> {
         async move {
+            // Validate inputs first
+            criteria.validate()?;
+            pagination.validate()?;
+
             let start = std::time::Instant::now();
 
-            // Filter sessions matching criteria
-            let filtered: Vec<StreamSession> = self
-                .store
-                .filter(|session| Self::matches_criteria(session, &criteria));
+            // Use bounded iteration to prevent DOS
+            let (mut filtered, scan_limit_reached) = self.store.filter_limited(
+                |session| Self::matches_criteria(session, &criteria),
+                MAX_RESULTS_LIMIT,
+                MAX_SCAN_LIMIT,
+            );
 
             let total_count = filtered.len();
 
             // Sort if sort_by specified
-            let mut sorted = filtered;
             if let Some(sort_field) = &pagination.sort_by {
-                sorted.sort_by(|a, b| {
+                filtered.sort_by(|a, b| {
                     let cmp = Self::compare_by_field(a, b, sort_field);
                     match pagination.sort_order {
                         SortOrder::Ascending => cmp,
@@ -206,7 +217,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
             }
 
             // Apply pagination
-            let paginated: Vec<StreamSession> = sorted
+            let paginated: Vec<StreamSession> = filtered
                 .into_iter()
                 .skip(pagination.offset)
                 .take(pagination.limit)
@@ -219,6 +230,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                 total_count,
                 has_more,
                 query_duration_ms: start.elapsed().as_millis() as u64,
+                scan_limit_reached,
             })
         }
     }
@@ -245,8 +257,8 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                         0.0
                     };
 
-                    // Collect metrics from session stats
-                    let mut metrics = std::collections::HashMap::new();
+                    // Preallocate for known metrics count (MEM-001 fix)
+                    let mut metrics = std::collections::HashMap::with_capacity(MAX_HEALTH_METRICS);
                     metrics.insert("active_streams".to_string(), health.active_streams as f64);
                     metrics.insert(
                         "total_bytes".to_string(),
@@ -255,6 +267,11 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                     metrics.insert(
                         "avg_duration_ms".to_string(),
                         session.stats().average_stream_duration_ms,
+                    );
+
+                    debug_assert!(
+                        metrics.len() <= MAX_HEALTH_METRICS,
+                        "Health metrics exceeded MAX_HEALTH_METRICS"
                     );
 
                     Ok(SessionHealthSnapshot {
@@ -267,18 +284,11 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                         metrics,
                     })
                 }
-                None => {
-                    // Return empty health for non-existent session
-                    Ok(SessionHealthSnapshot {
-                        session_id,
-                        is_healthy: false,
-                        active_streams: 0,
-                        total_frames: 0,
-                        last_activity: Utc::now(),
-                        error_rate: 0.0,
-                        metrics: std::collections::HashMap::new(),
-                    })
-                }
+                // ERR-001 fix: Return NotFound for non-existent sessions
+                None => Err(DomainError::SessionNotFound(format!(
+                    "Session {} not found",
+                    session_id
+                ))),
             }
         }
     }
@@ -327,6 +337,48 @@ impl GatInMemoryStreamStore {
                 | (StreamState::Failed, StreamStatus::Failed)
                 | (StreamState::Cancelled, StreamStatus::Cancelled)
         )
+    }
+
+    /// Helper: Check if stream matches filter criteria
+    fn matches_stream_filter(
+        stream: &Stream,
+        session_id: SessionId,
+        filter: &StreamFilter,
+    ) -> bool {
+        // First check session membership
+        if stream.session_id() != session_id {
+            return false;
+        }
+
+        // Apply status filter
+        if let Some(statuses) = &filter.statuses {
+            let matches_status = statuses
+                .iter()
+                .any(|status| Self::stream_state_matches_status(stream.state(), status));
+            if !matches_status {
+                return false;
+            }
+        }
+
+        // Apply time filter
+        if let Some(after) = filter.created_after
+            && stream.created_at() < after
+        {
+            return false;
+        }
+
+        // Apply has_frames filter
+        if let Some(has_frames) = filter.has_frames {
+            let frame_count = stream.stats().total_frames;
+            if has_frames && frame_count == 0 {
+                return false;
+            }
+            if !has_frames && frame_count > 0 {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -388,7 +440,15 @@ impl StreamStoreGat for GatInMemoryStreamStore {
         &self,
         session_id: SessionId,
     ) -> Self::ListStreamsForSessionFuture<'_> {
-        async move { Ok(self.store.filter(|s| s.session_id() == session_id)) }
+        async move {
+            // Use bounded iteration for DOS protection
+            let (streams, _) = self.store.filter_limited(
+                |s| s.session_id() == session_id,
+                MAX_RESULTS_LIMIT,
+                MAX_SCAN_LIMIT,
+            );
+            Ok(streams)
+        }
     }
 
     fn find_streams_by_session(
@@ -397,56 +457,12 @@ impl StreamStoreGat for GatInMemoryStreamStore {
         filter: StreamFilter,
     ) -> Self::FindStreamsBySessionFuture<'_> {
         async move {
-            let streams: Vec<Stream> = self.store.filter(|stream| {
-                // First check session membership
-                if stream.session_id() != session_id {
-                    return false;
-                }
-
-                // Apply status filter
-                if let Some(statuses) = &filter.statuses {
-                    let matches_status = statuses
-                        .iter()
-                        .any(|status| Self::stream_state_matches_status(stream.state(), status));
-                    if !matches_status {
-                        return false;
-                    }
-                }
-
-                // Apply time filter
-                if let Some(after) = filter.created_after
-                    && stream.created_at() < after
-                {
-                    return false;
-                }
-
-                // Apply has_frames filter
-                if let Some(has_frames) = filter.has_frames {
-                    let frame_count = stream.stats().total_frames;
-                    if has_frames && frame_count == 0 {
-                        return false;
-                    }
-                    if !has_frames && frame_count > 0 {
-                        return false;
-                    }
-                }
-
-                // NOTE: min_priority/max_priority filtering not implemented
-                //
-                // Stream entity doesn't expose a single priority value - priorities are assigned
-                // per-frame during streaming. StreamStats only tracks critical_bytes and
-                // high_priority_bytes, without full priority distribution data.
-                //
-                // Possible future implementations:
-                // 1. Add priority distribution to StreamStats (preferred - maintains domain purity)
-                // 2. Filter based on heuristic (e.g., has_critical_bytes if min >= CRITICAL)
-                // 3. Deprecate these fields in favor of has_high_priority/has_critical filters
-                //
-                // For now, these filter fields are silently ignored. This is documented in the
-                // StreamFilter API docs and should be addressed in a future minor version bump.
-
-                true
-            });
+            // DOS-002 fix: Use bounded iteration
+            let (streams, _) = self.store.filter_limited(
+                |stream| Self::matches_stream_filter(stream, session_id, &filter),
+                MAX_RESULTS_LIMIT,
+                MAX_SCAN_LIMIT,
+            );
 
             Ok(streams)
         }
@@ -458,32 +474,35 @@ impl StreamStoreGat for GatInMemoryStreamStore {
         status: StreamStatus,
     ) -> Self::UpdateStreamStatusFuture<'_> {
         async move {
-            use crate::domain::DomainError;
-
-            self.store
-                .update_with(&stream_id, |stream| {
-                    // Apply status transition based on requested status
-                    match status {
-                        StreamStatus::Active => stream.start_streaming(),
-                        StreamStatus::Completed => stream.complete(),
-                        StreamStatus::Failed => stream.fail("Status update to Failed".to_string()),
-                        StreamStatus::Cancelled => stream.cancel(),
-                        StreamStatus::Paused => {
-                            // Paused not directly supported by Stream entity; treat as invalid transition
-                            Err(DomainError::InvalidStateTransition(
-                                "Cannot transition to Paused status: not supported by StreamState"
-                                    .to_string(),
-                            ))
-                        }
-                        StreamStatus::Created => {
-                            // Cannot transition to Created
-                            Err(DomainError::InvalidStateTransition(
-                                "Cannot transition to Created status".to_string(),
-                            ))
-                        }
+            // ERR-001 fix: Return NotFound for missing streams
+            match self.store.update_with(&stream_id, |stream| {
+                // Apply status transition based on requested status
+                match status {
+                    StreamStatus::Active => stream.start_streaming(),
+                    StreamStatus::Completed => stream.complete(),
+                    StreamStatus::Failed => stream.fail("Status update to Failed".to_string()),
+                    StreamStatus::Cancelled => stream.cancel(),
+                    StreamStatus::Paused => {
+                        // Paused not directly supported by Stream entity; treat as invalid transition
+                        Err(DomainError::InvalidStateTransition(
+                            "Cannot transition to Paused status: not supported by StreamState"
+                                .to_string(),
+                        ))
                     }
-                })
-                .unwrap_or(Ok(())) // Stream not found - idempotent behavior
+                    StreamStatus::Created => {
+                        // Cannot transition to Created
+                        Err(DomainError::InvalidStateTransition(
+                            "Cannot transition to Created status".to_string(),
+                        ))
+                    }
+                }
+            }) {
+                Some(result) => result,
+                None => Err(DomainError::StreamNotFound(format!(
+                    "Stream {} not found",
+                    stream_id
+                ))),
+            }
         }
     }
 
@@ -522,18 +541,11 @@ impl StreamStoreGat for GatInMemoryStreamStore {
                         }),
                     })
                 }
-                None => {
-                    // Return default statistics for non-existent stream
-                    Ok(StreamStatistics {
-                        total_frames: 0,
-                        total_bytes: 0,
-                        priority_distribution: PriorityDistribution::default(),
-                        avg_frame_size: 0.0,
-                        creation_time: Utc::now(),
-                        completion_time: None,
-                        processing_duration: None,
-                    })
-                }
+                // ERR-001 fix: Return NotFound for non-existent streams
+                None => Err(DomainError::StreamNotFound(format!(
+                    "Stream {} not found",
+                    stream_id
+                ))),
             }
         }
     }
@@ -595,6 +607,7 @@ mod tests {
         assert_eq!(result.sessions.len(), 0);
         assert_eq!(result.total_count, 0);
         assert!(!result.has_more);
+        assert!(!result.scan_limit_reached);
     }
 
     #[tokio::test]
@@ -781,6 +794,41 @@ mod tests {
         assert_eq!(result.sessions[0].id(), session2_id); // Session with most streams first
     }
 
+    #[tokio::test]
+    async fn test_find_sessions_validates_criteria() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        // Invalid criteria: min > max
+        let criteria = SessionQueryCriteria {
+            min_stream_count: Some(10),
+            max_stream_count: Some(5),
+            ..Default::default()
+        };
+        let result = repo
+            .find_sessions_by_criteria(criteria, Pagination::default())
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DomainError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn test_find_sessions_validates_pagination() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        // Invalid pagination: limit = 0
+        let pagination = Pagination {
+            offset: 0,
+            limit: 0,
+            sort_by: None,
+            sort_order: SortOrder::Ascending,
+        };
+        let result = repo
+            .find_sessions_by_criteria(SessionQueryCriteria::default(), pagination)
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DomainError::InvalidInput(_)));
+    }
+
     // ===== StreamRepositoryGat Tests: get_session_health =====
 
     #[tokio::test]
@@ -801,16 +849,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_session_health_not_found() {
+    async fn test_get_session_health_returns_not_found() {
         let repo = GatInMemoryStreamRepository::new();
 
         let missing_session_id = SessionId::new();
-        let health = repo.get_session_health(missing_session_id).await.unwrap();
+        let result = repo.get_session_health(missing_session_id).await;
 
-        assert_eq!(health.session_id, missing_session_id);
-        assert!(!health.is_healthy);
-        assert_eq!(health.active_streams, 0);
-        assert_eq!(health.total_frames, 0);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::SessionNotFound(_)
+        ));
     }
 
     // ===== StreamRepositoryGat Tests: session_exists =====
@@ -1022,17 +1071,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_stream_status_not_found() {
+    async fn test_update_stream_status_returns_not_found() {
         let store = GatInMemoryStreamStore::new();
 
         let missing_stream_id = StreamId::new();
 
-        // Should be idempotent - no error for missing stream
         let result = store
             .update_stream_status(missing_stream_id, StreamStatus::Active)
             .await;
 
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::StreamNotFound(_)
+        ));
     }
 
     // ===== StreamStoreGat Tests: get_stream_statistics =====
@@ -1059,18 +1111,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_stream_statistics_not_found() {
+    async fn test_get_stream_statistics_returns_not_found() {
         let store = GatInMemoryStreamStore::new();
 
         let missing_stream_id = StreamId::new();
-        let stats = store
-            .get_stream_statistics(missing_stream_id)
+        let result = store.get_stream_statistics(missing_stream_id).await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::StreamNotFound(_)
+        ));
+    }
+
+    // ===== Bounded iteration tests =====
+
+    #[tokio::test]
+    async fn test_find_sessions_uses_bounded_iteration() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        // Create enough sessions to verify bounded iteration is used
+        // (though we can't easily hit MAX_SCAN_LIMIT in tests without performance impact)
+        for _ in 0..10 {
+            let mut session = StreamSession::new(SessionConfig::default());
+            session.activate().unwrap();
+            repo.save_session(session).await.unwrap();
+        }
+
+        let result = repo
+            .find_sessions_by_criteria(SessionQueryCriteria::default(), Pagination::default())
             .await
             .unwrap();
 
-        // Should return default statistics for non-existent stream
-        assert_eq!(stats.total_frames, 0);
-        assert_eq!(stats.total_bytes, 0);
-        assert!(stats.completion_time.is_none());
+        assert_eq!(result.total_count, 10);
+        assert!(!result.scan_limit_reached);
+    }
+
+    #[tokio::test]
+    async fn test_find_active_sessions_uses_bounded_iteration() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        for _ in 0..5 {
+            let mut session = StreamSession::new(SessionConfig::default());
+            session.activate().unwrap();
+            repo.save_session(session).await.unwrap();
+        }
+
+        let sessions = repo.find_active_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_list_streams_for_session_uses_bounded_iteration() {
+        let store = GatInMemoryStreamStore::new();
+        let session_id = SessionId::new();
+
+        for _ in 0..5 {
+            let stream = Stream::new(
+                session_id,
+                JsonData::String("test".to_string()),
+                StreamConfig::default(),
+            );
+            store.store_stream(stream).await.unwrap();
+        }
+
+        let streams = store.list_streams_for_session(session_id).await.unwrap();
+        assert_eq!(streams.len(), 5);
     }
 }
