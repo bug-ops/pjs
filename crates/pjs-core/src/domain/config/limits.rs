@@ -48,13 +48,13 @@ mod tests {
     #[test]
     fn test_max_pagination_limit_value() {
         assert_eq!(MAX_PAGINATION_LIMIT, 1_000);
-        assert!(MAX_PAGINATION_LIMIT > 0);
+        const { assert!(MAX_PAGINATION_LIMIT > 0) };
     }
 
     #[test]
     fn test_max_pagination_offset_value() {
         assert_eq!(MAX_PAGINATION_OFFSET, 1_000_000);
-        assert!(MAX_PAGINATION_OFFSET > 0);
+        const { assert!(MAX_PAGINATION_OFFSET > 0) };
     }
 
     #[test]
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn test_pagination_limit_within_industry_standard() {
         // Industry standard range: 100-1000
-        assert!(MAX_PAGINATION_LIMIT >= 100);
-        assert!(MAX_PAGINATION_LIMIT <= 10_000);
+        const { assert!(MAX_PAGINATION_LIMIT >= 100) };
+        const { assert!(MAX_PAGINATION_LIMIT <= 10_000) };
     }
 }

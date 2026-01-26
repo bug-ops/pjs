@@ -50,32 +50,32 @@ mod tests {
     #[test]
     fn test_max_scan_limit_value() {
         assert_eq!(MAX_SCAN_LIMIT, 10_000);
-        assert!(MAX_SCAN_LIMIT > 0);
+        const { assert!(MAX_SCAN_LIMIT > 0) };
     }
 
     #[test]
     fn test_max_results_limit_value() {
         assert_eq!(MAX_RESULTS_LIMIT, 10_000);
-        assert!(MAX_RESULTS_LIMIT > 0);
+        const { assert!(MAX_RESULTS_LIMIT > 0) };
     }
 
     #[test]
     fn test_max_pagination_limit_value() {
         assert_eq!(MAX_PAGINATION_LIMIT, 1_000);
-        assert!(MAX_PAGINATION_LIMIT > 0);
-        assert!(MAX_PAGINATION_LIMIT <= MAX_RESULTS_LIMIT);
+        const { assert!(MAX_PAGINATION_LIMIT > 0) };
+        const { assert!(MAX_PAGINATION_LIMIT <= MAX_RESULTS_LIMIT) };
     }
 
     #[test]
     fn test_max_pagination_offset_value() {
         assert_eq!(MAX_PAGINATION_OFFSET, 1_000_000);
-        assert!(MAX_PAGINATION_OFFSET > 0);
+        const { assert!(MAX_PAGINATION_OFFSET > 0) };
     }
 
     #[test]
     fn test_max_health_metrics_value() {
         assert_eq!(MAX_HEALTH_METRICS, 16);
-        assert!(MAX_HEALTH_METRICS >= 3);
+        const { assert!(MAX_HEALTH_METRICS >= 3) };
     }
 
     #[test]

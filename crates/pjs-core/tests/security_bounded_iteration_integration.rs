@@ -355,13 +355,13 @@ mod end_to_end_security_tests {
     #[test]
     fn test_domain_constants_are_accessible() {
         // Verify domain layer constants exist and have reasonable values
-        assert!(MAX_PAGINATION_LIMIT > 0);
-        assert!(MAX_PAGINATION_LIMIT <= 10_000); // Industry standard range
-        assert!(MAX_PAGINATION_OFFSET > 0);
+        const { assert!(MAX_PAGINATION_LIMIT > 0) };
+        const { assert!(MAX_PAGINATION_LIMIT <= 10_000) }; // Industry standard range
+        const { assert!(MAX_PAGINATION_OFFSET > 0) };
         assert!(!ALLOWED_SORT_FIELDS.is_empty());
 
         // Verify infrastructure constants
-        assert!(MAX_SCAN_LIMIT > 0);
-        assert!(MAX_RESULTS_LIMIT > 0);
+        const { assert!(MAX_SCAN_LIMIT > 0) };
+        const { assert!(MAX_RESULTS_LIMIT > 0) };
     }
 }
