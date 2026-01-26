@@ -1,67 +1,22 @@
 //! Writer ports for streaming I/O operations
 //!
-//! These ports abstract away the underlying I/O mechanisms,
-//! allowing the domain to work with any transport (HTTP/2, WebSocket, TCP).
+//! Supporting types for writer operations. GAT trait definitions are in `super::gat`.
+//!
+//! # Migration Note
+//!
+//! async_trait-based writer traits have been removed. Use GAT equivalents from `super::gat`:
+//! - `FrameSinkGat` - Frame writing (replaces StreamWriter)
+//! - `FrameWriterGat` - Priority-based frame writing
+//! - `WriterFactoryGat` - Writer factory
+//! - `ConnectionMonitorGat` - Connection monitoring
 
-use crate::domain::{DomainResult, entities::Frame};
-use async_trait::async_trait;
 use std::time::Duration;
 
-/// Abstract interface for writing streaming data
-///
-/// This port represents the domain's contract for how frames should be
-/// written to clients. Infrastructure adapters implement this for specific
-/// transports (HTTP/2, WebSocket, etc.).
-#[async_trait]
-pub trait StreamWriter: Send + Sync {
-    /// Write a single frame to the stream
-    ///
-    /// Should handle backpressure and flow control automatically
-    async fn write_frame(&mut self, frame: Frame) -> DomainResult<()>;
+// ============================================================================
+// Supporting Types
+// ============================================================================
 
-    /// Write multiple frames efficiently in a batch
-    ///
-    /// Implementations should optimize for bulk operations
-    async fn write_frames(&mut self, frames: Vec<Frame>) -> DomainResult<()>;
-
-    /// Flush any buffered data to ensure delivery
-    async fn flush(&mut self) -> DomainResult<()>;
-
-    /// Get the write capacity (0 = no limit, >0 = max frames that can be buffered)
-    fn capacity(&self) -> Option<usize>;
-
-    /// Check if the writer is ready to accept more data
-    fn is_ready(&self) -> bool;
-
-    /// Close the writer gracefully
-    async fn close(&mut self) -> DomainResult<()>;
-}
-
-/// Higher-level interface for frame-oriented writing
-///
-/// This port provides additional functionality for frame management,
-/// including prioritization and adaptive behavior.
-#[async_trait]
-pub trait FrameWriter: Send + Sync {
-    /// Write a frame with priority handling
-    ///
-    /// High-priority frames may be sent immediately while low-priority
-    /// frames may be buffered or dropped under backpressure.
-    async fn write_prioritized_frame(&mut self, frame: Frame) -> DomainResult<()>;
-
-    /// Write frames in priority order
-    ///
-    /// Frames are automatically sorted and written in priority order
-    async fn write_frames_by_priority(&mut self, frames: Vec<Frame>) -> DomainResult<()>;
-
-    /// Set backpressure threshold
-    ///
-    /// When buffer exceeds this threshold, low-priority frames may be dropped
-    async fn set_backpressure_threshold(&mut self, threshold: usize) -> DomainResult<()>;
-
-    /// Get current write metrics
-    async fn get_metrics(&self) -> DomainResult<WriterMetrics>;
-}
+// async_trait traits removed - use GAT traits from super::gat instead
 
 /// Metrics about writer performance
 #[derive(Debug, Clone, PartialEq)]
@@ -96,27 +51,6 @@ impl Default for WriterMetrics {
             error_count: 0,
         }
     }
-}
-
-/// Factory for creating writers
-///
-/// This allows the domain to request writers without knowing
-/// about the specific transport implementation.
-#[async_trait]
-pub trait WriterFactory: Send + Sync {
-    /// Create a new stream writer for the given connection
-    async fn create_stream_writer(
-        &self,
-        connection_id: &str,
-        config: WriterConfig,
-    ) -> DomainResult<Box<dyn StreamWriter>>;
-
-    /// Create a new frame writer with advanced features
-    async fn create_frame_writer(
-        &self,
-        connection_id: &str,
-        config: WriterConfig,
-    ) -> DomainResult<Box<dyn FrameWriter>>;
 }
 
 /// Configuration for writer creation
@@ -183,26 +117,6 @@ pub enum ConnectionState {
 
     /// Connection encountered an error
     Error(String),
-}
-
-/// Port for monitoring connection health
-#[async_trait]
-pub trait ConnectionMonitor: Send + Sync {
-    /// Get current connection state
-    async fn get_connection_state(&self, connection_id: &str) -> DomainResult<ConnectionState>;
-
-    /// Check if connection is healthy
-    async fn is_connection_healthy(&self, connection_id: &str) -> DomainResult<bool>;
-
-    /// Get connection metrics
-    async fn get_connection_metrics(&self, connection_id: &str) -> DomainResult<ConnectionMetrics>;
-
-    /// Register for connection state change notifications
-    async fn subscribe_to_state_changes(
-        &self,
-        connection_id: &str,
-        callback: Box<dyn Fn(ConnectionState) + Send + Sync>,
-    ) -> DomainResult<()>;
 }
 
 /// Metrics about connection performance

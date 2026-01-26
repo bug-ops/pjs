@@ -1179,7 +1179,6 @@ dependencies = [
 name = "pjson-rs"
 version = "0.4.7"
 dependencies = [
- "async-trait",
  "axum",
  "bitflags",
  "bytes",

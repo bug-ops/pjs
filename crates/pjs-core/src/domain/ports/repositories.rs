@@ -1,207 +1,35 @@
 //! Repository ports for data persistence
 //!
-//! These ports define the domain's requirements for data storage,
-//! allowing infrastructure adapters to implement various storage backends.
+//! Supporting types for repository operations. GAT trait definitions are in `super::gat`.
+//!
+//! # Migration Note
+//!
+//! async_trait-based repository traits have been removed. Use GAT equivalents from `super::gat`:
+//! - `StreamRepositoryGat` - Session storage
+//! - `StreamStoreGat` - Stream storage
+//! - `FrameRepositoryGat` - Frame storage
+//! - `EventStoreGat` - Event sourcing
+//! - `CacheGat` - Caching operations
 
 use crate::domain::{
     DomainResult,
     aggregates::StreamSession,
-    entities::{Frame, Stream},
-    events::DomainEvent,
-    value_objects::{JsonPath, Priority, SessionId, StreamId},
+    entities::Frame,
+    value_objects::{Priority, SessionId},
 };
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
-/// Enhanced repository for stream sessions with transactional support
-#[async_trait]
-pub trait StreamSessionRepository: Send + Sync {
-    /// Start a new transaction
-    async fn begin_transaction(&self) -> DomainResult<Box<dyn SessionTransaction>>;
+// ============================================================================
+// Supporting Types
+// ============================================================================
 
-    /// Find session by ID with read consistency guarantees
-    async fn find_session(&self, session_id: SessionId) -> DomainResult<Option<StreamSession>>;
-
-    /// Save session with optimistic concurrency control
-    async fn save_session(&self, session: StreamSession, version: Option<u64>)
-    -> DomainResult<u64>;
-
-    /// Remove session and all associated data
-    async fn remove_session(&self, session_id: SessionId) -> DomainResult<()>;
-
-    /// Find sessions by criteria with pagination
-    async fn find_sessions_by_criteria(
-        &self,
-        criteria: SessionQueryCriteria,
-        pagination: Pagination,
-    ) -> DomainResult<SessionQueryResult>;
-
-    /// Get session health metrics
-    async fn get_session_health(
-        &self,
-        session_id: SessionId,
-    ) -> DomainResult<SessionHealthSnapshot>;
-
-    /// Check if session exists (lightweight operation)
-    async fn session_exists(&self, session_id: SessionId) -> DomainResult<bool>;
-}
-
-/// Transaction interface for session operations
-#[async_trait]
-pub trait SessionTransaction: Send + Sync {
-    /// Save session within transaction
-    async fn save_session(&self, session: StreamSession) -> DomainResult<()>;
-
-    /// Remove session within transaction
-    async fn remove_session(&self, session_id: SessionId) -> DomainResult<()>;
-
-    /// Add stream to session within transaction
-    async fn add_stream(&self, session_id: SessionId, stream: Stream) -> DomainResult<()>;
-
-    /// Commit all changes
-    async fn commit(self: Box<Self>) -> DomainResult<()>;
-
-    /// Rollback all changes
-    async fn rollback(self: Box<Self>) -> DomainResult<()>;
-}
-
-/// Repository for stream data with efficient querying
-#[async_trait]
-pub trait StreamDataRepository: Send + Sync {
-    /// Store stream with metadata indexing
-    async fn store_stream(&self, stream: Stream, metadata: StreamMetadata) -> DomainResult<()>;
-
-    /// Get stream by ID with caching hints
-    async fn get_stream(
-        &self,
-        stream_id: StreamId,
-        use_cache: bool,
-    ) -> DomainResult<Option<Stream>>;
-
-    /// Delete stream and associated frames
-    async fn delete_stream(&self, stream_id: StreamId) -> DomainResult<()>;
-
-    /// Find streams by session with filtering
-    async fn find_streams_by_session(
-        &self,
-        session_id: SessionId,
-        filter: StreamFilter,
-    ) -> DomainResult<Vec<Stream>>;
-
-    /// Update stream status
-    async fn update_stream_status(
-        &self,
-        stream_id: StreamId,
-        status: StreamStatus,
-    ) -> DomainResult<()>;
-
-    /// Get stream statistics
-    async fn get_stream_statistics(&self, stream_id: StreamId) -> DomainResult<StreamStatistics>;
-}
-
-/// Repository for frame data with priority-based access
-#[async_trait]
-pub trait FrameRepository: Send + Sync {
-    /// Store frame with priority indexing
-    async fn store_frame(&self, frame: Frame) -> DomainResult<()>;
-
-    /// Store multiple frames efficiently
-    async fn store_frames(&self, frames: Vec<Frame>) -> DomainResult<()>;
-
-    /// Get frames by stream with priority filtering
-    async fn get_frames_by_stream(
-        &self,
-        stream_id: StreamId,
-        priority_filter: Option<Priority>,
-        pagination: Pagination,
-    ) -> DomainResult<FrameQueryResult>;
-
-    /// Get frames by JSON path
-    async fn get_frames_by_path(
-        &self,
-        stream_id: StreamId,
-        path: JsonPath,
-    ) -> DomainResult<Vec<Frame>>;
-
-    /// Delete frames older than specified time
-    async fn cleanup_old_frames(&self, older_than: DateTime<Utc>) -> DomainResult<u64>;
-
-    /// Get frame count by priority distribution
-    async fn get_frame_priority_distribution(
-        &self,
-        stream_id: StreamId,
-    ) -> DomainResult<PriorityDistribution>;
-}
-
-/// Repository for domain events with event sourcing support
-#[async_trait]
-pub trait EventRepository: Send + Sync {
-    /// Store domain event with ordering guarantees
-    async fn store_event(&self, event: DomainEvent, sequence: u64) -> DomainResult<()>;
-
-    /// Store multiple events as atomic batch
-    async fn store_events(&self, events: Vec<DomainEvent>) -> DomainResult<()>;
-
-    /// Get events for session in chronological order
-    async fn get_events_for_session(
-        &self,
-        session_id: SessionId,
-        from_sequence: Option<u64>,
-        limit: Option<usize>,
-    ) -> DomainResult<Vec<DomainEvent>>;
-
-    /// Get events for stream
-    async fn get_events_for_stream(
-        &self,
-        stream_id: StreamId,
-        from_sequence: Option<u64>,
-        limit: Option<usize>,
-    ) -> DomainResult<Vec<DomainEvent>>;
-
-    /// Get events by type
-    async fn get_events_by_type(
-        &self,
-        event_types: Vec<String>,
-        time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    ) -> DomainResult<Vec<DomainEvent>>;
-
-    /// Get latest sequence number
-    async fn get_latest_sequence(&self) -> DomainResult<u64>;
-
-    /// Replay events for session reconstruction
-    async fn replay_session_events(&self, session_id: SessionId) -> DomainResult<Vec<DomainEvent>>;
-}
-
-/// Cache abstraction for performance optimization
-/// Using bytes for object-safe interface
-#[async_trait]
-pub trait CacheRepository: Send + Sync {
-    /// Get cached value as bytes
-    async fn get_bytes(&self, key: &str) -> DomainResult<Option<Vec<u8>>>;
-
-    /// Set cached value as bytes with TTL
-    async fn set_bytes(
-        &self,
-        key: &str,
-        value: Vec<u8>,
-        ttl: Option<std::time::Duration>,
-    ) -> DomainResult<()>;
-
-    /// Remove cached value
-    async fn remove(&self, key: &str) -> DomainResult<()>;
-
-    /// Clear all cached values with prefix
-    async fn clear_prefix(&self, prefix: &str) -> DomainResult<()>;
-
-    /// Get cache statistics
-    async fn get_stats(&self) -> DomainResult<CacheStatistics>;
-}
+// async_trait traits removed - use GAT traits from super::gat instead
 
 /// Helper extension trait for type-safe cache operations
 /// This can be used as extension methods on implementers
 #[allow(async_fn_in_trait)]
-pub trait CacheExtensions: CacheRepository {
+pub trait CacheExtensions: super::gat::CacheGat {
     /// Get cached value with deserialization
     async fn get_typed<T>(&self, key: &str) -> DomainResult<Option<T>>
     where
@@ -233,8 +61,8 @@ pub trait CacheExtensions: CacheRepository {
     }
 }
 
-// Blanket implementation for all CacheRepository implementers
-impl<T: CacheRepository> CacheExtensions for T {}
+// Blanket implementation for all CacheGat implementers
+impl<T: super::gat::CacheGat> CacheExtensions for T {}
 
 // Supporting types for query operations
 
@@ -300,10 +128,27 @@ pub struct SessionHealthSnapshot {
 /// Filter for stream queries
 #[derive(Debug, Clone, Default)]
 pub struct StreamFilter {
+    /// Filter by stream status
     pub statuses: Option<Vec<StreamStatus>>,
+
+    /// Minimum priority level (currently not implemented - silently ignored)
+    ///
+    /// NOTE: Stream entities don't expose a single priority value. This field is
+    /// reserved for future implementation when priority distribution tracking is added
+    /// to StreamStats.
     pub min_priority: Option<Priority>,
+
+    /// Maximum priority level (currently not implemented - silently ignored)
+    ///
+    /// NOTE: Stream entities don't expose a single priority value. This field is
+    /// reserved for future implementation when priority distribution tracking is added
+    /// to StreamStats.
     pub max_priority: Option<Priority>,
+
+    /// Filter by creation time
     pub created_after: Option<DateTime<Utc>>,
+
+    /// Filter by presence of frames
     pub has_frames: Option<bool>,
 }
 
@@ -376,19 +221,25 @@ impl Default for CacheStatistics {
 
 #[cfg(test)]
 mod tests {
+    use super::super::gat::CacheGat;
     use super::*;
+    use crate::domain::DomainError;
+    use std::future::Future;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
 
-    // Mock cache repository for testing CacheExtensions
-    struct MockCacheRepository {
+    // ========================================================================
+    // MockCacheGat - GAT-based mock for testing CacheExtensions
+    // ========================================================================
+
+    struct MockCacheGat {
         store: Arc<Mutex<HashMap<String, Vec<u8>>>>,
         fail_on_get: bool,
         fail_on_set: bool,
     }
 
-    impl MockCacheRepository {
+    impl MockCacheGat {
         fn new() -> Self {
             Self {
                 store: Arc::new(Mutex::new(HashMap::new())),
@@ -414,45 +265,85 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl CacheRepository for MockCacheRepository {
-        async fn get_bytes(&self, key: &str) -> DomainResult<Option<Vec<u8>>> {
-            if self.fail_on_get {
-                return Err(crate::domain::DomainError::Logic("Get failed".into()));
+    impl super::super::gat::CacheGat for MockCacheGat {
+        type GetBytesFuture<'a>
+            = impl Future<Output = DomainResult<Option<Vec<u8>>>> + Send + 'a
+        where
+            Self: 'a;
+
+        type SetBytesFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type RemoveFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type ClearPrefixFuture<'a>
+            = impl Future<Output = DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type GetStatsFuture<'a>
+            = impl Future<Output = DomainResult<CacheStatistics>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn get_bytes<'a>(&'a self, key: &'a str) -> Self::GetBytesFuture<'a> {
+            async move {
+                if self.fail_on_get {
+                    return Err(DomainError::Logic("Mock get failure".to_string()));
+                }
+                let store = self.store.lock().await;
+                Ok(store.get(key).cloned())
             }
-            Ok(self.store.lock().await.get(key).cloned())
         }
 
-        async fn set_bytes(
-            &self,
-            key: &str,
+        fn set_bytes<'a>(
+            &'a self,
+            key: &'a str,
             value: Vec<u8>,
             _ttl: Option<Duration>,
-        ) -> DomainResult<()> {
-            if self.fail_on_set {
-                return Err(crate::domain::DomainError::Logic("Set failed".into()));
+        ) -> Self::SetBytesFuture<'a> {
+            async move {
+                if self.fail_on_set {
+                    return Err(DomainError::Logic("Mock set failure".to_string()));
+                }
+                let mut store = self.store.lock().await;
+                store.insert(key.to_string(), value);
+                Ok(())
             }
-            self.store.lock().await.insert(key.to_string(), value);
-            Ok(())
         }
 
-        async fn remove(&self, key: &str) -> DomainResult<()> {
-            self.store.lock().await.remove(key);
-            Ok(())
+        fn remove<'a>(&'a self, key: &'a str) -> Self::RemoveFuture<'a> {
+            async move {
+                let mut store = self.store.lock().await;
+                store.remove(key);
+                Ok(())
+            }
         }
 
-        async fn clear_prefix(&self, prefix: &str) -> DomainResult<()> {
-            let mut store = self.store.lock().await;
-            store.retain(|k, _| !k.starts_with(prefix));
-            Ok(())
+        fn clear_prefix<'a>(&'a self, prefix: &'a str) -> Self::ClearPrefixFuture<'a> {
+            async move {
+                let mut store = self.store.lock().await;
+                store.retain(|k, _| !k.starts_with(prefix));
+                Ok(())
+            }
         }
 
-        async fn get_stats(&self) -> DomainResult<CacheStatistics> {
-            let store = self.store.lock().await;
-            Ok(CacheStatistics {
-                total_keys: store.len() as u64,
-                ..Default::default()
-            })
+        fn get_stats(&self) -> Self::GetStatsFuture<'_> {
+            async move {
+                let store = self.store.lock().await;
+                Ok(CacheStatistics {
+                    hit_rate: 0.0,
+                    miss_rate: 0.0,
+                    total_keys: store.len() as u64,
+                    memory_usage_bytes: 0,
+                    eviction_count: 0,
+                })
+            }
         }
     }
 
@@ -977,10 +868,13 @@ mod tests {
         assert_eq!(cloned.avg_frame_size, stats.avg_frame_size);
     }
 
-    // Tests for CacheExtensions trait
+    // ========================================================================
+    // Tests for CacheExtensions trait with MockCacheGat
+    // ========================================================================
+
     #[tokio::test]
     async fn test_cache_extensions_set_and_get_typed() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
 
         #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
         struct TestData {
@@ -1002,14 +896,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_extensions_get_typed_not_found() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
         let result: Option<String> = cache.get_typed::<String>("nonexistent").await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn test_cache_extensions_set_typed_with_ttl() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
         let ttl = Some(Duration::from_secs(60));
         cache.set_typed("key", &"value", ttl).await.unwrap();
         let result: Option<String> = cache.get_typed("key").await.unwrap();
@@ -1018,7 +912,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_extensions_get_typed_invalid_json() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
         cache
             .set_bytes("key", b"invalid json{{{".to_vec(), None)
             .await
@@ -1032,21 +926,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_extensions_get_bytes_failure() {
-        let cache = MockCacheRepository::with_get_failure();
+        let cache = MockCacheGat::with_get_failure();
         let result: DomainResult<Option<String>> = cache.get_typed("key").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_cache_extensions_set_bytes_failure() {
-        let cache = MockCacheRepository::with_set_failure();
+        let cache = MockCacheGat::with_set_failure();
         let result = cache.set_typed("key", &"value", None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_cache_extensions_complex_type() {
-        let cache = MockCacheRepository::new();
+        let cache = MockCacheGat::new();
 
         #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
         struct ComplexData {
@@ -1072,10 +966,13 @@ mod tests {
         assert_eq!(retrieved.metadata.get("count"), Some(&100));
     }
 
-    // Tests for MockCacheRepository (to ensure test infrastructure works)
+    // ========================================================================
+    // Tests for MockCacheGat operations
+    // ========================================================================
+
     #[tokio::test]
-    async fn test_mock_cache_repository_remove() {
-        let cache = MockCacheRepository::new();
+    async fn test_mock_cache_gat_remove() {
+        let cache = MockCacheGat::new();
         cache
             .set_bytes("key", b"value".to_vec(), None)
             .await
@@ -1086,8 +983,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_cache_repository_clear_prefix() {
-        let cache = MockCacheRepository::new();
+    async fn test_mock_cache_gat_clear_prefix() {
+        let cache = MockCacheGat::new();
         cache
             .set_bytes("prefix:key1", b"value1".to_vec(), None)
             .await
@@ -1109,8 +1006,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_cache_repository_get_stats() {
-        let cache = MockCacheRepository::new();
+    async fn test_mock_cache_gat_get_stats() {
+        let cache = MockCacheGat::new();
         cache
             .set_bytes("key1", b"value1".to_vec(), None)
             .await

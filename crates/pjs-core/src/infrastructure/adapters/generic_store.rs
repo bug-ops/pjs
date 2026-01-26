@@ -82,6 +82,24 @@ where
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
+
+    /// Atomic read-modify-write operation
+    ///
+    /// Applies function to mutable value reference if key exists.
+    /// Returns the result of the function or None if key not found.
+    ///
+    /// # Example
+    /// ```ignore
+    /// store.update_with(&stream_id, |stream| {
+    ///     stream.complete()
+    /// });
+    /// ```
+    pub fn update_with<F, R>(&self, key: &K, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut V) -> R,
+    {
+        self.data.get_mut(key).map(|mut entry| f(entry.value_mut()))
+    }
 }
 
 impl<K, V> Default for InMemoryStore<K, V>

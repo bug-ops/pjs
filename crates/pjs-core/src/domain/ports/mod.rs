@@ -10,21 +10,21 @@ pub mod gat;
 pub mod repositories;
 pub mod writer;
 
-// Re-export commonly used types
+// GAT traits (canonical interfaces)
 pub use gat::*;
-pub use repositories::*;
-pub use writer::*;
 
-// Re-export GAT traits as main interfaces
-pub use gat::{
-    EventPublisherGat as EventPublisher, FrameSinkGat as FrameSink, FrameSourceGat as FrameSource,
-    MetricsCollectorGat as MetricsCollector, SessionMetricsGat as SessionMetrics,
-    StreamRepositoryGat as StreamRepository, StreamStoreGat as StreamStore,
+// Supporting types only (no async_trait traits)
+pub use repositories::{
+    CacheExtensions, CacheStatistics, FrameQueryResult, Pagination, PriorityDistribution,
+    SessionHealthSnapshot, SessionQueryCriteria, SessionQueryResult, SortOrder, StreamFilter,
+    StreamMetadata, StreamStatistics, StreamStatus,
 };
 
-// Cleaned up unused imports
+pub use writer::{
+    BackpressureStrategy, ConnectionMetrics, ConnectionState, WriterConfig, WriterMetrics,
+};
 
-// Legacy async_trait implementations removed - use GAT versions in gat.rs instead
+// Legacy async_trait implementations removed - use GAT versions instead
 
 /// Time provider port (for testability)
 pub trait TimeProvider: Send + Sync {

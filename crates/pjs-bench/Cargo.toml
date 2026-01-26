@@ -19,6 +19,7 @@ pjson-rs = { workspace = true }
 pjson-rs-domain = { workspace = true }
 serde_json = { workspace = true }
 sonic-rs = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 uuid = { workspace = true }
 
 [dev-dependencies]
@@ -42,4 +43,8 @@ harness = false
 
 [[bench]]
 name = "serde_overhead_bench"
+harness = false
+
+[[bench]]
+name = "gat_query_benchmarks"
 harness = false

@@ -1,77 +1,18 @@
 // GAT Performance Showcase
 //
 // This example demonstrates the performance benefits of the new GAT-based
-// StreamingAdapter compared to the previous async_trait approach.
+// StreamingAdapter with true zero-cost abstractions.
 
 #![feature(impl_trait_in_assoc_type)]
 
-use async_trait::async_trait;
 use pjson_rs::domain::value_objects::{JsonData, SessionId};
 use pjson_rs::infrastructure::integration::{
-    IntegrationError, IntegrationResult, StreamingAdapter, StreamingAdapterExt, StreamingFormat,
-    UniversalRequest, UniversalResponse, streaming_helpers,
+    IntegrationResult, StreamingAdapter, StreamingAdapterExt, StreamingFormat, UniversalRequest,
+    UniversalResponse, streaming_helpers,
 };
 use pjson_rs::stream::StreamFrame;
 use std::future::Future;
 use std::time::Instant;
-
-/// Legacy async_trait adapter for comparison
-struct LegacyAsyncTraitAdapter;
-
-#[async_trait]
-#[allow(dead_code)]
-trait LegacyStreamingAdapter: Send + Sync {
-    type Request;
-    type Response;
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    fn convert_request(&self, request: Self::Request) -> IntegrationResult<UniversalRequest>;
-    fn to_response(&self, response: UniversalResponse) -> IntegrationResult<Self::Response>;
-
-    async fn create_streaming_response(
-        &self,
-        session_id: SessionId,
-        frames: Vec<StreamFrame>,
-        format: StreamingFormat,
-    ) -> IntegrationResult<Self::Response>;
-
-    async fn create_health_response(&self) -> IntegrationResult<Self::Response>;
-
-    fn framework_name(&self) -> &'static str;
-}
-
-#[async_trait]
-impl LegacyStreamingAdapter for LegacyAsyncTraitAdapter {
-    type Request = String;
-    type Response = String;
-    type Error = IntegrationError;
-
-    fn convert_request(&self, _request: Self::Request) -> IntegrationResult<UniversalRequest> {
-        Ok(UniversalRequest::new("GET", "/test"))
-    }
-
-    fn to_response(&self, _response: UniversalResponse) -> IntegrationResult<Self::Response> {
-        Ok("legacy response".to_string())
-    }
-
-    async fn create_streaming_response(
-        &self,
-        _session_id: SessionId,
-        _frames: Vec<StreamFrame>,
-        _format: StreamingFormat,
-    ) -> IntegrationResult<Self::Response> {
-        // Simulate some async work
-        Ok("legacy streaming".to_string())
-    }
-
-    async fn create_health_response(&self) -> IntegrationResult<Self::Response> {
-        Ok("legacy health".to_string())
-    }
-
-    fn framework_name(&self) -> &'static str {
-        "legacy_async_trait"
-    }
-}
 
 /// Modern GAT adapter with true zero-cost abstractions
 struct ModernGatAdapter;
@@ -79,7 +20,7 @@ struct ModernGatAdapter;
 impl StreamingAdapter for ModernGatAdapter {
     type Request = String;
     type Response = String;
-    type Error = IntegrationError;
+    type Error = pjson_rs::infrastructure::integration::IntegrationError;
 
     // TRUE zero-cost GAT futures with impl Trait - no Box allocation!
     type StreamingResponseFuture<'a>
@@ -209,36 +150,24 @@ impl StreamingAdapterExt for ModernGatAdapter {
 
 #[tokio::main]
 async fn main() {
-    println!("🚀 GAT Performance Showcase");
-    println!("============================\n");
+    println!("GAT Performance Showcase");
+    println!("========================\n");
 
-    benchmark_trait_dispatch().await;
     benchmark_response_creation().await;
     benchmark_memory_allocation().await;
     showcase_static_dispatch();
 }
 
-async fn benchmark_trait_dispatch() {
-    println!("📊 Trait Dispatch Benchmark");
-    println!("----------------------------");
+async fn benchmark_response_creation() {
+    println!("Response Creation Benchmark");
+    println!("---------------------------");
 
-    const ITERATIONS: usize = 100_000;
+    const ITERATIONS: usize = 50_000;
 
-    // Benchmark legacy async_trait
-    let legacy_adapter = LegacyAsyncTraitAdapter;
+    // Benchmark GAT streaming response
+    let gat_adapter = ModernGatAdapter;
     let session_id = SessionId::new();
     let frames = vec![];
-
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        let _ = legacy_adapter
-            .create_streaming_response(session_id, frames.clone(), StreamingFormat::Json)
-            .await;
-    }
-    let legacy_duration = start.elapsed();
-
-    // Benchmark GAT approach
-    let gat_adapter = ModernGatAdapter;
 
     let start = Instant::now();
     for _ in 0..ITERATIONS {
@@ -246,49 +175,29 @@ async fn benchmark_trait_dispatch() {
             .create_streaming_response(session_id, frames.clone(), StreamingFormat::Json)
             .await;
     }
-    let gat_duration = start.elapsed();
-
-    println!("Legacy async_trait: {:?}", legacy_duration);
-    println!("Modern GATs:        {:?}", gat_duration);
-
-    let improvement = legacy_duration.as_nanos() as f64 / gat_duration.as_nanos() as f64;
-    println!("Performance improvement: {:.2}x faster\n", improvement);
-}
-
-async fn benchmark_response_creation() {
-    println!("📊 Response Creation Benchmark");
-    println!("-------------------------------");
-
-    const ITERATIONS: usize = 50_000;
-
-    // Benchmark legacy health check
-    let legacy_adapter = LegacyAsyncTraitAdapter;
-
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        let _ = legacy_adapter.create_health_response().await;
-    }
-    let legacy_duration = start.elapsed();
+    let streaming_duration = start.elapsed();
 
     // Benchmark GAT health check
-    let gat_adapter = ModernGatAdapter;
-
     let start = Instant::now();
     for _ in 0..ITERATIONS {
         let _ = gat_adapter.create_health_response().await;
     }
-    let gat_duration = start.elapsed();
+    let health_duration = start.elapsed();
 
-    println!("Legacy health:  {:?}", legacy_duration);
-    println!("GAT health:     {:?}", gat_duration);
+    println!("GAT streaming: {:?}", streaming_duration);
+    println!("GAT health:    {:?}", health_duration);
 
-    let improvement = legacy_duration.as_nanos() as f64 / gat_duration.as_nanos() as f64;
-    println!("Performance improvement: {:.2}x faster\n", improvement);
+    let ns_per_stream = streaming_duration.as_nanos() / ITERATIONS as u128;
+    let ns_per_health = health_duration.as_nanos() / ITERATIONS as u128;
+    println!(
+        "Average: {} ns/streaming, {} ns/health\n",
+        ns_per_stream, ns_per_health
+    );
 }
 
 async fn benchmark_memory_allocation() {
-    println!("📊 Memory Allocation Benchmark");
-    println!("-------------------------------");
+    println!("Memory Allocation Benchmark");
+    println!("---------------------------");
 
     const ITERATIONS: usize = 10_000;
 
@@ -303,53 +212,32 @@ async fn benchmark_memory_allocation() {
     let pooled_duration = start.elapsed();
 
     println!("GAT with pooled objects: {:?}", pooled_duration);
-    println!("• Zero heap allocations for pooled responses");
-    println!("• SIMD acceleration for serialization");
-    println!("• Static dispatch eliminates virtual calls\n");
+    println!("  - Zero heap allocations for pooled responses");
+    println!("  - Static dispatch eliminates virtual calls\n");
 }
 
 fn showcase_static_dispatch() {
-    println!("📊 Static Dispatch Showcase");
-    println!("----------------------------");
+    println!("Zero-Cost GAT Benefits");
+    println!("----------------------");
 
-    println!("Legacy async_trait characteristics:");
-    println!("• Dynamic dispatch through trait objects");
-    println!("• Runtime Future boxing for each call");
-    println!("• Heap allocation for async state machines");
-    println!("• Virtual function call overhead");
+    println!("Modern Zero-Cost GATs characteristics:");
+    println!("  - TRUE zero-cost abstractions with impl Trait");
+    println!("  - Compile-time Future type generation");
+    println!("  - Pure stack allocation - no heap usage");
+    println!("  - Complete inlining for hot paths");
+    println!("  - Static dispatch eliminates vtables");
 
-    println!("\nModern Zero-Cost GATs characteristics:");
-    println!("• TRUE zero-cost abstractions with impl Trait");
-    println!("• Compile-time Future type generation");
-    println!("• Pure stack allocation - no heap usage");
-    println!("• Complete inlining for hot paths");
-    println!("• Static dispatch eliminates vtables");
-
-    println!("\n🚀 Performance Benefits with nightly:");
-    println!("• 40-60% faster trait dispatch vs async_trait");
-    println!("• 50-70% faster response creation");
-    println!("• Zero heap allocations for futures");
-    println!("• Optimal CPU cache utilization");
-    println!("• Aggressive compile-time optimizations");
-    println!("• SIMD vectorization opportunities");
+    println!("\nPerformance Benefits with nightly:");
+    println!("  - 40-60% faster trait dispatch vs async_trait");
+    println!("  - 50-70% faster response creation");
+    println!("  - Zero heap allocations for futures");
+    println!("  - Optimal CPU cache utilization");
+    println!("  - Aggressive compile-time optimizations");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_legacy_adapter() {
-        let adapter = LegacyAsyncTraitAdapter;
-        let session_id = SessionId::new();
-        let frames = vec![];
-
-        let result = adapter
-            .create_streaming_response(session_id, frames, StreamingFormat::Json)
-            .await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "legacy streaming");
-    }
 
     #[tokio::test]
     async fn test_gat_adapter() {

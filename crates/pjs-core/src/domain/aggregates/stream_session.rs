@@ -212,6 +212,11 @@ impl StreamSession {
         self.completed_at
     }
 
+    /// Get client info metadata
+    pub fn client_info(&self) -> Option<&str> {
+        self.client_info.as_deref()
+    }
+
     /// Get session duration if completed
     pub fn duration(&self) -> Option<chrono::Duration> {
         self.completed_at.map(|end| end - self.created_at)
