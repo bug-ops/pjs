@@ -179,12 +179,11 @@ where
         P: Fn(&V) -> bool,
     {
         let mut results = Vec::with_capacity(result_limit.min(MAX_PREALLOC_SIZE));
-        let mut scanned = 0usize;
         let mut limit_reached = false;
 
-        for entry in self.data.iter() {
-            scanned += 1;
-            if scanned > scan_limit {
+        for (scanned, entry) in self.data.iter().enumerate() {
+            // Check limit to ensure exactly scan_limit items are scanned
+            if scanned >= scan_limit {
                 limit_reached = true;
                 break;
             }

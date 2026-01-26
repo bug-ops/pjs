@@ -59,6 +59,15 @@ struct CachedSessionStats {
     computed_at_secs: AtomicU64,
 }
 
+impl Clone for CachedSessionStats {
+    fn clone(&self) -> Self {
+        Self {
+            total_frames: AtomicU64::new(self.total_frames.load(AtomicOrdering::Relaxed)),
+            computed_at_secs: AtomicU64::new(self.computed_at_secs.load(AtomicOrdering::Relaxed)),
+        }
+    }
+}
+
 impl CachedSessionStats {
     fn new(total_frames: u64) -> Self {
         Self {
@@ -107,7 +116,8 @@ impl Clone for GatInMemoryStreamRepository {
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
-            stats_cache: DashMap::new(),
+            // Clone the cache to preserve cached statistics
+            stats_cache: self.stats_cache.clone(),
         }
     }
 }
@@ -219,7 +229,7 @@ impl GatInMemoryStreamRepository {
     fn get_cached_total_frames(&self, session: &StreamSession) -> u64 {
         let session_id = session.id();
 
-        // Check if we have a valid cached value (collapsed if per clippy)
+        // Fast path: use cached stats if present and still valid
         if let Some(cached) = self.stats_cache.get(&session_id)
             && cached.is_valid()
         {
@@ -233,13 +243,11 @@ impl GatInMemoryStreamRepository {
             .map(|s| s.stats().total_frames)
             .sum();
 
-        // Update or insert cache entry
-        if let Some(cached) = self.stats_cache.get(&session_id) {
-            cached.update(total_frames);
-        } else {
-            self.stats_cache
-                .insert(session_id, CachedSessionStats::new(total_frames));
-        }
+        // Update or insert cache entry atomically using DashMap's entry API
+        self.stats_cache
+            .entry(session_id)
+            .and_modify(|cached| cached.update(total_frames))
+            .or_insert_with(|| CachedSessionStats::new(total_frames));
 
         total_frames
     }

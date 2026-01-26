@@ -22,26 +22,19 @@ pub const MAX_SCAN_LIMIT: usize = 10_000;
 /// Matches MAX_SCAN_LIMIT for consistency.
 pub const MAX_RESULTS_LIMIT: usize = 10_000;
 
-/// Maximum allowed pagination limit per request.
+/// Re-export domain pagination limits to avoid duplication.
 ///
-/// Prevents single requests from retrieving excessive data.
-/// Aligns with industry standards (GitHub API, Stripe use 100-1000).
-pub const MAX_PAGINATION_LIMIT: usize = 1_000;
-
-/// Maximum allowed pagination offset.
-///
-/// Prevents requests that would scan deep into result sets.
-/// Beyond this, cursor-based pagination is recommended.
-pub const MAX_PAGINATION_OFFSET: usize = 1_000_000;
+/// Infrastructure layer can depend on domain layer per Clean Architecture,
+/// so we re-export these constants instead of duplicating them.
+pub use crate::domain::config::limits::{
+    ALLOWED_SORT_FIELDS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
+};
 
 /// Maximum number of health metrics per session.
 ///
 /// Bounds HashMap allocation in get_session_health to prevent
 /// unbounded growth. Currently 3 metrics; allows room for 13 more.
 pub const MAX_HEALTH_METRICS: usize = 16;
-
-/// Allowed sort field names for pagination validation.
-pub const ALLOWED_SORT_FIELDS: &[&str] = &["created_at", "updated_at", "stream_count"];
 
 #[cfg(test)]
 mod tests {
@@ -60,16 +53,13 @@ mod tests {
     }
 
     #[test]
-    fn test_max_pagination_limit_value() {
+    fn test_domain_pagination_limits_accessible() {
+        // Verify re-exported domain constants are accessible
         assert_eq!(MAX_PAGINATION_LIMIT, 1_000);
         const { assert!(MAX_PAGINATION_LIMIT > 0) };
-        const { assert!(MAX_PAGINATION_LIMIT <= MAX_RESULTS_LIMIT) };
-    }
-
-    #[test]
-    fn test_max_pagination_offset_value() {
         assert_eq!(MAX_PAGINATION_OFFSET, 1_000_000);
         const { assert!(MAX_PAGINATION_OFFSET > 0) };
+        assert!(!ALLOWED_SORT_FIELDS.is_empty());
     }
 
     #[test]
@@ -78,11 +68,4 @@ mod tests {
         const { assert!(MAX_HEALTH_METRICS >= 3) };
     }
 
-    #[test]
-    fn test_allowed_sort_fields() {
-        assert!(ALLOWED_SORT_FIELDS.contains(&"created_at"));
-        assert!(ALLOWED_SORT_FIELDS.contains(&"updated_at"));
-        assert!(ALLOWED_SORT_FIELDS.contains(&"stream_count"));
-        assert!(!ALLOWED_SORT_FIELDS.contains(&"invalid_field"));
-    }
 }
