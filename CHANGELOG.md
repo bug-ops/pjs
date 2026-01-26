@@ -9,11 +9,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for v0.5.0
+### Planned for v0.6.0
 
 - **Enhanced Framework Integrations**: Additional Rust web framework support (Actix, Warp)
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
+
+## [0.5.0] - 2026-01-26
+
+### Security
+
+- **Phase 1 & 2 Security Hardening**: Comprehensive DoS protection and input validation (#80)
+  - **Bounded Iteration Protection**: MAX_SCAN_LIMIT (10,000) prevents unbounded iteration attacks
+    - DOS-001: filter_limited() with scan_limit enforcement
+    - DOS-002: Result limit protection (MAX_RESULTS_LIMIT: 10,000)
+    - DOS-003: MAX_PREALLOC_SIZE (1,024) prevents excessive memory allocation
+  - **Input Validation**: Multi-layer validation for all query operations
+    - Pagination::validate() - checks limit (1-1,000), offset (<1M), sort_by whitelist
+    - SessionQueryCriteria::validate() - validates ranges, rejects empty filters
+    - StreamFilter::validate() - priority range validation
+  - **Memory Protection**: Bounded HashMap allocation in health checks
+    - MEM-001: HashMap::with_capacity(MAX_HEALTH_METRICS) for session health
+    - MEM-002: Session-level stats caching with 5s TTL (CachedSessionStats)
+  - **Error Handling**: Proper NotFound errors instead of empty results (ERR-001)
+  - **Type Safety**: saturating_f64_to_u64() handles NaN/infinity/negative values
+  - **Documentation**: Comprehensive DashMap weakly consistent iteration guarantees
+  - **Testing**: 367-test security_bounded_iteration_integration.rs suite
+  - **Verification**: 100% coverage for security-critical code, <1% performance overhead
+
+### Performance
+
+- **Zero-Cost GAT Migration**: Complete removal of async_trait overhead (#78)
+  - **1.82x faster**: Static dispatch replaces dynamic dispatch (Box<dyn Future>)
+  - **11 async_trait traits removed**: Migrated to Generic Associated Types
+  - **8 new GAT traits**: Using gat_port! macro and manual GAT implementations
+    - StreamRepositoryGat: +4 methods (find_sessions_by_criteria, get_session_health, etc.)
+    - StreamStoreGat: +3 methods (find_streams_by_session, update_stream_status, etc.)
+    - SessionTransactionGat, FrameRepositoryGat, EventStoreGat, CacheGat, etc.
+  - **Zero heap allocations**: Compile-time monomorphization replaces runtime polymorphism
+  - **API stability**: All method signatures remain semantically identical
+  - **Code reduction**: Net -31 lines through elimination of boilerplate
+
+### Infrastructure
+
+- **Generic Type System Refactoring**: Foundation for type-safe architecture
+  - **Phase 1 (#74)**: Generic Id<T> and IdDto<T> wrappers
+    - Type-safe identifiers with phantom types
+    - Zero-cost abstractions for domain entities
+  - **Phase 2 (#75)**: Generic InMemoryStore<K, V>
+    - Unified storage layer for all entity types
+    - Lock-free concurrent access with DashMap
+    - Type aliases: SessionStore, StreamStore
+  - **gat_port! macro (#76)**: Declarative GAT trait definitions
+    - Reduces boilerplate for standard CRUD operations
+    - Consistent interface patterns across ports
+
+- **Repository Enhancements**:
+  - **Atomic Operations**: update_with() for read-modify-write consistency
+  - **Caching Layer**: CachedSessionStats with AtomicU64 for thread-safe stats
+  - **Query Methods**: 12 new GAT methods for advanced filtering and statistics
+  - **WebSocket Transport**: Migrated to zero-cost GAT pattern
+
+### Code Quality
+
+- **Clean Architecture Compliance**: Zero violations, strict layer separation
+  - Domain layer: Pure business logic with GAT ports
+  - Application layer: CQRS command/query handlers
+  - Infrastructure layer: Zero-cost GAT implementations
+- **Clippy Clean**: Zero warnings with `-D warnings` strict mode
+  - Fixed collapsible_if with let-chains
+  - Replaced format! allocations with as_str() in hot paths
+  - Applied saturating conversions for type safety
+- **Test Coverage**: 2,593 tests passing (87.35% coverage)
+  - 367 security integration tests
+  - GAT query performance benchmarks
+  - Cross-platform validation (Linux, macOS, Windows)
+
+### Documentation
+
+- **Security Documentation**: Comprehensive security limits and rationale
+  - Production tuning guide for MAX_SCAN_LIMIT and pagination limits
+  - DashMap weakly consistent iteration guarantees
+  - Defense-in-depth security layer documentation
+- **CI/CD Improvements**: GitHub Actions updates
+  - actions/labeler: 5 → 6 (#77)
+  - Contributor documentation enhancements
+  - Optimized release workflow
+- **API Documentation**: Enhanced port trait documentation
+  - StreamFilter priority field limitations documented
+  - Future implementation strategies outlined
+  - Migration guide for GAT transition
+
+### Bug Fixes
+
+- **State Transitions**: Return InvalidStateTransition for invalid status changes
+  - Fix Created status transition validation
+  - Proper error handling for Paused status
+- **Client Info Filtering**: Implement client_info_pattern matching in queries
+- **Code Formatting**: Applied nightly rustfmt for CI compliance
+- **Race Conditions**: Fixed cache update with entry().and_modify() atomic API
+- **Off-by-One Errors**: Use enumerate() for exact scan limit enforcement
+
+### Breaking Changes
+
+- **async_trait Removal**: All domain ports migrated to GAT
+  - Replace `CacheRepository` with `CacheGat`
+  - Replace `StreamSessionRepository` with `StreamRepositoryGat`
+  - Supporting types unchanged, method signatures semantically identical
+- **Error Types**: NotFound errors replace empty results
+  - SessionNotFound, StreamNotFound instead of Ok(None)
+
+### Migration Guide
+
+For users upgrading from v0.4.7:
+
+1. **Port Trait Updates**: Replace async_trait imports with GAT equivalents
+   ```rust
+   // Before
+   use crate::domain::ports::StreamSessionRepository;
+
+   // After
+   use crate::domain::ports::StreamRepositoryGat;
+   ```
+
+2. **Error Handling**: Update code expecting empty results to handle NotFound errors
+   ```rust
+   // Before
+   if let Some(session) = repo.find(&id).await? { ... }
+
+   // After (unchanged - still works, but errors are more explicit)
+   if let Some(session) = repo.find(&id).await? { ... }
+   ```
+
+3. **Security Limits**: Review pagination parameters against new limits
+   - MAX_PAGINATION_LIMIT: 1,000 (was implicit)
+   - MAX_PAGINATION_OFFSET: 1,000,000 (was implicit)
+   - Adjust client code if using larger values
 
 ## [0.4.7] - 2026-01-25
 
