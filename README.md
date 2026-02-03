@@ -231,7 +231,6 @@ cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 | `compression` | Schema-based compression | No |
 | `http-server` | Axum HTTP server | No |
 | `websocket-server` | WebSocket streaming | No |
-| `prometheus-metrics` | Prometheus integration | No |
 | `jemalloc` | Use jemalloc allocator | No |
 | `mimalloc` | Use mimalloc allocator | No |
 

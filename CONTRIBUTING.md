@@ -414,7 +414,6 @@ PJS uses feature flags to minimize compile times and binary size. Be mindful whe
 - `websocket-client` - WebSocket client
 - `websocket-server` - WebSocket server
 - `http-client` - HTTP event publishing
-- `prometheus-metrics` - Prometheus integration
 
 ### Memory Allocators (Mutually Exclusive)
 - `jemalloc` - Use jemalloc allocator

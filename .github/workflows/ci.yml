@@ -69,11 +69,11 @@ jobs:
       matrix:
         include:
           - allocator: system
-            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics"
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server"
           - allocator: jemalloc
-            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics,jemalloc"
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,jemalloc"
           - allocator: mimalloc
-            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,prometheus-metrics,mimalloc"
+            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,mimalloc"
 
     steps:
       - uses: actions/checkout@v6
