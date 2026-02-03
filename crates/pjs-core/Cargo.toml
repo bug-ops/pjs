@@ -84,7 +84,6 @@ schema-validation = []
 # Infrastructure features
 http-client = ["dep:reqwest"]
 http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:futures"]
-prometheus-metrics = ["dep:prometheus"]
 websocket-client = ["dep:tokio-tungstenite", "dep:url"]
 websocket-server = ["http-server"]
 
