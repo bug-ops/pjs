@@ -333,7 +333,7 @@ jobs:
 
 
       - name: Upload WASM build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-build-${{ matrix.target }}
           path: crates/pjs-wasm/pkg-${{ matrix.target }}/
@@ -387,7 +387,7 @@ jobs:
           cat bundle-report.md
 
       - name: Upload bundle size report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-size-report
           path: bundle-report.md
@@ -489,7 +489,7 @@ jobs:
           grep -q "export function version" wasm-pkg/pjs_wasm.d.ts || (echo "Missing version function" && exit 1)
 
       - name: Upload validated package
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: validated-wasm-package
           path: wasm-pkg/
