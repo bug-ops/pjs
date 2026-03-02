@@ -283,23 +283,17 @@ impl PriorityService {
 
         // Adjust based on value characteristics
         match value {
-            JsonValue::String(s) => {
-                if s.len() < 50 {
-                    // Short strings are likely important labels
-                    priority = priority.increase_by(5);
-                }
+            JsonValue::String(s) if s.len() < 50 => {
+                // Short strings are likely important labels
+                priority = priority.increase_by(5);
             }
-            JsonValue::Array(arr) => {
-                if arr.len() > 10 {
-                    // Large arrays are less critical for initial display
-                    priority = priority.decrease_by(15);
-                }
+            JsonValue::Array(arr) if arr.len() > 10 => {
+                // Large arrays are less critical for initial display
+                priority = priority.decrease_by(15);
             }
-            JsonValue::Object(obj) => {
-                if obj.len() > 10 {
-                    // Complex objects are less critical for initial display
-                    priority = priority.decrease_by(10);
-                }
+            JsonValue::Object(obj) if obj.len() > 10 => {
+                // Complex objects are less critical for initial display
+                priority = priority.decrease_by(10);
             }
             _ => {}
         }
