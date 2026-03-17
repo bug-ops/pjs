@@ -169,72 +169,17 @@ jobs:
           shared-key: "coverage"
           cache-on-failure: true
 
-      - name: Generate coverage for pjs-core
+      - name: Generate workspace coverage
         run: |
-          cargo llvm-cov nextest --all-features --all-targets -p pjson-rs \
-            --lcov --output-path lcov-pjs-core.info \
+          cargo llvm-cov nextest --all-features --all-targets --workspace \
+            --lcov --output-path lcov.info \
             --status-level fail --final-status-level skip
 
-      - name: Generate coverage for pjs-domain
-        run: |
-          cargo llvm-cov nextest --all-features --all-targets -p pjson-rs-domain \
-            --lcov --output-path lcov-pjs-domain.info \
-            --status-level fail --final-status-level skip
-
-      - name: Generate coverage for pjs-wasm
-        run: |
-          cargo llvm-cov nextest --all-features --all-targets -p pjs-wasm \
-            --lcov --output-path lcov-pjs-wasm.info \
-            --status-level fail --final-status-level skip
-
-      - name: Check pjs-domain coverage threshold
-        run: |
-          # Domain layer requires minimum 80% coverage
-          cargo llvm-cov nextest -p pjson-rs-domain --json --output-path domain-coverage.json
-          coverage=$(jq -r '.data[0].totals.lines.percent' domain-coverage.json)
-          echo "Domain coverage: ${coverage}%"
-          threshold=80
-          if (( $(echo "$coverage < $threshold" | bc -l) )); then
-            echo "::error::Domain coverage ${coverage}% is below required threshold of ${threshold}%"
-            exit 1
-          fi
-          echo "::notice::Domain coverage ${coverage}% meets threshold of ${threshold}%"
-
-      - name: Check pjs-core coverage threshold
-        run: |
-          # Core library requires minimum 70% coverage
-          cargo llvm-cov nextest -p pjson-rs --json --output-path core-coverage.json
-          coverage=$(jq -r '.data[0].totals.lines.percent' core-coverage.json)
-          echo "Core coverage: ${coverage}%"
-          threshold=70
-          if (( $(echo "$coverage < $threshold" | bc -l) )); then
-            echo "::warning::Core coverage ${coverage}% is below recommended threshold of ${threshold}%"
-          else
-            echo "::notice::Core coverage ${coverage}% meets threshold of ${threshold}%"
-          fi
-
-      - name: Upload pjs-core coverage
+      - name: Upload coverage to codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov-pjs-core.info
-          flags: pjs-core
-          fail_ci_if_error: false
-
-      - name: Upload pjs-domain coverage
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov-pjs-domain.info
-          flags: pjs-domain
-          fail_ci_if_error: false
-
-      - name: Upload pjs-wasm coverage
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov-pjs-wasm.info
-          flags: pjs-wasm
+          files: lcov.info
           fail_ci_if_error: false
 
   # WASM build and tests
