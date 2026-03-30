@@ -176,7 +176,7 @@ jobs:
             --status-level fail --final-status-level skip
 
       - name: Upload coverage to codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
