@@ -164,7 +164,12 @@ async fn test_adaptive_frame_stream_with_compression() {
     let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
-    assert!(collected[0].is_ok());
+    // Gzip output is binary; the pipeline correctly returns Err rather than
+    // silently corrupting bytes via from_utf8_lossy (fix for #214).
+    assert!(
+        collected[0].is_err(),
+        "compression produces binary gzip — pipeline must return Err, not corrupt via lossy UTF-8"
+    );
 }
 
 #[tokio::test]
@@ -504,5 +509,10 @@ async fn test_adaptive_stream_builder_pattern() {
     let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
-    assert!(collected[0].is_ok());
+    // Gzip output is binary; the pipeline correctly rejects it with Err rather
+    // than silently corrupting bytes via from_utf8_lossy (fix for #214).
+    assert!(
+        collected[0].is_err(),
+        "compression produces binary gzip — pipeline must return Err, not corrupt via lossy UTF-8"
+    );
 }

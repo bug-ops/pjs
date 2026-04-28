@@ -109,7 +109,9 @@ fn maybe_compress_owned(s: String, enabled: bool) -> Result<String, StreamError>
         let compressed = compressor
             .compress(s.as_bytes())
             .map_err(|e| StreamError::Io(e.to_string()))?;
-        return Ok(String::from_utf8_lossy(&compressed.data).into_owned());
+        // Gzip output is binary; reject rather than silently corrupt via lossy conversion.
+        return String::from_utf8(compressed.data)
+            .map_err(|e| StreamError::Io(format!("compressed output is not valid UTF-8: {e}")));
     }
     #[cfg(not(feature = "compression"))]
     let _ = enabled;
@@ -395,11 +397,50 @@ where
         .map_err(|e| StreamError::Io(e.to_string()))
 }
 
+/// Create a streaming response with an explicit `Content-Type`.
+///
+/// Use this when the stream's content-type cannot be derived from [`StreamFormat`]
+/// alone — for example, when a [`BatchFrameStream`] promotes `StreamFormat::Json`
+/// to `application/x-ndjson` via [`BatchFrameStream::content_type()`].
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use pjson_rs::infrastructure::http::streaming::{
+/// #     BatchFrameStream, StreamFormat, create_streaming_response_with_content_type,
+/// # };
+/// # use futures::stream;
+/// # use pjson_rs::domain::entities::Frame;
+/// # async fn example() -> Result<axum::response::Response, Box<dyn std::error::Error>> {
+/// let frames = stream::iter(Vec::<Frame>::new());
+/// let batch = BatchFrameStream::new(frames, StreamFormat::Json, 10);
+/// let content_type = batch.content_type();
+/// let response = create_streaming_response_with_content_type(batch.into_stream(), content_type)?;
+/// # Ok(response)
+/// # }
+/// ```
+pub fn create_streaming_response_with_content_type<S>(
+    stream: S,
+    content_type: &str,
+) -> Result<Response, StreamError>
+where
+    S: Stream<Item = Result<String, StreamError>> + Send + 'static,
+{
+    let body = axum::body::Body::from_stream(stream);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(body)
+        .map_err(|e| StreamError::Io(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::entities::Frame;
     use crate::domain::value_objects::{JsonData, JsonPath, Priority, StreamId};
+    use axum::http::header;
     use futures::StreamExt;
     use futures::stream;
     use pjson_rs_domain::entities::frame::FramePatch;
@@ -723,6 +764,50 @@ mod tests {
                 assert!(r.is_ok());
             }
         });
+    }
+
+    /// `create_streaming_response_with_content_type` sets the exact content-type
+    /// provided by the caller — specifically `application/x-ndjson` when wrapping
+    /// a `BatchFrameStream` that promotes `StreamFormat::Json`.
+    #[tokio::test]
+    async fn test_create_streaming_response_with_content_type_uses_explicit_type() {
+        let frames: Vec<Frame> = (0..2).map(|_| make_skeleton_frame()).collect();
+        let batch = BatchFrameStream::new(stream::iter(frames), StreamFormat::Json, 10);
+        let expected_ct = batch.content_type();
+        assert_eq!(
+            expected_ct, "application/x-ndjson",
+            "BatchFrameStream with Json format must report application/x-ndjson"
+        );
+
+        let response =
+            create_streaming_response_with_content_type(batch.into_stream(), expected_ct)
+                .expect("response must be built");
+        let ct = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .expect("Content-Type header must be present")
+            .to_str()
+            .unwrap();
+        assert_eq!(ct, "application/x-ndjson");
+    }
+
+    /// `create_streaming_response` uses `format.content_type()` — for
+    /// `StreamFormat::Json` this is `application/json`, demonstrating the API gap
+    /// that `create_streaming_response_with_content_type` was introduced to close.
+    #[tokio::test]
+    async fn test_create_streaming_response_uses_format_content_type() {
+        let frames: Vec<Frame> = (0..1).map(|_| make_skeleton_frame()).collect();
+        let batch = BatchFrameStream::new(stream::iter(frames), StreamFormat::Json, 10);
+        let response = create_streaming_response(batch.into_stream(), StreamFormat::Json)
+            .expect("response must be built");
+        let ct = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .expect("Content-Type header must be present")
+            .to_str()
+            .unwrap();
+        // Without the new helper, the caller is stuck with application/json.
+        assert_eq!(ct, "application/json");
     }
 
     /// Priority ordering is preserved when buffer fill is interleaved with

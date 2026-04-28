@@ -20,4 +20,5 @@ pub use axum_extension::{HttpExtensionConfig, PjsExtension};
 pub use middleware::{RateLimitConfig, RateLimitMiddleware};
 pub use streaming::{
     AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamError, StreamFormat,
+    create_streaming_response, create_streaming_response_with_content_type,
 };
