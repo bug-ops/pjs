@@ -105,7 +105,7 @@ jobs:
     name: Build (${{ matrix.os }}, ${{ matrix.allocator }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    needs: [changes, quality]
+    needs: [changes]
     if: |
       needs.changes.outputs.rust == 'true' ||
       github.event_name == 'push' ||
