@@ -17,10 +17,13 @@ build = "build.rs"
 [dependencies]
 axum = { workspace = true, optional = true, features = ["ws"] }
 bitflags = { workspace = true }
+brotli = { workspace = true, optional = true }
+
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 crossbeam = { workspace = true }
 dashmap = { workspace = true }
+flate2 = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 libmimalloc-sys = { workspace = true, optional = true }
 maplit = { workspace = true }
@@ -80,8 +83,8 @@ jemalloc = [
 mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 
 # Optional features
-compression = []
-schema-validation = ["dep:regex"]
+compression = ["dep:brotli", "dep:flate2"]
+schema-validation = []
 
 # Infrastructure features
 http-client = ["dep:reqwest"]

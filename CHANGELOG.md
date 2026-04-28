@@ -9,9 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ByteCodec` enum (`None | Deflate | Gzip | Brotli`) for byte-level codec selection in `SecureCompressor` (#114)
+- `CompressionQuality` enum (`Fast | Balanced | Best`) for tuning codec compression levels (#114)
+- Real deflate, gzip, and brotli compression/decompression in `SecureCompressor` via `flate2` (pure Rust) and `brotli` crates, gated on `feature = "compression"` (#114)
+- `CompressionBombConfig::max_compressed_size` field to independently limit compressed input size before decoding (#114)
+- `Error::CompressionError(String)` variant for codec-level failures, distinct from `SecurityError` (#114)
+
 ### Changed
 
 - SIMD feature flags (`simd-auto`, `simd-avx2`, `simd-avx512`, `simd-sse42`, `simd-neon`) now activate sonic-rs SIMD codegen via `.cargo/config.toml` (`-C target-cpu=native` on x86_64/aarch64); `crates/pjs-core/build.rs` emits `pjs_simd_*` cfg gates and `cargo::warning` diagnostics when a SIMD feature is enabled but the required CPU target features are not exposed to rustc (#125)
+- `SecureCompressor::new` and `with_default_security` now accept `ByteCodec` instead of `CompressionStrategy`; `CompressionStrategy` is Layer A (JSON-aware) and is unchanged (#114)
+- `SecureCompressedData` gains a `codec: ByteCodec` field to identify which decoder to use on decompression (#114)
+- `CompressionBombConfig::validate_pre_decompression` now checks `max_compressed_size` (not `max_decompressed_size`); the decompressed output is still monitored by `CompressionBombProtector` during streaming (#114)
+- `CompressionBombConfig::max_ratio` default raised from 100.0 to 300.0 to accommodate legitimate brotli ratios on repetitive JSON (200x+ is normal) (#114)
+- `CompressionBombConfig::high_throughput()` preset `max_ratio` raised to 1000.0 (#114)
 
 ### Removed
 

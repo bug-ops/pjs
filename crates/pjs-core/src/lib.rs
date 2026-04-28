@@ -80,8 +80,8 @@ pub use config::{
 pub use compression::{
     CompressedData, CompressionConfig, CompressionStrategy, SchemaAnalyzer, SchemaCompressor,
     secure::{
-        DecompressionContextStats, SecureCompressedData, SecureCompressor,
-        SecureDecompressionContext,
+        ByteCodec, CompressionQuality, DecompressionContextStats, SecureCompressedData,
+        SecureCompressor, SecureDecompressionContext,
     },
 };
 
