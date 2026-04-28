@@ -323,8 +323,8 @@ impl WebSocketTransport for AxumWebSocketTransport {
     fn close_stream(&self, session_id: &str) -> Self::CloseStreamFuture<'_> {
         let session_id = session_id.to_string();
         async move {
-            // TODO: Implement session cleanup
             info!("Closing stream session: {}", session_id);
+            self.controller.remove_session(&session_id).await;
             Ok(())
         }
     }

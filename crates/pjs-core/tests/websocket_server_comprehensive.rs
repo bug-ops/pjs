@@ -12,8 +12,12 @@
 
 #![cfg(feature = "http-server")]
 
-use pjson_rs::infrastructure::websocket::{
-    AdaptiveStreamController, AxumWebSocketTransport, StreamOptions, WebSocketTransport, WsMessage,
+use pjson_rs::{
+    Error as PjsError,
+    infrastructure::websocket::{
+        AdaptiveStreamController, AxumWebSocketTransport, StreamOptions, WebSocketTransport,
+        WsMessage,
+    },
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -192,6 +196,29 @@ async fn test_websocket_transport_close_stream() {
     let result = transport.close_stream("test-session-close").await;
 
     assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_close_stream_removes_session_from_controller() {
+    let transport = AxumWebSocketTransport::new();
+    let controller = transport.controller();
+
+    let session_id = controller
+        .create_session(json!({"k": "v"}), StreamOptions::default())
+        .await
+        .unwrap();
+
+    transport.close_stream(&session_id).await.unwrap();
+
+    // Session must be gone — subsequent operations must return InvalidSession.
+    let err = controller
+        .handle_frame_ack(&session_id, 0, 10)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, PjsError::InvalidSession(_)),
+        "expected InvalidSession, got {err:?}"
+    );
 }
 
 // ============================================================================
@@ -565,8 +592,14 @@ async fn test_full_websocket_lifecycle() {
         .await
         .unwrap();
 
-    // 4. Close stream
+    // 4. Close stream — session must be removed from the controller.
     transport.close_stream(&session_id).await.unwrap();
+
+    let err = controller
+        .handle_frame_ack(&session_id, 0, 0)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PjsError::InvalidSession(_)));
 }
 
 #[tokio::test]
