@@ -15,10 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed inverted layer ordering diagram in `create_pjs_router_with_rate_limit_and_auth` doc comment; the diagram now correctly shows `rate_limit` as the outermost layer wrapping both public and protected sub-routers, with `auth` as an inner layer on protected routes only (closes #204)
 - Extracted `public_routes`, `protected_routes`, and `apply_common_layers` helpers in `axum_adapter.rs` to eliminate route table duplication across router factory functions
 - Added `ApiKeyAuthLayer` and related auth infrastructure behind `http-server` feature flag; `http-auth-jwt` feature gate added for optional JWT support
+- **BREAKING** `JsonData::float(f64)` now returns `DomainResult<Self>` and rejects NaN and infinite values per RFC 8259 §6; the `From<f64> for JsonData` impl has been removed — callers must use `JsonData::float(value)?` to propagate the error. Closes #176.
 
 ### Added
 
 - 24 integration tests in `tests/http_middleware_tests.rs` covering `ApiKeyAuthLayer` (auth pass/fail, OPTIONS bypass, multi-key), `AuthConfigError` construction validation, `RateLimitMiddleware` (budget enforcement, 429 with `Retry-After`), and `create_pjs_router` construction (closes #197)
+- Serde round-trip tests for `Frame` covering all four frame types, all four patch operations, metadata, unicode, large payloads, timestamp precision, priority preservation, stream-ID preservation, and JSON field-name stability (`crates/pjs-domain/tests/frame_comprehensive.rs`)
+- NaN/Infinity rejection tests for `JsonData::float` and round-trip serialization tests for finite float values (`crates/pjs-domain/tests/json_data_comprehensive.rs`)
+
+### Fixed
+
+- `axum_extension.rs` SSE handler no longer silently drops frames containing non-finite floats via `unwrap_or_default()`; serialization is now asserted infallible (invariant guaranteed by `JsonData::float` validation at construction). Closes #176.
 
 - `GetActiveSessionsQuery` now routes through `find_sessions_by_criteria` with a bounded `Pagination` instead of the unbounded `find_active_sessions()` — eliminates the load-all-then-paginate allocation at large session counts (closes #136)
 - `SearchSessionsQuery` enforces a maximum page size of 100 and correctly reports `has_more` in the response

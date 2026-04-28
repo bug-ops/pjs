@@ -47,27 +47,21 @@ fn test_json_data_integer_creation() {
 
 #[test]
 fn test_json_data_float_creation() {
-    let zero = JsonData::float(0.0);
-    let positive = JsonData::float(3.5);
-    let negative = JsonData::float(-2.5);
-    let infinity = JsonData::float(f64::INFINITY);
-    let neg_infinity = JsonData::float(f64::NEG_INFINITY);
+    let zero = JsonData::float(0.0).unwrap();
+    let positive = JsonData::float(3.5).unwrap();
+    let negative = JsonData::float(-2.5).unwrap();
 
     assert_eq!(zero, JsonData::Float(0.0));
     assert_eq!(positive, JsonData::Float(3.5));
     assert_eq!(negative, JsonData::Float(-2.5));
-    assert_eq!(infinity, JsonData::Float(f64::INFINITY));
-    assert_eq!(neg_infinity, JsonData::Float(f64::NEG_INFINITY));
+
+    assert!(JsonData::float(f64::INFINITY).is_err());
+    assert!(JsonData::float(f64::NEG_INFINITY).is_err());
 }
 
 #[test]
 fn test_json_data_float_nan() {
-    let nan = JsonData::float(f64::NAN);
-    if let JsonData::Float(f) = nan {
-        assert!(f.is_nan());
-    } else {
-        panic!("Expected Float variant");
-    }
+    assert!(JsonData::float(f64::NAN).is_err());
 }
 
 #[test]
@@ -579,11 +573,8 @@ fn test_json_data_from_i64() {
     assert_eq!(data, JsonData::Integer(-100));
 }
 
-#[test]
-fn test_json_data_from_f64() {
-    let data: JsonData = 3.5f64.into();
-    assert_eq!(data, JsonData::Float(3.5));
-}
+// From<f64> for JsonData has been removed because it cannot propagate the
+// validation error for NaN/Infinity. Use JsonData::float(value)? instead.
 
 #[test]
 fn test_json_data_from_string() {
@@ -669,20 +660,13 @@ fn test_json_data_from_serde_json_object() {
 
 #[test]
 fn test_json_data_serialize_primitives() {
-    let null = JsonData::Null;
-    let _ = serde_json::to_string(&null);
+    assert!(serde_json::to_string(&JsonData::Null).is_ok());
+    assert!(serde_json::to_string(&JsonData::Bool(true)).is_ok());
+    assert!(serde_json::to_string(&JsonData::Integer(42)).is_ok());
+    assert!(serde_json::to_string(&JsonData::String("test".to_string())).is_ok());
 
-    let bool_val = JsonData::Bool(true);
-    let _ = serde_json::to_string(&bool_val);
-
-    let int_val = JsonData::Integer(42);
-    let _ = serde_json::to_string(&int_val);
-
-    let float_val = JsonData::Float(3.5);
-    let _ = serde_json::to_string(&float_val);
-
-    let str_val = JsonData::String("test".to_string());
-    let _ = serde_json::to_string(&str_val);
+    let float_val = JsonData::float(3.5).unwrap();
+    assert!(serde_json::to_string(&float_val).is_ok());
 }
 
 #[test]
@@ -738,4 +722,84 @@ fn test_json_data_equality() {
     assert_ne!(JsonData::Bool(true), JsonData::Bool(false));
     assert_eq!(JsonData::Integer(42), JsonData::Integer(42));
     assert_ne!(JsonData::Integer(42), JsonData::Integer(43));
+}
+
+// ============================================================================
+// Float Validation Tests
+// ============================================================================
+
+#[test]
+fn test_json_data_float_rejects_nan() {
+    assert!(JsonData::float(f64::NAN).is_err());
+}
+
+#[test]
+fn test_json_data_float_rejects_positive_infinity() {
+    assert!(JsonData::float(f64::INFINITY).is_err());
+}
+
+#[test]
+fn test_json_data_float_rejects_negative_infinity() {
+    assert!(JsonData::float(f64::NEG_INFINITY).is_err());
+}
+
+#[test]
+fn test_json_data_float_accepts_finite_values() {
+    assert!(JsonData::float(0.0).is_ok());
+    assert!(JsonData::float(-0.0).is_ok());
+    assert!(JsonData::float(f64::MIN).is_ok());
+    assert!(JsonData::float(f64::MAX).is_ok());
+    assert!(JsonData::float(f64::EPSILON).is_ok());
+    assert!(JsonData::float(1e-308).is_ok());
+    // subnormal
+    assert!(JsonData::float(5e-324).is_ok());
+}
+
+#[test]
+fn test_json_data_serialize_finite_floats_succeeds() {
+    let val = JsonData::float(2.5).unwrap();
+    let serialized = serde_json::to_string(&val).unwrap();
+    // JsonData serializes with the enum variant tag; assert it round-trips correctly
+    let roundtripped: JsonData = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(roundtripped, val);
+}
+
+#[test]
+fn test_json_data_serialize_array_with_floats_succeeds() {
+    let arr = JsonData::Array(vec![
+        JsonData::float(1.1).unwrap(),
+        JsonData::float(2.2).unwrap(),
+        JsonData::float(3.3).unwrap(),
+        JsonData::float(0.0).unwrap(),
+        JsonData::float(-1.5).unwrap(),
+    ]);
+    assert!(serde_json::to_string(&arr).is_ok());
+}
+
+#[test]
+fn test_json_data_roundtrip_all_primitives() {
+    let values = vec![
+        JsonData::Null,
+        JsonData::Bool(true),
+        JsonData::Bool(false),
+        JsonData::Integer(42),
+        JsonData::Integer(i64::MIN),
+        JsonData::Integer(i64::MAX),
+        JsonData::float(3.5).unwrap(),
+        JsonData::float(0.0).unwrap(),
+        JsonData::float(-2.5).unwrap(),
+        JsonData::String("hello".to_string()),
+        JsonData::Array(vec![JsonData::Integer(1), JsonData::Integer(2)]),
+        JsonData::Object({
+            let mut m = HashMap::new();
+            m.insert("k".to_string(), JsonData::Bool(false));
+            m
+        }),
+    ];
+
+    for original in values {
+        let json = serde_json::to_string(&original).unwrap();
+        let roundtripped: JsonData = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, roundtripped);
+    }
 }
