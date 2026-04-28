@@ -116,7 +116,7 @@ async fn test_adaptive_frame_stream_json_format() {
     let frame_stream = futures::stream::iter(frames);
     let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json);
 
-    let collected: Vec<_> = adaptive.collect().await;
+    let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 2);
     for result in collected {
@@ -131,7 +131,7 @@ async fn test_adaptive_frame_stream_ndjson_format() {
     let frame_stream = futures::stream::iter(frames);
     let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::NdJson);
 
-    let collected: Vec<_> = adaptive.collect().await;
+    let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
     let formatted = collected[0].as_ref().unwrap();
@@ -145,7 +145,7 @@ async fn test_adaptive_frame_stream_sse_format() {
     let frame_stream = futures::stream::iter(frames);
     let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::ServerSentEvents);
 
-    let collected: Vec<_> = adaptive.collect().await;
+    let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
     let formatted = collected[0].as_ref().unwrap();
@@ -161,7 +161,7 @@ async fn test_adaptive_frame_stream_with_compression() {
     let adaptive =
         AdaptiveFrameStream::new(frame_stream, StreamFormat::Json).with_compression(true);
 
-    let collected: Vec<_> = adaptive.collect().await;
+    let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
     assert!(collected[0].is_ok());
@@ -174,7 +174,7 @@ async fn test_adaptive_frame_stream_with_buffer_size() {
     let frame_stream = futures::stream::iter(frames);
     let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json).with_buffer_size(20);
 
-    let collected: Vec<_> = adaptive.collect().await;
+    let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
 }
@@ -185,7 +185,7 @@ async fn test_adaptive_frame_stream_empty() {
     let frame_stream = futures::stream::iter(frames);
     let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json);
 
-    let collected: Vec<_> = adaptive.collect().await;
+    let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 0);
 }
@@ -205,7 +205,7 @@ async fn test_batch_frame_stream_single_batch() {
     let frame_stream = futures::stream::iter(frames);
     let batch = BatchFrameStream::new(frame_stream, StreamFormat::Json, 5);
 
-    let collected: Vec<_> = batch.collect().await;
+    let collected: Vec<_> = batch.into_stream().collect().await;
 
     // All frames in one batch since batch_size=5 and we have 3 frames
     assert_eq!(collected.len(), 1);
@@ -225,7 +225,7 @@ async fn test_batch_frame_stream_multiple_batches() {
     let frame_stream = futures::stream::iter(frames);
     let batch = BatchFrameStream::new(frame_stream, StreamFormat::Json, 2);
 
-    let collected: Vec<_> = batch.collect().await;
+    let collected: Vec<_> = batch.into_stream().collect().await;
 
     // Should have 3 batches: [2, 2, 1]
     assert_eq!(collected.len(), 3);
@@ -244,7 +244,7 @@ async fn test_batch_frame_stream_ndjson_format() {
     let frame_stream = futures::stream::iter(frames);
     let batch = BatchFrameStream::new(frame_stream, StreamFormat::NdJson, 10);
 
-    let collected: Vec<_> = batch.collect().await;
+    let collected: Vec<_> = batch.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
     let result = collected[0].as_ref().unwrap();
@@ -262,7 +262,7 @@ async fn test_batch_frame_stream_sse_format() {
     let frame_stream = futures::stream::iter(frames);
     let batch = BatchFrameStream::new(frame_stream, StreamFormat::ServerSentEvents, 10);
 
-    let collected: Vec<_> = batch.collect().await;
+    let collected: Vec<_> = batch.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
     let result = collected[0].as_ref().unwrap();
@@ -276,7 +276,7 @@ async fn test_batch_frame_stream_empty() {
     let frame_stream = futures::stream::iter(frames);
     let batch = BatchFrameStream::new(frame_stream, StreamFormat::Json, 5);
 
-    let collected: Vec<_> = batch.collect().await;
+    let collected: Vec<_> = batch.into_stream().collect().await;
 
     assert_eq!(collected.len(), 0);
 }
@@ -297,7 +297,7 @@ async fn test_priority_frame_stream_orders_by_priority() {
     let frame_stream = futures::stream::iter(frames);
     let priority = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 10);
 
-    let collected: Vec<_> = priority.collect().await;
+    let collected: Vec<_> = priority.into_stream().collect().await;
 
     // Should get all frames
     assert_eq!(collected.len(), 4);
@@ -318,7 +318,7 @@ async fn test_priority_frame_stream_small_buffer() {
     // Small buffer to test partial priority ordering
     let priority = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 2);
 
-    let collected: Vec<_> = priority.collect().await;
+    let collected: Vec<_> = priority.into_stream().collect().await;
 
     assert_eq!(collected.len(), 3);
 }
@@ -329,7 +329,7 @@ async fn test_priority_frame_stream_empty() {
     let frame_stream = futures::stream::iter(frames);
     let priority = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 5);
 
-    let collected: Vec<_> = priority.collect().await;
+    let collected: Vec<_> = priority.into_stream().collect().await;
 
     assert_eq!(collected.len(), 0);
 }
@@ -341,7 +341,7 @@ async fn test_priority_frame_stream_sse_format() {
     let frame_stream = futures::stream::iter(frames);
     let priority = PriorityFrameStream::new(frame_stream, StreamFormat::ServerSentEvents, 5);
 
-    let collected: Vec<_> = priority.collect().await;
+    let collected: Vec<_> = priority.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
     let result = collected[0].as_ref().unwrap();
@@ -479,7 +479,7 @@ async fn test_full_streaming_pipeline() {
     let frame_stream = futures::stream::iter(frames);
     let priority = PriorityFrameStream::new(frame_stream, StreamFormat::ServerSentEvents, 10);
 
-    let collected: Vec<_> = priority.collect().await;
+    let collected: Vec<_> = priority.into_stream().collect().await;
 
     assert_eq!(collected.len(), 3);
 
@@ -501,7 +501,7 @@ async fn test_adaptive_stream_builder_pattern() {
         .with_compression(true)
         .with_buffer_size(100);
 
-    let collected: Vec<_> = adaptive.collect().await;
+    let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
     assert!(collected[0].is_ok());
