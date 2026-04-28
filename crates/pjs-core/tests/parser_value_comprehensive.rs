@@ -163,8 +163,7 @@ mod lazy_array_tests {
         let scan_result = ScanResult::new();
         let array = LazyArray::from_scan(raw, scan_result);
 
-        // With placeholder implementation, boundaries is empty
-        assert_eq!(array.len(), 0);
+        assert_eq!(array.len(), 3);
     }
 
     #[test]
@@ -173,7 +172,7 @@ mod lazy_array_tests {
         let scan_result = ScanResult::new();
         let array = LazyArray::from_scan(raw, scan_result);
 
-        assert!(array.get(0).is_none());
+        assert!(array.get(0).is_some());
         assert!(array.get(10).is_none());
     }
 
@@ -183,7 +182,7 @@ mod lazy_array_tests {
         let scan_result = ScanResult::new();
         let array = LazyArray::from_scan(raw, scan_result);
 
-        assert!(array.get_parsed(0).is_none());
+        assert!(array.get_parsed(0).is_some());
     }
 
     #[test]
@@ -240,8 +239,7 @@ mod lazy_object_tests {
         let scan_result = ScanResult::new();
         let object = LazyObject::from_scan(raw, scan_result);
 
-        // With placeholder implementation, fields is empty
-        assert_eq!(object.len(), 0);
+        assert_eq!(object.len(), 1);
     }
 
     #[test]
@@ -250,7 +248,7 @@ mod lazy_object_tests {
         let scan_result = ScanResult::new();
         let object = LazyObject::from_scan(raw, scan_result);
 
-        assert!(object.get("key").is_none());
+        assert!(object.get("key").is_some());
         assert!(object.get("nonexistent").is_none());
     }
 
@@ -324,7 +322,7 @@ mod lazy_array_iterator_tests {
         let array = LazyArray::from_scan(raw, scan_result);
 
         let elements: Vec<_> = array.iter().collect();
-        assert_eq!(elements.len(), 0); // Empty boundaries in placeholder
+        assert_eq!(elements.len(), 3);
     }
 
     #[test]
@@ -382,7 +380,7 @@ mod json_value_edge_cases {
         let val = JsonValue::Array(lazy_array);
 
         let array = val.as_array().expect("should be array");
-        assert!(array.is_empty()); // Empty boundaries in placeholder
+        assert_eq!(array.len(), 2);
     }
 
     #[test]
@@ -393,7 +391,7 @@ mod json_value_edge_cases {
         let val = JsonValue::Object(lazy_object);
 
         let object = val.as_object().expect("should be object");
-        assert!(object.is_empty()); // Empty fields in placeholder
+        assert_eq!(object.len(), 1);
     }
 }
 
