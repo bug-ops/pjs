@@ -6,9 +6,13 @@
 //! This module implements the Ports and Adapters pattern (Hexagonal Architecture)
 //! by defining abstract interfaces that decouple the domain from infrastructure concerns.
 
+pub mod dictionary_store;
 pub mod gat;
 pub mod repositories;
 pub mod writer;
+
+// Dictionary store port
+pub use dictionary_store::{DictionaryFuture, DictionaryStore, NoopDictionaryStore};
 
 // GAT traits (canonical interfaces)
 pub use gat::*;

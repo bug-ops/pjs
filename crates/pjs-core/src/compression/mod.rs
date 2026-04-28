@@ -5,6 +5,9 @@
 
 pub mod secure;
 
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+pub mod zstd;
+
 use crate::domain::{DomainError, DomainResult};
 use serde_json::{Value as JsonValue, json};
 use std::collections::HashMap;

@@ -31,7 +31,10 @@ use crate::{
     },
     domain::{
         aggregates::stream_session::{SessionConfig, SessionHealth},
-        ports::{EventPublisherGat, StreamRepositoryGat, StreamStoreGat},
+        ports::{
+            DictionaryStore, EventPublisherGat, NoopDictionaryStore, StreamRepositoryGat,
+            StreamStoreGat,
+        },
         value_objects::{Priority, SessionId, StreamId},
     },
     infrastructure::http::middleware::{RateLimitMiddleware, security_middleware},
@@ -128,7 +131,10 @@ fn build_cors_layer(config: &HttpServerConfig) -> Result<CorsLayer, PjsError> {
     Ok(layer)
 }
 
-/// Axum application state with PJS GAT-based handlers
+/// Axum application state with PJS GAT-based handlers.
+///
+/// The `dictionary_store` field is `pub(crate)` so the dictionary handler can
+/// access it without exposing it as a public API.
 pub struct PjsAppState<R, P, S>
 where
     R: StreamRepositoryGat + Send + Sync + 'static,
@@ -139,6 +145,7 @@ where
     session_query_handler: Arc<SessionQueryHandler<R>>,
     stream_query_handler: Arc<StreamQueryHandler<R, S>>,
     system_handler: Arc<SystemQueryHandler<R>>,
+    pub(crate) dictionary_store: Arc<dyn DictionaryStore>,
 }
 
 impl<R, P, S> Clone for PjsAppState<R, P, S>
@@ -153,6 +160,7 @@ where
             session_query_handler: self.session_query_handler.clone(),
             stream_query_handler: self.stream_query_handler.clone(),
             system_handler: self.system_handler.clone(),
+            dictionary_store: self.dictionary_store.clone(),
         }
     }
 }
@@ -163,9 +171,32 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    /// Create a new application state, recording the current instant as the
-    /// process start time for uptime reporting.
+    /// Create a new application state with default [`NoopDictionaryStore`].
+    ///
+    /// The `/pjs/sessions/{id}/dictionary` endpoint will return 404 until
+    /// you upgrade to [`PjsAppState::with_dictionary_store`] with a concrete
+    /// implementation such as [`crate::infrastructure::repositories::InMemoryDictionaryStore`].
+    ///
+    /// Records the current instant as the process start time for uptime reporting.
     pub fn new(repository: Arc<R>, event_publisher: Arc<P>, stream_store: Arc<S>) -> Self {
+        Self::with_dictionary_store(
+            repository,
+            event_publisher,
+            stream_store,
+            Arc::new(NoopDictionaryStore),
+        )
+    }
+
+    /// Create a new application state with a custom [`DictionaryStore`].
+    ///
+    /// Pass `Arc::new(InMemoryDictionaryStore::new(...))` to enable end-to-end
+    /// dictionary training and serving.
+    pub fn with_dictionary_store(
+        repository: Arc<R>,
+        event_publisher: Arc<P>,
+        stream_store: Arc<S>,
+        dictionary_store: Arc<dyn DictionaryStore>,
+    ) -> Self {
         let started_at = Instant::now();
         Self {
             command_handler: Arc::new(SessionCommandHandler::new(
@@ -178,6 +209,7 @@ where
                 stream_store,
             )),
             system_handler: Arc::new(SystemQueryHandler::with_start_time(repository, started_at)),
+            dictionary_store,
         }
     }
 }
@@ -440,7 +472,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    Router::new()
+    let router = Router::new()
         .route("/pjs/sessions", post(create_session::<R, P, S>))
         .route("/pjs/sessions/{session_id}", get(get_session::<R, P, S>))
         .route(
@@ -469,7 +501,15 @@ where
         )
         .route("/pjs/sessions/search", get(search_sessions::<R, P, S>))
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
-        .route("/pjs/stats", get(get_system_stats::<R, P, S>))
+        .route("/pjs/stats", get(get_system_stats::<R, P, S>));
+
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    let router = router.route(
+        "/pjs/sessions/{session_id}/dictionary",
+        get(crate::infrastructure::http::dictionary::get_session_dictionary::<R, P, S>),
+    );
+
+    router
 }
 
 /// Apply the cross-cutting middleware stack shared by all router variants.

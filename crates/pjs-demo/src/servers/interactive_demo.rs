@@ -15,14 +15,15 @@ use pjs_demo::{
     data::{DatasetSize, DatasetType, generate_dataset, generate_metadata},
     utils::{NetworkType, PerfTimer, simulate_network_latency},
 };
-// TODO: Re-enable streaming imports when infrastructure is stable
-// use pjson_rs::{
-//     StreamProcessor, StreamConfig, StreamFrame, Priority,
-//     StreamingCompressor, SchemaCompressor, CompressionStrategy,
-// };
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+use pjson_rs::infrastructure::repositories::InMemoryDictionaryStore;
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+use pjson_rs::security::CompressionBombDetector;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+use std::sync::Arc;
 use tokio::time::sleep;
 use tracing::info;
 
@@ -368,6 +369,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // WebSocket support will be added later
     };
 
+    // Wire the in-memory dictionary store so that the library's
+    // `GET /pjs/sessions/{id}/dictionary` endpoint is reachable end-to-end once
+    // N_TRAIN frame samples have been accumulated for a session.
+    //
+    // Example wiring (not mounted here because this demo uses a custom router):
+    //   let dict_store = Arc::new(InMemoryDictionaryStore::new(
+    //       Arc::new(CompressionBombDetector::default()),
+    //       64 * 1024,
+    //   ));
+    //   let pjs_state = PjsAppState::with_dictionary_store(repo, publisher, store, dict_store);
+    //   let pjs_router = create_pjs_router::<R, P, S>().with_state(pjs_state);
+    //   let app = Router::new().merge(pjs_router).merge(demo_router);
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    let _dict_store = Arc::new(InMemoryDictionaryStore::new(
+        Arc::new(CompressionBombDetector::default()),
+        64 * 1024,
+    ));
+
     // Build router
     let app = Router::new()
         .route("/", get(demo_page))
@@ -388,12 +407,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📱 Web Interface:");
     println!("   http://{}:{}/ - Interactive Demo", args.host, args.port);
     println!();
-    println!("🔗 API Endpoints:");
+    println!("API Endpoints:");
     println!("   GET  /traditional?dataset_type=ecommerce&dataset_size=medium&network_type=wifi");
     println!("   GET  /pjs-streaming?dataset_type=social&dataset_size=large&network_type=4g");
     println!("   GET  /performance?dataset_type=analytics&dataset_size=small&network_type=fiber");
     println!("   GET  /api/info - API documentation");
     println!("   WS   /ws - WebSocket streaming");
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    println!("   GET  /pjs/sessions/{{session_id}}/dictionary - zstd dict (via InMemoryDictionaryStore)");
     println!();
     println!("🎯 Dataset Types: ecommerce, social, analytics, realtime");
     println!("📊 Dataset Sizes: small, medium, large, huge");

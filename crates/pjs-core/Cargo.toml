@@ -63,6 +63,7 @@ tracing = { workspace = true }
 typed-arena = { workspace = true }
 url = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
+zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -92,7 +93,7 @@ simd-sse42 = []
 mimalloc = ["dep:mimalloc"]
 
 # Optional features
-compression = ["dep:brotli", "dep:flate2"]
+compression = ["dep:brotli", "dep:flate2", "dep:zstd"]
 partial-parse = ["dep:jiter"]
 schema-validation = ["dep:regex"]
 
