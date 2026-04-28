@@ -97,11 +97,12 @@ jobs:
       - name: Run clippy (strict mode)
         run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
-  # ── Tier 2a: Rust host tests ─────────────────────────────────────────────
+  # ── Tier 2a: build + archive ─────────────────────────────────────────────
+  # Compiles tests and archives them with nextest --no-run.
   # 3 OS × 2 allocators = 6 parallel jobs (Windows skips mimalloc).
-  # Skipped when only JS files changed.
-  test:
-    name: Test (${{ matrix.os }}, ${{ matrix.allocator }})
+  # Each job uploads a nextest archive artifact consumed by the test job.
+  build:
+    name: Build (${{ matrix.os }}, ${{ matrix.allocator }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     needs: [changes, quality]
@@ -133,18 +134,107 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "test-${{ matrix.os }}-${{ matrix.allocator }}"
+          shared-key: "build-${{ matrix.os }}-${{ matrix.allocator }}"
           cache-on-failure: true
 
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
 
-      - name: Run tests
-        run: cargo nextest run --workspace --features "${{ matrix.features }}" --all-targets --no-fail-fast
+      # Compile tests and produce a self-contained archive.  The archive
+      # bundles test binaries + metadata so the test job can run without
+      # recompiling.
+      - name: Build test archive
+        run: >-
+          cargo nextest run
+          --no-run
+          --workspace
+          --features "${{ matrix.features }}"
+          --lib --bins
+          --archive-file nextest-archive.tar.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-${{ matrix.os }}-${{ matrix.allocator }}
+          path: nextest-archive.tar.zst
+          retention-days: 1
+
+  # ── Tier 2b: partitioned tests ───────────────────────────────────────────
+  # Downloads the archive produced by the build job and runs 4 parallel
+  # partitions per OS/allocator combination.  Each partition is an
+  # independent job — all 20 jobs (4 partitions × 5 build targets) fan out
+  # in parallel.
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.allocator }}, ${{ matrix.partition }}/4)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        allocator: [system, mimalloc]
+        partition: [1, 2, 3, 4]
+        exclude:
+          - os: windows-latest
+            allocator: mimalloc
+
+    steps:
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-${{ matrix.os }}-${{ matrix.allocator }}
+
+      - name: Run test partition ${{ matrix.partition }}/4
+        run: >-
+          cargo nextest run
+          --archive-file nextest-archive.tar.zst
+          --partition count:${{ matrix.partition }}/4
+          --no-fail-fast
+
+  # Doctests cannot be archived; run them separately on each OS.
+  # They depend on the build job for cache warm-up but do not use the archive.
+  doctest:
+    name: Doctests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    needs: [changes, quality]
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Share the cache key with the system-allocator build on the same OS
+          # so the compiler cache is warm when this job runs.
+          shared-key: "build-${{ matrix.os }}-system"
+          save-if: false
+          cache-on-failure: true
 
       - name: Run doctests
-        run: cargo test --workspace --doc --features "${{ matrix.features }}"
+        run: >-
+          cargo test
+          --workspace
+          --doc
+          --features "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server"
 
   # Coverage runs on ubuntu only; does not wait for the cross-platform matrix.
   # Skipped when only JS files changed.
@@ -187,7 +277,7 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
 
-  # ── Tier 2b: WASM library tests ──────────────────────────────────────────
+  # ── Tier 2c: WASM library tests ──────────────────────────────────────────
   # Runs in parallel with the Rust host matrix — does NOT wait for it.
   # Triggered by any Rust change (pjs-core, pjs-domain, pjs-wasm, Cargo files)
   # or explicit dispatch/push.  Skipped on JS-only PRs.
@@ -449,7 +539,9 @@ jobs:
     needs:
       - changes
       - quality
+      - build
       - test
+      - doctest
       - coverage
       - wasm-test
       - wasm-build
@@ -470,7 +562,9 @@ jobs:
             fi
           }
           check quality                   "${{ needs.quality.result }}"
+          check build                     "${{ needs.build.result }}"
           check test                      "${{ needs.test.result }}"
+          check doctest                   "${{ needs.doctest.result }}"
           check coverage                  "${{ needs.coverage.result }}"
           check wasm-test                 "${{ needs.wasm-test.result }}"
           check wasm-build                "${{ needs.wasm-build.result }}"
