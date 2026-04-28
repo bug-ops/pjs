@@ -16,6 +16,8 @@ build = "build.rs"
 
 [dependencies]
 axum = { workspace = true, optional = true, features = ["ws"] }
+metrics = { workspace = true, optional = true }
+metrics-exporter-prometheus = { workspace = true, optional = true }
 bitflags = { workspace = true }
 brotli = { workspace = true, optional = true }
 
@@ -81,6 +83,7 @@ schema-validation = ["dep:regex"]
 # Infrastructure features
 http-client = ["dep:reqwest"]
 http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:futures"]
+metrics = ["http-server", "dep:metrics", "dep:metrics-exporter-prometheus"]
 websocket-client = ["dep:tokio-tungstenite", "dep:url"]
 websocket-server = ["http-server"]
 

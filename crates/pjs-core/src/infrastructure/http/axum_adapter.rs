@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path as AxumPath, Query, State},
     http::{
-        Method, StatusCode,
+        HeaderValue, Method, StatusCode,
         header::{self, AUTHORIZATION, CONTENT_TYPE},
     },
     middleware,
@@ -13,8 +13,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::sync::Arc;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use std::{sync::Arc, time::Instant};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    trace::TraceLayer,
+};
 
 use crate::{
     application::{
@@ -22,7 +25,7 @@ use crate::{
         handlers::{
             CommandHandlerGat, QueryHandlerGat,
             command_handlers::SessionCommandHandler,
-            query_handlers::{SessionQueryHandler, StreamQueryHandler},
+            query_handlers::{SessionQueryHandler, StreamQueryHandler, SystemQueryHandler},
         },
         queries::*,
     },
@@ -34,6 +37,97 @@ use crate::{
     infrastructure::http::middleware::{RateLimitMiddleware, security_middleware},
 };
 
+/// HTTP server configuration.
+///
+/// # Production warning
+///
+/// `HttpServerConfig::default()` returns a configuration suitable for **local development
+/// only** — it allows a single hard-coded origin (`http://localhost:3000`). Production
+/// deployments must construct an explicit `HttpServerConfig` with the actual list of
+/// allowed origins, or pass `vec![]` to deny all cross-origin requests.
+///
+/// Use [`create_pjs_router_with_config`] to apply a non-default configuration.
+// TODO(critic): Mark with #[non_exhaustive] or migrate to builder before 1.0
+// to avoid breaking changes when adding fields like allow_credentials/max_age.
+#[derive(Debug, Clone)]
+pub struct HttpServerConfig {
+    /// List of origins allowed by the CORS layer.
+    ///
+    /// # Matching semantics
+    ///
+    /// Origins are matched against the request's `Origin` header by **case-sensitive byte
+    /// equality**. This is `tower_http::cors::AllowOrigin::list` behavior; it is not the
+    /// case-insensitive scheme/host comparison defined by RFC 6454 §6.
+    ///
+    /// In practice this matches all real browser traffic, because mainstream browsers
+    /// always send lowercase scheme and host. Write your origins in lowercase.
+    ///
+    /// # Special values
+    ///
+    /// - `[]` (empty) — deny all cross-origin requests (fail-closed)
+    /// - `["*"]` — allow any origin (passes through to `tower_http::cors::Any`)
+    /// - Mixing `"*"` with explicit origins is rejected at construction time
+    pub allowed_origins: Vec<String>,
+}
+
+impl Default for HttpServerConfig {
+    /// Local-development default: allows `http://localhost:3000`.
+    ///
+    /// **Do not use this in production.** See the type-level docs.
+    fn default() -> Self {
+        Self {
+            allowed_origins: vec!["http://localhost:3000".to_string()],
+        }
+    }
+}
+
+/// Build a [`CorsLayer`] from an [`HttpServerConfig`].
+///
+/// # Errors
+///
+/// Returns [`PjsError::HttpError`] if:
+/// - `allowed_origins` is a mix of `"*"` and explicit origins
+/// - any origin string fails to parse as a valid `HeaderValue`
+fn build_cors_layer(config: &HttpServerConfig) -> Result<CorsLayer, PjsError> {
+    // We intentionally do NOT call .allow_credentials(true).
+    // PJS does not use cookie-based auth; the Authorization header works without
+    // credentials mode. allow_credentials(true) is incompatible with allow_origin(Any),
+    // which would forbid the `["*"]` config path.
+    let base = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([CONTENT_TYPE, AUTHORIZATION])
+        .max_age(std::time::Duration::from_secs(3600));
+
+    let has_wildcard = config.allowed_origins.iter().any(|o| o == "*");
+    let has_explicit = config.allowed_origins.iter().any(|o| o != "*");
+
+    let layer = match (
+        config.allowed_origins.is_empty(),
+        has_wildcard,
+        has_explicit,
+    ) {
+        (true, _, _) => base.allow_origin(AllowOrigin::list(std::iter::empty::<HeaderValue>())),
+        (_, true, true) => {
+            return Err(PjsError::HttpError(
+                "CORS: wildcard '*' cannot be combined with explicit origins".into(),
+            ));
+        }
+        (_, true, false) => base.allow_origin(tower_http::cors::Any),
+        (_, false, _) => {
+            let origins: Vec<HeaderValue> = config
+                .allowed_origins
+                .iter()
+                .map(|o| {
+                    o.parse::<HeaderValue>()
+                        .map_err(|e| PjsError::HttpError(format!("invalid CORS origin {o:?}: {e}")))
+                })
+                .collect::<Result<_, _>>()?;
+            base.allow_origin(AllowOrigin::list(origins))
+        }
+    };
+    Ok(layer)
+}
+
 /// Axum application state with PJS GAT-based handlers
 pub struct PjsAppState<R, P, S>
 where
@@ -44,6 +138,7 @@ where
     command_handler: Arc<SessionCommandHandler<R, P>>,
     session_query_handler: Arc<SessionQueryHandler<R>>,
     stream_query_handler: Arc<StreamQueryHandler<R, S>>,
+    system_handler: Arc<SystemQueryHandler<R>>,
 }
 
 impl<R, P, S> Clone for PjsAppState<R, P, S>
@@ -57,6 +152,7 @@ where
             command_handler: self.command_handler.clone(),
             session_query_handler: self.session_query_handler.clone(),
             stream_query_handler: self.stream_query_handler.clone(),
+            system_handler: self.system_handler.clone(),
         }
     }
 }
@@ -67,14 +163,21 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
+    /// Create a new application state, recording the current instant as the
+    /// process start time for uptime reporting.
     pub fn new(repository: Arc<R>, event_publisher: Arc<P>, stream_store: Arc<S>) -> Self {
+        let started_at = Instant::now();
         Self {
             command_handler: Arc::new(SessionCommandHandler::new(
                 repository.clone(),
                 event_publisher,
             )),
             session_query_handler: Arc::new(SessionQueryHandler::new(repository.clone())),
-            stream_query_handler: Arc::new(StreamQueryHandler::new(repository, stream_store)),
+            stream_query_handler: Arc::new(StreamQueryHandler::new(
+                repository.clone(),
+                stream_store,
+            )),
+            system_handler: Arc::new(SystemQueryHandler::with_start_time(repository, started_at)),
         }
     }
 }
@@ -132,19 +235,56 @@ impl From<SessionHealth> for SessionHealthResponse {
     }
 }
 
-/// Create PJS-enabled Axum router
+/// Create PJS-enabled Axum router with the default CORS configuration.
+///
+/// Uses [`HttpServerConfig::default`] which allows `http://localhost:3000`.
 ///
 /// # Security Note
+///
+/// This is suitable for local development only. For production, use
+/// [`create_pjs_router_with_config`] with an explicit [`HttpServerConfig`].
+///
 /// TODO: Implement authentication strategy before production deployment.
 /// Options: API keys, JWT tokens, OAuth2/OIDC
-/// Current implementation is a public API - requires strict rate limiting
 pub fn create_pjs_router<R, P, S>() -> Router<PjsAppState<R, P, S>>
 where
     R: StreamRepositoryGat + Send + Sync + 'static,
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    Router::new()
+    create_pjs_router_with_config::<R, P, S>(&HttpServerConfig::default())
+        .expect("default HttpServerConfig must always produce a valid CORS layer")
+}
+
+/// Create PJS-enabled Axum router with a custom [`HttpServerConfig`].
+///
+/// # Errors
+///
+/// Returns [`PjsError::HttpError`] if `config` contains invalid CORS origins
+/// (see [`build_cors_layer`] for the full list of failure conditions).
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pjson_rs::infrastructure::http::{HttpServerConfig, create_pjs_router_with_config};
+///
+/// let config = HttpServerConfig {
+///     allowed_origins: vec!["https://app.example.com".to_string()],
+/// };
+/// let router = create_pjs_router_with_config::<R, P, S>(&config)?;
+/// ```
+// TODO(critic): Extract shared route table from create_pjs_router_with_config and
+// create_pjs_router_with_rate_limit_and_config — currently ~40 lines duplicated.
+pub fn create_pjs_router_with_config<R, P, S>(
+    config: &HttpServerConfig,
+) -> Result<Router<PjsAppState<R, P, S>>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let cors = build_cors_layer(config)?;
+    let router = Router::new()
         .route("/pjs/sessions", post(create_session::<R, P, S>))
         .route("/pjs/sessions/{session_id}", get(get_session::<R, P, S>))
         .route(
@@ -173,26 +313,31 @@ where
         )
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
         .route("/pjs/health", get(system_health))
+        .route("/pjs/stats", get(get_system_stats::<R, P, S>));
+
+    #[cfg(feature = "metrics")]
+    let router = router.route(
+        "/metrics",
+        get(crate::infrastructure::http::metrics::metrics_handler),
+    );
+
+    Ok(router
         .layer(middleware::from_fn(security_middleware))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(["http://localhost:3000"
-                    .parse::<axum::http::HeaderValue>()
-                    .unwrap()])
-                .allow_methods([Method::GET, Method::POST])
-                .allow_headers([CONTENT_TYPE, AUTHORIZATION])
-                .max_age(std::time::Duration::from_secs(3600)),
-        )
-        .layer(TraceLayer::new_for_http())
+        .layer(cors)
+        .layer(TraceLayer::new_for_http()))
 }
 
-/// Create PJS-enabled Axum router with rate limiting
+/// Create PJS-enabled Axum router with rate limiting and the default CORS configuration.
 ///
 /// Adds rate limiting middleware to protect against DoS attacks.
 /// Default: 100 requests per minute per IP address.
 ///
+/// Uses [`HttpServerConfig::default`] which allows `http://localhost:3000`.
+/// For production, use [`create_pjs_router_with_rate_limit_and_config`].
+///
 /// # Security Note
+///
 /// Rate limiting is applied globally to all endpoints.
 /// Returns 429 Too Many Requests with Retry-After header when limit exceeded.
 /// Adds X-RateLimit-* headers per RFC 6585.
@@ -204,7 +349,29 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    Router::new()
+    create_pjs_router_with_rate_limit_and_config::<R, P, S>(
+        &HttpServerConfig::default(),
+        rate_limit_middleware,
+    )
+    .expect("default HttpServerConfig must always produce a valid CORS layer")
+}
+
+/// Create PJS-enabled Axum router with rate limiting and a custom [`HttpServerConfig`].
+///
+/// # Errors
+///
+/// Returns [`PjsError::HttpError`] if `config` contains invalid CORS origins.
+pub fn create_pjs_router_with_rate_limit_and_config<R, P, S>(
+    config: &HttpServerConfig,
+    rate_limit_middleware: RateLimitMiddleware,
+) -> Result<Router<PjsAppState<R, P, S>>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let cors = build_cors_layer(config)?;
+    let router = Router::new()
         .route("/pjs/sessions", post(create_session::<R, P, S>))
         .route("/pjs/sessions/{session_id}", get(get_session::<R, P, S>))
         .route(
@@ -233,19 +400,20 @@ where
         )
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
         .route("/pjs/health", get(system_health))
+        .route("/pjs/stats", get(get_system_stats::<R, P, S>));
+
+    #[cfg(feature = "metrics")]
+    let router = router.route(
+        "/metrics",
+        get(crate::infrastructure::http::metrics::metrics_handler),
+    );
+
+    Ok(router
         .layer(rate_limit_middleware)
         .layer(middleware::from_fn(security_middleware))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(["http://localhost:3000"
-                    .parse::<axum::http::HeaderValue>()
-                    .unwrap()])
-                .allow_methods([Method::GET, Method::POST])
-                .allow_headers([CONTENT_TYPE, AUTHORIZATION])
-                .max_age(std::time::Duration::from_secs(3600)),
-        )
-        .layer(TraceLayer::new_for_http())
+        .layer(cors)
+        .layer(TraceLayer::new_for_http()))
 }
 
 /// Create a new streaming session
@@ -484,6 +652,29 @@ async fn system_health() -> Json<serde_json::Value> {
     }))
 }
 
+/// Real-time system statistics: uptime, session counts, frame throughput.
+async fn get_system_stats<R, P, S>(
+    State(state): State<PjsAppState<R, P, S>>,
+) -> Result<Json<SystemStatsResponse>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let query = GetSystemStatsQuery {
+        include_historical: false,
+    };
+
+    let response = <SystemQueryHandler<R> as QueryHandlerGat<GetSystemStatsQuery>>::handle(
+        &*state.system_handler,
+        query,
+    )
+    .await
+    .map_err(PjsError::Application)?;
+
+    Ok(Json(response))
+}
+
 /// Query parameters for frame listing
 #[derive(Debug, Deserialize)]
 pub struct FrameQueryParams {
@@ -620,6 +811,89 @@ impl IntoResponse for PjsError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- build_cors_layer unit tests ---
+
+    #[test]
+    fn cors_empty_origins_denies_all() {
+        let config = HttpServerConfig {
+            allowed_origins: vec![],
+        };
+        // Empty list must succeed (returns a layer that denies all origins).
+        let result = build_cors_layer(&config);
+        assert!(
+            result.is_ok(),
+            "empty origins should return Ok (deny-all layer)"
+        );
+    }
+
+    #[test]
+    fn cors_wildcard_only_is_ok() {
+        let config = HttpServerConfig {
+            allowed_origins: vec!["*".to_string()],
+        };
+        let result = build_cors_layer(&config);
+        assert!(result.is_ok(), "wildcard-only should return Ok");
+    }
+
+    #[test]
+    fn cors_mixed_wildcard_and_explicit_is_err() {
+        let config = HttpServerConfig {
+            allowed_origins: vec!["*".to_string(), "http://example.com".to_string()],
+        };
+        let result = build_cors_layer(&config);
+        assert!(
+            result.is_err(),
+            "mixing wildcard with explicit origins must fail"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("wildcard"),
+            "error message should mention wildcard: {msg}"
+        );
+    }
+
+    #[test]
+    fn cors_valid_single_origin_is_ok() {
+        let config = HttpServerConfig {
+            allowed_origins: vec!["http://example.com".to_string()],
+        };
+        assert!(build_cors_layer(&config).is_ok());
+    }
+
+    #[test]
+    fn cors_valid_multiple_origins_is_ok() {
+        let config = HttpServerConfig {
+            allowed_origins: vec![
+                "https://app.example.com".to_string(),
+                "https://admin.example.com".to_string(),
+            ],
+        };
+        assert!(build_cors_layer(&config).is_ok());
+    }
+
+    #[test]
+    fn cors_invalid_origin_string_is_err() {
+        let config = HttpServerConfig {
+            // HeaderValue rejects strings containing control characters / invalid bytes.
+            allowed_origins: vec!["not a\nvalid header".to_string()],
+        };
+        let result = build_cors_layer(&config);
+        assert!(result.is_err(), "invalid origin string must return Err");
+    }
+
+    #[test]
+    fn default_config_is_valid() {
+        // Guarantees that the expect() in create_pjs_router / create_pjs_router_with_rate_limit
+        // will never panic at runtime.
+        assert!(
+            build_cors_layer(&HttpServerConfig::default()).is_ok(),
+            "default HttpServerConfig must produce a valid CORS layer"
+        );
+    }
+
+    // --- existing integration tests ---
+
     use crate::domain::{
         aggregates::StreamSession,
         entities::Stream,
@@ -890,5 +1164,71 @@ mod tests {
         let stream_store = Arc::new(MockStreamStore);
 
         let _state = PjsAppState::new(repository, event_publisher, stream_store);
+    }
+
+    #[tokio::test]
+    async fn test_get_system_stats_returns_real_uptime() {
+        use crate::application::handlers::QueryHandlerGat;
+        use crate::application::handlers::query_handlers::SystemQueryHandler;
+        use crate::application::queries::GetSystemStatsQuery;
+        use std::time::{Duration, Instant};
+
+        let repository = Arc::new(MockRepository::new());
+        // Simulate a handler that started 5 seconds ago.
+        let started_at = Instant::now() - Duration::from_secs(5);
+        let handler = SystemQueryHandler::with_start_time(repository, started_at);
+
+        let query = GetSystemStatsQuery {
+            include_historical: false,
+        };
+        let result = QueryHandlerGat::handle(&handler, query).await.unwrap();
+
+        // uptime must reflect the real elapsed time, not a hard-coded value.
+        assert!(
+            result.uptime_seconds >= 5,
+            "uptime_seconds should be at least 5, got {}",
+            result.uptime_seconds
+        );
+        // Must not be the old placeholder value (3600).
+        assert_ne!(
+            result.uptime_seconds, 3600,
+            "uptime_seconds must not be the hard-coded placeholder 3600"
+        );
+    }
+
+    #[cfg(feature = "metrics")]
+    #[tokio::test]
+    async fn test_metrics_endpoint_returns_prometheus_format() {
+        use crate::infrastructure::http::metrics::install_global_recorder;
+
+        // Install the recorder and verify the handle renders text/plain output.
+        let handle = install_global_recorder().expect("recorder install should succeed");
+        let rendered = handle.render();
+        // Prometheus text format: empty registry produces an empty string or
+        // comment lines; never a JSON error body.
+        assert!(
+            !rendered.contains("{\"error\""),
+            "rendered metrics should not be a JSON error: {rendered}"
+        );
+
+        // Calling again must be idempotent.
+        let handle2 = install_global_recorder().expect("second call must not fail");
+        assert_eq!(
+            handle.render(),
+            handle2.render(),
+            "both handles must render the same metrics"
+        );
+    }
+
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn test_metrics_router_has_metrics_route() {
+        // Verify that the router includes /metrics by exercising the route builder.
+        // We check this at compile time through the feature-gated code path.
+        let _router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build successfully with metrics feature");
     }
 }

@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Real deflate, gzip, and brotli compression/decompression in `SecureCompressor` via `flate2` (pure Rust) and `brotli` crates, gated on `feature = "compression"` (#114)
 - `CompressionBombConfig::max_compressed_size` field to independently limit compressed input size before decoding (#114)
 - `Error::CompressionError(String)` variant for codec-level failures, distinct from `SecurityError` (#114)
+- `HttpServerConfig` struct with `allowed_origins: Vec<String>` for configurable CORS origins; `create_pjs_router_with_config` and `create_pjs_router_with_rate_limit_and_config` variants accept it — original signatures unchanged (#152)
+- `metrics` Cargo feature: adds `metrics` + `metrics-exporter-prometheus` dependencies; installs a process-global Prometheus recorder via `OnceLock::get_or_try_init`; exposes `GET /metrics` endpoint in Prometheus text format (#142)
+- `GET /pjs/stats` route backed by `SystemQueryHandler` with real wall-clock uptime and correct `frames_per_second`/`bytes_per_second` rates; `PjsAppState` stores `start_time: Instant` (#142)
+- Aggregate frame counter `pjs_frames_total` (no per-session label) incremented in `GenerateFramesCommand` and `BatchGenerateFramesCommand` handlers when `metrics` feature is enabled (#142)
+
+### Removed
+
+- Unused `prometheus = "0.14"` workspace dependency (#142)
 
 ### Changed
 

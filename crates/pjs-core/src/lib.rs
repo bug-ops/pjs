@@ -5,6 +5,7 @@
 //! zero-copy operations, and semantic type hints for automatic optimization.
 
 #![feature(impl_trait_in_assoc_type)]
+#![cfg_attr(feature = "metrics", feature(once_cell_try))]
 #![warn(rust_2018_idioms)]
 #![deny(unsafe_op_in_unsafe_fn)]
 // Allow specific clippy warnings that are intentional design choices
