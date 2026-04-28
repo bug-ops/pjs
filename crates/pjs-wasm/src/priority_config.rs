@@ -14,13 +14,14 @@ use wasm_bindgen::prelude::*;
 /// # Example
 ///
 /// ```javascript
-/// import { PriorityConfigBuilder } from 'pjs-wasm';
+/// import { PriorityConfigBuilder, PjsParser } from 'pjs-wasm';
 ///
 /// const config = new PriorityConfigBuilder()
 ///   .addCriticalField('user_id')
 ///   .addHighField('display_name')
-///   .addLowPattern('debug')
-///   .build();
+///   .addLowPattern('debug');
+///
+/// const parser = PjsParser.withConfig(config);
 /// ```
 #[wasm_bindgen]
 pub struct PriorityConfigBuilder {

@@ -33,105 +33,54 @@ use crate::security::{SecurityConfig, validate_input_size};
 use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FrameType;
 use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
+#[wasm_bindgen(typescript_custom_section)]
+const TS_CALLBACK_TYPES: &str = r#"
+export type FrameCallback = (frame: FrameData) => void;
+export type StreamStatsCallback = (stats: StreamStats) => void;
+export type ErrorCallback = (error: string) => void;
+"#;
+
 /// Statistics about a completed stream.
-#[wasm_bindgen]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamStats {
     /// Total number of frames generated
-    total_frames: u32,
+    pub total_frames: u32,
     /// Number of patch frames
-    patch_frames: u32,
+    pub patch_frames: u32,
     /// Total bytes processed
-    bytes_processed: u32,
+    pub bytes_processed: u32,
     /// Time taken in milliseconds
-    duration_ms: f64,
-}
-
-#[wasm_bindgen]
-impl StreamStats {
-    /// Get the total number of frames generated.
-    #[wasm_bindgen(getter, js_name = totalFrames)]
-    pub fn total_frames(&self) -> u32 {
-        self.total_frames
-    }
-
-    /// Get the number of patch frames.
-    #[wasm_bindgen(getter, js_name = patchFrames)]
-    pub fn patch_frames(&self) -> u32 {
-        self.patch_frames
-    }
-
-    /// Get the total bytes processed.
-    #[wasm_bindgen(getter, js_name = bytesProcessed)]
-    pub fn bytes_processed(&self) -> u32 {
-        self.bytes_processed
-    }
-
-    /// Get the duration in milliseconds.
-    #[wasm_bindgen(getter, js_name = durationMs)]
-    pub fn duration_ms(&self) -> f64 {
-        self.duration_ms
-    }
+    pub duration_ms: f64,
 }
 
 /// Frame data exposed to JavaScript.
 ///
 /// This struct wraps frame information in a JavaScript-friendly format.
-#[wasm_bindgen]
-#[derive(Debug, Clone)]
+/// The `type` field contains one of: `"skeleton"`, `"patch"`, `"complete"`, `"error"`.
+/// The `payload` field contains the frame data as a JSON string.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct FrameData {
     /// Frame type: "skeleton", "patch", "complete", or "error"
-    frame_type: String,
+    #[serde(rename = "type")]
+    pub frame_type: String,
     /// Frame sequence number
-    sequence: u64,
+    pub sequence: u64,
     /// Priority level (1-255)
-    priority: u8,
+    pub priority: u8,
     /// Frame payload as JSON string
-    payload: String,
-}
-
-#[wasm_bindgen]
-impl FrameData {
-    /// Get the frame type.
-    #[wasm_bindgen(getter, js_name = type)]
-    pub fn frame_type(&self) -> String {
-        self.frame_type.clone()
-    }
-
-    /// Get the sequence number.
-    #[wasm_bindgen(getter)]
-    pub fn sequence(&self) -> u64 {
-        self.sequence
-    }
-
-    /// Get the priority level.
-    #[wasm_bindgen(getter)]
-    pub fn priority(&self) -> u8 {
-        self.priority
-    }
-
-    /// Get the payload as JSON string.
-    #[wasm_bindgen(getter)]
-    pub fn payload(&self) -> String {
-        self.payload.clone()
-    }
-
-    /// Get the payload as a JavaScript object.
-    #[wasm_bindgen(js_name = getPayloadObject)]
-    pub fn get_payload_object(&self) -> Result<JsValue, JsValue> {
-        let value: serde_json::Value = serde_json::from_str(&self.payload)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse payload: {}", e)))?;
-        serde_wasm_bindgen::to_value(&value)
-            .map_err(|e| JsValue::from_str(&format!("Failed to convert payload: {}", e)))
-    }
+    pub payload: String,
 }
 
 impl From<&Frame> for FrameData {
     fn from(frame: &Frame) -> Self {
-        // Pre-allocate string to avoid reallocation during to_string()
         let frame_type = match frame.frame_type() {
             FrameType::Skeleton => "skeleton".to_string(),
             FrameType::Patch => "patch".to_string(),
@@ -139,7 +88,6 @@ impl From<&Frame> for FrameData {
             FrameType::Error => "error".to_string(),
         };
 
-        // Serialize frame payload to JSON (single allocation)
         let payload = serde_json::to_string(frame.payload()).unwrap_or_else(|_| "null".to_string());
 
         Self {
@@ -172,9 +120,9 @@ impl From<&Frame> for FrameData {
 ///
 /// stream.onFrame((frame) => {
 ///     if (frame.type === 'skeleton') {
-///         renderSkeleton(frame.getPayloadObject());
+///         renderSkeleton(JSON.parse(frame.payload));
 ///     } else if (frame.type === 'patch') {
-///         applyPatch(frame.getPayloadObject());
+///         applyPatch(JSON.parse(frame.payload));
 ///     }
 /// });
 ///
@@ -264,10 +212,6 @@ impl PriorityStream {
     ///
     /// * `priority` - Minimum priority (1-255)
     ///
-    /// # Returns
-    ///
-    /// Self for method chaining
-    ///
     /// # Example
     ///
     /// ```javascript
@@ -288,7 +232,7 @@ impl PriorityStream {
     ///
     /// # Arguments
     ///
-    /// * `callback` - JavaScript function(frame: FrameData)
+    /// * `callback` - `(frame: FrameData) => void`
     ///
     /// # Example
     ///
@@ -308,7 +252,7 @@ impl PriorityStream {
     ///
     /// # Arguments
     ///
-    /// * `callback` - JavaScript function(stats: StreamStats)
+    /// * `callback` - `(stats: StreamStats) => void`
     ///
     /// # Example
     ///
@@ -328,7 +272,7 @@ impl PriorityStream {
     ///
     /// # Arguments
     ///
-    /// * `callback` - JavaScript function(error: string)
+    /// * `callback` - `(error: string) => void`
     ///
     /// # Example
     ///
@@ -523,26 +467,26 @@ impl PriorityStream {
 
     /// Emit frame to JavaScript callback
     fn emit_frame(&self, frame: &Frame) {
-        if let Some(ref callback) = self.on_frame {
-            let frame_data = FrameData::from(frame);
-            let this = JsValue::null();
-            let _ = callback.call1(&this, &JsValue::from(frame_data));
+        if let Some(ref callback) = self.on_frame
+            && let Ok(js_val) = serde_wasm_bindgen::to_value(&FrameData::from(frame))
+        {
+            let _ = callback.call1(&JsValue::null(), &js_val);
         }
     }
 
     /// Emit completion to JavaScript callback
     fn emit_complete(&self, stats: StreamStats) {
-        if let Some(ref callback) = self.on_complete {
-            let this = JsValue::null();
-            let _ = callback.call1(&this, &JsValue::from(stats));
+        if let Some(ref callback) = self.on_complete
+            && let Ok(js_val) = serde_wasm_bindgen::to_value(&stats)
+        {
+            let _ = callback.call1(&JsValue::null(), &js_val);
         }
     }
 
     /// Emit error to JavaScript callback
     fn emit_error(&self, error: &str) {
         if let Some(ref callback) = self.on_error {
-            let this = JsValue::null();
-            let _ = callback.call1(&this, &JsValue::from_str(error));
+            let _ = callback.call1(&JsValue::null(), &JsValue::from_str(error));
         }
     }
 }
@@ -573,7 +517,7 @@ mod tests {
     // Note: test_set_min_priority_invalid is in wasm_tests since it uses JsValue
 
     #[test]
-    fn test_stream_stats_getters() {
+    fn test_stream_stats_fields() {
         let stats = StreamStats {
             total_frames: 5,
             patch_frames: 3,
@@ -581,10 +525,10 @@ mod tests {
             duration_ms: 10.5,
         };
 
-        assert_eq!(stats.total_frames(), 5);
-        assert_eq!(stats.patch_frames(), 3);
-        assert_eq!(stats.bytes_processed(), 1024);
-        assert!((stats.duration_ms() - 10.5).abs() < 0.001);
+        assert_eq!(stats.total_frames, 5);
+        assert_eq!(stats.patch_frames, 3);
+        assert_eq!(stats.bytes_processed, 1024);
+        assert!((stats.duration_ms - 10.5).abs() < 0.001);
     }
 
     #[test]
@@ -594,8 +538,8 @@ mod tests {
         let frame = Frame::skeleton(stream_id, 0, skeleton_data);
 
         let frame_data = FrameData::from(&frame);
-        assert_eq!(frame_data.frame_type(), "skeleton");
-        assert_eq!(frame_data.sequence(), 0);
+        assert_eq!(frame_data.frame_type, "skeleton");
+        assert_eq!(frame_data.sequence, 0);
     }
 
     #[test]
@@ -618,6 +562,55 @@ mod tests {
             frames.last().unwrap().frame_type(),
             FrameType::Complete
         ));
+    }
+
+    #[test]
+    fn test_frame_data_serde_roundtrip() {
+        let original = FrameData {
+            frame_type: "skeleton".to_string(),
+            sequence: 42,
+            priority: 100,
+            payload: r#"{"id":1}"#.to_string(),
+        };
+
+        let json = serde_json::to_string(&original).expect("serialize failed");
+        let restored: FrameData = serde_json::from_str(&json).expect("deserialize failed");
+
+        assert_eq!(restored.frame_type, original.frame_type);
+        assert_eq!(restored.sequence, original.sequence);
+        assert_eq!(restored.priority, original.priority);
+        assert_eq!(restored.payload, original.payload);
+    }
+
+    #[test]
+    fn test_frame_data_serde_type_field_rename() {
+        let frame_data = FrameData {
+            frame_type: "patch".to_string(),
+            sequence: 1,
+            priority: 50,
+            payload: "null".to_string(),
+        };
+
+        let json = serde_json::to_string(&frame_data).expect("serialize failed");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse failed");
+        assert_eq!(value["type"], "patch");
+        assert!(value.get("frame_type").is_none());
+    }
+
+    #[test]
+    fn test_stream_stats_serde_camel_case() {
+        let stats = StreamStats {
+            total_frames: 3,
+            patch_frames: 1,
+            bytes_processed: 512,
+            duration_ms: 5.0,
+        };
+
+        let json = serde_json::to_string(&stats).expect("serialize failed");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse failed");
+        assert_eq!(value["totalFrames"], 3);
+        assert_eq!(value["patchFrames"], 1);
+        assert!(value.get("total_frames").is_none());
     }
 }
 
@@ -655,7 +648,7 @@ mod wasm_tests {
     }
 
     #[wasm_bindgen_test]
-    fn test_frame_data_payload() {
+    fn test_frame_data_payload_not_empty() {
         let stream_id = StreamId::new();
         let mut obj = std::collections::HashMap::new();
         obj.insert("test".to_string(), JsonData::String("value".to_string()));
@@ -663,9 +656,6 @@ mod wasm_tests {
         let frame = Frame::skeleton(stream_id, 0, data);
 
         let frame_data = FrameData::from(&frame);
-        assert!(!frame_data.payload().is_empty());
-
-        let payload_obj = frame_data.get_payload_object();
-        assert!(payload_obj.is_ok());
+        assert!(!frame_data.payload.is_empty());
     }
 }
