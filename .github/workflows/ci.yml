@@ -416,6 +416,7 @@ jobs:
       - wasm-bundle-size
       - wasm-node-example
       - wasm-package-validation
+      - security-osv
     runs-on: ubuntu-latest
     if: always()
     steps:
