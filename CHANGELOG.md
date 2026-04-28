@@ -24,58 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `AdaptiveFrameStream::poll_next` now respects `buffer_size`: frames are prefetched into `current_buffer` and drained per-poll, enabling batched delivery (#163)
 - `AdaptiveFrameStream::with_compression(true)` now applies `SecureCompressor` (Gzip) to each formatted frame when the `compression` feature is active (#163)
 - `ValidationService::validate_string` no longer recompiles regex patterns on every call; compiled patterns are cached in a static `DashMap` and reused across invocations (#154)
-
-### Added
-
-- CI job `js-client-test` runs `npm ci && npm test` for `crates/pjs-js-client` on push and JS file changes (#180)
-- Wire-level WebSocket integration tests that perform real protocol upgrades, frame exchange, and connection close verification (closes #158)
-- `AxumWebSocketTransport::active_connection_count` async method for observability of open connections
-- `pjson_rs::global_allocator_name()` — returns `"mimalloc"` or `"system"` for diagnostics and benchmark reporting (#160)
-- `mimalloc` feature now registers `mimalloc::MiMalloc` as the actual `#[global_allocator]` on non-wasm targets; previously it was dead extern-crate linkage with no effect (#160)
-- New `crates/pjs-core/src/global_alloc` module owns the `#[global_allocator]` registration, separated from the aligned-buffer helpers (#160)
-
-### Changed
-
-- **BREAKING:** `jemalloc` feature removed along with all `tikv-jemalloc-*` workspace dependencies (`tikv-jemallocator`, `tikv-jemalloc-ctl`, `tikv-jemalloc-sys`). Use `mimalloc` (now a real `#[global_allocator]`) or the system allocator (#160)
-- **BREAKING:** `parser::allocator::SimdAllocator` renamed to `parser::aligned_alloc::AlignedAllocator`; module `parser::allocator` is now `parser::aligned_alloc`. Per-backend FFI branches removed — all paths now route through the registered `#[global_allocator]` (#160)
-- **BREAKING:** `AllocatorBackend` enum, `AllocatorStats` struct, `initialize_global_allocator()`, and `global_allocator()` removed. Use `global_allocator_name()` for diagnostics and `aligned_allocator()` for the buffer-pool accessor (#160)
-- CI build and test matrices collapsed from 3 allocators (`system`, `jemalloc`, `mimalloc`) to 2 (`system`, `mimalloc`); Windows jemalloc exclusion removed; test jobs now use per-variant `features` instead of `--all-features` (#160)
-
-### Removed
-
-- `libmimalloc-sys` workspace dependency — no longer needed; `mimalloc` crate brings it transitively and the FFI call sites in `parser/allocator.rs` are deleted (#160)
-- `ByteCodec` enum (`None | Deflate | Gzip | Brotli`) for byte-level codec selection in `SecureCompressor` (#114)
-- `CompressionQuality` enum (`Fast | Balanced | Best`) for tuning codec compression levels (#114)
-- Real deflate, gzip, and brotli compression/decompression in `SecureCompressor` via `flate2` (pure Rust) and `brotli` crates, gated on `feature = "compression"` (#114)
-- `CompressionBombConfig::max_compressed_size` field to independently limit compressed input size before decoding (#114)
-- `Error::CompressionError(String)` variant for codec-level failures, distinct from `SecurityError` (#114)
-- `HttpServerConfig` struct with `allowed_origins: Vec<String>` for configurable CORS origins; `create_pjs_router_with_config` and `create_pjs_router_with_rate_limit_and_config` variants accept it — original signatures unchanged (#152)
-- `metrics` Cargo feature: adds `metrics` + `metrics-exporter-prometheus` dependencies; installs a process-global Prometheus recorder via `OnceLock::get_or_try_init`; exposes `GET /metrics` endpoint in Prometheus text format (#142)
-- `GET /pjs/stats` route backed by `SystemQueryHandler` with real wall-clock uptime and correct `frames_per_second`/`bytes_per_second` rates; `PjsAppState` stores `start_time: Instant` (#142)
-- Aggregate frame counter `pjs_frames_total` (no per-session label) incremented in `GenerateFramesCommand` and `BatchGenerateFramesCommand` handlers when `metrics` feature is enabled (#142)
-
-### Removed
-
-- Unused `prometheus = "0.14"` workspace dependency (#142)
-
-### Changed
-
-- SIMD feature flags (`simd-auto`, `simd-avx2`, `simd-avx512`, `simd-sse42`, `simd-neon`) now activate sonic-rs SIMD codegen via `.cargo/config.toml` (`-C target-cpu=native` on x86_64/aarch64); `crates/pjs-core/build.rs` emits `pjs_simd_*` cfg gates and `cargo::warning` diagnostics when a SIMD feature is enabled but the required CPU target features are not exposed to rustc (#125)
-- `SecureCompressor::new` and `with_default_security` now accept `ByteCodec` instead of `CompressionStrategy`; `CompressionStrategy` is Layer A (JSON-aware) and is unchanged (#114)
-- `SecureCompressedData` gains a `codec: ByteCodec` field to identify which decoder to use on decompression (#114)
-- `CompressionBombConfig::validate_pre_decompression` now checks `max_compressed_size` (not `max_decompressed_size`); the decompressed output is still monitored by `CompressionBombProtector` during streaming (#114)
-- `CompressionBombConfig::max_ratio` default raised from 100.0 to 300.0 to accommodate legitimate brotli ratios on repetitive JSON (200x+ is normal) (#114)
-- `CompressionBombConfig::high_throughput()` preset `max_ratio` raised to 1000.0 (#114)
-
-### Removed
-
-- Dead `parser/hybrid.rs` stub (`HybridParser`, `SimdBackend`, `SerdeBackend`, `BackendThresholds`, `ParserMetrics`): 406-line file was never wired into the module tree (#126)
-- Dead fields `Parser::zero_copy_simd` and `Parser::use_zero_copy` from `crates/pjs-core/src/parser/mod.rs`; `Parser` now has exactly three fields: `sonic`, `simple`, `use_sonic` (#126)
-- Orphaned application service files (`session_service`, `stream_orchestrator`, `streaming_service`) — never compiled, reference non-existent `CommandHandler` trait (closes #129)
-- Unused command structs (`ActivateSessionCommand`, `FailStreamCommand`, `CancelStreamCommand`, `UpdateStreamConfigCommand`) — no handlers, no callers (closes #130)
-
-### Fixed
-
 - `Parser::new()` and `Parser::with_config()` honor `simd-*` Cargo features: the sonic-rs backend is selected only when a SIMD feature is enabled (default via `simd-auto`); with `--no-default-features` and no SIMD feature the portable `SimpleParser` is used (#115)
 - `simd-avx512` Cargo feature now forwards to `sonic-rs/avx512`, enabling AVX-512 codegen in sonic-rs when the feature is activated (#116)
 - `GetSystemStatsQuery` now reports real server uptime: `SystemQueryHandler` captures `Instant::now()` at construction and computes elapsed time on each query; `frames_per_second` and `bytes_per_second` are derived from actual uptime (#139)
@@ -91,6 +39,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement `Schema::String` `pattern` validation in `ValidationService`: add `regex` crate under `schema-validation` feature, emit `SchemaValidationError::PatternMismatch` on mismatch and new `InvalidPattern` on malformed regex (#118)
 - Apply `client_info` filter in `SearchSessionsQuery` handler: replace discarded placeholder with case-insensitive substring matching against `session.client_info()` (#121)
 - Implement `LazyArray::extract_element_boundaries` and `LazyObject::extract_field_boundaries` with byte-level JSON parsers; all `.len()`, `.get()`, `.iter()`, and `.keys()` methods now return correct results (#120)
+
+### Added
+
+- CI job `js-client-test` runs `npm ci && npm test` for `crates/pjs-js-client` on push and JS file changes (#180)
+- Wire-level WebSocket integration tests that perform real protocol upgrades, frame exchange, and connection close verification (closes #158)
+- `AxumWebSocketTransport::active_connection_count` async method for observability of open connections
+- `pjson_rs::global_allocator_name()` — returns `"mimalloc"` or `"system"` for diagnostics and benchmark reporting (#160)
+- `mimalloc` feature now registers `mimalloc::MiMalloc` as the actual `#[global_allocator]` on non-wasm targets; previously it was dead extern-crate linkage with no effect (#160)
+- New `crates/pjs-core/src/global_alloc` module owns the `#[global_allocator]` registration, separated from the aligned-buffer helpers (#160)
+- Real deflate, gzip, and brotli compression/decompression in `SecureCompressor` via `flate2` (pure Rust) and `brotli` crates, gated on `feature = "compression"` (#114)
+- `CompressionBombConfig::max_compressed_size` field to independently limit compressed input size before decoding (#114)
+- `Error::CompressionError(String)` variant for codec-level failures, distinct from `SecurityError` (#114)
+- `HttpServerConfig` struct with `allowed_origins: Vec<String>` for configurable CORS origins; `create_pjs_router_with_config` and `create_pjs_router_with_rate_limit_and_config` variants accept it — original signatures unchanged (#152)
+- `metrics` Cargo feature: adds `metrics` + `metrics-exporter-prometheus` dependencies; installs a process-global Prometheus recorder via `OnceLock::get_or_try_init`; exposes `GET /metrics` endpoint in Prometheus text format (#142)
+- `GET /pjs/stats` route backed by `SystemQueryHandler` with real wall-clock uptime and correct `frames_per_second`/`bytes_per_second` rates; `PjsAppState` stores `start_time: Instant` (#142)
+- Aggregate frame counter `pjs_frames_total` (no per-session label) incremented in `GenerateFramesCommand` and `BatchGenerateFramesCommand` handlers when `metrics` feature is enabled (#142)
+
+### Changed
+
+- **BREAKING:** `jemalloc` feature removed along with all `tikv-jemalloc-*` workspace dependencies (`tikv-jemallocator`, `tikv-jemalloc-ctl`, `tikv-jemalloc-sys`). Use `mimalloc` (now a real `#[global_allocator]`) or the system allocator (#160)
+- **BREAKING:** `parser::allocator::SimdAllocator` renamed to `parser::aligned_alloc::AlignedAllocator`; module `parser::allocator` is now `parser::aligned_alloc`. Per-backend FFI branches removed — all paths now route through the registered `#[global_allocator]` (#160)
+- **BREAKING:** `AllocatorBackend` enum, `AllocatorStats` struct, `initialize_global_allocator()`, and `global_allocator()` removed. Use `global_allocator_name()` for diagnostics and `aligned_allocator()` for the buffer-pool accessor (#160)
+- CI build and test matrices collapsed from 3 allocators (`system`, `jemalloc`, `mimalloc`) to 2 (`system`, `mimalloc`); Windows jemalloc exclusion removed; test jobs now use per-variant `features` instead of `--all-features` (#160)
+- SIMD feature flags (`simd-auto`, `simd-avx2`, `simd-avx512`, `simd-sse42`, `simd-neon`) now activate sonic-rs SIMD codegen via `.cargo/config.toml` (`-C target-cpu=native` on x86_64/aarch64); `crates/pjs-core/build.rs` emits `pjs_simd_*` cfg gates and `cargo::warning` diagnostics when a SIMD feature is enabled but the required CPU target features are not exposed to rustc (#125)
+- `SecureCompressor::new` and `with_default_security` now accept `ByteCodec` instead of `CompressionStrategy`; `CompressionStrategy` is Layer A (JSON-aware) and is unchanged (#114)
+- `SecureCompressedData` gains a `codec: ByteCodec` field to identify which decoder to use on decompression (#114)
+- `CompressionBombConfig::validate_pre_decompression` now checks `max_compressed_size` (not `max_decompressed_size`); the decompressed output is still monitored by `CompressionBombProtector` during streaming (#114)
+- `CompressionBombConfig::max_ratio` default raised from 100.0 to 300.0 to accommodate legitimate brotli ratios on repetitive JSON (200x+ is normal) (#114)
+- `CompressionBombConfig::high_throughput()` preset `max_ratio` raised to 1000.0 (#114)
+
+### Removed
+
+- `libmimalloc-sys` workspace dependency — no longer needed; `mimalloc` crate brings it transitively and the FFI call sites in `parser/allocator.rs` are deleted (#160)
+- `ByteCodec` enum (`None | Deflate | Gzip | Brotli`) for byte-level codec selection in `SecureCompressor` (#114)
+- `CompressionQuality` enum (`Fast | Balanced | Best`) for tuning codec compression levels (#114)
+- Unused `prometheus = "0.14"` workspace dependency (#142)
+- Dead `parser/hybrid.rs` stub (`HybridParser`, `SimdBackend`, `SerdeBackend`, `BackendThresholds`, `ParserMetrics`): 406-line file was never wired into the module tree (#126)
+- Dead fields `Parser::zero_copy_simd` and `Parser::use_zero_copy` from `crates/pjs-core/src/parser/mod.rs`; `Parser` now has exactly three fields: `sonic`, `simple`, `use_sonic` (#126)
+- Orphaned application service files (`session_service`, `stream_orchestrator`, `streaming_service`) — never compiled, reference non-existent `CommandHandler` trait (closes #129)
+- Unused command structs (`ActivateSessionCommand`, `FailStreamCommand`, `CancelStreamCommand`, `UpdateStreamConfigCommand`) — no handlers, no callers (closes #130)
 
 ### Planned for v0.6.0
 
