@@ -193,7 +193,10 @@ export class JsonReconstructor {
       if (!isNaN(index) && index >= 0 && index < parent.length) {
         parent.splice(index, 1);
       }
-    } else if (key !== '__proto__' && key !== 'constructor' && key !== 'prototype') {
+    } else if (
+      key !== '__proto__' && key !== 'constructor' && key !== 'prototype' &&
+      Object.prototype.hasOwnProperty.call(parent, key)
+    ) {
       // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
       delete parent[key];
     }
@@ -209,13 +212,17 @@ export class JsonReconstructor {
       JsonReconstructor.assertSafeKey(key);
 
       if (index !== null) {
-        current = current[key];
-        current = current[index];
+        // Use own-property access to prevent prototype chain traversal
+        if (!Object.prototype.hasOwnProperty.call(current, key)) {
+          throw new Error(`Path segment not found: ${key}`);
+        }
+        current = (current as Record<string, unknown>)[key];
+        current = (current as unknown[])[index];
       } else {
-        if (!(key in current)) {
+        if (!Object.prototype.hasOwnProperty.call(current, key)) {
           Object.defineProperty(current, key, { value: {}, writable: true, enumerable: true, configurable: true });
         }
-        current = current[key];
+        current = (current as Record<string, unknown>)[key];
       }
     }
 
@@ -224,10 +231,10 @@ export class JsonReconstructor {
     JsonReconstructor.assertSafeKey(key);
 
     if (index !== null) {
-      if (!Array.isArray(current[key])) {
+      if (!Object.prototype.hasOwnProperty.call(current, key) || !Array.isArray((current as Record<string, unknown>)[key])) {
         Object.defineProperty(current, key, { value: [], writable: true, enumerable: true, configurable: true });
       }
-      return { parent: current[key], key: index.toString() };
+      return { parent: (current as Record<string, unknown>)[key], key: index.toString() };
     }
     return { parent: current, key };
   }
