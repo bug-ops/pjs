@@ -99,9 +99,13 @@ export function parseJsonPath(path: JsonPath): {
         continue;
       }
       
-      // Check for array notation
+      // Check for array notation (including negative indices)
+      const negativeArrayMatch = segment.match(/^([^[\]]+)\[(-\d+)\]$/);
       const arrayMatch = segment.match(/^([^[\]]+)\[(\d+)\]$/);
-      if (arrayMatch) {
+      if (negativeArrayMatch) {
+        const [, , index] = negativeArrayMatch;
+        errors.push(`Invalid array index "${index}" in segment "${segment}"`);
+      } else if (arrayMatch) {
         const [, key, index] = arrayMatch;
         if (!isValidKey(key)) {
           errors.push(`Invalid key "${key}" in segment "${segment}"`);
@@ -144,20 +148,20 @@ export function calculateHeuristicPriority(path: JsonPath, value: any): Priority
   if (pathLower.includes('email') || pathLower.includes('phone')) return Priority.High;
   if (pathLower.includes('price') || pathLower.includes('cost')) return Priority.High;
   
+  // Default based on data type and size (checked before path keywords)
+  if (typeof value === 'string' && value.length > 1000) return Priority.Low;
+
   // Medium priority (descriptive content)
   if (pathLower.includes('description') || pathLower.includes('summary')) return Priority.Medium;
   if (pathLower.includes('content') || pathLower.includes('body')) return Priority.Medium;
-  
+
   // Low priority (metadata, timestamps)
   if (pathLower.includes('created') || pathLower.includes('updated')) return Priority.Low;
   if (pathLower.includes('metadata') || pathLower.includes('meta')) return Priority.Low;
-  
+
   // Background priority (large arrays, detailed info)
   if (Array.isArray(value) && value.length > 10) return Priority.Background;
   if (pathLower.includes('analytics') || pathLower.includes('stats')) return Priority.Background;
-  
-  // Default based on data type and size
-  if (typeof value === 'string' && value.length > 1000) return Priority.Low;
   if (typeof value === 'object' && value !== null) {
     const keys = Object.keys(value);
     if (keys.length > 20) return Priority.Low;

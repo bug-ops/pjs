@@ -250,11 +250,14 @@ export interface StreamStats {
  */
 export enum PJSErrorType {
   ConnectionError = 'CONNECTION_ERROR',
-  ProtocolError = 'PROTOCOL_ERROR', 
+  ProtocolError = 'PROTOCOL_ERROR',
+  ProtocolViolation = 'PROTOCOL_VIOLATION',
   ParseError = 'PARSE_ERROR',
   ValidationError = 'VALIDATION_ERROR',
   TimeoutError = 'TIMEOUT_ERROR',
-  ConfigurationError = 'CONFIGURATION_ERROR'
+  ConfigurationError = 'CONFIGURATION_ERROR',
+  InitializationError = 'INITIALIZATION_ERROR',
+  StreamError = 'STREAM_ERROR'
 }
 
 /**

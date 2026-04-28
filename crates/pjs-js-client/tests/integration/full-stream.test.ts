@@ -220,7 +220,7 @@ describe('Full Stream Integration', () => {
     expect(renderCalls[0].priority).toBe(Priority.Critical);
     
     // Critical data should be available early
-    const criticalRender = renderCalls.find(call => call.priority === Priority.Critical);
+    const criticalRender = renderCalls.filter(call => call.priority === Priority.Critical).at(-1);
     expect(criticalRender?.data.user.id).toBe(12345);
 
     // Progress should increase over time

@@ -9,25 +9,18 @@
  * - Memory cleanup
  */
 
-import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
 import { WasmBackend, WasmStreamOptions } from '../../src/transport/wasm-backend.js';
 import { PJSClientConfig, FrameType, Frame, PJSError } from '../../src/types/index.js';
 
-// Mock pjs-wasm module
-jest.mock('pjs-wasm', () => ({
-  default: jest.fn().mockResolvedValue(undefined),
-  version: jest.fn().mockReturnValue('0.1.0'),
-  PriorityStream: jest.fn().mockImplementation(() => ({
-    setMinPriority: jest.fn(),
-    onFrame: jest.fn(),
-    onComplete: jest.fn(),
-    onError: jest.fn(),
-    start: jest.fn(),
-    free: jest.fn()
-  }))
-}), { virtual: true });
+// Skip the entire suite when pjs-wasm/pkg is not built
+const wasmPkgAvailable = existsSync(resolve(process.cwd(), 'crates/pjs-wasm/pkg/package.json'))
+  || existsSync(resolve(process.cwd(), '../pjs-wasm/pkg/package.json'));
+const describeWasm = wasmPkgAvailable ? describe : describe.skip;
 
-describe('WasmBackend Integration Tests', () => {
+describeWasm('WasmBackend Integration Tests', () => {
   let backend: WasmBackend;
   let config: Required<PJSClientConfig>;
 
