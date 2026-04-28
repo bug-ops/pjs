@@ -121,9 +121,6 @@ jobs:
             features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server"
           - allocator: mimalloc
             features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,mimalloc"
-        exclude:
-          - os: windows-latest
-            allocator: mimalloc
 
     steps:
       - uses: actions/checkout@v4
@@ -162,7 +159,7 @@ jobs:
   # ── Tier 2b: partitioned tests ───────────────────────────────────────────
   # Downloads the archive produced by the build job and runs 4 parallel
   # partitions per OS/allocator combination.  Each partition is an
-  # independent job — all 20 jobs (4 partitions × 5 build targets) fan out
+  # independent job — all 24 jobs (4 partitions × 6 build targets) fan out
   # in parallel.
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.allocator }}, ${{ matrix.partition }}/4)
@@ -175,9 +172,6 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         allocator: [system, mimalloc]
         partition: [1, 2, 3, 4]
-        exclude:
-          - os: windows-latest
-            allocator: mimalloc
 
     steps:
       - uses: dtolnay/rust-toolchain@nightly
