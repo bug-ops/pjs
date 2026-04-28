@@ -29,7 +29,7 @@ use crate::{
     domain::{
         aggregates::stream_session::{SessionConfig, SessionHealth},
         ports::{EventPublisherGat, StreamRepositoryGat, StreamStoreGat},
-        value_objects::{SessionId, StreamId},
+        value_objects::{Priority, SessionId, StreamId},
     },
     infrastructure::http::middleware::{RateLimitMiddleware, security_middleware},
 };
@@ -152,6 +152,10 @@ where
             get(session_health::<R, P, S>),
         )
         .route(
+            "/pjs/sessions/{session_id}/stats",
+            get(get_session_stats::<R, P, S>),
+        )
+        .route(
             "/pjs/sessions/{session_id}/streams",
             post(create_stream::<R, P, S>),
         )
@@ -162,6 +166,10 @@ where
         .route(
             "/pjs/sessions/{session_id}/streams/{stream_id}",
             get(get_stream::<R, P, S>),
+        )
+        .route(
+            "/pjs/sessions/{session_id}/streams/{stream_id}/frames",
+            get(get_stream_frames::<R, P, S>),
         )
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
         .route("/pjs/health", get(system_health))
@@ -204,6 +212,10 @@ where
             get(session_health::<R, P, S>),
         )
         .route(
+            "/pjs/sessions/{session_id}/stats",
+            get(get_session_stats::<R, P, S>),
+        )
+        .route(
             "/pjs/sessions/{session_id}/streams",
             post(create_stream::<R, P, S>),
         )
@@ -214,6 +226,10 @@ where
         .route(
             "/pjs/sessions/{session_id}/streams/{stream_id}",
             get(get_stream::<R, P, S>),
+        )
+        .route(
+            "/pjs/sessions/{session_id}/streams/{stream_id}/frames",
+            get(get_stream_frames::<R, P, S>),
         )
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
         .route("/pjs/health", get(system_health))
@@ -466,6 +482,81 @@ async fn system_health() -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "features": ["pjs_streaming", "axum_integration", "gat_handlers"]
     }))
+}
+
+/// Query parameters for frame listing
+#[derive(Debug, Deserialize)]
+pub struct FrameQueryParams {
+    pub since_sequence: Option<u64>,
+    pub priority: Option<u8>,
+    pub limit: Option<usize>,
+}
+
+/// Get frames for a stream (currently returns empty; no persistent frame store exists yet)
+async fn get_stream_frames<R, P, S>(
+    State(state): State<PjsAppState<R, P, S>>,
+    AxumPath((session_id, stream_id)): AxumPath<(String, String)>,
+    Query(params): Query<FrameQueryParams>,
+) -> Result<Json<FramesResponse>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let session_id = SessionId::from_string(&session_id)
+        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
+    let stream_id =
+        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
+
+    let priority_filter = params
+        .priority
+        .map(|p| Priority::new(p).map(Into::into))
+        .transpose()
+        .map_err(|e: crate::domain::DomainError| PjsError::InvalidPriority(e.to_string()))?;
+
+    let query = GetStreamFramesQuery {
+        session_id: session_id.into(),
+        stream_id: stream_id.into(),
+        since_sequence: params.since_sequence,
+        priority_filter,
+        limit: params.limit,
+    };
+
+    let response = <StreamQueryHandler<R, S> as QueryHandlerGat<GetStreamFramesQuery>>::handle(
+        &*state.stream_query_handler,
+        query,
+    )
+    .await
+    .map_err(PjsError::Application)?;
+
+    Ok(Json(response))
+}
+
+/// Get statistics for a session
+async fn get_session_stats<R, P, S>(
+    State(state): State<PjsAppState<R, P, S>>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<SessionStatsResponse>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let session_id =
+        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
+
+    let query = GetSessionStatsQuery {
+        session_id: session_id.into(),
+    };
+
+    let response = <SessionQueryHandler<R> as QueryHandlerGat<GetSessionStatsQuery>>::handle(
+        &*state.session_query_handler,
+        query,
+    )
+    .await
+    .map_err(PjsError::Application)?;
+
+    Ok(Json(response))
 }
 
 /// TODO(CQ-004): Implement HTTP rate limiting middleware

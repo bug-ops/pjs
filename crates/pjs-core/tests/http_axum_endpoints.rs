@@ -514,6 +514,111 @@ async fn test_invalid_stream_id_returns_400() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+// ===== New Endpoints: Session Stats and Stream Frames =====
+
+#[tokio::test]
+async fn test_get_session_stats_success() {
+    let session = common::SessionBuilder::new().build();
+    let session_id = session.id();
+
+    let state = common::create_test_app_state_with_session(session);
+    let app = create_pjs_router().with_state(state);
+
+    let request = Request::builder()
+        .uri(format!("/pjs/sessions/{}/stats", session_id))
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: JsonValue = serde_json::from_slice(&body).unwrap();
+
+    assert!(json.get("session_id").is_some());
+    assert!(json.get("stream_count").is_some());
+    assert!(json.get("stats").is_some());
+}
+
+#[tokio::test]
+async fn test_get_session_stats_not_found() {
+    let state = common::create_test_app_state();
+    let app = create_pjs_router().with_state(state);
+
+    let request = Request::builder()
+        .uri(format!("/pjs/sessions/{}/stats", SessionId::new()))
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn test_get_stream_frames_success() {
+    let mut session = common::SessionBuilder::new().build();
+    let session_id = session.id();
+    let stream_id = session
+        .create_stream(serde_json::json!({"test": "data"}).into())
+        .unwrap();
+
+    let repository = Arc::new(common::MockRepository::with_session(session));
+    let event_publisher = Arc::new(common::MockEventPublisher::new());
+    let stream_store = Arc::new(common::MockStreamStore::new());
+
+    use pjson_rs::infrastructure::http::axum_adapter::PjsAppState;
+    let state = PjsAppState::new(repository, event_publisher, stream_store);
+    let app = create_pjs_router().with_state(state);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/pjs/sessions/{}/streams/{}/frames",
+            session_id, stream_id
+        ))
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: JsonValue = serde_json::from_slice(&body).unwrap();
+
+    assert!(json.get("frames").is_some());
+    assert!(json.get("total_count").is_some());
+    assert_eq!(json["total_count"], 0);
+}
+
+#[tokio::test]
+async fn test_get_stream_frames_not_found() {
+    let state = common::create_test_app_state();
+    let app = create_pjs_router().with_state(state);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/pjs/sessions/{}/streams/{}/frames",
+            SessionId::new(),
+            StreamId::new()
+        ))
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 // ===== Response Headers Tests =====
 
 #[tokio::test]

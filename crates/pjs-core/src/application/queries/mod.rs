@@ -2,7 +2,10 @@
 
 use crate::application::dto::{PriorityDto, SessionIdDto, StreamIdDto};
 use crate::domain::{
-    aggregates::{StreamSession, stream_session::SessionHealth},
+    aggregates::{
+        StreamSession,
+        stream_session::{SessionHealth, SessionStats},
+    },
     entities::{Frame, Stream},
     events::DomainEvent,
 };
@@ -163,6 +166,19 @@ pub struct HealthResponse {
 pub struct EventsResponse {
     pub events: Vec<DomainEvent>,
     pub total_count: usize,
+}
+
+/// Response for session stats queries
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStatsResponse {
+    pub session_id: SessionIdDto,
+    pub stats: SessionStats,
+    pub stream_count: usize,
+    pub active_stream_count: usize,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    /// Duration in milliseconds since session creation, or `None` if not yet completed.
+    pub duration_ms: Option<i64>,
 }
 
 /// System statistics response

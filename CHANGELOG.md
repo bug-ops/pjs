@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `GetSystemStatsQuery` now reports real server uptime: `SystemQueryHandler` captures `Instant::now()` at construction and computes elapsed time on each query; `frames_per_second` and `bytes_per_second` are derived from actual uptime (#139)
+- Implement `QueryHandlerGat<GetStreamFramesQuery>` and `QueryHandlerGat<GetSessionStatsQuery>`; add HTTP routes `GET /pjs/sessions/:id/streams/:stream_id/frames` and `GET /pjs/sessions/:id/stats` (#141)
+- Remove `infrastructure/repositories/memory.rs` placeholder (`MemoryRepository` had no domain port implementations); delete the associated no-op test file; real in-memory storage is `GatInMemoryStreamRepository` (#133)
 - Replace `Mutex<PoolStats>` with `AtomicUsize` counters in `ObjectPool` to eliminate stat-tracking lock contention; `Vec<u8>` pool now performs comparably to stdlib allocation (#110)
 - Move orphaned `tests/websocket_security.rs` into `crates/pjs-core/tests/` and wire it to the test harness; fix crate name import and two logic bugs in rate-limiting assertions (#111)
 - `StringArena::intern()` now stores raw pointers instead of `&'static str` transmutes, eliminating potential use-after-free UB (#124)
