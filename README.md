@@ -26,13 +26,11 @@ High-performance Rust library for priority-based JSON streaming with SIMD accele
 
 ## Performance
 
-| Benchmark | Performance Gain | Notes |
-|-----------|-----------------|-------|
-| **GAT Async** | **1.82x faster** | Static dispatch eliminates virtual calls |
-| **Small JSON** | Competitive | Comparable to industry standards |
-| **Medium JSON** | **~3x faster** | vs traditional parsers |
-| **Large JSON** | **~6x faster** | vs traditional parsers |
-| **Progressive Loading** | **~5x faster** | vs batch processing |
+| Benchmark | Result | Notes |
+|-----------|--------|-------|
+| **GAT Async** | **1.82x faster** | Static dispatch vs `async_trait` virtual calls |
+
+Reproducible benchmarks: `cargo bench -p pjs-bench`
 
 ## Installation
 
