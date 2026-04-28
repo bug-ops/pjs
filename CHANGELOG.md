@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Replace `Mutex<PoolStats>` with `AtomicUsize` counters in `ObjectPool` to eliminate stat-tracking lock contention; `Vec<u8>` pool now performs comparably to stdlib allocation (#110)
+- Move orphaned `tests/websocket_security.rs` into `crates/pjs-core/tests/` and wire it to the test harness; fix crate name import and two logic bugs in rate-limiting assertions (#111)
+
 ### Planned for v0.6.0
 
 - **Enhanced Framework Integrations**: Additional Rust web framework support (Actix, Warp)
