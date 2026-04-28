@@ -173,6 +173,8 @@ jobs:
         partition: [1, 2, 3, 4]
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@nightly
 
       - uses: taiki-e/install-action@v2
