@@ -69,8 +69,8 @@ mod inner {
         #[error("API key must not contain whitespace")]
         WhitespaceInKey,
         /// Returned when the system RNG fails to seed the per-process HMAC key.
-        #[error("failed to seed HMAC key from system RNG")]
-        RngFailure,
+        #[error("failed to seed HMAC key from system RNG: {0}")]
+        RngFailure(getrandom::Error),
     }
 
     // ── Internal state ───────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ mod inner {
             }
 
             let mut hmac_key = [0u8; 32];
-            getrandom::fill(&mut hmac_key).map_err(|_| AuthConfigError::RngFailure)?;
+            getrandom::fill(&mut hmac_key).map_err(AuthConfigError::RngFailure)?;
 
             let keys = raw_keys
                 .iter()

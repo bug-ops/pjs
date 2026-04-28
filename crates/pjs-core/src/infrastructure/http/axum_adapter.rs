@@ -375,11 +375,14 @@ where
 
 /// Create PJS-enabled Axum router with both rate limiting and API key authentication.
 ///
-/// Layer ordering (Tower applies layers outer-to-inner on the protected sub-router):
+/// Layer ordering (Tower applies layers outer-to-inner):
 /// ```text
-/// auth        ← outermost: rejects unauthenticated requests before consuming rate-limit quota
-/// rate_limit  ← applied after auth; unauthenticated traffic does not count against quota
-/// handlers
+/// rate_limit  ← outermost: wraps both public and protected sub-routers
+///   public_routes (no auth)
+///   protected_routes
+///     auth    ← inner: wraps only protected routes; unauthenticated requests are
+///               rejected before consuming rate-limit quota for protected paths
+///     handlers
 /// ```
 ///
 /// Rate limiting is applied to **both** the public and protected sub-routers (DoS
