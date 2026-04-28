@@ -43,6 +43,7 @@ mod inner {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     use std::{
+        fmt,
         future::Future,
         pin::Pin,
         sync::Arc,
@@ -101,10 +102,6 @@ mod inner {
     /// let config = ApiKeyConfig::new(&["secret-key-1", "secret-key-2"])?;
     /// let layer = ApiKeyAuthLayer::new(config);
     /// ```
-    // NOTE: Debug is derived but the fields contain HMAC key material. The output is
-    // formatted as arrays of integers which is not secret-safe in logs, but is needed for
-    // test assertions. Do not log ApiKeyConfig instances in production code.
-    #[derive(Debug)]
     pub struct ApiKeyConfig {
         /// HMAC-SHA256 tags of all configured API keys.
         pub(crate) keys: Vec<[u8; 32]>,
@@ -139,6 +136,15 @@ mod inner {
                 .map(|k| hmac_tag(&hmac_key, k.as_bytes()))
                 .collect();
             Ok(Self { keys, hmac_key })
+        }
+    }
+
+    impl fmt::Debug for ApiKeyConfig {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("ApiKeyConfig")
+                .field("keys", &format!("[{} redacted tags]", self.keys.len()))
+                .field("hmac_key", &"[redacted]")
+                .finish()
         }
     }
 
@@ -525,6 +531,20 @@ mod inner {
         use tower::{Service, ServiceExt};
 
         // ── ApiKeyConfig construction ────────────────────────────────────────────
+
+        #[test]
+        fn api_key_config_debug_redacts_key_material() {
+            let config = ApiKeyConfig::new(&["test-key-one"]).unwrap();
+            let debug = format!("{config:?}");
+            assert!(
+                debug.contains("redacted"),
+                "debug output must redact keys: {debug}"
+            );
+            assert!(
+                !debug.contains("hmac_key: ["),
+                "hmac_key must not appear as raw bytes: {debug}"
+            );
+        }
 
         #[test]
         fn empty_key_list_is_rejected() {

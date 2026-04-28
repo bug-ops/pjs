@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- `ApiKeyConfig` no longer derives `Debug`; a hand-written impl redacts `hmac_key` and `keys` fields, preventing HMAC key material from appearing in logs or panic output (closes #216)
+
+### Added
+
+- `GET /pjs/sessions/search` HTTP route dispatching to `SearchSessionsQuery`; supports `state`, `sort_by` (`created_at`, `updated_at`, `stream_count`, `total_bytes`), `sort_order` (`asc`/`ascending`, `desc`/`descending`), `limit`, and `offset` query parameters (closes #209)
+
 ### Changed
 
 - `AuthConfigError::RngFailure` now wraps the underlying `getrandom::Error` instead of discarding it, providing operators with actionable diagnostic information when the system RNG fails in sandboxed environments (closes #203)
