@@ -1,7 +1,7 @@
 //! HTTP authentication middleware for PJS endpoints.
 //!
-//! This module provides Tower [`Layer`] implementations for API key and (optionally) JWT
-//! authentication. Both layers mirror the boilerplate pattern of [`RateLimitMiddleware`]
+//! This module provides Tower `Layer` implementations for API key and (optionally) JWT
+//! authentication. Both layers mirror the boilerplate pattern of `RateLimitMiddleware`
 //! in `middleware.rs` so that they compose cleanly with the existing middleware stack.
 //!
 //! # Security design
@@ -11,7 +11,7 @@
 //! Raw API keys are never stored. At construction time each configured key is tagged with
 //! HMAC-SHA256 using a per-process random `hmac_key`. During authentication the candidate
 //! token is tagged with the same key and the resulting 32-byte digest is compared against
-//! every stored tag using [`ConstantTimeEq`].
+//! every stored tag using `ConstantTimeEq`.
 //!
 //! This design eliminates two side-channel classes:
 //! - **Length leakage** — all tags are exactly 32 bytes regardless of original key length.
@@ -32,7 +32,7 @@
 //! # Feature gates
 //!
 //! The entire module is gated behind `#[cfg(feature = "http-server")]`.
-//! [`JwtAuthLayer`] is additionally gated behind `#[cfg(feature = "http-auth-jwt")]`.
+//! `JwtAuthLayer` is additionally gated behind `#[cfg(feature = "http-auth-jwt")]`.
 
 #[cfg(feature = "http-server")]
 mod inner {
@@ -249,7 +249,7 @@ mod inner {
     /// Constant-time membership test.
     ///
     /// Tags the candidate with the stored HMAC key and compares against every stored tag
-    /// using [`ConstantTimeEq`]. The full list is always iterated — no early return —
+    /// using `ConstantTimeEq`. The full list is always iterated — no early return —
     /// and results are accumulated with bitwise OR to prevent timing-based key-index
     /// discovery.
     fn matches_any(state: &ApiKeyState, candidate: &[u8]) -> bool {

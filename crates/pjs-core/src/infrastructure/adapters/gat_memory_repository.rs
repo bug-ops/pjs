@@ -4,7 +4,7 @@
 //!
 //! # Concurrency Model
 //!
-//! These repositories use [`InMemoryStore`] which is backed by `DashMap` for
+//! These repositories use [`InMemoryStore`](super::InMemoryStore) which is backed by `DashMap` for
 //! lock-free concurrent access. See `generic_store.rs` for detailed consistency
 //! guarantees.
 //!

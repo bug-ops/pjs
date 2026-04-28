@@ -1,7 +1,7 @@
 //! Process-wide global allocator registration.
 //!
 //! When the `mimalloc` feature is enabled on a non-WASM target, registers
-//! [`mimalloc::MiMalloc`] as the `#[global_allocator]`. This routes all
+//! `mimalloc::MiMalloc` as the `#[global_allocator]`. This routes all
 //! `Box`/`Vec`/`String` allocations through mimalloc.
 //!
 //! On WASM (`target_arch = "wasm32"`) the system allocator is always used,
