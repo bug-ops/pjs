@@ -276,6 +276,11 @@ where
                 .create_patch_frames(priority, command.max_frames)
                 .map_err(ApplicationError::Domain)?;
 
+            // TODO(critic): Audit whether streaming/WebSocket frame paths bypass these
+            // command handlers — if so, pjs_frames_total underreports throughput.
+            #[cfg(feature = "metrics")]
+            metrics::counter!("pjs_frames_total").increment(frames.len() as u64);
+
             // Save updated session
             self.repository
                 .save_session(session.clone())
@@ -322,6 +327,11 @@ where
             let frames = session
                 .create_priority_frames(command.max_frames)
                 .map_err(ApplicationError::Domain)?;
+
+            // TODO(critic): Audit whether streaming/WebSocket frame paths bypass these
+            // command handlers — if so, pjs_frames_total underreports throughput.
+            #[cfg(feature = "metrics")]
+            metrics::counter!("pjs_frames_total").increment(frames.len() as u64);
 
             // Save updated session
             self.repository
