@@ -43,6 +43,7 @@ getrandom = "0.3"
 hmac = "0.12"
 hyper = "1.9"
 jsonwebtoken = { version = "10.3", default-features = false, features = ["use_pem"] }
+jiter = "0.14"
 js-sys = "0.3"
 maplit = "1.0"
 memchr = "2.8"

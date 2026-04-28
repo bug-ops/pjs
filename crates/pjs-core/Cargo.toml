@@ -30,6 +30,7 @@ flate2 = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 getrandom = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
+jiter = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 maplit = { workspace = true }
 mimalloc = { workspace = true, optional = true }
@@ -92,6 +93,7 @@ mimalloc = ["dep:mimalloc"]
 
 # Optional features
 compression = ["dep:brotli", "dep:flate2"]
+partial-parse = ["dep:jiter"]
 schema-validation = ["dep:regex"]
 
 # Infrastructure features

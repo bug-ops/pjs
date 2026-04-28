@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `pjson-rs`: new `partial-parse` feature flag; adds `jiter = "0.14"` workspace dependency and `parser/partial.rs` with the sealed `PartialJsonParser` trait, `PartialParseResult`, `StreamingHint`, `ParseDiagnostic` (`DuplicateKey`, `BigIntLossyConversion`), `JiterPartialParser` (hand-rolled per-token walker), and `JiterConfig`; foundation for partial JSON parsing in streaming frame delivery (#117)
 - `pjs-wasm`: added `tsify-next` dependency; `FrameData` and `StreamStats` now derive `Tsify` and generate precise TypeScript interfaces in the wasm-pack `.d.ts` output; `FrameCallback`, `StreamStatsCallback`, and `ErrorCallback` type aliases are emitted via `typescript_custom_section` (closes #143)
 - `PjsConfig::validate()` and sub-config validators (`StreamingConfig`, `ParserConfig`, `SimdConfig`, `SecurityConfig`) return `Err(ConfigError)` for zero-value fields and inconsistent bounds; `ConfigError` is re-exported from `pjson_rs` (closes #175)
 - `ApiKeyAuthLayer` Tower middleware for `Authorization: Bearer` and `X-PJS-API-Key` authentication using HMAC-SHA256 tag comparison via `subtle::ConstantTimeEq` — constant-time, no key-index or length leakage (closes #135)
