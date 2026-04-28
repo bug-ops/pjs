@@ -72,6 +72,10 @@ pub enum Error {
     #[error("Security error: {0}")]
     SecurityError(String),
 
+    /// Compression or decompression codec failure
+    #[error("Compression error: {0}")]
+    CompressionError(String),
+
     /// Generic error for other cases
     #[error("{0}")]
     Other(String),
@@ -149,6 +153,11 @@ impl Error {
         Self::SecurityError(message.into())
     }
 
+    /// Create a compression error
+    pub fn compression_error(message: impl Into<String>) -> Self {
+        Self::CompressionError(message.into())
+    }
+
     /// Create a generic error
     pub fn other(message: impl Into<String>) -> Self {
         Self::Other(message.into())
@@ -189,6 +198,7 @@ impl Error {
             Self::ClientError(_) | Self::InvalidSession(_) | Self::InvalidUrl(_) => "client",
             Self::Utf8(_) => "encoding",
             Self::SecurityError(_) => "security",
+            Self::CompressionError(_) => "compression",
             Self::Other(_) => "other",
         }
     }

@@ -17,58 +17,74 @@ pub enum CompressionBombError {
     DepthExceeded { depth: usize, max_depth: usize },
 }
 
-/// Configuration for compression bomb protection
+/// Configuration for compression bomb protection.
+///
+/// `max_ratio` is a security parameter: it limits how much the decompressed output may exceed
+/// the compressed input. Legitimate high-compression workloads (e.g., repetitive JSON with
+/// brotli) can exceed 200x; increase this field if you see false positives. Default is 300.0
+/// which is permissive enough for real brotli/gzip workloads while still catching true bombs.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompressionBombConfig {
-    /// Maximum allowed compression ratio (decompressed_size / compressed_size)
+    /// Maximum allowed compression ratio (decompressed_size / compressed_size).
+    /// This is a security parameter — see struct-level note.
     pub max_ratio: f64,
-    /// Maximum allowed decompressed size in bytes
+    /// Maximum allowed decompressed size in bytes.
     pub max_decompressed_size: usize,
-    /// Maximum nested compression levels
+    /// Maximum compressed input size in bytes. Reject inputs larger than this before decoding.
+    /// Defaults to 100 MiB. This is separate from `max_decompressed_size` — a legitimately
+    /// small compressed payload is expected to be far less than the decompressed limit.
+    pub max_compressed_size: usize,
+    /// Maximum nested compression levels.
     pub max_compression_depth: usize,
-    /// Check interval - how often to check during decompression
+    /// Check interval - how often to check during decompression.
     pub check_interval_bytes: usize,
 }
 
 impl Default for CompressionBombConfig {
     fn default() -> Self {
         Self {
-            max_ratio: 100.0,                         // 100x compression ratio limit
-            max_decompressed_size: 100 * 1024 * 1024, // 100MB
+            // 300x is permissive enough for real brotli on repetitive JSON (200x+ ratios are
+            // normal) while still blocking realistic compression bombs.
+            max_ratio: 300.0,
+            max_decompressed_size: 100 * 1024 * 1024, // 100 MiB
+            max_compressed_size: 100 * 1024 * 1024,   // 100 MiB
             max_compression_depth: 3,
-            check_interval_bytes: 64 * 1024, // Check every 64KB
+            check_interval_bytes: 64 * 1024, // Check every 64 KiB
         }
     }
 }
 
 impl CompressionBombConfig {
-    /// Configuration for high-security environments
+    /// Configuration for high-security environments.
     pub fn high_security() -> Self {
         Self {
             max_ratio: 20.0,
-            max_decompressed_size: 10 * 1024 * 1024, // 10MB
+            max_decompressed_size: 10 * 1024 * 1024, // 10 MiB
+            max_compressed_size: 10 * 1024 * 1024,   // 10 MiB
             max_compression_depth: 2,
-            check_interval_bytes: 32 * 1024, // Check every 32KB
+            check_interval_bytes: 32 * 1024, // Check every 32 KiB
         }
     }
 
-    /// Configuration for low-memory environments
+    /// Configuration for low-memory environments.
     pub fn low_memory() -> Self {
         Self {
             max_ratio: 50.0,
-            max_decompressed_size: 5 * 1024 * 1024, // 5MB
+            max_decompressed_size: 5 * 1024 * 1024, // 5 MiB
+            max_compressed_size: 5 * 1024 * 1024,   // 5 MiB
             max_compression_depth: 2,
-            check_interval_bytes: 16 * 1024, // Check every 16KB
+            check_interval_bytes: 16 * 1024, // Check every 16 KiB
         }
     }
 
-    /// Configuration for high-throughput environments
+    /// Configuration for high-throughput environments.
     pub fn high_throughput() -> Self {
         Self {
-            max_ratio: 200.0,
-            max_decompressed_size: 500 * 1024 * 1024, // 500MB
+            max_ratio: 1000.0,
+            max_decompressed_size: 500 * 1024 * 1024, // 500 MiB
+            max_compressed_size: 500 * 1024 * 1024,   // 500 MiB
             max_compression_depth: 5,
-            check_interval_bytes: 128 * 1024, // Check every 128KB
+            check_interval_bytes: 128 * 1024, // Check every 128 KiB
         }
     }
 }
@@ -224,12 +240,17 @@ impl CompressionBombDetector {
         Self { config }
     }
 
-    /// Validate compressed data before decompression
+    /// Validate compressed input size before decompression.
+    ///
+    /// Rejects inputs whose compressed size exceeds `max_compressed_size`. This guards against
+    /// oversized inputs before any decoding begins. It does NOT compare against
+    /// `max_decompressed_size` — decompressed output is monitored by [`CompressionBombProtector`]
+    /// during streaming.
     pub fn validate_pre_decompression(&self, compressed_size: usize) -> Result<()> {
-        if compressed_size > self.config.max_decompressed_size {
+        if compressed_size > self.config.max_compressed_size {
             return Err(Error::SecurityError(format!(
-                "Compressed data size {} exceeds maximum allowed {}",
-                compressed_size, self.config.max_decompressed_size
+                "Compressed data size {} exceeds maximum allowed compressed size {}",
+                compressed_size, self.config.max_compressed_size
             )));
         }
         Ok(())
@@ -506,12 +527,12 @@ mod tests {
     #[test]
     fn test_validate_pre_decompression_size_exceeded() {
         let config = CompressionBombConfig {
-            max_decompressed_size: 1024,
+            max_compressed_size: 1024,
             ..Default::default()
         };
         let detector = CompressionBombDetector::new(config);
 
-        // Try to validate compressed data larger than max decompressed size
+        // Compressed input larger than max_compressed_size must be rejected before decoding.
         let result = detector.validate_pre_decompression(2048);
         assert!(result.is_err());
 
@@ -874,6 +895,7 @@ mod tests {
         let config = CompressionBombConfig {
             max_ratio: 123.45,
             max_decompressed_size: 999_888,
+            max_compressed_size: 512_000,
             max_compression_depth: 7,
             check_interval_bytes: 16_384,
         };
