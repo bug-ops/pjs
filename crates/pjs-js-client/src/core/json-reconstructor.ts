@@ -7,7 +7,6 @@
 
 import {
   JsonPath,
-  PatchOperation,
   SkeletonFrame,
   PatchFrame
 } from '../types/index.js';
@@ -152,15 +151,23 @@ export class JsonReconstructor {
 
   // Path resolution helpers
 
+  private static readonly UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+  private static assertSafeKey(key: string): void {
+    if (JsonReconstructor.UNSAFE_KEYS.has(key)) {
+      throw new Error(`Unsafe path segment: ${key}`);
+    }
+  }
+
   private setPatchValue(obj: any, path: JsonPath, value: any): void {
     const { parent, key } = this.resolvePath(obj, path);
-    parent[key] = value;
+    Object.defineProperty(parent, key, { value, writable: true, enumerable: true, configurable: true });
   }
 
   private appendPatchValue(obj: any, path: JsonPath, value: any): void {
     const { parent, key } = this.resolvePath(obj, path);
     if (!Array.isArray(parent[key])) {
-      parent[key] = [];
+      Object.defineProperty(parent, key, { value: [], writable: true, enumerable: true, configurable: true });
     }
     if (Array.isArray(value)) {
       parent[key].push(...value);
@@ -171,14 +178,12 @@ export class JsonReconstructor {
 
   private mergePatchValue(obj: any, path: JsonPath, value: any): void {
     const { parent, key } = this.resolvePath(obj, path);
-    if (
+    const merged =
       typeof parent[key] === 'object' && typeof value === 'object' &&
       !Array.isArray(parent[key]) && !Array.isArray(value)
-    ) {
-      parent[key] = { ...parent[key], ...value };
-    } else {
-      parent[key] = value;
-    }
+        ? { ...parent[key], ...value }
+        : value;
+    Object.defineProperty(parent, key, { value: merged, writable: true, enumerable: true, configurable: true });
   }
 
   private deletePatchValue(obj: any, path: JsonPath): void {
@@ -189,6 +194,7 @@ export class JsonReconstructor {
         parent.splice(index, 1);
       }
     } else {
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
       delete parent[key];
     }
   }
@@ -200,13 +206,14 @@ export class JsonReconstructor {
     for (let i = 0; i < pathSegments.length - 1; i++) {
       const segment = pathSegments[i];
       const { key, index } = this.parseSegment(segment);
+      JsonReconstructor.assertSafeKey(key);
 
       if (index !== null) {
         current = current[key];
         current = current[index];
       } else {
         if (!(key in current)) {
-          current[key] = {};
+          Object.defineProperty(current, key, { value: {}, writable: true, enumerable: true, configurable: true });
         }
         current = current[key];
       }
@@ -214,10 +221,11 @@ export class JsonReconstructor {
 
     const lastSegment = pathSegments[pathSegments.length - 1];
     const { key, index } = this.parseSegment(lastSegment);
+    JsonReconstructor.assertSafeKey(key);
 
     if (index !== null) {
       if (!Array.isArray(current[key])) {
-        current[key] = [];
+        Object.defineProperty(current, key, { value: [], writable: true, enumerable: true, configurable: true });
       }
       return { parent: current[key], key: index.toString() };
     }
