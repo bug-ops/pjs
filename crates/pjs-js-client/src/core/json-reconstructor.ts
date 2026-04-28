@@ -193,7 +193,7 @@ export class JsonReconstructor {
       if (!isNaN(index) && index >= 0 && index < parent.length) {
         parent.splice(index, 1);
       }
-    } else {
+    } else if (!JsonReconstructor.UNSAFE_KEYS.has(key)) {
       // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
       delete parent[key];
     }
