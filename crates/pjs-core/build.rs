@@ -20,6 +20,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(pjs_simd_sse42)");
     println!("cargo::rustc-check-cfg=cfg(pjs_simd_neon)");
     println!("cargo::rustc-check-cfg=cfg(pjs_simd_auto)");
+    println!("cargo::rustc-check-cfg=cfg(pjs_simd)");
 
     // Re-run only when these inputs change.
     println!("cargo::rerun-if-env-changed=CARGO_CFG_TARGET_FEATURE");
@@ -102,4 +103,8 @@ fn main() {
 
     // Unsupported feature combinations on non-matching architectures: silently no-op.
     // sonic-rs already handles the runtime fallback.
+
+    if want_auto || want_avx2 || want_avx512 || want_sse42 || want_neon {
+        println!("cargo::rustc-cfg=pjs_simd");
+    }
 }

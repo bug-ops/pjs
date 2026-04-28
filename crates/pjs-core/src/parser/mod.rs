@@ -36,12 +36,16 @@ pub struct Parser {
 }
 
 impl Parser {
-    /// Create new parser with default configuration (sonic-rs enabled)
+    /// Create new parser with default configuration.
+    ///
+    /// Selects the sonic-rs SIMD backend when any `simd-*` Cargo feature is
+    /// enabled (which is the default via `simd-auto`). Without any `simd-*`
+    /// feature, falls back to the portable serde-based parser.
     pub fn new() -> Self {
         Self {
             sonic: SonicParser::new(),
             simple: SimpleParser::new(),
-            use_sonic: true,
+            use_sonic: cfg!(pjs_simd),
         }
     }
 
@@ -55,7 +59,7 @@ impl Parser {
         Self {
             sonic: SonicParser::with_config(sonic_config),
             simple: SimpleParser::with_config(config),
-            use_sonic: true,
+            use_sonic: cfg!(pjs_simd),
         }
     }
 
