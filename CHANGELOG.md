@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- SIMD feature flags (`simd-auto`, `simd-avx2`, `simd-avx512`, `simd-sse42`, `simd-neon`) now activate sonic-rs SIMD codegen via `.cargo/config.toml` (`-C target-cpu=native` on x86_64/aarch64); `crates/pjs-core/build.rs` emits `pjs_simd_*` cfg gates and `cargo::warning` diagnostics when a SIMD feature is enabled but the required CPU target features are not exposed to rustc (#125)
+
+### Removed
+
+- Dead `parser/hybrid.rs` stub (`HybridParser`, `SimdBackend`, `SerdeBackend`, `BackendThresholds`, `ParserMetrics`): 406-line file was never wired into the module tree (#126)
+- Dead fields `Parser::zero_copy_simd` and `Parser::use_zero_copy` from `crates/pjs-core/src/parser/mod.rs`; `Parser` now has exactly three fields: `sonic`, `simple`, `use_sonic` (#126)
+
 ### Fixed
 
 - Replace `Mutex<PoolStats>` with `AtomicUsize` counters in `ObjectPool` to eliminate stat-tracking lock contention; `Vec<u8>` pool now performs comparably to stdlib allocation (#110)
