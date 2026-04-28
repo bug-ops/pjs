@@ -133,7 +133,6 @@ pub struct BatchFrameStream<S> {
     format: StreamFormat,
     batch_size: usize,
     current_batch: Vec<Frame>,
-    is_first_batch: bool,
 }
 
 impl<S> BatchFrameStream<S>
@@ -146,7 +145,18 @@ where
             format,
             batch_size,
             current_batch: Vec::new(),
-            is_first_batch: true,
+        }
+    }
+
+    /// Returns the content-type that accurately describes what this stream emits.
+    ///
+    /// `BatchFrameStream` serializes each batch as one JSON array per line regardless of the
+    /// requested format, so `StreamFormat::Json` is promoted to `application/x-ndjson` — the
+    /// output is not a single well-formed JSON document and must not be advertised as one.
+    pub fn content_type(&self) -> &'static str {
+        match self.format {
+            StreamFormat::Json => "application/x-ndjson",
+            other => other.content_type(),
         }
     }
 
@@ -166,13 +176,9 @@ where
             .collect();
 
         match self.format {
-            StreamFormat::Json => {
-                if self.is_first_batch {
-                    Ok(format!("[{}]", serde_json::to_string(&batch_data)?))
-                } else {
-                    Ok(format!(",{}", serde_json::to_string(&batch_data)?))
-                }
-            }
+            // Each batch is emitted as one valid JSON array per line (NDJSON-style),
+            // so every line can be parsed independently by the consumer.
+            StreamFormat::Json => Ok(format!("{}\n", serde_json::to_string(&batch_data)?)),
             StreamFormat::NdJson => {
                 let mut result = String::new();
                 for item in batch_data {
@@ -208,7 +214,6 @@ where
                     if self.current_batch.len() >= self.batch_size {
                         let batch = std::mem::take(&mut self.current_batch);
                         let formatted = self.format_batch(&batch);
-                        self.is_first_batch = false;
                         return Poll::Ready(Some(formatted));
                     }
                 }
@@ -224,10 +229,8 @@ where
                     if !self.current_batch.is_empty()
                         && self.current_batch.len() >= self.batch_size / 2
                     {
-                        // Send partial batch if we have some frames and are waiting
                         let batch = std::mem::take(&mut self.current_batch);
                         let formatted = self.format_batch(&batch);
-                        self.is_first_batch = false;
                         return Poll::Ready(Some(formatted));
                     }
                     return Poll::Pending;
@@ -243,6 +246,9 @@ pub struct PriorityFrameStream<S> {
     format: StreamFormat,
     priority_buffer: std::collections::BinaryHeap<PriorityFrame>,
     buffer_size: usize,
+    /// Set to `true` once the inner stream returns `Poll::Ready(None)`.
+    /// Used to distinguish "buffer empty and upstream done" from "upstream paused".
+    inner_done: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +287,7 @@ where
             format,
             priority_buffer: std::collections::BinaryHeap::new(),
             buffer_size,
+            inner_done: false,
         }
     }
 
@@ -312,25 +319,30 @@ where
     type Item = Result<String, StreamError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Fill buffer with frames
-        while self.priority_buffer.len() < self.buffer_size {
+        // Fill buffer until full, inner stream ends, or inner stream pauses.
+        while !self.inner_done && self.priority_buffer.len() < self.buffer_size {
             match Pin::new(&mut self.inner).poll_next(cx) {
                 Poll::Ready(Some(frame)) => {
                     let priority = frame.priority().value();
                     self.priority_buffer.push(PriorityFrame { frame, priority });
                 }
-                Poll::Ready(None) => break,
+                Poll::Ready(None) => {
+                    self.inner_done = true;
+                    break;
+                }
                 Poll::Pending => break,
             }
         }
 
-        // Return highest priority frame
+        // Drain buffer from highest to lowest priority.
         if let Some(priority_frame) = self.priority_buffer.pop() {
             let formatted = self.format_frame(&priority_frame.frame);
             Poll::Ready(Some(formatted))
-        } else if self.priority_buffer.is_empty() {
+        } else if self.inner_done {
+            // Buffer empty and upstream finished — stream is complete.
             Poll::Ready(None)
         } else {
+            // Buffer empty but upstream may produce more frames.
             Poll::Pending
         }
     }
@@ -388,12 +400,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::entities::Frame;
+    use crate::domain::value_objects::{JsonData, JsonPath, Priority, StreamId};
+    use futures::StreamExt;
     use futures::stream;
+    use pjson_rs_domain::entities::frame::FramePatch;
+
+    fn make_skeleton_frame() -> Frame {
+        Frame::skeleton(StreamId::new(), 1, JsonData::Null)
+    }
+
+    fn make_patch_frame(priority: Priority) -> Frame {
+        let path = JsonPath::new("$.x").expect("valid path");
+        let patch = FramePatch::set(path, JsonData::Null);
+        Frame::patch(StreamId::new(), 1, priority, vec![patch]).expect("valid patch frame")
+    }
 
     #[test]
     fn test_stream_format_detection() {
         let mut headers = HeaderMap::new();
-        // TODO: Handle unwrap() - add proper error handling for header value parsing in tests
         headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
 
         let format = StreamFormat::from_accept_header(&headers);
@@ -401,18 +426,89 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_adaptive_stream() {
-        use futures::StreamExt;
+    async fn test_adaptive_stream_empty() {
+        let frame_stream = stream::iter(Vec::<Frame>::new());
+        let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json);
+        let collected: Vec<_> = adaptive.collect().await;
+        assert!(collected.is_empty());
+    }
 
-        // Create mock frame stream
+    /// Each output line must be a valid JSON array (the batch), not a double-nested array.
+    #[tokio::test]
+    async fn test_batch_frame_stream_multiple_batches() {
+        let frames: Vec<Frame> = (0..5).map(|_| make_skeleton_frame()).collect();
+        let frame_stream = stream::iter(frames);
+
+        // batch_size=2 → two full batches of 2 and one remainder batch of 1
+        let batch_stream = BatchFrameStream::new(frame_stream, StreamFormat::Json, 2);
+        let collected: Vec<Result<String, StreamError>> = batch_stream.collect().await;
+
+        assert_eq!(
+            collected.len(),
+            3,
+            "expected 3 batches for 5 frames with batch_size=2"
+        );
+
+        for result in &collected {
+            let line = result.as_ref().expect("batch should not error");
+            assert!(line.ends_with('\n'), "output line must end with newline");
+            let trimmed = line.trim_end_matches('\n');
+            // Must parse as a JSON array — not double-nested like `[[...]]`
+            let parsed: serde_json::Value =
+                serde_json::from_str(trimmed).expect("each batch line must be valid JSON");
+            assert!(
+                parsed.is_array(),
+                "each batch line must be a JSON array, got: {trimmed}"
+            );
+        }
+    }
+
+    /// After the inner stream ends and the buffer drains, `PriorityFrameStream` must
+    /// return `Poll::Ready(None)` — not hang on `Poll::Pending`.
+    #[tokio::test]
+    async fn test_priority_stream_terminates() {
+        let frames: Vec<Frame> = (0..4).map(|_| make_skeleton_frame()).collect();
+        let frame_stream = stream::iter(frames);
+
+        let priority_stream = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 8);
+        let collected: Vec<Result<String, StreamError>> = priority_stream.collect().await;
+
+        assert_eq!(collected.len(), 4);
+        for result in &collected {
+            assert!(result.is_ok());
+        }
+    }
+
+    /// Frames must be emitted in descending priority order (highest first).
+    #[tokio::test]
+    async fn test_priority_stream_ordering() {
         let frames = vec![
-            // Would create actual Frame objects here
+            make_patch_frame(Priority::new(10).unwrap()),
+            make_patch_frame(Priority::new(50).unwrap()),
+            make_patch_frame(Priority::new(30).unwrap()),
         ];
         let frame_stream = stream::iter(frames);
 
-        let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json);
-        let _collected: Vec<_> = adaptive.collect().await;
+        let priority_stream = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 8);
+        let collected: Vec<_> = priority_stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|r| r.expect("no error"))
+            .collect();
 
-        // Test would verify format output
+        let priorities: Vec<u64> = collected
+            .iter()
+            .map(|s| {
+                let v: serde_json::Value = serde_json::from_str(s).unwrap();
+                v["priority"].as_u64().unwrap()
+            })
+            .collect();
+
+        assert_eq!(
+            priorities,
+            vec![50, 30, 10],
+            "frames must be ordered highest priority first"
+        );
     }
 }
