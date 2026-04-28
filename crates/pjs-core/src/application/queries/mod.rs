@@ -134,6 +134,8 @@ pub struct SessionResponse {
 pub struct SessionsResponse {
     pub sessions: Vec<StreamSession>,
     pub total_count: usize,
+    /// Whether more sessions exist beyond this page.
+    pub has_more: bool,
 }
 
 /// Response for stream queries
