@@ -322,6 +322,15 @@ impl From<&crate::domain::value_objects::SchemaValidationError> for ValidationEr
                 path.clone(),
                 format!("AllOf validation failed for schemas: {failures}"),
             ),
+            SchemaValidationError::InvalidPattern {
+                path,
+                pattern,
+                reason,
+            } => (
+                "invalid_pattern".to_string(),
+                path.clone(),
+                format!("Pattern '{pattern}' is not valid regex: {reason}"),
+            ),
         };
 
         Self {

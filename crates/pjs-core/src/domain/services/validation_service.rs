@@ -287,7 +287,7 @@ impl ValidationService {
         path: &str,
         min_length: Option<usize>,
         max_length: Option<usize>,
-        _pattern: &Option<String>,
+        pattern: &Option<String>,
         allowed_values: &Option<smallvec::SmallVec<[String; 8]>>,
     ) -> SchemaValidationResult<()> {
         let value = match data {
@@ -333,6 +333,26 @@ impl ValidationService {
                 value: value.clone(),
             });
         }
+
+        #[cfg(feature = "schema-validation")]
+        if let Some(pat) = pattern {
+            // TODO: cache compiled regexes to avoid recompiling on every call
+            let re = regex::Regex::new(pat).map_err(|e| SchemaValidationError::InvalidPattern {
+                path: path.to_string(),
+                pattern: pat.clone(),
+                reason: e.to_string(),
+            })?;
+            if !re.is_match(value) {
+                return Err(SchemaValidationError::PatternMismatch {
+                    path: path.to_string(),
+                    value: value.clone(),
+                    pattern: pat.clone(),
+                });
+            }
+        }
+
+        #[cfg(not(feature = "schema-validation"))]
+        let _ = pattern;
 
         Ok(())
     }
@@ -1180,5 +1200,49 @@ mod tests {
 
         assert!(default.validate(&data, &schema, "/").is_ok());
         assert!(created.validate(&data, &schema, "/").is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "schema-validation")]
+    fn test_validate_string_pattern() {
+        let validator = ValidationService::new();
+        let schema = Schema::String {
+            min_length: None,
+            max_length: None,
+            pattern: Some("^[a-z]+$".to_string()),
+            allowed_values: None,
+        };
+
+        assert!(
+            validator
+                .validate(&JsonData::String("hello".to_string()), &schema, "/name")
+                .is_ok()
+        );
+
+        let result = validator.validate(&JsonData::String("12345".to_string()), &schema, "/name");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SchemaValidationError::PatternMismatch { .. }
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "schema-validation")]
+    fn test_validate_string_invalid_regex_pattern() {
+        let validator = ValidationService::new();
+        let schema = Schema::String {
+            min_length: None,
+            max_length: None,
+            pattern: Some("(unclosed".to_string()),
+            allowed_values: None,
+        };
+
+        let result = validator.validate(&JsonData::String("hello".to_string()), &schema, "$");
+        assert!(
+            matches!(result, Err(SchemaValidationError::InvalidPattern { .. })),
+            "expected InvalidPattern for a syntactically invalid regex, got: {:?}",
+            result
+        );
     }
 }

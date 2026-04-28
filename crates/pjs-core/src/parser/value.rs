@@ -170,11 +170,100 @@ impl<'a> LazyArray<'a> {
         }
     }
 
-    /// Extract element boundaries from structural analysis
-    fn extract_element_boundaries(_raw: &[u8], _scan_result: &ScanResult) -> SmallVec<[Range; 32]> {
-        // This would analyze the structural characters to find array element boundaries
-        // For now, return empty boundaries as placeholder
-        SmallVec::new()
+    /// Extract top-level element boundaries from a JSON array.
+    ///
+    /// Parses `raw` bytes assuming it is a JSON array (`[...]`) and returns
+    /// a `Range` for each top-level element, trimmed of surrounding whitespace.
+    /// Nested arrays/objects and strings (including escaped quotes) are treated
+    /// opaquely — only depth-0 commas and the closing `]` act as delimiters.
+    ///
+    /// # Invariant
+    ///
+    /// Assumes well-formed JSON. Mismatched brackets in nested content (e.g. `[{]}`) may
+    /// produce incorrect ranges without signalling an error.
+    fn extract_element_boundaries(raw: &[u8], _scan_result: &ScanResult) -> SmallVec<[Range; 32]> {
+        let mut result = SmallVec::new();
+        let len = raw.len();
+
+        // Find the opening '['.
+        let mut pos = 0;
+        while pos < len && raw[pos] != b'[' {
+            pos += 1;
+        }
+        if pos == len {
+            return result;
+        }
+        pos += 1; // skip '['
+
+        let mut depth: usize = 1;
+        let mut in_string = false;
+        let mut elem_start: Option<usize> = None;
+
+        while pos < len {
+            let b = raw[pos];
+
+            if in_string {
+                if b == b'\\' {
+                    // Skip the escaped character.
+                    pos += 1;
+                } else if b == b'"' {
+                    in_string = false;
+                }
+                pos += 1;
+                continue;
+            }
+
+            match b {
+                b'"' => {
+                    in_string = true;
+                    if elem_start.is_none() {
+                        elem_start = Some(pos);
+                    }
+                }
+                b'[' | b'{' => {
+                    depth += 1;
+                    if elem_start.is_none() {
+                        elem_start = Some(pos);
+                    }
+                }
+                b']' | b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        // Closing bracket of the top-level array — emit last element.
+                        if let Some(start) = elem_start {
+                            let end = trim_end(raw, start, pos);
+                            if end > start {
+                                result.push(Range::new(start, end));
+                            }
+                        }
+                        break;
+                    }
+                }
+                b',' if depth == 1 => {
+                    // Top-level separator — emit the current element.
+                    if let Some(start) = elem_start {
+                        let end = trim_end(raw, start, pos);
+                        if end > start {
+                            result.push(Range::new(start, end));
+                        }
+                    }
+                    elem_start = None;
+                }
+                b' ' | b'\t' | b'\n' | b'\r' => {
+                    // Whitespace before first non-space character of an element.
+                    pos += 1;
+                    continue;
+                }
+                _ => {
+                    if elem_start.is_none() {
+                        elem_start = Some(pos);
+                    }
+                }
+            }
+            pos += 1;
+        }
+
+        result
     }
 
     /// Check if this appears to be a numeric array for SIMD optimization
@@ -243,14 +332,128 @@ impl<'a> LazyObject<'a> {
             .collect()
     }
 
-    /// Extract field boundaries from structural analysis
+    /// Extract top-level field boundaries from a JSON object.
+    ///
+    /// Parses `raw` bytes assuming it is a JSON object (`{...}`) and returns a
+    /// `FieldRange` for each top-level field.  The `key` range covers the string
+    /// content **without** surrounding quotes; the `value` range covers the full
+    /// value representation (including quotes when the value is a string).
+    ///
+    /// # Invariant
+    ///
+    /// Assumes well-formed JSON. Malformed input (e.g. duplicate commas, mismatched
+    /// brackets) may produce incomplete results without signalling an error.
     fn extract_field_boundaries(
-        _raw: &[u8],
+        raw: &[u8],
         _scan_result: &ScanResult,
     ) -> SmallVec<[FieldRange; 16]> {
-        // This would analyze the structural characters to find object field boundaries
-        // For now, return empty fields as placeholder
-        SmallVec::new()
+        let mut result = SmallVec::new();
+        let len = raw.len();
+
+        // Find the opening '{'.
+        let mut pos = 0;
+        while pos < len && raw[pos] != b'{' {
+            pos += 1;
+        }
+        if pos == len {
+            return result;
+        }
+        pos += 1; // skip '{'
+
+        loop {
+            // --- skip whitespace before key ---
+            while pos < len && raw[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            if pos >= len || raw[pos] == b'}' {
+                break;
+            }
+            if raw[pos] != b'"' {
+                // Malformed input; stop.
+                break;
+            }
+            pos += 1; // skip opening '"'
+            let key_start = pos;
+            // Scan to closing '"', honouring backslash escapes.
+            while pos < len && raw[pos] != b'"' {
+                if raw[pos] == b'\\' {
+                    pos += 1; // skip escaped char
+                }
+                pos += 1;
+            }
+            let key_end = pos;
+            if pos < len {
+                pos += 1; // skip closing '"'
+            }
+
+            // --- skip whitespace and ':' ---
+            while pos < len && (raw[pos].is_ascii_whitespace() || raw[pos] == b':') {
+                pos += 1;
+            }
+            if pos >= len {
+                break;
+            }
+
+            // --- parse value with depth tracking ---
+            let value_start = pos;
+            let mut depth: usize = 0;
+            let mut in_str = false;
+
+            while pos < len {
+                let b = raw[pos];
+                if in_str {
+                    if b == b'\\' {
+                        pos += 1; // skip escaped char
+                    } else if b == b'"' {
+                        in_str = false;
+                        if depth == 0 {
+                            pos += 1;
+                            break;
+                        }
+                    }
+                    pos += 1;
+                    continue;
+                }
+                match b {
+                    b'"' => {
+                        in_str = true;
+                    }
+                    b'[' | b'{' => depth += 1,
+                    b']' | b'}' => {
+                        if depth == 0 {
+                            // Closing brace of the parent object — do not consume.
+                            break;
+                        }
+                        depth -= 1;
+                        if depth == 0 {
+                            pos += 1;
+                            break;
+                        }
+                    }
+                    b',' if depth == 0 => {
+                        // Separator between fields — do not consume.
+                        break;
+                    }
+                    _ => {}
+                }
+                pos += 1;
+            }
+
+            let value_end = trim_end(raw, value_start, pos);
+            if value_end > value_start {
+                result.push(FieldRange::new(
+                    Range::new(key_start, key_end),
+                    Range::new(value_start, value_end),
+                ));
+            }
+
+            // Skip ',' between fields (or '}' will exit on the next iteration).
+            while pos < len && (raw[pos].is_ascii_whitespace() || raw[pos] == b',') {
+                pos += 1;
+            }
+        }
+
+        result
     }
 }
 
@@ -282,6 +485,17 @@ impl FieldRange {
     }
 }
 
+/// Return the index past the last non-whitespace byte in `raw[start..end]`.
+///
+/// Used to strip trailing whitespace from element and value ranges.
+fn trim_end(raw: &[u8], start: usize, end: usize) -> usize {
+    let mut e = end;
+    while e > start && raw[e - 1].is_ascii_whitespace() {
+        e -= 1;
+    }
+    e
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,7 +513,74 @@ mod tests {
         let scan_result = ScanResult::new();
         let array = LazyArray::from_scan(raw, scan_result);
 
-        assert_eq!(array.len(), 0); // Empty boundaries in placeholder
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.get(0), Some(b"1".as_ref()));
+        assert_eq!(array.get(1), Some(b"2".as_ref()));
+        assert_eq!(array.get(2), Some(b"3".as_ref()));
+    }
+
+    #[test]
+    fn test_lazy_array_empty() {
+        let array = LazyArray::from_scan(b"[]", ScanResult::new());
+        assert_eq!(array.len(), 0);
+        assert!(array.is_empty());
+    }
+
+    #[test]
+    fn test_lazy_array_strings() {
+        let raw = b"[\"hello\", \"world\"]";
+        let array = LazyArray::from_scan(raw, ScanResult::new());
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.get(0), Some(b"\"hello\"".as_ref()));
+    }
+
+    #[test]
+    fn test_lazy_array_nested() {
+        let raw = b"[1, [2, 3], {\"a\": 4}]";
+        let array = LazyArray::from_scan(raw, ScanResult::new());
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.get(0), Some(b"1".as_ref()));
+        assert_eq!(array.get(1), Some(b"[2, 3]".as_ref()));
+        assert_eq!(array.get(2), Some(b"{\"a\": 4}".as_ref()));
+    }
+
+    #[test]
+    fn test_lazy_array_escaped_string() {
+        let raw = br#"["say \"hi\"", "bye"]"#;
+        let array = LazyArray::from_scan(raw, ScanResult::new());
+        assert_eq!(array.len(), 2);
+    }
+
+    #[test]
+    fn test_lazy_object_creation() {
+        let obj = LazyObject::from_scan(b"{\"a\": 1, \"b\": 2}", ScanResult::new());
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("a"), Some(b"1".as_ref()));
+        assert_eq!(obj.get("b"), Some(b"2".as_ref()));
+    }
+
+    #[test]
+    fn test_lazy_object_empty() {
+        let obj = LazyObject::from_scan(b"{}", ScanResult::new());
+        assert_eq!(obj.len(), 0);
+        assert!(obj.is_empty());
+    }
+
+    #[test]
+    fn test_lazy_object_string_value() {
+        let raw = b"{\"name\": \"alice\"}";
+        let obj = LazyObject::from_scan(raw, ScanResult::new());
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.get("name"), Some(b"\"alice\"".as_ref()));
+    }
+
+    #[test]
+    fn test_lazy_object_nested_value() {
+        let raw = b"{\"arr\": [1, 2], \"n\": 42}";
+        let obj = LazyObject::from_scan(raw, ScanResult::new());
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("arr"), Some(b"[1, 2]".as_ref()));
+        assert_eq!(obj.get("n"), Some(b"42".as_ref()));
     }
 
     #[test]

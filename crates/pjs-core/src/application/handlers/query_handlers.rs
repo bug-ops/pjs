@@ -222,11 +222,20 @@ where
             return false;
         }
 
-        // Client info filter
+        // Client info filter — case-insensitive substring match, consistent with the
+        // state filter above.
         if let Some(ref client_filter) = filters.client_info {
-            // Note: In real implementation, we'd need to store and access client info
-            // This is a placeholder for the filtering logic
-            let _ = client_filter; // Suppress unused warning
+            match session.client_info() {
+                Some(info) => {
+                    if !info
+                        .to_lowercase()
+                        .contains(&client_filter.to_lowercase() as &str)
+                    {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
         }
 
         // Active streams filter
@@ -1061,5 +1070,125 @@ mod tests {
 
         let result = QueryHandlerGat::handle(&handler, query).await;
         assert!(result.is_err());
+    }
+
+    // Helper to build an active session with optional client_info
+    fn make_session(client_info: Option<&str>) -> StreamSession {
+        let mut session = StreamSession::new(SessionConfig::default());
+        let _ = session.activate();
+        if let Some(info) = client_info {
+            session.set_client_info(info.to_owned(), None, None);
+        }
+        session
+    }
+
+    #[tokio::test]
+    async fn test_client_info_filter_matching_passes() {
+        let repository = Arc::new(MockRepository::new());
+        repository.add_session(make_session(Some("Mozilla/5.0 (compatible; TestBot/1.0)")));
+        let handler = SessionQueryHandler::new(repository);
+
+        // Use mixed-case filter to verify case-insensitive matching.
+        let query = SearchSessionsQuery {
+            filters: SessionFilters {
+                client_info: Some("testbot".to_owned()),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sessions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_client_info_filter_non_matching_rejected() {
+        let repository = Arc::new(MockRepository::new());
+        repository.add_session(make_session(Some("Mozilla/5.0 (compatible; TestBot/1.0)")));
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters {
+                client_info: Some("OtherClient".to_owned()),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sessions.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_client_info_filter_no_info_rejected() {
+        let repository = Arc::new(MockRepository::new());
+        repository.add_session(make_session(None));
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters {
+                client_info: Some("TestBot".to_owned()),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sessions.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_client_info_filter_none_passes_all() {
+        let repository = Arc::new(MockRepository::new());
+        repository.add_session(make_session(Some("SomeAgent/2.0")));
+        repository.add_session(make_session(None));
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sessions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_client_info_filter_case_insensitive() {
+        let repository = Arc::new(MockRepository::new());
+        repository.add_session(make_session(Some("Mozilla/5.0 (compatible; TESTBOT/2.0)")));
+        let handler = SessionQueryHandler::new(repository);
+
+        // Filter uses lowercase while session value is uppercase — must still match.
+        let query = SearchSessionsQuery {
+            filters: SessionFilters {
+                client_info: Some("testbot".to_owned()),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sessions.len(), 1);
     }
 }

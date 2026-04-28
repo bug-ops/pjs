@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StringArena::intern()` now stores raw pointers instead of `&'static str` transmutes, eliminating potential use-after-free UB (#124)
 - `StringArena::memory_usage()` returns actual allocation counts and byte totals instead of hardcoded zeros (#123)
 - Remove `ArenaJsonParser` from the public API; it remains `pub(crate)` until arena-backed parsing is implemented (#119)
+- Implement `Schema::String` `pattern` validation in `ValidationService`: add `regex` crate under `schema-validation` feature, emit `SchemaValidationError::PatternMismatch` on mismatch and new `InvalidPattern` on malformed regex (#118)
+- Apply `client_info` filter in `SearchSessionsQuery` handler: replace discarded placeholder with case-insensitive substring matching against `session.client_info()` (#121)
+- Implement `LazyArray::extract_element_boundaries` and `LazyObject::extract_field_boundaries` with byte-level JSON parsers; all `.len()`, `.get()`, `.iter()`, and `.keys()` methods now return correct results (#120)
 
 ### Planned for v0.6.0
 
