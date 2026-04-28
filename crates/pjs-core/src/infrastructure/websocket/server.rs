@@ -165,6 +165,13 @@ impl AxumWebSocketTransport {
         self.controller.clone()
     }
 
+    /// Returns the number of currently active WebSocket connections.
+    ///
+    /// Useful for observability, health endpoints, and integration tests.
+    pub async fn active_connection_count(&self) -> usize {
+        self.active_connections.read().await.len()
+    }
+
     /// Handle WebSocket message for a specific connection
     async fn handle_websocket_message(
         &self,

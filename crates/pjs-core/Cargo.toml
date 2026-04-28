@@ -113,6 +113,11 @@ name = "websocket_security"
 path = "tests/websocket_security.rs"
 required-features = ["websocket-server"]
 
+[[test]]
+name = "websocket_wire_level"
+path = "tests/websocket_wire_level.rs"
+required-features = ["http-server", "websocket-client"]
+
 [[example]]
 name = "simple_priority_demo"
 required-features = []
