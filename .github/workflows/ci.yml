@@ -532,6 +532,35 @@ jobs:
       - uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
 
   # ── Single gate for branch protection ────────────────────────────────────
+  # ── JS Client Tests ──────────────────────────────────────────────────────
+  js-client-test:
+    name: JS Client Tests
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: |
+      needs.changes.outputs.js == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: crates/pjs-js-client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: crates/pjs-js-client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
   # Keys off this job name in branch protection settings.
   # Skipped jobs (wasm/rust on JS-only PRs, security on push) are treated as
   # success — the gate fails only on actual failure or cancellation.
@@ -549,6 +578,7 @@ jobs:
       - wasm-node-example
       - wasm-package-validation
       - security-osv
+      - js-client-test
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -571,4 +601,5 @@ jobs:
           check wasm-node-example         "${{ needs.wasm-node-example.result }}"
           check wasm-package-validation   "${{ needs.wasm-package-validation.result }}"
           check security-osv              "${{ needs.security-osv.result }}"
+          check js-client-test            "${{ needs.js-client-test.result }}"
           echo "All required jobs passed or were skipped."

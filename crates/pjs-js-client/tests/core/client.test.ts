@@ -158,7 +158,7 @@ describe('PJSClient', () => {
       ];
 
       // Mock transport to emit these frames
-      jest.spyOn(client as any, 'transport').mockImplementation({
+      jest.spyOn(client as any, 'transport', 'get').mockReturnValue({
         connect: () => Promise.resolve({ sessionId: 'test-session' }),
         startStream: () => {
           // Emit frames after a short delay
@@ -170,7 +170,8 @@ describe('PJSClient', () => {
           return Promise.resolve();
         },
         on: jest.fn(),
-        removeListener: jest.fn()
+        removeListener: jest.fn(),
+        disconnect: () => Promise.resolve()
       });
     });
 
@@ -217,6 +218,44 @@ describe('PJSClient', () => {
   });
 
   describe('Statistics', () => {
+    beforeEach(() => {
+      const mockFrames = [
+        {
+          type: FrameType.Skeleton as FrameType.Skeleton,
+          priority: Priority.Critical,
+          data: { id: null, name: null },
+          complete: false,
+          timestamp: Date.now()
+        },
+        {
+          type: FrameType.Patch as FrameType.Patch,
+          priority: Priority.High,
+          patches: [
+            { path: '$.id', value: 1, operation: 'set' as const },
+            { path: '$.name', value: 'Test', operation: 'set' as const }
+          ],
+          timestamp: Date.now()
+        },
+        {
+          type: FrameType.Complete as FrameType.Complete,
+          priority: Priority.Background,
+          timestamp: Date.now()
+        }
+      ];
+      jest.spyOn(client as any, 'transport', 'get').mockReturnValue({
+        connect: () => Promise.resolve({ sessionId: 'stats-session' }),
+        startStream: () => {
+          setTimeout(() => {
+            mockFrames.forEach(frame => client.emit(PJSEvent.FrameReceived, { frame }));
+          }, 20);
+          return Promise.resolve();
+        },
+        on: jest.fn(),
+        removeListener: jest.fn(),
+        disconnect: () => Promise.resolve()
+      });
+    });
+
     test('should track stream statistics', async () => {
       await client.stream('/api/test');
       

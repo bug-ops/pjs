@@ -15,12 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renamed `infrastructure::http::PjsConfig` (HTTP extension config) to `HttpExtensionConfig` to eliminate name collision with the top-level `pjson_rs::PjsConfig` library config (closes #174)
 - `StreamProcessor::process_frame` now returns `ProcessResult::Processed(frame)` immediately for each accepted frame; removed the dead `Incomplete` variant and the 64-frame buffer accumulation that made all frames appear incomplete (#181)
 - `pjs-bench` benchmark crate restored as a workspace member — `cargo bench -p pjs-bench` now works; fixed pre-existing unused import, deprecated `criterion::black_box`, and `.clone()` on `Copy` type errors in bench sources (#179)
+- `pjs-js-client`: align `JsonReconstructor` API — add `processSkeleton(frame)`, `applyPatch(patchFrame)`, `getCurrentState()`, `isComplete()`, `reset()` (#178)
+- `pjs-js-client`: align `FrameProcessor` API — add `validateFrame(frame)` returning `{ isValid, errors }`, state-machine `processFrame(frame)`, `getStatistics()` (#178)
+- `pjs-js-client`: fix `PJSClient` transport getter for Jest spy support; per-stream `JsonReconstructor` for concurrent isolation; `PatchApplied` fires once per frame (#178)
+- `pjs-js-client`: prepend `baseUrl` to session URL in `HttpTransport.connect()` (#178)
+- `pjs-js-client`: fix negative array index detection and long-string priority heuristic in utils (#178)
+- `pjs-js-client`: WASM test suite skipped when `pjs-wasm/pkg` is absent (#178)
 - `AdaptiveFrameStream::poll_next` now respects `buffer_size`: frames are prefetched into `current_buffer` and drained per-poll, enabling batched delivery (#163)
 - `AdaptiveFrameStream::with_compression(true)` now applies `SecureCompressor` (Gzip) to each formatted frame when the `compression` feature is active (#163)
 - `ValidationService::validate_string` no longer recompiles regex patterns on every call; compiled patterns are cached in a static `DashMap` and reused across invocations (#154)
 
 ### Added
 
+- CI job `js-client-test` runs `npm ci && npm test` for `crates/pjs-js-client` on push and JS file changes (#180)
 - Wire-level WebSocket integration tests that perform real protocol upgrades, frame exchange, and connection close verification (closes #158)
 - `AxumWebSocketTransport::active_connection_count` async method for observability of open connections
 - `pjson_rs::global_allocator_name()` — returns `"mimalloc"` or `"system"` for diagnostics and benchmark reporting (#160)

@@ -74,6 +74,14 @@ global.EventSource = class MockEventSource extends EventTarget {
 
 // Mock fetch with basic functionality
 global.fetch = jest.fn().mockImplementation((url: string, options?: RequestInit) => {
+  // Reject requests to invalid/unreachable hosts
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'invalid-url') {
+      return Promise.reject(new Error('getaddrinfo ENOTFOUND invalid-url'));
+    }
+  } catch { /* ignore URL parse errors */ }
+
   const mockResponse = {
     ok: true,
     status: 200,

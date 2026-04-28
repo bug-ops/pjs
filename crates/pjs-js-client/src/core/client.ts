@@ -34,13 +34,13 @@ import { Transport } from '../transport/base.js';
  */
 export class PJSClient extends EventEmitter {
   private config: Required<PJSClientConfig>;
-  private transport: Transport;
+  private _transport: Transport;
+  private get transport(): Transport { return this._transport; }
   private frameProcessor: FrameProcessor;
   private jsonReconstructor: JsonReconstructor;
   private sessionId?: string;
   private isConnected = false;
   private streams = new Map<string, StreamStats>();
-  private currentStreamId?: string;
 
   constructor(config: PJSClientConfig) {
     super();
@@ -49,19 +49,15 @@ export class PJSClient extends EventEmitter {
     this.config = this.validateAndNormalizeConfig(config);
     
     // Initialize components
-    this.frameProcessor = new FrameProcessor({
-      debug: this.config.debug,
-      priorityThreshold: this.config.priorityThreshold
-    });
-    
-    this.jsonReconstructor = new JsonReconstructor({
-      bufferSize: this.config.bufferSize,
-      debug: this.config.debug
-    });
+    this.frameProcessor = new FrameProcessor();
+    this.jsonReconstructor = new JsonReconstructor();
     
     // Initialize transport based on configuration
-    this.transport = this.createTransport();
-    
+    this._transport = this.createTransport();
+
+    // Prevent unhandled 'error' event crashes when no user listener is registered
+    this.on('error', () => {});
+
     // Set up event handlers
     this.setupEventHandlers();
     
@@ -154,7 +150,6 @@ export class PJSClient extends EventEmitter {
     }
 
     const streamId = this.generateStreamId();
-    this.currentStreamId = streamId;
 
     // Initialize stream statistics
     const streamStats: StreamStats = {
@@ -182,20 +177,17 @@ export class PJSClient extends EventEmitter {
     try {
       return await this.processStream<T>(endpoint, streamId, options);
     } catch (error) {
-      const pjsError = error instanceof PJSError 
-        ? error 
+      const pjsError = error instanceof PJSError
+        ? error
         : new PJSError(
             PJSErrorType.ProtocolError,
             `Stream failed for endpoint: ${endpoint}`,
             { endpoint, streamId },
             error as Error
           );
-      
       this.emit(PJSEvent.Error, { error: pjsError, context: 'stream' });
       throw pjsError;
     } finally {
-      // Cleanup
-      this.currentStreamId = undefined;
       streamStats.endTime = Date.now();
     }
   }
@@ -287,20 +279,34 @@ export class PJSClient extends EventEmitter {
     });
 
     this.transport.on('error', (error: Error) => {
-      this.emit(PJSEvent.Error, { 
+      this.emit(PJSEvent.Error, {
         error: new PJSError(
           PJSErrorType.ConnectionError,
           'Transport error',
           undefined,
           error
-        ), 
-        context: 'transport' 
+        ),
+        context: 'transport'
       });
     });
 
     this.transport.on('disconnect', () => {
       this.isConnected = false;
       this.emit(PJSEvent.Disconnected, { reason: 'Transport disconnected' });
+    });
+
+    // Validate frames and emit errors for invalid frames
+    super.on(PJSEvent.FrameReceived, ({ frame }: { frame: Frame }) => {
+      const validation = this.frameProcessor.validateFrame(frame);
+      if (!validation.isValid) {
+        this.emit(PJSEvent.Error, {
+          error: new PJSError(
+            PJSErrorType.ValidationError,
+            `Invalid frame: ${validation.errors.join(', ')}`
+          ),
+          context: 'frame_validation'
+        });
+      }
     });
   }
 
@@ -319,23 +325,45 @@ export class PJSClient extends EventEmitter {
       prioritiesReceived: []
     };
 
+    // Per-stream reconstructor so concurrent streams don't share state
+    const reconstructor = new JsonReconstructor();
+
     return new Promise<T>((resolve, reject) => {
-      // Set up frame handler for this stream
-      const frameHandler = (frame: Frame) => {
-        if (this.currentStreamId !== streamId) return; // Ignore frames for other streams
+      let settled = false;
+
+      const finish = (value?: T, error?: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        this.removeListener(PJSEvent.FrameReceived, frameReceivedHandler);
+        if (error !== undefined) {
+          reject(error);
+        } else {
+          resolve(value!);
+        }
+      };
+
+      const frameReceivedHandler = ({ frame }: { frame: Frame }) => {
+        // Validate frame before processing
+        const validation = this.frameProcessor.validateFrame(frame);
+        if (!validation.isValid) {
+          finish(undefined, new PJSError(
+            PJSErrorType.ValidationError,
+            `Invalid frame: ${validation.errors.join(', ')}`
+          ));
+          return;
+        }
 
         try {
           stats.totalFrames++;
           progressInfo.framesReceived++;
           progressInfo.elapsedTime = Date.now() - stats.startTime;
-          
-          // Update priority distribution
+
           if (!stats.priorityDistribution[frame.priority]) {
             stats.priorityDistribution[frame.priority] = 0;
           }
           stats.priorityDistribution[frame.priority]++;
 
-          // Track unique priorities received
           if (!progressInfo.prioritiesReceived.includes(frame.priority)) {
             progressInfo.prioritiesReceived.push(frame.priority);
           }
@@ -347,14 +375,14 @@ export class PJSClient extends EventEmitter {
               skeletonReceived = true;
             }
 
-            result = this.jsonReconstructor.applySkeleton(frame.data);
-            
+            const skeletonResult = reconstructor.processSkeleton(frame as any);
+            result = skeletonResult.data;
+
             this.emit(PJSEvent.SkeletonReady, {
               data: result,
               processingTime: progressInfo.elapsedTime
             });
 
-            // Call render callback if provided
             if (options.onRender) {
               options.onRender(result, {
                 priority: frame.priority,
@@ -365,24 +393,23 @@ export class PJSClient extends EventEmitter {
 
           } else if (frame.type === FrameType.Patch) {
             if (!result) {
-              throw new PJSError(
-                PJSErrorType.ProtocolError,
-                'Received patch frame before skeleton'
-              );
+              throw new PJSError(PJSErrorType.ProtocolError, 'Received patch frame before skeleton');
             }
 
-            for (const patch of frame.patches) {
-              result = this.jsonReconstructor.applyPatch(result, patch);
-              
+            reconstructor.applyPatch(frame as any);
+            result = reconstructor.getCurrentState();
+
+            // Emit one PatchApplied per frame (not per operation)
+            const patches = (frame as any).patches as any[];
+            if (patches.length > 0) {
               this.emit(PJSEvent.PatchApplied, {
-                patch,
-                path: patch.path,
+                patch: patches[0],
+                path: patches[0].path,
                 priority: frame.priority,
                 resultingData: result
               });
             }
 
-            // Call render callback for patch updates
             if (options.onRender) {
               options.onRender(result, {
                 priority: frame.priority,
@@ -393,15 +420,13 @@ export class PJSClient extends EventEmitter {
 
           } else if (frame.type === FrameType.Complete) {
             stats.performance.timeToCompletion = progressInfo.elapsedTime;
-            
-            // Calculate final performance metrics
-            const totalTime = progressInfo.elapsedTime / 1000; // seconds
+            const totalTime = progressInfo.elapsedTime / 1000;
             stats.performance.framesPerSecond = stats.totalFrames / totalTime;
-            
-            if (frame.total_frames) {
-              progressInfo.totalFrames = frame.total_frames;
-              progressInfo.completionPercentage = 100;
+
+            if ((frame as any).total_frames) {
+              progressInfo.totalFrames = (frame as any).total_frames;
             }
+            progressInfo.completionPercentage = 100;
 
             this.emit(PJSEvent.StreamComplete, {
               data: result!,
@@ -409,7 +434,6 @@ export class PJSClient extends EventEmitter {
               totalTime: progressInfo.elapsedTime
             });
 
-            // Final render callback
             if (options.onRender) {
               options.onRender(result!, {
                 priority: frame.priority,
@@ -418,40 +442,40 @@ export class PJSClient extends EventEmitter {
               });
             }
 
-            resolve(result!);
+            this.emit(PJSEvent.ProgressUpdate, progressInfo);
+            if (options.onProgress) {
+              options.onProgress(progressInfo);
+            }
+
+            finish(result!);
             return;
           }
 
-          // Emit progress update
           this.emit(PJSEvent.ProgressUpdate, progressInfo);
-          
           if (options.onProgress) {
             options.onProgress(progressInfo);
           }
 
-        } catch (error) {
-          reject(error instanceof PJSError ? error : new PJSError(
+        } catch (err) {
+          finish(undefined, err instanceof PJSError ? err : new PJSError(
             PJSErrorType.ProtocolError,
             'Error processing frame',
-            { frame, streamId },
-            error as Error
+            { streamId },
+            err as Error
           ));
         }
       };
 
-      // Set up timeout
       const timeout = setTimeout(() => {
-        reject(new PJSError(
+        finish(undefined, new PJSError(
           PJSErrorType.TimeoutError,
           `Stream timeout after ${options.timeout || this.config.timeout}ms`,
           { endpoint, streamId }
         ));
       }, options.timeout || this.config.timeout);
 
-      // Start listening for frames
-      this.transport.on('frame', frameHandler);
+      this.on(PJSEvent.FrameReceived, frameReceivedHandler);
 
-      // Start the stream
       this.transport.startStream(endpoint, {
         sessionId: this.sessionId!,
         streamId,
@@ -461,30 +485,9 @@ export class PJSClient extends EventEmitter {
         if (this.config.debug) {
           console.log(`[PJS] Started stream ${streamId} for endpoint: ${endpoint}`);
         }
-      }).catch((error) => {
-        clearTimeout(timeout);
-        reject(error);
+      }).catch((err) => {
+        finish(undefined, err);
       });
-
-      // Cleanup function
-      const cleanup = () => {
-        clearTimeout(timeout);
-        this.transport.removeListener('frame', frameHandler);
-      };
-
-      // Ensure cleanup happens
-      const originalResolve = resolve;
-      const originalReject = reject;
-      
-      resolve = (value: T) => {
-        cleanup();
-        originalResolve(value);
-      };
-      
-      reject = (reason?: any) => {
-        cleanup();
-        originalReject(reason);
-      };
     });
   }
 

@@ -17,7 +17,7 @@ export class HttpTransport extends Transport {
 
   async connect(): Promise<ConnectResult> {
     try {
-      const response = await this.makeRequest('/pjs/sessions', {
+      const response = await this.makeRequest(`${this.config.baseUrl}/pjs/sessions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

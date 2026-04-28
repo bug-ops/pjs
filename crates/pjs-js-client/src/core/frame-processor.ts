@@ -1,328 +1,201 @@
 /**
- * Frame Processor - Handles validation and processing of PJS frames
- * 
- * This module is responsible for validating incoming frames,
- * filtering by priority, and preparing them for JSON reconstruction.
+ * Frame Processor - Validates and processes PJS frames
+ *
+ * Validates incoming frames against the PJS protocol specification and
+ * enforces the required frame ordering and priority constraints.
  */
 
 import {
   Frame,
   FrameType,
   Priority,
-  SkeletonFrame,
-  PatchFrame,
-  CompleteFrame,
   PatchOperation,
-  PJSError,
   PJSErrorType,
   JsonPath
 } from '../types/index.js';
-
-export interface FrameProcessorConfig {
-  debug?: boolean;
-  priorityThreshold: Priority;
-  strictValidation?: boolean;
-}
 
 /**
  * Processes and validates PJS frames according to protocol specification
  */
 export class FrameProcessor {
-  private config: FrameProcessorConfig;
-  private frameCount = 0;
-  private receivedFrameTypes = new Set<FrameType>();
-  
-  constructor(config: FrameProcessorConfig) {
-    this.config = {
-      strictValidation: true,
-      ...config
-    };
-  }
+  private expectedFrameType: FrameType = FrameType.Skeleton;
+  private streamComplete = false;
+  private framesProcessed = 0;
+  private patchesApplied = 0;
+  private priorityDistribution: Record<number, number> = {};
+  private lastPatchPriority: number | null = null;
+
+  constructor() {}
 
   /**
-   * Process and validate an incoming frame
+   * Validate a frame without mutating state. Returns errors if any.
    */
-  processFrame(frame: any): Frame {
-    this.frameCount++;
-    
-    try {
-      // Basic structure validation
-      const validatedFrame = this.validateFrameStructure(frame);
-      
-      // Priority filtering
-      if (validatedFrame.priority < this.config.priorityThreshold) {
-        if (this.config.debug) {
-          console.log(`[PJS] Filtering frame with priority ${validatedFrame.priority} (threshold: ${this.config.priorityThreshold})`);
-        }
-        throw new PJSError(
-          PJSErrorType.ValidationError,
-          `Frame priority ${validatedFrame.priority} below threshold ${this.config.priorityThreshold}`
-        );
-      }
-      
-      // Protocol validation
-      this.validateProtocolOrder(validatedFrame);
-      
-      // Type-specific validation
-      this.validateFrameContent(validatedFrame);
-      
-      this.receivedFrameTypes.add(validatedFrame.type);
-      
-      if (this.config.debug) {
-        console.log(`[PJS] Processed frame ${this.frameCount}:`, {
-          type: validatedFrame.type,
-          priority: validatedFrame.priority,
-          contentSize: this.getFrameContentSize(validatedFrame)
-        });
-      }
-      
-      return validatedFrame;
-      
-    } catch (error) {
-      if (error instanceof PJSError) {
-        throw error;
-      }
-      
-      throw new PJSError(
-        PJSErrorType.ParseError,
-        `Failed to process frame ${this.frameCount}`,
-        { frame, frameCount: this.frameCount },
-        error as Error
-      );
-    }
-  }
+  validateFrame(frame: any): { isValid: boolean; errors: string[] } {
+    const errors: string[] = [];
 
-  /**
-   * Reset processor state for new stream
-   */
-  reset(): void {
-    this.frameCount = 0;
-    this.receivedFrameTypes.clear();
-  }
-
-  /**
-   * Get processing statistics
-   */
-  getStats() {
-    return {
-      frameCount: this.frameCount,
-      receivedFrameTypes: Array.from(this.receivedFrameTypes),
-      priorityThreshold: this.config.priorityThreshold
-    };
-  }
-
-  // Private validation methods
-
-  private validateFrameStructure(frame: any): Frame {
     if (!frame || typeof frame !== 'object') {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Frame must be an object'
-      );
+      errors.push('Frame must be an object');
+      return { isValid: false, errors };
     }
 
-    // Validate required fields
     if (!frame.type) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Frame must have a type field'
-      );
+      errors.push('Frame missing type field');
+      return { isValid: false, errors };
     }
 
     if (!Object.values(FrameType).includes(frame.type)) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        `Invalid frame type: ${frame.type}`
-      );
+      errors.push(`Invalid frame type: ${frame.type}`);
+      return { isValid: false, errors };
     }
 
     if (typeof frame.priority !== 'number') {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Frame must have a numeric priority field'
-      );
+      errors.push('Frame missing numeric priority field');
+    } else if (frame.priority < 0 || frame.priority > 100) {
+      errors.push('Priority must be between 0 and 100');
     }
 
-    // Normalize priority to known values
-    const priority = this.normalizePriority(frame.priority);
+    if (frame.type === FrameType.Skeleton) {
+      if (frame.data === undefined) {
+        errors.push('Skeleton frame must have data field');
+      }
+    }
 
-    // Add timestamp if not present
-    const timestamp = frame.timestamp ?? Date.now();
+    if (frame.type === FrameType.Patch) {
+      if (!Array.isArray(frame.patches)) {
+        errors.push('Patch frame must have patches array');
+      } else if (frame.patches.length === 0) {
+        errors.push('Patch frame must have at least one patch operation');
+      } else {
+        for (let i = 0; i < frame.patches.length; i++) {
+          this.validatePatchOperations(frame.patches[i], i, errors);
+        }
+      }
+    }
 
+    return { isValid: errors.length === 0, errors };
+  }
+
+  /**
+   * Process a frame, enforcing protocol state machine and priority ordering.
+   */
+  processFrame(frame: any): {
+    accepted: boolean;
+    error?: { type: PJSErrorType; message: string };
+  } {
+    if (this.streamComplete) {
+      return {
+        accepted: false,
+        error: {
+          type: PJSErrorType.ProtocolViolation,
+          message: 'Stream is already complete'
+        }
+      };
+    }
+
+    if (frame.type === FrameType.Patch && this.expectedFrameType === FrameType.Skeleton) {
+      return {
+        accepted: false,
+        error: {
+          type: PJSErrorType.ProtocolViolation,
+          message: 'Expected skeleton frame first'
+        }
+      };
+    }
+
+    if (frame.type === FrameType.Skeleton && this.expectedFrameType === FrameType.Patch) {
+      return {
+        accepted: false,
+        error: {
+          type: PJSErrorType.ProtocolViolation,
+          message: 'Duplicate skeleton frame — skeleton already received'
+        }
+      };
+    }
+
+    if (frame.type === FrameType.Patch) {
+      if (this.lastPatchPriority !== null && frame.priority > this.lastPatchPriority) {
+        return {
+          accepted: false,
+          error: {
+            type: PJSErrorType.ProtocolViolation,
+            message: `Priority order violation: patch priority ${frame.priority} is higher than previous patch priority ${this.lastPatchPriority}`
+          }
+        };
+      }
+    }
+
+    // Accept frame — update state
+    this.framesProcessed++;
+    this.priorityDistribution[frame.priority] = (this.priorityDistribution[frame.priority] ?? 0) + 1;
+
+    if (frame.type === FrameType.Skeleton) {
+      this.expectedFrameType = FrameType.Patch;
+    } else if (frame.type === FrameType.Patch) {
+      this.lastPatchPriority = frame.priority;
+      this.patchesApplied++;
+    } else if (frame.type === FrameType.Complete) {
+      this.streamComplete = true;
+    }
+
+    return { accepted: true };
+  }
+
+  /** Returns the currently expected frame type. */
+  getExpectedFrameType(): FrameType {
+    return this.expectedFrameType;
+  }
+
+  /** Whether the stream has received a Complete frame. */
+  isStreamComplete(): boolean {
+    return this.streamComplete;
+  }
+
+  /** Processing statistics. */
+  getStatistics(): {
+    framesProcessed: number;
+    patchesApplied: number;
+    priorityDistribution: Record<Priority, number>;
+  } {
     return {
-      ...frame,
-      priority,
-      timestamp
-    } as Frame;
+      framesProcessed: this.framesProcessed,
+      patchesApplied: this.patchesApplied,
+      priorityDistribution: { ...this.priorityDistribution } as Record<Priority, number>
+    };
   }
 
-  private validateProtocolOrder(frame: Frame): void {
-    if (!this.config.strictValidation) return;
-
-    switch (frame.type) {
-      case FrameType.Skeleton:
-        // Skeleton should be first frame, but multiple skeletons are allowed for different data sections
-        break;
-        
-      case FrameType.Patch:
-        // Patch frames can only come after skeleton
-        if (!this.receivedFrameTypes.has(FrameType.Skeleton)) {
-          throw new PJSError(
-            PJSErrorType.ProtocolError,
-            'Patch frame received before skeleton frame'
-          );
-        }
-        break;
-        
-      case FrameType.Complete:
-        // Complete frame should come after at least a skeleton
-        if (!this.receivedFrameTypes.has(FrameType.Skeleton)) {
-          throw new PJSError(
-            PJSErrorType.ProtocolError,
-            'Complete frame received without skeleton frame'
-          );
-        }
-        break;
-    }
+  /** Reset all state for a new stream. */
+  reset(): void {
+    this.expectedFrameType = FrameType.Skeleton;
+    this.streamComplete = false;
+    this.framesProcessed = 0;
+    this.patchesApplied = 0;
+    this.priorityDistribution = {};
+    this.lastPatchPriority = null;
   }
 
-  private validateFrameContent(frame: Frame): void {
-    switch (frame.type) {
-      case FrameType.Skeleton:
-        this.validateSkeletonFrame(frame as SkeletonFrame);
-        break;
-        
-      case FrameType.Patch:
-        this.validatePatchFrame(frame as PatchFrame);
-        break;
-        
-      case FrameType.Complete:
-        this.validateCompleteFrame(frame as CompleteFrame);
-        break;
-    }
-  }
+  // Private helpers
 
-  private validateSkeletonFrame(frame: SkeletonFrame): void {
-    if (frame.data === undefined) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Skeleton frame must have data field'
-      );
-    }
-
-    if (frame.complete !== false && frame.complete !== undefined) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Skeleton frame complete field must be false or undefined'
-      );
-    }
-  }
-
-  private validatePatchFrame(frame: PatchFrame): void {
-    if (!Array.isArray(frame.patches)) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Patch frame must have patches array'
-      );
-    }
-
-    if (frame.patches.length === 0) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Patch frame must have at least one patch operation'
-      );
-    }
-
-    // Validate each patch operation
-    for (let i = 0; i < frame.patches.length; i++) {
-      this.validatePatchOperation(frame.patches[i], i);
-    }
-  }
-
-  private validateCompleteFrame(frame: CompleteFrame): void {
-    // Complete frames are minimal, just validate optional fields
-    if (frame.total_frames !== undefined && typeof frame.total_frames !== 'number') {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Complete frame total_frames must be a number if present'
-      );
-    }
-
-    if (frame.checksum !== undefined && typeof frame.checksum !== 'string') {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        'Complete frame checksum must be a string if present'
-      );
-    }
-  }
-
-  private validatePatchOperation(patch: PatchOperation, index: number): void {
+  private validatePatchOperations(patch: PatchOperation, index: number, errors: string[]): void {
     if (!patch || typeof patch !== 'object') {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        `Patch operation ${index} must be an object`
-      );
+      errors.push(`Patch operation ${index} must be an object`);
+      return;
     }
 
     if (!patch.path || typeof patch.path !== 'string') {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        `Patch operation ${index} must have a valid path`
-      );
-    }
-
-    if (!this.isValidJsonPath(patch.path)) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        `Patch operation ${index} has invalid JSON path: ${patch.path}`
-      );
+      errors.push(`Patch operation ${index} must have a valid path`);
+    } else if (!this.isValidJsonPath(patch.path)) {
+      errors.push(`Patch operation ${index} has invalid JSON path: ${patch.path}`);
     }
 
     const validOperations = ['set', 'append', 'merge', 'delete'];
     if (!patch.operation || !validOperations.includes(patch.operation)) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        `Patch operation ${index} has invalid operation: ${patch.operation}`
-      );
-    }
-
-    // Value is required for all operations except delete
-    if (patch.operation !== 'delete' && patch.value === undefined) {
-      throw new PJSError(
-        PJSErrorType.ValidationError,
-        `Patch operation ${index} with operation '${patch.operation}' must have a value`
-      );
+      errors.push(`Patch operation ${index} has invalid operation: ${patch.operation}`);
     }
   }
 
   private isValidJsonPath(path: JsonPath): boolean {
-    // Basic JSON path validation
-    if (!path.startsWith('$')) {
-      return false;
-    }
-
-    // Allow common patterns: $.field, $.field[0], $.field.subfield
+    if (!path.startsWith('$')) return false;
     const pathRegex = /^\$(\.[a-zA-Z_][a-zA-Z0-9_]*(\[\d+\])?)*$/;
     return pathRegex.test(path);
-  }
-
-  private normalizePriority(priority: number): Priority {
-    // Find closest Priority enum value
-    const priorities = Object.values(Priority)
-      .filter(p => typeof p === 'number') as number[];
-    
-    const closest = priorities.reduce((prev, curr) => 
-      Math.abs(curr - priority) < Math.abs(prev - priority) ? curr : prev
-    );
-    
-    return closest as Priority;
-  }
-
-  private getFrameContentSize(frame: Frame): number {
-    try {
-      return JSON.stringify(frame).length;
-    } catch {
-      return 0;
-    }
   }
 }
