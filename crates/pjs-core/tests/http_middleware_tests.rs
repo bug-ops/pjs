@@ -6,6 +6,8 @@
 //!   OPTIONS preflight passthrough
 //! - `AuthConfigError` — empty key list, whitespace key
 //! - Router factory — `create_pjs_router` does not panic with a valid config
+//! - `create_pjs_router_with_auth` — health is public, sessions require auth
+//! - `create_pjs_router_with_rate_limit_and_auth` — rate limit wraps auth
 
 #![feature(impl_trait_in_assoc_type)]
 #![cfg(feature = "http-server")]
@@ -20,9 +22,10 @@ use axum::{
     routing::get,
 };
 use pjson_rs::infrastructure::http::{
-    RateLimitConfig, RateLimitMiddleware,
+    HttpServerConfig, RateLimitConfig, RateLimitMiddleware,
     auth::{ApiKeyAuthLayer, ApiKeyConfig, AuthConfigError},
-    axum_adapter::create_pjs_router,
+    axum_adapter::{PjsAppState, create_pjs_router, create_pjs_router_with_auth},
+    create_pjs_router_with_rate_limit_and_auth,
 };
 use std::time::Duration;
 use tower::ServiceExt;
@@ -342,11 +345,287 @@ async fn test_rate_limit_429_includes_retry_after() {
 #[test]
 fn test_create_pjs_router_does_not_panic() {
     use common::{MockEventPublisher, MockRepository, MockStreamStore};
-    use pjson_rs::infrastructure::http::axum_adapter::PjsAppState;
 
     let state = common::create_test_app_state();
     // Router construction must not panic — just consuming the result is sufficient.
     let _router: axum::Router<PjsAppState<MockRepository, MockEventPublisher, MockStreamStore>> =
         create_pjs_router::<MockRepository, MockEventPublisher, MockStreamStore>()
             .with_state(state);
+}
+
+// ── Helpers for auth router tests ─────────────────────────────────────────────
+
+fn build_auth_router(api_key: &str) -> Router {
+    use common::{MockEventPublisher, MockRepository, MockStreamStore};
+
+    let state = common::create_test_app_state();
+    let config = ApiKeyConfig::new(&[api_key]).expect("valid key");
+    let auth_layer = ApiKeyAuthLayer::new(config);
+    let server_config = HttpServerConfig::default();
+
+    create_pjs_router_with_auth::<MockRepository, MockEventPublisher, MockStreamStore>(
+        &server_config,
+        auth_layer,
+    )
+    .expect("router with auth must build with default config")
+    .with_state(state)
+}
+
+fn build_rate_limit_and_auth_router(api_key: &str, rate_limit: RateLimitConfig) -> Router {
+    use common::{MockEventPublisher, MockRepository, MockStreamStore};
+
+    let state = common::create_test_app_state();
+    let config = ApiKeyConfig::new(&[api_key]).expect("valid key");
+    let auth_layer = ApiKeyAuthLayer::new(config);
+    let rate_limit_middleware = RateLimitMiddleware::new(rate_limit);
+    let server_config = HttpServerConfig::default();
+
+    create_pjs_router_with_rate_limit_and_auth::<MockRepository, MockEventPublisher, MockStreamStore>(
+        &server_config,
+        rate_limit_middleware,
+        auth_layer,
+    )
+    .expect("router with rate limit and auth must build with default config")
+    .with_state(state)
+}
+
+// ============================================================================
+// create_pjs_router_with_auth — public vs protected routes
+// ============================================================================
+
+/// GET /pjs/health requires no auth — health is always public.
+#[tokio::test]
+async fn test_router_with_auth_health_no_auth_returns_200() {
+    let app = build_auth_router("test-api-key");
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/pjs/health")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// GET /pjs/health with a wrong key still returns 200 — auth does not apply to public routes.
+#[tokio::test]
+async fn test_router_with_auth_health_wrong_key_returns_200() {
+    let app = build_auth_router("test-api-key");
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/pjs/health")
+        .header("X-PJS-API-Key", "wrong-key")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// POST /pjs/sessions with no auth header must return 401.
+#[tokio::test]
+async fn test_router_with_auth_sessions_no_auth_returns_401() {
+    let app = build_auth_router("test-api-key");
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/pjs/sessions")
+        .header("Content-Type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// POST /pjs/sessions with the wrong key must return 401.
+#[tokio::test]
+async fn test_router_with_auth_sessions_wrong_key_returns_401() {
+    let app = build_auth_router("test-api-key");
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/pjs/sessions")
+        .header("Content-Type", "application/json")
+        .header("X-PJS-API-Key", "wrong-key")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// POST /pjs/sessions with the correct X-PJS-API-Key header must pass auth.
+///
+/// The mock repository accepts any valid session request and returns 200.
+#[tokio::test]
+async fn test_router_with_auth_sessions_valid_key_returns_200() {
+    let app = build_auth_router("test-api-key");
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/pjs/sessions")
+        .header("Content-Type", "application/json")
+        .header("X-PJS-API-Key", "test-api-key")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "valid key must not be rejected by auth layer"
+    );
+}
+
+/// POST /pjs/sessions with Authorization: Bearer <key> must pass auth.
+#[tokio::test]
+async fn test_router_with_auth_sessions_bearer_returns_200() {
+    let app = build_auth_router("test-api-key");
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/pjs/sessions")
+        .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer test-api-key")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "bearer token must not be rejected by auth layer"
+    );
+}
+
+// ============================================================================
+// create_pjs_router_with_rate_limit_and_auth — combined layers
+// ============================================================================
+
+/// GET /pjs/health with a generous rate limit and no auth header must return 200.
+#[tokio::test]
+async fn test_router_rl_auth_health_no_auth_returns_200() {
+    let rate_limit = RateLimitConfig::new(1000).with_window(Duration::from_secs(60));
+    let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/pjs/health")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// POST /pjs/sessions with a generous rate limit and no auth must return 401.
+#[tokio::test]
+async fn test_router_rl_auth_sessions_no_auth_returns_401() {
+    let rate_limit = RateLimitConfig::new(1000).with_window(Duration::from_secs(60));
+    let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/pjs/sessions")
+        .header("Content-Type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// POST /pjs/sessions with a generous rate limit and valid auth must succeed.
+#[tokio::test]
+async fn test_router_rl_auth_sessions_valid_auth_succeeds() {
+    let rate_limit = RateLimitConfig::new(1000).with_window(Duration::from_secs(60));
+    let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/pjs/sessions")
+        .header("Content-Type", "application/json")
+        .header("X-PJS-API-Key", "test-api-key")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "valid key must not be rejected by auth layer"
+    );
+}
+
+/// With a tight rate limit (1 request), the second request to /pjs/health must return 429.
+#[tokio::test]
+async fn test_router_rl_auth_health_rate_limited() {
+    let rate_limit = RateLimitConfig::new(1).with_window(Duration::from_millis(500));
+    let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
+
+    let req1 = Request::builder()
+        .method(Method::GET)
+        .uri("/pjs/health")
+        .body(Body::empty())
+        .unwrap();
+    let resp1 = app.clone().oneshot(req1).await.unwrap();
+    assert_eq!(resp1.status(), StatusCode::OK, "first request must pass");
+
+    let req2 = Request::builder()
+        .method(Method::GET)
+        .uri("/pjs/health")
+        .body(Body::empty())
+        .unwrap();
+    let resp2 = app.oneshot(req2).await.unwrap();
+    assert_eq!(
+        resp2.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "second request must be rate limited"
+    );
+}
+
+/// Rate limit is the outermost layer: when exhausted, 429 is returned before auth runs.
+///
+/// Indirect ordering proof with a budget of 1:
+/// - req1 passes rate-limit (consuming the full budget), then auth rejects it → 401.
+/// - req2 hits the exhausted budget → 429 without ever reaching the auth layer.
+///
+/// Getting 429 on req2 proves that rate-limit consumed budget during req1, i.e. it
+/// evaluated first — it is the outermost layer.
+#[tokio::test]
+async fn test_router_rl_auth_sessions_rate_limit_before_auth() {
+    let rate_limit = RateLimitConfig::new(1).with_window(Duration::from_millis(500));
+    let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
+
+    // First request: within rate limit budget, no auth → auth layer rejects with 401.
+    let req1 = Request::builder()
+        .method(Method::POST)
+        .uri("/pjs/sessions")
+        .header("Content-Type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let resp1 = app.clone().oneshot(req1).await.unwrap();
+    assert_eq!(
+        resp1.status(),
+        StatusCode::UNAUTHORIZED,
+        "first unauthenticated request must yield 401"
+    );
+
+    // Second request: rate limit budget exhausted → rate limiter rejects with 429
+    // before the auth layer even runs.
+    let req2 = Request::builder()
+        .method(Method::POST)
+        .uri("/pjs/sessions")
+        .header("Content-Type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let resp2 = app.oneshot(req2).await.unwrap();
+    assert_eq!(
+        resp2.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "second request must be rejected by rate limiter (outer layer) before auth"
+    );
 }

@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 11 integration tests for `create_pjs_router_with_auth` and `create_pjs_router_with_rate_limit_and_auth` in `tests/http_middleware_tests.rs`: verify that `/pjs/health` is publicly accessible without credentials, protected routes return 401 without auth and 200 with a valid API key (both `X-PJS-API-Key` and `Authorization: Bearer` schemes), and that the rate-limit layer is correctly applied as outermost (closes #218)
 - 24 integration tests in `tests/http_middleware_tests.rs` covering `ApiKeyAuthLayer` (auth pass/fail, OPTIONS bypass, multi-key), `AuthConfigError` construction validation, `RateLimitMiddleware` (budget enforcement, 429 with `Retry-After`), and `create_pjs_router` construction (closes #197)
 - Serde round-trip tests for `Frame` covering all four frame types, all four patch operations, metadata, unicode, large payloads, timestamp precision, priority preservation, stream-ID preservation, and JSON field-name stability (`crates/pjs-domain/tests/frame_comprehensive.rs`)
 - NaN/Infinity rejection tests for `JsonData::float` and round-trip serialization tests for finite float values (`crates/pjs-domain/tests/json_data_comprehensive.rs`)
