@@ -340,42 +340,25 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
-
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "wasm-test"
           cache-on-failure: true
-          cache-directories: |
-            ~/.cargo/registry
-            ~/.cargo/git
 
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
 
       - name: Run pjs-wasm library tests
-        env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
         run: cargo nextest run -p pjs-wasm --lib --no-fail-fast
 
       - name: Run pjson-rs-domain library tests
-        env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
         run: cargo nextest run -p pjson-rs-domain --lib --no-fail-fast
 
       - name: Run doctests
-        env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
         run: |
           cargo test -p pjs-wasm --doc
           cargo test -p pjson-rs-domain --doc
-
-      - name: Print sccache stats
-        run: sccache --show-stats
 
 
   # ── Tier 3: WASM artefact builds ─────────────────────────────────────────
