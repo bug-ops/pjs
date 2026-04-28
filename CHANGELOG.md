@@ -9,8 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `pjs-wasm`: added `tsify-next` dependency; `FrameData` and `StreamStats` now derive `Tsify` and generate precise TypeScript interfaces in the wasm-pack `.d.ts` output; `FrameCallback`, `StreamStatsCallback`, and `ErrorCallback` type aliases are emitted via `typescript_custom_section` (closes #143)
+
 ### Fixed
 
+- `pjs-wasm`: corrected module-level doc example in `lib.rs` — `PriorityStream.withSecurityConfig()` does not exist; replaced with `new PriorityStream()` + `stream.setSecurityConfig(security)` (closes #138)
+- `pjs-wasm`: corrected `PriorityConfigBuilder` doc example — `.build()` is not a JavaScript-visible method; replaced with `PjsParser.withConfig(config)` usage pattern (closes #140)
 - `PjsError::Application` now maps `ApplicationError` variants to semantically correct HTTP status codes: `NotFound` → 404, `Validation` → 400, `Authorization` → 401, `Concurrency`/`Conflict` → 409, `Logic`/`Domain` → 500 (closes #173)
 - Renamed `infrastructure::http::PjsConfig` (HTTP extension config) to `HttpExtensionConfig` to eliminate name collision with the top-level `pjson_rs::PjsConfig` library config (closes #174)
 - `StreamProcessor::process_frame` now returns `ProcessResult::Processed(frame)` immediately for each accepted frame; removed the dead `Incomplete` variant and the 64-frame buffer accumulation that made all frames appear incomplete (#181)

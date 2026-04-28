@@ -58,10 +58,11 @@
 //! import { PriorityStream, SecurityConfig } from 'pjs-wasm';
 //!
 //! const security = new SecurityConfig()
-//!     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB limit
-//!     .setMaxDepth(32);                  // 32 levels max
+//!     .setMaxJsonSize(5 * 1024 * 1024)
+//!     .setMaxDepth(32);
 //!
-//! const stream = PriorityStream.withSecurityConfig(security);
+//! const stream = new PriorityStream();
+//! stream.setSecurityConfig(security);
 //! ```
 
 use wasm_bindgen::prelude::*;
