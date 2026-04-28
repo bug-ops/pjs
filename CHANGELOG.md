@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Wire-level WebSocket integration tests that perform real protocol upgrades, frame exchange, and connection close verification (closes #158)
 - `AxumWebSocketTransport::active_connection_count` async method for observability of open connections
+- `pjson_rs::global_allocator_name()` — returns `"mimalloc"` or `"system"` for diagnostics and benchmark reporting (#160)
+- `mimalloc` feature now registers `mimalloc::MiMalloc` as the actual `#[global_allocator]` on non-wasm targets; previously it was dead extern-crate linkage with no effect (#160)
+- New `crates/pjs-core/src/global_alloc` module owns the `#[global_allocator]` registration, separated from the aligned-buffer helpers (#160)
+
+### Changed
+
+- **BREAKING:** `jemalloc` feature removed along with all `tikv-jemalloc-*` workspace dependencies (`tikv-jemallocator`, `tikv-jemalloc-ctl`, `tikv-jemalloc-sys`). Use `mimalloc` (now a real `#[global_allocator]`) or the system allocator (#160)
+- **BREAKING:** `parser::allocator::SimdAllocator` renamed to `parser::aligned_alloc::AlignedAllocator`; module `parser::allocator` is now `parser::aligned_alloc`. Per-backend FFI branches removed — all paths now route through the registered `#[global_allocator]` (#160)
+- **BREAKING:** `AllocatorBackend` enum, `AllocatorStats` struct, `initialize_global_allocator()`, and `global_allocator()` removed. Use `global_allocator_name()` for diagnostics and `aligned_allocator()` for the buffer-pool accessor (#160)
+- CI build and test matrices collapsed from 3 allocators (`system`, `jemalloc`, `mimalloc`) to 2 (`system`, `mimalloc`); Windows jemalloc exclusion removed; test jobs now use per-variant `features` instead of `--all-features` (#160)
+
+### Removed
+
+- `libmimalloc-sys` workspace dependency — no longer needed; `mimalloc` crate brings it transitively and the FFI call sites in `parser/allocator.rs` are deleted (#160)
 - `ByteCodec` enum (`None | Deflate | Gzip | Brotli`) for byte-level codec selection in `SecureCompressor` (#114)
 - `CompressionQuality` enum (`Fast | Balanced | Best`) for tuning codec compression levels (#114)
 - Real deflate, gzip, and brotli compression/decompression in `SecureCompressor` via `flate2` (pure Rust) and `brotli` crates, gated on `feature = "compression"` (#114)

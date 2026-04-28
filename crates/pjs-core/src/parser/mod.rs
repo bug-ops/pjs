@@ -3,7 +3,7 @@
 //! This module provides both SIMD-optimized parsing and serde fallback,
 //! allowing rapid MVP development while building towards maximum performance.
 
-pub mod allocator;
+pub mod aligned_alloc;
 pub mod buffer_pool;
 pub mod scanner;
 pub mod simd;
@@ -13,7 +13,7 @@ pub mod sonic;
 pub mod value;
 pub mod zero_copy;
 
-pub use allocator::{AllocatorBackend, AllocatorStats, SimdAllocator, global_allocator};
+pub use aligned_alloc::{AlignedAllocator, aligned_allocator};
 pub use buffer_pool::{
     BufferPool, BufferSize, PoolConfig, PooledBuffer, SimdType, global_buffer_pool,
 };
