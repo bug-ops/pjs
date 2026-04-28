@@ -70,7 +70,7 @@ default = ["simd-auto", "schema-validation"]
 # SIMD features
 simd-auto = []
 simd-avx2 = []
-simd-avx512 = []
+simd-avx512 = ["sonic-rs/avx512"]
 simd-neon = []
 simd-sse42 = []
 

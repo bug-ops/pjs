@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Parser::new()` and `Parser::with_config()` honor `simd-*` Cargo features: the sonic-rs backend is selected only when a SIMD feature is enabled (default via `simd-auto`); with `--no-default-features` and no SIMD feature the portable `SimpleParser` is used (#115)
+- `simd-avx512` Cargo feature now forwards to `sonic-rs/avx512`, enabling AVX-512 codegen in sonic-rs when the feature is activated (#116)
 - `GetSystemStatsQuery` now reports real server uptime: `SystemQueryHandler` captures `Instant::now()` at construction and computes elapsed time on each query; `frames_per_second` and `bytes_per_second` are derived from actual uptime (#139)
 - Implement `QueryHandlerGat<GetStreamFramesQuery>` and `QueryHandlerGat<GetSessionStatsQuery>`; add HTTP routes `GET /pjs/sessions/:id/streams/:stream_id/frames` and `GET /pjs/sessions/:id/stats` (#141)
 - Remove `infrastructure/repositories/memory.rs` placeholder (`MemoryRepository` had no domain port implementations); delete the associated no-op test file; real in-memory storage is `GatInMemoryStreamRepository` (#133)
