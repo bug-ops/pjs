@@ -1,7 +1,7 @@
 //! Performance and stress tests to improve coverage
 
 use pjson_rs::{
-    ArenaJsonParser, SemanticMeta, SimpleParser, SonicParser, ZeroCopyParser,
+    SemanticMeta, SimpleParser, SonicParser, ZeroCopyParser,
     parser::ParseConfig,
     semantic::{NumericDType, SemanticType},
 };
@@ -113,28 +113,6 @@ mod parser_performance_tests {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
-
-    #[test]
-    fn test_arena_parser_memory_efficiency() {
-        let mut arena_parser = ArenaJsonParser::new();
-
-        // Parse multiple small documents to test arena recycling
-        for i in 0..10 {
-            let json = format!(r#"{{"iteration": {}, "data": "test{}}}"#, i, i);
-            let result = arena_parser.parse(&json);
-            // ArenaJsonParser may not be fully implemented, so just check it doesn't crash
-            println!("Arena parsing iteration {}: {:?}", i, result.is_ok());
-        }
-
-        let stats = arena_parser.arena_stats();
-        println!("Arena stats after 10 parses: {:?}", stats);
-
-        // Just ensure we can get stats without crashing
-        assert!(
-            stats.values_allocated < 1000,
-            "Arena should have reasonable allocation count"
-        );
-    }
 
     #[test]
     fn test_zero_copy_parser_memory() {

@@ -2,6 +2,4 @@
 
 pub mod arena;
 
-pub use arena::{
-    ArenaJsonParser, ArenaStats, CombinedArenaStats, JsonArena, StringArena, ValueArena,
-};
+pub use arena::{ArenaStats, CombinedArenaStats, JsonArena, StringArena, ValueArena};

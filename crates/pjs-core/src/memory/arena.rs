@@ -7,9 +7,15 @@ use std::{cell::RefCell, collections::HashMap};
 use typed_arena::Arena;
 
 /// Arena-backed string pool for zero-copy string operations
+///
+/// `StringArena` is `!Send` and `!Sync` because the `interned` map stores raw pointers
+/// into arena-allocated memory. All access is single-threaded via `RefCell`.
 pub struct StringArena {
     arena: Arena<String>,
-    interned: RefCell<HashMap<&'static str, &'static str>>,
+    /// Key is the owned canonical string; value is a raw pointer into arena memory.
+    interned: RefCell<HashMap<String, *const str>>,
+    strings_allocated: RefCell<usize>,
+    total_bytes: RefCell<usize>,
 }
 
 impl StringArena {
@@ -18,6 +24,8 @@ impl StringArena {
         Self {
             arena: Arena::new(),
             interned: RefCell::new(HashMap::new()),
+            strings_allocated: RefCell::new(0),
+            total_bytes: RefCell::new(0),
         }
     }
 
@@ -26,35 +34,36 @@ impl StringArena {
         self.arena.alloc(s).as_str()
     }
 
-    /// Intern string to avoid duplicates (useful for JSON keys)
-    pub fn intern(&self, s: &str) -> &str {
-        // For demonstration - in production you'd use a more sophisticated interning strategy
-        if let Some(&interned) = self.interned.borrow().get(s) {
-            return interned;
+    /// Intern string to avoid duplicates (useful for JSON keys).
+    ///
+    /// The returned reference is valid for the lifetime of `&self`.
+    pub fn intern<'a>(&'a self, s: &str) -> &'a str {
+        if let Some(&ptr) = self.interned.borrow().get(s) {
+            // SAFETY: The raw pointer was stored from a reference into `self.arena`.
+            // `typed_arena::Arena<String>` never reallocates or frees individual elements
+            // while the arena is alive, so the pointer remains valid for `'a` (the lifetime
+            // of `&self`).
+            return unsafe { &*ptr };
         }
 
         let allocated = self.alloc_str(s.to_string());
-
-        // SAFETY: This transmute extends the lifetime of the allocated string to 'static.
-        // This is safe because:
-        // 1. The Arena owns the memory and will not deallocate until dropped
-        // 2. The returned reference is interned in the HashMap, ensuring it outlives any borrows
-        // 3. The string content is immutable after allocation
-        // 4. The Arena is never dropped while any interned references exist
-        // WARNING: This pattern is only safe if the Arena outlives all references to interned strings.
-        // In production, consider using a safer interning library like `string-interner`.
-        let static_ref: &'static str = unsafe { std::mem::transmute(allocated) };
-        self.interned.borrow_mut().insert(static_ref, static_ref);
-        static_ref
+        *self.strings_allocated.borrow_mut() += 1;
+        *self.total_bytes.borrow_mut() += allocated.len();
+        self.interned
+            .borrow_mut()
+            .insert(s.to_string(), allocated as *const str);
+        allocated
     }
 
-    /// Get current memory usage statistics
+    /// Get current memory usage statistics.
+    ///
+    /// `chunks_allocated` is always 1 because `typed_arena` does not expose its
+    /// internal chunk count.
     pub fn memory_usage(&self) -> ArenaStats {
-        // typed_arena doesn't expose internal stats, so we estimate
         ArenaStats {
-            chunks_allocated: 1,  // Simplified
-            total_bytes: 0,       // Would need arena introspection
-            strings_allocated: 0, // Would need counting
+            chunks_allocated: 1,
+            total_bytes: *self.total_bytes.borrow(),
+            strings_allocated: *self.strings_allocated.borrow(),
         }
     }
 }
@@ -169,11 +178,13 @@ pub struct CombinedArenaStats {
 }
 
 /// Arena-aware JSON parser for high-performance parsing
-pub struct ArenaJsonParser {
+#[allow(dead_code)]
+pub(crate) struct ArenaJsonParser {
     arena: JsonArena,
     reuse_threshold: usize,
 }
 
+#[allow(dead_code)]
 impl ArenaJsonParser {
     /// Create new arena-backed parser
     pub fn new() -> Self {
