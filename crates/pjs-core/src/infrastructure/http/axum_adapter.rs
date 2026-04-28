@@ -793,7 +793,21 @@ pub enum PjsError {
 impl IntoResponse for PjsError {
     fn into_response(self) -> Response {
         let (status, error_message) = match &self {
-            PjsError::Application(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            PjsError::Application(app_err) => {
+                use crate::application::ApplicationError;
+                let status = match app_err {
+                    ApplicationError::NotFound(_) => StatusCode::NOT_FOUND,
+                    ApplicationError::Validation(_) => StatusCode::BAD_REQUEST,
+                    ApplicationError::Authorization(_) => StatusCode::UNAUTHORIZED,
+                    ApplicationError::Concurrency(_) | ApplicationError::Conflict(_) => {
+                        StatusCode::CONFLICT
+                    }
+                    ApplicationError::Domain(_) | ApplicationError::Logic(_) => {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                };
+                (status, self.to_string())
+            }
             PjsError::InvalidSessionId(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::InvalidStreamId(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::InvalidPriority(_) => (StatusCode::BAD_REQUEST, self.to_string()),

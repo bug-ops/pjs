@@ -23,7 +23,8 @@ use axum::{
 };
 use pjson_rs::Priority;
 use pjson_rs::infrastructure::http::axum_extension::{
-    PjsConfig, PjsExtension, PjsStreamingRequest, StreamError, StreamRequest, StreamResponse,
+    HttpExtensionConfig, PjsExtension, PjsStreamingRequest, StreamError, StreamRequest,
+    StreamResponse,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -36,7 +37,7 @@ use tower::ServiceExt;
 
 #[test]
 fn test_pjs_config_default_values() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
 
     assert_eq!(config.route_prefix, "/pjs");
     assert!(config.auto_detect);
@@ -47,7 +48,7 @@ fn test_pjs_config_default_values() {
 
 #[test]
 fn test_pjs_config_custom_values() {
-    let config = PjsConfig {
+    let config = HttpExtensionConfig {
         route_prefix: "/api/stream".to_string(),
         auto_detect: false,
         default_priority: Priority::HIGH,
@@ -64,7 +65,7 @@ fn test_pjs_config_custom_values() {
 
 #[test]
 fn test_pjs_config_clone() {
-    let config1 = PjsConfig::default();
+    let config1 = HttpExtensionConfig::default();
     let config2 = config1.clone();
 
     assert_eq!(config1.route_prefix, config2.route_prefix);
@@ -78,7 +79,7 @@ fn test_pjs_config_clone() {
 
 #[test]
 fn test_pjs_extension_creation() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     // Extension created successfully
@@ -94,7 +95,7 @@ async fn test_pjs_extension_router_integration() {
         }))
     }
 
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     let app = Router::new().route("/api/data", axum::routing::get(api_route));
@@ -118,7 +119,7 @@ async fn test_pjs_extension_router_integration() {
 
 #[tokio::test]
 async fn test_pjs_health_endpoint() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     let app = Router::new();
@@ -146,7 +147,7 @@ async fn test_pjs_health_endpoint() {
 
 #[tokio::test]
 async fn test_pjs_health_endpoint_capabilities() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     let app = Router::new();
@@ -174,7 +175,7 @@ async fn test_pjs_health_endpoint_capabilities() {
 
 #[tokio::test]
 async fn test_pjs_custom_route_prefix() {
-    let config = PjsConfig {
+    let config = HttpExtensionConfig {
         route_prefix: "/custom".to_string(),
         ..Default::default()
     };
@@ -310,7 +311,7 @@ fn test_stream_response_serialization() {
 
 #[tokio::test]
 async fn test_middleware_detects_pjs_stream_header() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     async fn test_handler(req: Request) -> impl IntoResponse {
@@ -343,7 +344,7 @@ async fn test_middleware_detects_pjs_stream_header() {
 
 #[tokio::test]
 async fn test_middleware_detects_sse_accept_header() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     async fn test_handler(req: Request) -> impl IntoResponse {
@@ -381,7 +382,7 @@ async fn test_middleware_detects_sse_accept_header() {
 
 #[tokio::test]
 async fn test_middleware_no_pjs_detection() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     async fn test_handler(req: Request) -> impl IntoResponse {
@@ -417,7 +418,7 @@ async fn test_middleware_no_pjs_detection() {
 
 #[tokio::test]
 async fn test_stream_request_endpoint_creates_stream() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     let app = Router::new();
@@ -459,7 +460,7 @@ async fn test_stream_request_endpoint_creates_stream() {
 
 #[tokio::test]
 async fn test_stream_request_format_detection_from_accept_header() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     let app = Router::new();
@@ -492,7 +493,7 @@ async fn test_stream_request_format_detection_from_accept_header() {
 
 #[tokio::test]
 async fn test_stream_request_format_detection_ndjson() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     let app = Router::new();
@@ -527,7 +528,7 @@ async fn test_stream_request_format_detection_ndjson() {
 
 #[tokio::test]
 async fn test_sse_stream_endpoint_returns_event_stream() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     let app = Router::new();
@@ -562,7 +563,7 @@ async fn test_sse_stream_endpoint_returns_event_stream() {
 
 #[tokio::test]
 async fn test_sse_stream_endpoint_cors_headers() {
-    let config = PjsConfig::default();
+    let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
     let app = Router::new();

@@ -19,7 +19,7 @@ use crate::{Priority, PriorityStreamer};
 
 /// Configuration for PJS extension
 #[derive(Debug, Clone)]
-pub struct PjsConfig {
+pub struct HttpExtensionConfig {
     /// Route prefix for PJS endpoints (default: "/pjs")
     pub route_prefix: String,
     /// Enable automatic PJS detection based on Accept header
@@ -32,7 +32,7 @@ pub struct PjsConfig {
     pub session_timeout: Duration,
 }
 
-impl Default for PjsConfig {
+impl Default for HttpExtensionConfig {
     fn default() -> Self {
         Self {
             route_prefix: "/pjs".to_string(),
@@ -46,12 +46,12 @@ impl Default for PjsConfig {
 
 /// Universal PJS extension that can be added to any Axum router
 pub struct PjsExtension {
-    config: PjsConfig,
+    config: HttpExtensionConfig,
     streamer: Arc<PriorityStreamer>,
 }
 
 impl PjsExtension {
-    pub fn new(config: PjsConfig) -> Self {
+    pub fn new(config: HttpExtensionConfig) -> Self {
         Self {
             config,
             streamer: Arc::new(PriorityStreamer::new()),
@@ -149,7 +149,7 @@ pub struct StreamResponse {
 
 /// Handle stream creation request
 async fn handle_stream_request(
-    Extension(config): Extension<PjsConfig>,
+    Extension(config): Extension<HttpExtensionConfig>,
     Extension(streamer): Extension<Arc<PriorityStreamer>>,
     headers: HeaderMap,
     Json(request): Json<StreamRequest>,
@@ -338,7 +338,7 @@ mod tests {
         }
 
         // Create router with PJS extension
-        let config = PjsConfig::default();
+        let config = HttpExtensionConfig::default();
         let pjs_extension = PjsExtension::new(config);
 
         let app = Router::new().route("/api/users", get(api_route));
@@ -363,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_auto_detection_middleware() {
-        let config = PjsConfig::default();
+        let config = HttpExtensionConfig::default();
         let _pjs_extension = Arc::new(PjsExtension::new(config));
 
         let _headers = HeaderMap::new();
