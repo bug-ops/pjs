@@ -35,7 +35,7 @@ use pjson_rs_domain::entities::frame::FrameType;
 use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tsify_next::Tsify;
+use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(typescript_custom_section)]
