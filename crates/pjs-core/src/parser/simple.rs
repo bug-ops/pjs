@@ -168,11 +168,10 @@ impl SimpleParser {
 
             let value_fields: SmallVec<[String; 4]> = obj
                 .keys()
-                .filter(|k| {
-                    // TODO: Handle unwrap() - add proper error handling for object field access
-                    *k != timestamp_field && self.looks_like_numeric_value(obj.get(*k).unwrap())
+                .filter_map(|k| {
+                    let v = obj.get(k.as_str())?;
+                    (*k != timestamp_field && self.looks_like_numeric_value(v)).then(|| k.clone())
                 })
-                .cloned()
                 .collect();
 
             if !value_fields.is_empty() {

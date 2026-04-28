@@ -112,11 +112,15 @@ impl Parser {
         }
     }
 
-    /// Get parser statistics (simplified for now)
+    /// Get parser statistics
     pub fn stats(&self) -> ParseStats {
         if self.use_sonic {
-            // TODO: Implement stats collection for sonic parser
-            ParseStats::default()
+            let sonic_stats = self.sonic.get_stats();
+            ParseStats {
+                total_parses: sonic_stats.total_parses,
+                semantic_detections: sonic_stats.sonic_successes,
+                avg_parse_time_ms: sonic_stats.avg_parse_time_ns as f64 / 1_000_000.0,
+            }
         } else {
             self.simple.stats()
         }
