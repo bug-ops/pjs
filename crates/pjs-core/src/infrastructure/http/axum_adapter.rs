@@ -750,27 +750,27 @@ where
     Ok(Json(response))
 }
 
-/// TODO(CQ-004): Implement HTTP rate limiting middleware
-///
-/// Recommended implementation:
-/// - Add Arc<WebSocketRateLimiter> to PjsAppState
-/// - Use 100 requests/minute per IP with burst allowance
-/// - Extract IP from ConnectInfo<SocketAddr>
-/// - Return 429 Too Many Requests on limit exceeded
-///
-/// Example:
-/// ```ignore
-/// async fn rate_limit_middleware(
-///     State(limiter): State<Arc<WebSocketRateLimiter>>,
-///     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-///     req: Request,
-///     next: Next,
-/// ) -> Result<Response, StatusCode> {
-///     limiter.check_request(addr.ip())
-///         .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
-///     Ok(next.run(req).await)
-/// }
-/// ```
+// TODO(CQ-004): Implement HTTP rate limiting middleware
+//
+// Recommended implementation:
+// - Add Arc<WebSocketRateLimiter> to PjsAppState
+// - Use 100 requests/minute per IP with burst allowance
+// - Extract IP from ConnectInfo<SocketAddr>
+// - Return 429 Too Many Requests on limit exceeded
+//
+// Example:
+// ```ignore
+// async fn rate_limit_middleware(
+//     State(limiter): State<Arc<WebSocketRateLimiter>>,
+//     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+//     req: Request,
+//     next: Next,
+// ) -> Result<Response, StatusCode> {
+//     limiter.check_request(addr.ip())
+//         .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+//     Ok(next.run(req).await)
+// }
+// ```
 /// PJS-specific errors for HTTP endpoints
 #[derive(Debug, thiserror::Error)]
 pub enum PjsError {

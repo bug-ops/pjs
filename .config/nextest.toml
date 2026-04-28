@@ -1,5 +1,5 @@
 [profile.default]
-default-filter = 'not test(integration)'
+default-filter = 'not test(/^integration_/)'
 
 [profile.ci]
 default-filter = 'all()'
