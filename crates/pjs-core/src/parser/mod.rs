@@ -3,6 +3,15 @@
 //! This module provides both SIMD-optimized parsing and serde fallback,
 //! allowing rapid MVP development while building towards maximum performance.
 
+#[cfg(feature = "partial-parse")]
+pub mod partial;
+
+#[cfg(feature = "partial-parse")]
+pub use partial::{
+    JiterConfig, JiterPartialParser, ParseDiagnostic, PartialJsonParser, PartialParseResult,
+    StreamingHint,
+};
+
 pub mod aligned_alloc;
 pub mod buffer_pool;
 pub mod scanner;
@@ -109,6 +118,40 @@ impl Parser {
             self.simple.parse_with_semantics(input, semantics)
         } else {
             self.simple.parse_with_semantics(input, semantics)
+        }
+    }
+
+    /// Parse the largest valid JSON prefix from `input`, tolerating truncation.
+    ///
+    /// Delegates to [`JiterPartialParser`] with default configuration.
+    ///
+    /// Returns `Ok(None)` when `consumed == 0` (no structurally complete prefix
+    /// could be recovered — e.g. input `[` or `-`). Returns `Ok(Some(_))` when
+    /// at least one byte was committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::InvalidJson`] for syntactically invalid
+    /// input (e.g. stray `}`). Returns [`crate::error::Error::Buffer`] when the
+    /// input exceeds the default `max_input_size` (100 MiB).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pjson_rs::parser::Parser;
+    ///
+    /// let parser = Parser::new();
+    /// let result = parser.parse_partial(b"{\"a\":1,\"b\":[2,3").unwrap();
+    /// assert!(result.is_some());
+    /// ```
+    #[cfg(feature = "partial-parse")]
+    pub fn parse_partial(&self, input: &[u8]) -> crate::Result<Option<PartialParseResult>> {
+        use partial::PartialJsonParser as _;
+        let result = JiterPartialParser::default().parse_partial(input)?;
+        if result.consumed == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(result))
         }
     }
 
