@@ -27,6 +27,9 @@ crossbeam = { workspace = true }
 dashmap = { workspace = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+jsonwebtoken = { workspace = true, optional = true }
 maplit = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 once_cell = { workspace = true }
@@ -38,7 +41,7 @@ regex = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["json"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
+sha2 = { workspace = true, optional = true }
 smallvec = { workspace = true, features = ["serde", "union", "const_generics"] }
 sonic-rs = { workspace = true }
 thiserror = { workspace = true }
@@ -51,6 +54,7 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 tokio-tungstenite = { workspace = true, optional = true }
+subtle = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
 tracing = { workspace = true }
@@ -90,7 +94,17 @@ schema-validation = ["dep:regex"]
 
 # Infrastructure features
 http-client = ["dep:reqwest"]
-http-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:futures"]
+http-server = [
+    "dep:axum",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:futures",
+    "dep:subtle",
+    "dep:hmac",
+    "dep:sha2",
+    "dep:getrandom",
+]
+http-auth-jwt = ["http-server", "dep:jsonwebtoken"]
 metrics = ["http-server", "dep:metrics", "dep:metrics-exporter-prometheus"]
 websocket-client = ["dep:tokio-tungstenite", "dep:url"]
 websocket-server = ["http-server"]

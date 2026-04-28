@@ -71,7 +71,7 @@ pub use application::{
 
 // Configuration exports
 pub use config::{
-    ParserConfig, PjsConfig, SecurityConfig, SimdConfig, StreamingConfig,
+    ConfigError, ParserConfig, PjsConfig, SecurityConfig, SimdConfig, StreamingConfig,
     security::{BufferLimits, JsonLimits, NetworkLimits, RateLimitingConfig, SessionLimits},
 };
 

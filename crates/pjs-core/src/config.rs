@@ -8,6 +8,28 @@ pub mod security;
 use crate::compression::CompressionConfig;
 pub use security::SecurityConfig;
 
+/// Errors produced by [`PjsConfig::validate`] and its sub-config validators.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    /// A numeric config field must be strictly greater than zero.
+    #[error("config field `{section}.{field}` must be > 0")]
+    MustBePositive {
+        /// Config section name (e.g. `"streaming"`)
+        section: &'static str,
+        /// Field name within that section (e.g. `"max_frame_size"`)
+        field: &'static str,
+    },
+
+    /// Two related config fields violate an ordering or consistency constraint.
+    #[error("config constraint violated in `{section}`: {message}")]
+    InconsistentBounds {
+        /// Config section name (e.g. `"security.sessions"`)
+        section: &'static str,
+        /// Human-readable description of the violated constraint
+        message: &'static str,
+    },
+}
+
 /// Global configuration for PJS library components
 #[derive(Debug, Clone, Default)]
 pub struct PjsConfig {
@@ -98,8 +120,132 @@ impl Default for SimdConfig {
     }
 }
 
+impl StreamingConfig {
+    /// Validate streaming configuration invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::MustBePositive`] when `max_frame_size` or
+    /// `operation_timeout_ms` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::config::StreamingConfig;
+    ///
+    /// StreamingConfig::default().validate().expect("defaults are valid");
+    /// ```
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_frame_size == 0 {
+            return Err(ConfigError::MustBePositive {
+                section: "streaming",
+                field: "max_frame_size",
+            });
+        }
+        if self.operation_timeout_ms == 0 {
+            return Err(ConfigError::MustBePositive {
+                section: "streaming",
+                field: "operation_timeout_ms",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl ParserConfig {
+    /// Validate parser configuration invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::MustBePositive`] when `max_input_size_mb` or
+    /// `buffer_initial_capacity` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::config::ParserConfig;
+    ///
+    /// ParserConfig::default().validate().expect("defaults are valid");
+    /// ```
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_input_size_mb == 0 {
+            return Err(ConfigError::MustBePositive {
+                section: "parser",
+                field: "max_input_size_mb",
+            });
+        }
+        if self.buffer_initial_capacity == 0 {
+            return Err(ConfigError::MustBePositive {
+                section: "parser",
+                field: "buffer_initial_capacity",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl SimdConfig {
+    /// Validate SIMD configuration invariants.
+    ///
+    /// The `avx512_alignment` field must be a power of two greater than zero,
+    /// because memory alignment requirements are always powers of two in x86.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::MustBePositive`] when `avx512_alignment` is zero.
+    /// Returns [`ConfigError::InconsistentBounds`] when `avx512_alignment` is
+    /// not a power of two.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::config::SimdConfig;
+    ///
+    /// SimdConfig::default().validate().expect("defaults are valid");
+    /// ```
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.avx512_alignment == 0 {
+            return Err(ConfigError::MustBePositive {
+                section: "simd",
+                field: "avx512_alignment",
+            });
+        }
+        if !self.avx512_alignment.is_power_of_two() {
+            return Err(ConfigError::InconsistentBounds {
+                section: "simd",
+                message: "avx512_alignment must be a power of two",
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Configuration profiles for different use cases
 impl PjsConfig {
+    /// Validate the entire configuration, including all sub-configs.
+    ///
+    /// Validation is fail-fast: the first error encountered is returned.
+    /// The chain order is: `streaming`, `parser`, `simd`, `security`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`ConfigError`] found in any sub-config.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::config::PjsConfig;
+    ///
+    /// PjsConfig::default().validate().expect("defaults are valid");
+    /// ```
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        self.streaming.validate()?;
+        self.parser.validate()?;
+        self.simd.validate()?;
+        self.security.validate()?;
+        Ok(())
+    }
+
     /// Configuration optimized for low latency
     pub fn low_latency() -> Self {
         Self {
@@ -203,6 +349,82 @@ mod tests {
         assert_eq!(config.parser.max_input_size_mb, 100);
         assert_eq!(config.streaming.max_frame_size, 64 * 1024);
         assert_eq!(config.simd.batch_size, 100);
+    }
+
+    #[test]
+    fn test_pjs_config_default_validates() {
+        PjsConfig::default()
+            .validate()
+            .expect("PjsConfig::default() must be valid");
+    }
+
+    #[test]
+    fn test_streaming_config_default_validates() {
+        StreamingConfig::default()
+            .validate()
+            .expect("StreamingConfig::default() must be valid");
+    }
+
+    #[test]
+    fn test_parser_config_default_validates() {
+        ParserConfig::default()
+            .validate()
+            .expect("ParserConfig::default() must be valid");
+    }
+
+    #[test]
+    fn test_simd_config_default_validates() {
+        SimdConfig::default()
+            .validate()
+            .expect("SimdConfig::default() must be valid");
+    }
+
+    #[test]
+    fn test_streaming_rejects_zero_max_frame_size() {
+        let cfg = StreamingConfig {
+            max_frame_size: 0,
+            ..StreamingConfig::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::MustBePositive {
+                section: "streaming",
+                field: "max_frame_size"
+            }
+        ));
+    }
+
+    #[test]
+    fn test_streaming_rejects_zero_operation_timeout_ms() {
+        let cfg = StreamingConfig {
+            operation_timeout_ms: 0,
+            ..StreamingConfig::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::MustBePositive {
+                section: "streaming",
+                field: "operation_timeout_ms"
+            }
+        ));
+    }
+
+    #[test]
+    fn test_simd_rejects_non_power_of_two_alignment() {
+        let cfg = SimdConfig {
+            avx512_alignment: 3,
+            ..SimdConfig::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InconsistentBounds {
+                section: "simd",
+                ..
+            }
+        ));
     }
 
     #[test]
