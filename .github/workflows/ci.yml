@@ -118,9 +118,9 @@ jobs:
         allocator: [system, mimalloc]
         include:
           - allocator: system
-            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server"
+            extra_features: ""
           - allocator: mimalloc
-            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,mimalloc"
+            extra_features: ",mimalloc"
 
     steps:
       - uses: actions/checkout@v4
@@ -146,7 +146,7 @@ jobs:
           cargo nextest run
           --no-run
           --workspace
-          --features "${{ matrix.features }}"
+          --features "default${{ matrix.extra_features }}"
           --lib --bins
           --archive-file nextest-archive.tar.zst
 
@@ -228,7 +228,6 @@ jobs:
           cargo test
           --workspace
           --doc
-          --features "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server"
 
   # Coverage runs on ubuntu only; does not wait for the cross-platform matrix.
   # Skipped when only JS files changed.

@@ -63,7 +63,15 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [features]
-default = ["simd-auto", "schema-validation"]
+default = [
+  "simd-auto",
+  "schema-validation",
+  "compression",
+  "http-server",
+  "http-client",
+  "websocket-server",
+  "websocket-client",
+]
 
 # SIMD features
 simd-auto = []
