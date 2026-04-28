@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom priority strategies**: User-configurable prioritization algorithms
 - **GPU acceleration**: CUDA-based JSON processing for ultra-high throughput
 
+## [0.5.1] - 2026-04-28
+
+### Fixed
+
+- Rewrite nested if-let blocks in parser with `?` operator for clarity (#51e199b)
+- Remove prometheus-metrics feature referencing deleted dependency (#d0f6e48)
+- Resolve npm security vulnerabilities in pjs-js-client (#88)
+- Update minimatch to resolve GHSA-23c5-xmqv-rm74 and GHSA-7r86-cg39-jmmj (#92)
+
+### Changed
+
+- Update all dependencies to latest versions (#86, #89, #83, #109)
+- Bump CI actions: upload-artifact v7, download-artifact v8, github-script v9, codecov v6, dependabot/fetch-metadata v3, lewagon/wait-on-check-action v1.7.0, google/osv-scanner-action v2.3.5
+- Add dependabot auto-merge workflow
+
 ## [0.5.0] - 2026-01-26
 
 ### Security
@@ -922,3 +937,20 @@ Licensed under either of
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.
+
+[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/bug-ops/pjs/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/bug-ops/pjs/compare/v0.4.7...v0.5.0
+[0.4.7]: https://github.com/bug-ops/pjs/compare/v0.4.6...v0.4.7
+[0.4.6]: https://github.com/bug-ops/pjs/compare/v0.4.5...v0.4.6
+[0.4.5]: https://github.com/bug-ops/pjs/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/bug-ops/pjs/compare/v0.4.0...v0.4.4
+[0.4.3]: https://github.com/bug-ops/pjs/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/bug-ops/pjs/compare/v0.4.0...v0.4.2
+[0.4.0]: https://github.com/bug-ops/pjs/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/bug-ops/pjs/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/bug-ops/pjs/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/bug-ops/pjs/compare/v0.2.0-alpha.1...v0.2.0
+[0.2.0-alpha.1]: https://github.com/bug-ops/pjs/compare/v0.1.0-alpha.1...v0.2.0-alpha.1
+[0.1.0-alpha.1]: https://github.com/bug-ops/pjs/compare/v0.1.0-alpha.0...v0.1.0-alpha.1
+[0.1.0-alpha.0]: https://github.com/bug-ops/pjs/releases/tag/v0.1.0-alpha.0
