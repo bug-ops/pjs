@@ -6,7 +6,7 @@
 use crate::{
     config::SecurityConfig,
     domain::{DomainError, DomainResult},
-    parser::allocator::global_allocator,
+    parser::aligned_alloc::aligned_allocator,
     security::SecurityValidator,
 };
 use dashmap::DashMap;
@@ -380,7 +380,7 @@ impl AlignedBuffer {
         })?;
 
         // Use global SIMD allocator for better performance
-        let allocator = global_allocator();
+        let allocator = aligned_allocator();
 
         // Allocate aligned memory using the appropriate allocator backend
         // Safety: alignment has been validated above
@@ -458,7 +458,7 @@ impl AlignedBuffer {
         let aligned_capacity = (new_capacity + self.alignment - 1) & !(self.alignment - 1);
 
         // Use global SIMD allocator for reallocation
-        let allocator = global_allocator();
+        let allocator = aligned_allocator();
 
         // Reallocate using the allocator (which will handle data copying)
         let new_ptr =
@@ -577,7 +577,7 @@ pub enum SimdType {
 impl Drop for AlignedBuffer {
     fn drop(&mut self) {
         // Use the global SIMD allocator for deallocation
-        let allocator = global_allocator();
+        let allocator = aligned_allocator();
 
         // Safety: We allocated this memory with the same layout
         unsafe {

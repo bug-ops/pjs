@@ -25,7 +25,6 @@ crossbeam = { workspace = true }
 dashmap = { workspace = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
-libmimalloc-sys = { workspace = true, optional = true }
 maplit = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 once_cell = { workspace = true }
@@ -41,9 +40,6 @@ sha2 = { workspace = true }
 smallvec = { workspace = true, features = ["serde", "union", "const_generics"] }
 sonic-rs = { workspace = true }
 thiserror = { workspace = true }
-tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats"] }
-tikv-jemalloc-sys = { workspace = true, optional = true }
-tikv-jemallocator = { workspace = true, optional = true }
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "sync",
@@ -74,13 +70,9 @@ simd-avx512 = ["sonic-rs/avx512"]
 simd-neon = []
 simd-sse42 = []
 
-# Memory allocator features (mutually exclusive)
-jemalloc = [
-    "dep:tikv-jemallocator",
-    "dep:tikv-jemalloc-ctl",
-    "dep:tikv-jemalloc-sys",
-]
-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+# Process-wide allocator (opt-in; registers MiMalloc as #[global_allocator] on non-wasm targets)
+# Note: conflicts with any other crate in the binary that also declares #[global_allocator].
+mimalloc = ["dep:mimalloc"]
 
 # Optional features
 compression = ["dep:brotli", "dep:flate2"]
@@ -96,7 +88,8 @@ websocket-server = ["http-server"]
 normal = ["axum", "tower", "tower-http", "hyper", "futures", "sha2"]
 
 [package.metadata.cargo-machete]
-ignored = ["tikv-jemallocator", "tikv-jemalloc-ctl", "mimalloc"]
+# mimalloc is referenced only via #[global_allocator] static; machete cannot detect this usage.
+ignored = ["mimalloc"]
 
 # Trusted publishing configuration for crates.io
 [package.metadata.release.publishers.crates-io]

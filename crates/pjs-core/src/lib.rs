@@ -12,24 +12,22 @@
 #![allow(clippy::only_used_in_recursion)] // Recursive algorithms by design
 // Note: dead_code is now handled per-item with targeted annotations
 
-// Allocator FFI dependencies
-#[cfg(feature = "mimalloc")]
-extern crate libmimalloc_sys;
-#[cfg(feature = "jemalloc")]
-extern crate tikv_jemalloc_sys;
-
 pub mod application;
 pub mod compression;
 pub mod config;
 pub mod domain;
 pub mod error;
 pub mod frame;
+pub mod global_alloc;
 pub mod infrastructure;
 pub mod memory;
 pub mod parser;
 pub mod security;
 pub mod semantic;
 pub mod stream;
+
+// Global allocator diagnostics
+pub use global_alloc::global_allocator_name;
 
 // Domain layer exports
 pub use domain::{
