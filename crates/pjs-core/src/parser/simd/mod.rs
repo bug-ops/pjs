@@ -183,13 +183,10 @@ impl SimdNumericOps {
         }
 
         for value in iter {
-            if let Some(num) = value.as_number() {
-                if let Some(f) = num.as_f64() {
-                    sum += f;
-                    count += 1;
-                }
-            } else {
-                return None; // Not a numeric array
+            let num = value.as_number()?;
+            if let Some(f) = num.as_f64() {
+                sum += f;
+                count += 1;
             }
         }
 
@@ -212,13 +209,10 @@ impl SimdNumericOps {
 
             for _ in 0..chunk_size {
                 if let Some(value) = chunks.next() {
-                    if let Some(num) = value.as_number() {
-                        if let Some(f) = num.as_f64() {
-                            chunk_sum += f;
-                            chunk_count += 1;
-                        }
-                    } else {
-                        return None;
+                    let num = value.as_number()?;
+                    if let Some(f) = num.as_f64() {
+                        chunk_sum += f;
+                        chunk_count += 1;
                     }
                 } else {
                     break;
@@ -243,15 +237,12 @@ impl SimdNumericOps {
         };
 
         for value in arr.iter() {
-            if let Some(num) = value.as_number() {
-                if let Some(f) = num.as_f64() {
-                    stats.min = stats.min.min(f);
-                    stats.max = stats.max.max(f);
-                    stats.sum += f;
-                    stats.count += 1;
-                }
-            } else {
-                return None;
+            let num = value.as_number()?;
+            if let Some(f) = num.as_f64() {
+                stats.min = stats.min.min(f);
+                stats.max = stats.max.max(f);
+                stats.sum += f;
+                stats.count += 1;
             }
         }
 
