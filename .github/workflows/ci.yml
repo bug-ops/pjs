@@ -271,53 +271,14 @@ jobs:
 
   # ── Tier 2c: WASM library tests ──────────────────────────────────────────
   # Runs in parallel with the Rust host matrix — does NOT wait for it.
-  # Triggered by any Rust change (pjs-core, pjs-domain, pjs-wasm, Cargo files)
-  # or explicit dispatch/push.  Skipped on JS-only PRs.
-  wasm-test:
-    name: WASM Library Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: [changes, quality]
-    if: |
-      needs.changes.outputs.wasm == 'true' ||
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "wasm-test"
-          cache-on-failure: true
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-
-      - name: Run pjs-wasm library tests
-        run: cargo nextest run -p pjs-wasm --lib --no-fail-fast
-
-      - name: Run pjson-rs-domain library tests
-        run: cargo nextest run -p pjson-rs-domain --lib --no-fail-fast
-
-      - name: Run doctests
-        run: |
-          cargo test -p pjs-wasm --doc
-          cargo test -p pjson-rs-domain --doc
-
   # ── Tier 3: WASM artefact builds ─────────────────────────────────────────
-  # Three wasm-pack targets in parallel; starts as soon as wasm-test passes.
-  # Same trigger condition as wasm-test.
+  # Three wasm-pack targets in parallel.  Library tests for pjs-wasm and
+  # pjson-rs-domain are covered by the main test matrix; no separate job needed.
   wasm-build:
     name: Build WASM (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [changes, wasm-test]
+    needs: [changes, quality]
     if: |
       needs.changes.outputs.wasm == 'true' ||
       github.event_name == 'push' ||
@@ -535,7 +496,6 @@ jobs:
       - test
       - doctest
       - coverage
-      - wasm-test
       - wasm-build
       - wasm-bundle-size
       - wasm-node-example
@@ -558,7 +518,6 @@ jobs:
           check test                      "${{ needs.test.result }}"
           check doctest                   "${{ needs.doctest.result }}"
           check coverage                  "${{ needs.coverage.result }}"
-          check wasm-test                 "${{ needs.wasm-test.result }}"
           check wasm-build                "${{ needs.wasm-build.result }}"
           check wasm-bundle-size          "${{ needs.wasm-bundle-size.result }}"
           check wasm-node-example         "${{ needs.wasm-node-example.result }}"
