@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-04-29
+
 ### Security
 
 - `ApiKeyConfig` no longer derives `Debug`; a hand-written impl redacts `hmac_key` and `keys` fields, preventing HMAC key material from appearing in logs or panic output (closes #216)
@@ -23,6 +25,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /pjs/sessions/{session_id}/dictionary` HTTP endpoint (behind `http-server` + `compression` + non-wasm32) — returns the trained dictionary with `Content-Type: application/zstd-dictionary` and `Cache-Control: private, max-age=300` once `N_TRAIN` (32) frame samples are accumulated.
 - `PjsAppState::with_dictionary_store(repo, publisher, store, dict_store)` — four-arg constructor that enables the dictionary endpoint end-to-end; existing `PjsAppState::new` defaults to `NoopDictionaryStore` (no behaviour change for existing callers).
 - `pjs-demo`: interactive demo server now instantiates `InMemoryDictionaryStore` at startup and prints the dictionary endpoint path.
+- 11 integration tests for `create_pjs_router_with_auth` and `create_pjs_router_with_rate_limit_and_auth` in `tests/http_middleware_tests.rs`: verify that `/pjs/health` is publicly accessible without credentials, protected routes return 401 without auth and 200 with a valid API key (both `X-PJS-API-Key` and `Authorization: Bearer` schemes), and that the rate-limit layer is correctly applied as outermost (closes #218)
+- 24 integration tests in `tests/http_middleware_tests.rs` covering `ApiKeyAuthLayer` (auth pass/fail, OPTIONS bypass, multi-key), `AuthConfigError` construction validation, `RateLimitMiddleware` (budget enforcement, 429 with `Retry-After`), and `create_pjs_router` construction (closes #197)
+- Serde round-trip tests for `Frame` covering all four frame types, all four patch operations, metadata, unicode, large payloads, timestamp precision, priority preservation, stream-ID preservation, and JSON field-name stability (`crates/pjs-domain/tests/frame_comprehensive.rs`)
+- NaN/Infinity rejection tests for `JsonData::float` and round-trip serialization tests for finite float values (`crates/pjs-domain/tests/json_data_comprehensive.rs`)
+- `pjson-rs`: new `partial-parse` feature flag; adds `jiter = "0.14"` workspace dependency and `parser/partial.rs` with the sealed `PartialJsonParser` trait, `PartialParseResult`, `StreamingHint`, `ParseDiagnostic` (`DuplicateKey`, `BigIntLossyConversion`), `JiterPartialParser` (hand-rolled per-token walker), and `JiterConfig`; foundation for partial JSON parsing in streaming frame delivery (#117)
+- `pjs-wasm`: added `tsify-next` dependency; `FrameData` and `StreamStats` now derive `Tsify` and generate precise TypeScript interfaces in the wasm-pack `.d.ts` output; `FrameCallback`, `StreamStatsCallback`, and `ErrorCallback` type aliases are emitted via `typescript_custom_section` (closes #143)
+- `PjsConfig::validate()` and sub-config validators (`StreamingConfig`, `ParserConfig`, `SimdConfig`, `SecurityConfig`) return `Err(ConfigError)` for zero-value fields and inconsistent bounds; `ConfigError` is re-exported from `pjson_rs` (closes #175)
+- `ApiKeyAuthLayer` Tower middleware for `Authorization: Bearer` and `X-PJS-API-Key` authentication using HMAC-SHA256 tag comparison via `subtle::ConstantTimeEq` — constant-time, no key-index or length leakage (closes #135)
+- `JwtAuthLayer` Tower middleware for JWT authentication, gated behind the `http-auth-jwt` feature flag using `jsonwebtoken`
+- `create_pjs_router_with_auth` and `create_pjs_router_with_rate_limit_and_auth` factory functions; `/pjs/health` remains unauthenticated via nested router design
+- `AuthConfigError` error type for `ApiKeyConfig` construction failures
+- `PendingThenReady<I>` adversarial test harness and 5 new waker-contract tests using `tokio_test::block_on` to deterministically catch `poll_next` waker bugs (#168)
+- CI job `js-client-test` runs `npm ci && npm test` for `crates/pjs-js-client` on push and JS file changes (#180)
+- Wire-level WebSocket integration tests that perform real protocol upgrades, frame exchange, and connection close verification (closes #158)
+- `AxumWebSocketTransport::active_connection_count` async method for observability of open connections
+- `pjson_rs::global_allocator_name()` — returns `"mimalloc"` or `"system"` for diagnostics and benchmark reporting (#160)
+- `mimalloc` feature now registers `mimalloc::MiMalloc` as the actual `#[global_allocator]` on non-wasm targets; previously it was dead extern-crate linkage with no effect (#160)
+- New `crates/pjs-core/src/global_alloc` module owns the `#[global_allocator]` registration, separated from the aligned-buffer helpers (#160)
+- Real deflate, gzip, and brotli compression/decompression in `SecureCompressor` via `flate2` (pure Rust) and `brotli` crates, gated on `feature = "compression"` (#114)
+- `CompressionBombConfig::max_compressed_size` field to independently limit compressed input size before decoding (#114)
+- `Error::CompressionError(String)` variant for codec-level failures, distinct from `SecurityError` (#114)
+- `HttpServerConfig` struct with `allowed_origins: Vec<String>` for configurable CORS origins; `create_pjs_router_with_config` and `create_pjs_router_with_rate_limit_and_config` variants accept it — original signatures unchanged (#152)
+- `metrics` Cargo feature: adds `metrics` + `metrics-exporter-prometheus` dependencies; installs a process-global Prometheus recorder via `OnceLock::get_or_try_init`; exposes `GET /metrics` endpoint in Prometheus text format (#142)
+- `GET /pjs/stats` route backed by `SystemQueryHandler` with real wall-clock uptime and correct `frames_per_second`/`bytes_per_second` rates; `PjsAppState` stores `start_time: Instant` (#142)
+- Aggregate frame counter `pjs_frames_total` (no per-session label) incremented in `GenerateFramesCommand` and `BatchGenerateFramesCommand` handlers when `metrics` feature is enabled (#142)
 
 ### Changed
 
@@ -33,42 +60,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extracted `public_routes`, `protected_routes`, and `apply_common_layers` helpers in `axum_adapter.rs` to eliminate route table duplication across router factory functions
 - Added `ApiKeyAuthLayer` and related auth infrastructure behind `http-server` feature flag; `http-auth-jwt` feature gate added for optional JWT support
 - **BREAKING** `JsonData::float(f64)` now returns `DomainResult<Self>` and rejects NaN and infinite values per RFC 8259 §6; the `From<f64> for JsonData` impl has been removed — callers must use `JsonData::float(value)?` to propagate the error. Closes #176.
-
-### Added
-
-- 11 integration tests for `create_pjs_router_with_auth` and `create_pjs_router_with_rate_limit_and_auth` in `tests/http_middleware_tests.rs`: verify that `/pjs/health` is publicly accessible without credentials, protected routes return 401 without auth and 200 with a valid API key (both `X-PJS-API-Key` and `Authorization: Bearer` schemes), and that the rate-limit layer is correctly applied as outermost (closes #218)
-- 24 integration tests in `tests/http_middleware_tests.rs` covering `ApiKeyAuthLayer` (auth pass/fail, OPTIONS bypass, multi-key), `AuthConfigError` construction validation, `RateLimitMiddleware` (budget enforcement, 429 with `Retry-After`), and `create_pjs_router` construction (closes #197)
-- Serde round-trip tests for `Frame` covering all four frame types, all four patch operations, metadata, unicode, large payloads, timestamp precision, priority preservation, stream-ID preservation, and JSON field-name stability (`crates/pjs-domain/tests/frame_comprehensive.rs`)
-- NaN/Infinity rejection tests for `JsonData::float` and round-trip serialization tests for finite float values (`crates/pjs-domain/tests/json_data_comprehensive.rs`)
+- **BREAKING:** `jemalloc` feature removed along with all `tikv-jemalloc-*` workspace dependencies (`tikv-jemallocator`, `tikv-jemalloc-ctl`, `tikv-jemalloc-sys`). Use `mimalloc` (now a real `#[global_allocator]`) or the system allocator (#160)
+- **BREAKING:** `parser::allocator::SimdAllocator` renamed to `parser::aligned_alloc::AlignedAllocator`; module `parser::allocator` is now `parser::aligned_alloc`. Per-backend FFI branches removed — all paths now route through the registered `#[global_allocator]` (#160)
+- **BREAKING:** `AllocatorBackend` enum, `AllocatorStats` struct, `initialize_global_allocator()`, and `global_allocator()` removed. Use `global_allocator_name()` for diagnostics and `aligned_allocator()` for the buffer-pool accessor (#160)
+- CI build and test matrices collapsed from 3 allocators (`system`, `jemalloc`, `mimalloc`) to 2 (`system`, `mimalloc`); Windows jemalloc exclusion removed; test jobs now use per-variant `features` instead of `--all-features` (#160)
+- SIMD feature flags (`simd-auto`, `simd-avx2`, `simd-avx512`, `simd-sse42`, `simd-neon`) now activate sonic-rs SIMD codegen via `.cargo/config.toml` (`-C target-cpu=native` on x86_64/aarch64); `crates/pjs-core/build.rs` emits `pjs_simd_*` cfg gates and `cargo::warning` diagnostics when a SIMD feature is enabled but the required CPU target features are not exposed to rustc (#125)
+- `SecureCompressor::new` and `with_default_security` now accept `ByteCodec` instead of `CompressionStrategy`; `CompressionStrategy` is Layer A (JSON-aware) and is unchanged (#114)
+- `SecureCompressedData` gains a `codec: ByteCodec` field to identify which decoder to use on decompression (#114)
+- `CompressionBombConfig::validate_pre_decompression` now checks `max_compressed_size` (not `max_decompressed_size`); the decompressed output is still monitored by `CompressionBombProtector` during streaming (#114)
+- `CompressionBombConfig::max_ratio` default raised from 100.0 to 300.0 to accommodate legitimate brotli ratios on repetitive JSON (200x+ is normal) (#114)
+- `CompressionBombConfig::high_throughput()` preset `max_ratio` raised to 1000.0 (#114)
 
 ### Fixed
 
 - `axum_extension.rs` SSE handler no longer silently drops frames containing non-finite floats via `unwrap_or_default()`; serialization is now asserted infallible (invariant guaranteed by `JsonData::float` validation at construction). Closes #176.
-
 - `GetActiveSessionsQuery` now routes through `find_sessions_by_criteria` with a bounded `Pagination` instead of the unbounded `find_active_sessions()` — eliminates the load-all-then-paginate allocation at large session counts (closes #136)
 - `SearchSessionsQuery` enforces a maximum page size of 100 and correctly reports `has_more` in the response
 - `SessionsResponse` gains a `has_more: bool` field indicating whether additional pages exist
 - Stream adapters (`AdaptiveFrameStream`, `BatchFrameStream`, `PriorityFrameStream`) migrated from hand-rolled `poll_next` to `async-stream::try_stream!` to eliminate latent waker-contract bugs (#166). Consume the named builder via `.into_stream()` before `.collect()` / `.next()`.
 - **BREAKING** (#167): `BatchFrameStream` with `StreamFormat::Json` now emits one JSON object per line per frame (NDJSON-of-objects), matching `StreamFormat::NdJson`'s wire format. Previously emitted one JSON array per batch. Pre-1.0 breaking change — no deprecation cycle. Consumers parsing each line should expect `serde_json::Value::Object`, not `Value::Array`.
-
-### Added
-
-- `pjson-rs`: new `partial-parse` feature flag; adds `jiter = "0.14"` workspace dependency and `parser/partial.rs` with the sealed `PartialJsonParser` trait, `PartialParseResult`, `StreamingHint`, `ParseDiagnostic` (`DuplicateKey`, `BigIntLossyConversion`), `JiterPartialParser` (hand-rolled per-token walker), and `JiterConfig`; foundation for partial JSON parsing in streaming frame delivery (#117)
-- `pjs-wasm`: added `tsify-next` dependency; `FrameData` and `StreamStats` now derive `Tsify` and generate precise TypeScript interfaces in the wasm-pack `.d.ts` output; `FrameCallback`, `StreamStatsCallback`, and `ErrorCallback` type aliases are emitted via `typescript_custom_section` (closes #143)
-- `PjsConfig::validate()` and sub-config validators (`StreamingConfig`, `ParserConfig`, `SimdConfig`, `SecurityConfig`) return `Err(ConfigError)` for zero-value fields and inconsistent bounds; `ConfigError` is re-exported from `pjson_rs` (closes #175)
-- `ApiKeyAuthLayer` Tower middleware for `Authorization: Bearer` and `X-PJS-API-Key` authentication using HMAC-SHA256 tag comparison via `subtle::ConstantTimeEq` — constant-time, no key-index or length leakage (closes #135)
-- `JwtAuthLayer` Tower middleware for JWT authentication, gated behind the `http-auth-jwt` feature flag using `jsonwebtoken`
-- `create_pjs_router_with_auth` and `create_pjs_router_with_rate_limit_and_auth` factory functions; `/pjs/health` remains unauthenticated via nested router design
-- `AuthConfigError` error type for `ApiKeyConfig` construction failures
-- `PendingThenReady<I>` adversarial test harness and 5 new waker-contract tests using `tokio_test::block_on` to deterministically catch `poll_next` waker bugs (#168).
-
-### Removed
-
-- Direct `Stream` impl on `AdaptiveFrameStream`, `BatchFrameStream`, and `PriorityFrameStream` types — use `.into_stream()` to obtain the underlying `impl Stream<...>` (#166).
-- `BatchFrameStream` half-batch-on-`Pending` heuristic (source of starvation under deterministic schedulers) (#166).
-
-### Fixed
-
 - Fixed 6 broken intra-doc links in `global_alloc.rs`, `gat_memory_repository.rs`, and `auth.rs` that caused `RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links" cargo doc` to fail; replaced unresolvable links with plain backtick text or qualified paths (closes #210)
 - `GetActiveSessionsQuery` and `SearchSessionsQuery` tests now assert `has_more` correctness and the 100-item page cap (closes #208)
 - nextest `default-filter` in `.config/nextest.toml` changed from `not test(integration)` (substring match on full test path) to `not test(/^integration_/)` (regex anchor on function name); restores 99 unit tests in `stream::compression_integration` and `infrastructure::integration` that were silently excluded (closes #200, resolves false 0% coverage in #195 and #196)
@@ -104,37 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Apply `client_info` filter in `SearchSessionsQuery` handler: replace discarded placeholder with case-insensitive substring matching against `session.client_info()` (#121)
 - Implement `LazyArray::extract_element_boundaries` and `LazyObject::extract_field_boundaries` with byte-level JSON parsers; all `.len()`, `.get()`, `.iter()`, and `.keys()` methods now return correct results (#120)
 
-### Added
-
-- CI job `js-client-test` runs `npm ci && npm test` for `crates/pjs-js-client` on push and JS file changes (#180)
-- Wire-level WebSocket integration tests that perform real protocol upgrades, frame exchange, and connection close verification (closes #158)
-- `AxumWebSocketTransport::active_connection_count` async method for observability of open connections
-- `pjson_rs::global_allocator_name()` — returns `"mimalloc"` or `"system"` for diagnostics and benchmark reporting (#160)
-- `mimalloc` feature now registers `mimalloc::MiMalloc` as the actual `#[global_allocator]` on non-wasm targets; previously it was dead extern-crate linkage with no effect (#160)
-- New `crates/pjs-core/src/global_alloc` module owns the `#[global_allocator]` registration, separated from the aligned-buffer helpers (#160)
-- Real deflate, gzip, and brotli compression/decompression in `SecureCompressor` via `flate2` (pure Rust) and `brotli` crates, gated on `feature = "compression"` (#114)
-- `CompressionBombConfig::max_compressed_size` field to independently limit compressed input size before decoding (#114)
-- `Error::CompressionError(String)` variant for codec-level failures, distinct from `SecurityError` (#114)
-- `HttpServerConfig` struct with `allowed_origins: Vec<String>` for configurable CORS origins; `create_pjs_router_with_config` and `create_pjs_router_with_rate_limit_and_config` variants accept it — original signatures unchanged (#152)
-- `metrics` Cargo feature: adds `metrics` + `metrics-exporter-prometheus` dependencies; installs a process-global Prometheus recorder via `OnceLock::get_or_try_init`; exposes `GET /metrics` endpoint in Prometheus text format (#142)
-- `GET /pjs/stats` route backed by `SystemQueryHandler` with real wall-clock uptime and correct `frames_per_second`/`bytes_per_second` rates; `PjsAppState` stores `start_time: Instant` (#142)
-- Aggregate frame counter `pjs_frames_total` (no per-session label) incremented in `GenerateFramesCommand` and `BatchGenerateFramesCommand` handlers when `metrics` feature is enabled (#142)
-
-### Changed
-
-- **BREAKING:** `jemalloc` feature removed along with all `tikv-jemalloc-*` workspace dependencies (`tikv-jemallocator`, `tikv-jemalloc-ctl`, `tikv-jemalloc-sys`). Use `mimalloc` (now a real `#[global_allocator]`) or the system allocator (#160)
-- **BREAKING:** `parser::allocator::SimdAllocator` renamed to `parser::aligned_alloc::AlignedAllocator`; module `parser::allocator` is now `parser::aligned_alloc`. Per-backend FFI branches removed — all paths now route through the registered `#[global_allocator]` (#160)
-- **BREAKING:** `AllocatorBackend` enum, `AllocatorStats` struct, `initialize_global_allocator()`, and `global_allocator()` removed. Use `global_allocator_name()` for diagnostics and `aligned_allocator()` for the buffer-pool accessor (#160)
-- CI build and test matrices collapsed from 3 allocators (`system`, `jemalloc`, `mimalloc`) to 2 (`system`, `mimalloc`); Windows jemalloc exclusion removed; test jobs now use per-variant `features` instead of `--all-features` (#160)
-- SIMD feature flags (`simd-auto`, `simd-avx2`, `simd-avx512`, `simd-sse42`, `simd-neon`) now activate sonic-rs SIMD codegen via `.cargo/config.toml` (`-C target-cpu=native` on x86_64/aarch64); `crates/pjs-core/build.rs` emits `pjs_simd_*` cfg gates and `cargo::warning` diagnostics when a SIMD feature is enabled but the required CPU target features are not exposed to rustc (#125)
-- `SecureCompressor::new` and `with_default_security` now accept `ByteCodec` instead of `CompressionStrategy`; `CompressionStrategy` is Layer A (JSON-aware) and is unchanged (#114)
-- `SecureCompressedData` gains a `codec: ByteCodec` field to identify which decoder to use on decompression (#114)
-- `CompressionBombConfig::validate_pre_decompression` now checks `max_compressed_size` (not `max_decompressed_size`); the decompressed output is still monitored by `CompressionBombProtector` during streaming (#114)
-- `CompressionBombConfig::max_ratio` default raised from 100.0 to 300.0 to accommodate legitimate brotli ratios on repetitive JSON (200x+ is normal) (#114)
-- `CompressionBombConfig::high_throughput()` preset `max_ratio` raised to 1000.0 (#114)
-
 ### Removed
 
+- Direct `Stream` impl on `AdaptiveFrameStream`, `BatchFrameStream`, and `PriorityFrameStream` types — use `.into_stream()` to obtain the underlying `impl Stream<...>` (#166)
+- `BatchFrameStream` half-batch-on-`Pending` heuristic (source of starvation under deterministic schedulers) (#166)
 - `libmimalloc-sys` workspace dependency — no longer needed; `mimalloc` crate brings it transitively and the FFI call sites in `parser/allocator.rs` are deleted (#160)
 - `ByteCodec` enum (`None | Deflate | Gzip | Brotli`) for byte-level codec selection in `SecureCompressor` (#114)
 - `CompressionQuality` enum (`Fast | Balanced | Best`) for tuning codec compression levels (#114)
@@ -1073,7 +1056,8 @@ Licensed under either of
 
 at your option.
 
-[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/bug-ops/pjs/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/bug-ops/pjs/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/bug-ops/pjs/compare/v0.4.7...v0.5.0
 [0.4.7]: https://github.com/bug-ops/pjs/compare/v0.4.6...v0.4.7
