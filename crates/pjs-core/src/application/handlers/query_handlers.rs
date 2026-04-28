@@ -995,6 +995,49 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(response.sessions.len(), 4);
         assert_eq!(response.total_count, 10);
+        assert!(response.has_more);
+    }
+
+    #[tokio::test]
+    async fn test_get_active_sessions_last_page_has_more_false() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository.clone());
+
+        for _ in 0..5 {
+            let mut session = StreamSession::new(SessionConfig::default());
+            let _ = session.activate();
+            repository.add_session(session);
+        }
+
+        // offset=3, limit=4 → only 2 remain → last page
+        let query = GetActiveSessionsQuery {
+            offset: Some(3),
+            limit: Some(4),
+        };
+        let response = handler.handle(query).await.unwrap();
+        assert_eq!(response.sessions.len(), 2);
+        assert!(!response.has_more);
+    }
+
+    #[tokio::test]
+    async fn test_get_active_sessions_page_cap() {
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository.clone());
+
+        for _ in 0..110 {
+            let mut session = StreamSession::new(SessionConfig::default());
+            let _ = session.activate();
+            repository.add_session(session);
+        }
+
+        // limit=200 must be capped to 100
+        let query = GetActiveSessionsQuery {
+            offset: Some(0),
+            limit: Some(200),
+        };
+        let response = handler.handle(query).await.unwrap();
+        assert!(response.sessions.len() <= 100);
+        assert!(response.has_more);
     }
 
     #[tokio::test]
@@ -1332,7 +1375,9 @@ mod tests {
 
         let result = QueryHandlerGat::handle(&handler, query).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().sessions.len(), 1);
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 1);
+        assert!(!response.has_more);
     }
 
     #[tokio::test]
@@ -1354,7 +1399,9 @@ mod tests {
 
         let result = QueryHandlerGat::handle(&handler, query).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().sessions.len(), 0);
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 0);
+        assert!(!response.has_more);
     }
 
     #[tokio::test]
@@ -1376,7 +1423,9 @@ mod tests {
 
         let result = QueryHandlerGat::handle(&handler, query).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().sessions.len(), 0);
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 0);
+        assert!(!response.has_more);
     }
 
     #[tokio::test]
@@ -1396,7 +1445,9 @@ mod tests {
 
         let result = QueryHandlerGat::handle(&handler, query).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().sessions.len(), 2);
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 2);
+        assert!(!response.has_more);
     }
 
     #[tokio::test]
@@ -1419,6 +1470,8 @@ mod tests {
 
         let result = QueryHandlerGat::handle(&handler, query).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().sessions.len(), 1);
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 1);
+        assert!(!response.has_more);
     }
 }
