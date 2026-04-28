@@ -109,16 +109,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(result) => match result {
                 pjson_rs::stream::ProcessResult::Processed(processed_frame) => {
                     println!(
-                        "   ✅ Processed successfully - Priority: {}",
+                        "   ✅ Accepted - Priority: {}",
                         processed_frame.priority.value()
                     );
-                    println!("   🖥️  Client can render this data immediately");
+                    println!("   Client can render this data immediately");
                 }
                 pjson_rs::stream::ProcessResult::Complete(_) => {
-                    println!("   🎯 Stream processing completed");
-                }
-                pjson_rs::stream::ProcessResult::Incomplete => {
-                    println!("   ⏳ Frame processing incomplete, waiting for more data");
+                    println!("   Stream processing completed");
                 }
                 pjson_rs::stream::ProcessResult::Error(e) => {
                     println!("   ❌ Processing error: {e}");
