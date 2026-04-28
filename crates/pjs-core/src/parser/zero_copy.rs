@@ -580,11 +580,8 @@ impl MemoryUsage {
 
 /// Incremental parser for streaming scenarios
 pub struct IncrementalParser<'a> {
-    #[allow(dead_code)] // Future: base parser for incremental parsing
-    base: ZeroCopyParser<'a>,
     buffer: Vec<u8>,
-    #[allow(dead_code)] // Future: storage for parsed values in stream
-    complete_values: Vec<LazyJsonValue<'a>>,
+    _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> Default for IncrementalParser<'a> {
@@ -596,9 +593,8 @@ impl<'a> Default for IncrementalParser<'a> {
 impl<'a> IncrementalParser<'a> {
     pub fn new() -> Self {
         Self {
-            base: ZeroCopyParser::new(),
             buffer: Vec::with_capacity(8192), // 8KB initial capacity
-            complete_values: Vec::new(),
+            _phantom: std::marker::PhantomData,
         }
     }
 

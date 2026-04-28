@@ -423,20 +423,6 @@ impl SonicParser {
     }
 }
 
-/// Simplified lazy frame for future implementation
-pub struct LazyFrame<'a> {
-    frame: Frame,
-    #[allow(dead_code)] // Future: lazy evaluation of frame components
-    parser: &'a SonicParser,
-}
-
-impl<'a> LazyFrame<'a> {
-    /// Get the parsed frame
-    pub fn frame(&self) -> &Frame {
-        &self.frame
-    }
-}
-
 impl Default for SonicParser {
     fn default() -> Self {
         Self::new()

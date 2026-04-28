@@ -20,8 +20,6 @@ pub struct SimdZeroCopyParser<'a> {
     input: &'a [u8],
     position: usize,
     depth: usize,
-    #[allow(dead_code)] // Future: depth limit enforcement
-    max_depth: usize,
     simd_enabled: bool,
     _phantom: PhantomData<&'a ()>,
 }
@@ -86,7 +84,6 @@ impl<'a> SimdZeroCopyParser<'a> {
             input: &[],
             position: 0,
             depth: 0,
-            max_depth: config.max_depth,
             simd_enabled: config.enable_simd && Self::is_simd_available(),
             _phantom: PhantomData,
         }
@@ -180,7 +177,6 @@ impl<'a> SimdZeroCopyParser<'a> {
         Ok(SonicStructuralInfo {
             value_type,
             start_pos: pos,
-            estimated_size: input.len(),
             has_escapes: self.detect_escapes(input),
             is_simd_friendly: self.is_simd_friendly(input),
         })
@@ -433,8 +429,6 @@ impl<'a> LazyParser<'a> for SimdZeroCopyParser<'a> {
 struct SonicStructuralInfo {
     value_type: ValueType,
     start_pos: usize,
-    #[allow(dead_code)] // Future: used for pre-allocation optimization
-    estimated_size: usize,
     has_escapes: bool,
     is_simd_friendly: bool,
 }

@@ -116,23 +116,11 @@ impl MetricsHistory {
 /// Individual metric samples
 #[derive(Debug, Clone)]
 struct LatencySample {
-    #[allow(dead_code)] // Used for time-series analysis in future
-    timestamp: SystemTime,
-    #[allow(dead_code)] // Used for per-session metrics in future
-    session_id: SessionId,
-    #[allow(dead_code)] // Used for per-stream metrics in future
-    stream_id: Option<StreamId>,
     latency_ms: f64,
-    #[allow(dead_code)] // Used for operation-specific analysis in future
-    operation_type: String,
 }
 
 #[derive(Debug, Clone)]
 struct ThroughputSample {
-    #[allow(dead_code)] // Used for time-series analysis in future
-    timestamp: SystemTime,
-    #[allow(dead_code)] // Used for per-session metrics in future
-    session_id: SessionId,
     bytes_transferred: u64,
     duration: Duration,
     frame_count: usize,
@@ -140,20 +128,12 @@ struct ThroughputSample {
 
 #[derive(Debug, Clone)]
 struct ErrorSample {
-    #[allow(dead_code)] // Used for time-series analysis in future
-    timestamp: SystemTime,
-    #[allow(dead_code)] // Used for per-session metrics in future
-    session_id: SessionId,
-    #[allow(dead_code)] // Used for per-stream metrics in future
-    stream_id: Option<StreamId>,
     error_type: String,
     error_severity: ErrorSeverity,
 }
 
 #[derive(Debug, Clone)]
 struct ResourceSample {
-    #[allow(dead_code)] // Used for time-series analysis in future
-    timestamp: SystemTime,
     cpu_usage: f64,
     memory_usage_bytes: u64,
     network_bandwidth_mbps: f64,
@@ -180,18 +160,12 @@ impl PerformanceAnalysisService {
     /// Record a latency measurement
     pub fn record_latency(
         &mut self,
-        session_id: SessionId,
-        stream_id: Option<StreamId>,
+        _session_id: SessionId,
+        _stream_id: Option<StreamId>,
         latency_ms: f64,
-        operation_type: String,
+        _operation_type: String,
     ) -> ApplicationResult<()> {
-        let sample = LatencySample {
-            timestamp: SystemTime::now(),
-            session_id,
-            stream_id,
-            latency_ms,
-            operation_type,
-        };
+        let sample = LatencySample { latency_ms };
 
         self.metrics_history.add_latency_sample(sample);
         Ok(())
@@ -200,14 +174,12 @@ impl PerformanceAnalysisService {
     /// Record throughput measurement
     pub fn record_throughput(
         &mut self,
-        session_id: SessionId,
+        _session_id: SessionId,
         bytes_transferred: u64,
         duration: Duration,
         frame_count: usize,
     ) -> ApplicationResult<()> {
         let sample = ThroughputSample {
-            timestamp: SystemTime::now(),
-            session_id,
             bytes_transferred,
             duration,
             frame_count,
@@ -220,15 +192,12 @@ impl PerformanceAnalysisService {
     /// Record error occurrence
     pub fn record_error(
         &mut self,
-        session_id: SessionId,
-        stream_id: Option<StreamId>,
+        _session_id: SessionId,
+        _stream_id: Option<StreamId>,
         error_type: String,
         severity: ErrorSeverity,
     ) -> ApplicationResult<()> {
         let sample = ErrorSample {
-            timestamp: SystemTime::now(),
-            session_id,
-            stream_id,
             error_type,
             error_severity: severity,
         };
@@ -246,7 +215,6 @@ impl PerformanceAnalysisService {
         active_connections: usize,
     ) -> ApplicationResult<()> {
         let sample = ResourceSample {
-            timestamp: SystemTime::now(),
             cpu_usage,
             memory_usage_bytes,
             network_bandwidth_mbps,

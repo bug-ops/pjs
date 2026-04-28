@@ -16,9 +16,6 @@ pub struct ObjectPool<T> {
     objects: ArrayQueue<T>,
     /// Factory function to create new objects
     factory: Arc<dyn Fn() -> T + Send + Sync>,
-    /// Maximum pool capacity
-    #[allow(dead_code)] // Future: used for pool size enforcement
-    max_capacity: usize,
     /// Best-effort stat counters — Relaxed ordering is intentional; these are
     /// metrics, not synchronization points, so occasional imprecision is acceptable.
     stat_created: AtomicUsize,
@@ -51,7 +48,6 @@ impl<T> ObjectPool<T> {
         Self {
             objects: ArrayQueue::new(capacity),
             factory: Arc::new(factory),
-            max_capacity: capacity,
             stat_created: AtomicUsize::new(0),
             stat_reused: AtomicUsize::new(0),
             stat_returned: AtomicUsize::new(0),
@@ -95,13 +91,6 @@ impl<T> ObjectPool<T> {
         // If pool is full, object is dropped (let GC handle it)
     }
 
-    /// Clean object before returning to pool (default implementation)
-    #[allow(dead_code)] // Future: will be used for type-specific cleaning strategies
-    fn clean_object(_obj: &mut T) {
-        // Default implementation does nothing
-        // Specialized implementations below for specific types
-    }
-
     /// Get current pool statistics
     pub fn stats(&self) -> PoolStats {
         PoolStats {
@@ -111,36 +100,6 @@ impl<T> ObjectPool<T> {
             peak_usage: self.stat_peak.load(Ordering::Relaxed),
             current_pool_size: self.stat_pool_size.load(Ordering::Relaxed),
         }
-    }
-}
-
-// Trait for cleanable objects
-#[allow(dead_code)] // Future: will be used for polymorphic cleaning
-trait Cleanable {
-    fn clean(&mut self);
-}
-
-impl Cleanable for HashMap<Cow<'static, str>, Cow<'static, str>> {
-    fn clean(&mut self) {
-        self.clear();
-    }
-}
-
-impl Cleanable for HashMap<String, String> {
-    fn clean(&mut self) {
-        self.clear();
-    }
-}
-
-impl Cleanable for Vec<u8> {
-    fn clean(&mut self) {
-        self.clear();
-    }
-}
-
-impl Cleanable for Vec<String> {
-    fn clean(&mut self) {
-        self.clear();
     }
 }
 
@@ -192,46 +151,6 @@ impl<'a, T> std::ops::DerefMut for PooledObject<'a, T> {
         self.get_mut()
     }
 }
-
-/// Global pools for common data structures
-pub struct GlobalPools {
-    pub cow_hashmap: ObjectPool<HashMap<Cow<'static, str>, Cow<'static, str>>>,
-    pub string_hashmap: ObjectPool<HashMap<String, String>>,
-    pub byte_vec: ObjectPool<Vec<u8>>,
-    pub string_vec: ObjectPool<Vec<String>>,
-}
-
-impl GlobalPools {
-    #[allow(dead_code)] // Future: will be exposed for global pool initialization
-    fn new() -> Self {
-        Self {
-            cow_hashmap: ObjectPool::new(50, || {
-                let mut map = HashMap::with_capacity(8);
-                map.shrink_to_fit(); // Ensure it's clean
-                map
-            }),
-            string_hashmap: ObjectPool::new(50, || {
-                let mut map = HashMap::with_capacity(8);
-                map.shrink_to_fit(); // Ensure it's clean
-                map
-            }),
-            byte_vec: ObjectPool::new(100, || {
-                let mut vec = Vec::with_capacity(1024);
-                vec.clear(); // Ensure it's clean
-                vec
-            }),
-            string_vec: ObjectPool::new(50, || {
-                let mut vec = Vec::with_capacity(16);
-                vec.clear(); // Ensure it's clean
-                vec
-            }),
-        }
-    }
-}
-
-/// Global singleton pools
-#[allow(dead_code)] // Future: will be used for global pool access pattern
-static GLOBAL_POOLS: Lazy<GlobalPools> = Lazy::new(GlobalPools::new);
 
 /// Wrapper that ensures cleaning happens
 pub struct CleaningPooledObject<T: 'static> {

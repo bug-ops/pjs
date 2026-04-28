@@ -519,44 +519,9 @@ impl EventPublisherGat for CompositeEventPublisher {
 mod tests {
     use super::*;
     use crate::domain::{
-        events::{DomainEvent, EventSubscriber},
+        events::DomainEvent,
         value_objects::{SessionId, StreamId},
     };
-    use std::sync::RwLock;
-
-    #[allow(dead_code)] // Future test utility
-    #[derive(Debug, Clone)]
-    struct TestSubscriber {
-        received_events: Arc<RwLock<Vec<DomainEvent>>>,
-    }
-
-    #[allow(dead_code)] // Future test utility
-    impl TestSubscriber {
-        fn new() -> Self {
-            Self {
-                received_events: Arc::new(RwLock::new(Vec::new())),
-            }
-        }
-
-        fn event_count(&self) -> usize {
-            self.received_events.read().unwrap().len()
-        }
-    }
-
-    impl EventSubscriber for TestSubscriber {
-        type HandleFuture<'a>
-            = impl std::future::Future<Output = DomainResult<()>> + Send + 'a
-        where
-            Self: 'a;
-
-        fn handle(&self, event: &DomainEvent) -> Self::HandleFuture<'_> {
-            let event = event.clone();
-            async move {
-                self.received_events.write().unwrap().push(event);
-                Ok(())
-            }
-        }
-    }
 
     #[tokio::test]
     async fn test_in_memory_event_publisher() {

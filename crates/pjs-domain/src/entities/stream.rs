@@ -51,28 +51,6 @@ mod serde_stream_id {
     }
 }
 
-/// Custom serde for Priority within entities
-#[allow(dead_code)]
-mod serde_priority {
-    use crate::value_objects::Priority;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(priority: &Priority, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        priority.value().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Priority, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u8::deserialize(deserializer)?;
-        Priority::new(value).map_err(serde::de::Error::custom)
-    }
-}
-
 /// Custom serde for HashMap<String, Priority>
 mod serde_priority_map {
     use crate::value_objects::Priority;

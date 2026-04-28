@@ -63,8 +63,6 @@ pub enum BufferSize {
 #[derive(Debug)]
 struct BufferBucket {
     buffers: Vec<AlignedBuffer>,
-    #[allow(dead_code)] // Future: size-based pool management
-    size: BufferSize,
     last_access: Instant,
 }
 
@@ -415,16 +413,28 @@ impl AlignedBuffer {
 
     /// Get mutable slice to buffer data
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: `self.ptr` was allocated via `AlignedAllocator::alloc_aligned` and remains
+        // valid for at least `self.capacity` bytes. `self.len <= self.capacity` is a class
+        // invariant upheld by every method that modifies `len`. The `&mut self` receiver
+        // ensures exclusive access for the lifetime of the returned slice.
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
     /// Get immutable slice to buffer data
     pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: `self.ptr` was allocated via `AlignedAllocator::alloc_aligned` and remains
+        // valid for at least `self.capacity` bytes. `self.len <= self.capacity` is a class
+        // invariant upheld by every method that modifies `len`. The `&self` receiver ensures
+        // no mutable aliasing exists for the lifetime of the returned slice.
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
     /// Get a mutable slice with full capacity
     pub fn as_mut_capacity_slice(&mut self) -> &mut [u8] {
+        // SAFETY: `self.ptr` was allocated via `AlignedAllocator::alloc_aligned` for exactly
+        // `self.capacity` bytes. The `&mut self` receiver ensures exclusive access for the
+        // lifetime of the returned slice. Callers are responsible for initializing bytes
+        // before reading them; `set_len` is `unsafe` and documents that requirement.
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.capacity) }
     }
 
@@ -460,7 +470,11 @@ impl AlignedBuffer {
         // Use global SIMD allocator for reallocation
         let allocator = aligned_allocator();
 
-        // Reallocate using the allocator (which will handle data copying)
+        // Reallocate using the allocator (which will handle data copying).
+        // SAFETY: `self.ptr` was allocated (or previously reallocated) via
+        // `AlignedAllocator::alloc_aligned` with `self.layout`. `aligned_capacity` is
+        // positive because it is at least `new_capacity > self.capacity >= self.alignment`.
+        // After this call `self.ptr` must not be used — it is replaced below.
         let new_ptr =
             unsafe { allocator.realloc_aligned(self.ptr, self.layout, aligned_capacity)? };
 
@@ -487,6 +501,11 @@ impl AlignedBuffer {
             self.reserve(data.len())?;
         }
 
+        // SAFETY: `reserve` above ensures `self.capacity >= self.len + data.len()`, so
+        // `self.ptr.as_ptr().add(self.len)` is within the allocation. `data` is a valid
+        // `&[u8]` slice so its pointer is also valid for `data.len()` bytes. The destination
+        // range `[self.len, self.len + data.len())` does not overlap with `data` because
+        // `data` is an external caller-provided slice that cannot alias `self.ptr`.
         unsafe {
             ptr::copy_nonoverlapping(data.as_ptr(), self.ptr.as_ptr().add(self.len), data.len());
             self.len += data.len();
@@ -592,7 +611,12 @@ impl Clone for AlignedBuffer {
         let mut new_buffer =
             Self::new(self.capacity, self.alignment).expect("Failed to clone buffer");
 
-        // Copy data
+        // Copy data.
+        // SAFETY: `self.ptr` is valid for `self.len` bytes (allocation invariant).
+        // `new_buffer.ptr` is valid for `self.capacity` bytes because `Self::new` was called
+        // with `self.capacity` above. `self.len <= self.capacity` ensures the byte count fits
+        // in both ranges. The two allocations are independent heap regions, so they cannot
+        // overlap.
         unsafe {
             ptr::copy_nonoverlapping(self.ptr.as_ptr(), new_buffer.ptr.as_ptr(), self.len);
             new_buffer.len = self.len;
@@ -656,7 +680,6 @@ impl Drop for PooledBuffer {
             // Get or create bucket for this buffer size
             let mut bucket_ref = self.pool.entry(self.size).or_insert_with(|| BufferBucket {
                 buffers: Vec::new(),
-                size: self.size,
                 last_access: Instant::now(),
             });
 

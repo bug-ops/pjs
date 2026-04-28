@@ -8,8 +8,6 @@ use crate::{application::ApplicationResult, domain::value_objects::Priority};
 /// Service for optimization strategies and use case handling
 #[derive(Debug)]
 pub struct OptimizationService {
-    #[allow(dead_code)] // Future: will be used for default optimization selection
-    default_strategy: OptimizationStrategy,
     custom_strategies: std::collections::HashMap<String, OptimizationStrategy>,
 }
 
@@ -67,7 +65,6 @@ pub struct OptimizationMetrics {
 impl OptimizationService {
     pub fn new() -> Self {
         Self {
-            default_strategy: Self::create_balanced_strategy(),
             custom_strategies: std::collections::HashMap::new(),
         }
     }
@@ -313,19 +310,6 @@ impl OptimizationService {
             description: "Optimized for live streaming with audience interaction".to_string(),
             target_latency_ms: 500.0,
             target_throughput_mbps: 20.0,
-        }
-    }
-
-    fn create_balanced_strategy() -> OptimizationStrategy {
-        OptimizationStrategy {
-            priority_threshold: Priority::MEDIUM,
-            max_frame_size: 32 * 1024,
-            batch_size: 10,
-            compression_enabled: true,
-            adaptive_quality: true,
-            description: "Balanced strategy for general use cases".to_string(),
-            target_latency_ms: 500.0,
-            target_throughput_mbps: 10.0,
         }
     }
 

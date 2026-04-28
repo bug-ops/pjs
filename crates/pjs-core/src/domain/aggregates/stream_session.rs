@@ -31,28 +31,6 @@ mod serde_session_id {
     }
 }
 
-/// Custom serde for StreamId within aggregates
-#[allow(dead_code)]
-mod serde_stream_id {
-    use crate::domain::value_objects::StreamId;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(id: &StreamId, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        id.as_uuid().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<StreamId, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let uuid = uuid::Uuid::deserialize(deserializer)?;
-        Ok(StreamId::from_uuid(uuid))
-    }
-}
-
 /// Custom serde for HashMap<StreamId, Stream>
 mod serde_stream_map {
     use crate::domain::{entities::Stream, value_objects::StreamId};
