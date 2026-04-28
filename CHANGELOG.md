@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- nextest `default-filter` in `.config/nextest.toml` changed from `not test(integration)` (substring match on full test path) to `not test(/^integration_/)` (regex anchor on function name); restores 99 unit tests in `stream::compression_integration` and `infrastructure::integration` that were silently excluded (closes #200, resolves false 0% coverage in #195 and #196)
+- TODO(CQ-004) comment block before `pub enum PjsError` in `axum_adapter.rs` converted from `///` to `//`; eliminates misattributed rustdoc and spurious ignored doctest on `PjsError` (closes #193)
 - `pjs-wasm`: corrected module-level doc example in `lib.rs` — `PriorityStream.withSecurityConfig()` does not exist; replaced with `new PriorityStream()` + `stream.setSecurityConfig(security)` (closes #138)
 - `pjs-wasm`: corrected `PriorityConfigBuilder` doc example — `.build()` is not a JavaScript-visible method; replaced with `PjsParser.withConfig(config)` usage pattern (closes #140)
 - `PjsError::Application` now maps `ApplicationError` variants to semantically correct HTTP status codes: `NotFound` → 404, `Validation` → 400, `Authorization` → 401, `Concurrency`/`Conflict` → 409, `Logic`/`Domain` → 500 (closes #173)
