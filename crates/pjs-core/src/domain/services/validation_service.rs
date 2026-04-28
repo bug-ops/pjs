@@ -10,6 +10,12 @@ use crate::domain::value_objects::{
     JsonData, Schema, SchemaValidationError, SchemaValidationResult,
 };
 
+#[cfg(feature = "schema-validation")]
+use {dashmap::DashMap, once_cell::sync::Lazy};
+
+#[cfg(feature = "schema-validation")]
+static REGEX_CACHE: Lazy<DashMap<String, regex::Regex>> = Lazy::new(DashMap::new);
+
 /// Schema validation service
 ///
 /// Validates JSON data against schema definitions following a subset of
@@ -336,11 +342,12 @@ impl ValidationService {
 
         #[cfg(feature = "schema-validation")]
         if let Some(pat) = pattern {
-            // TODO: cache compiled regexes to avoid recompiling on every call
-            let re = regex::Regex::new(pat).map_err(|e| SchemaValidationError::InvalidPattern {
-                path: path.to_string(),
-                pattern: pat.clone(),
-                reason: e.to_string(),
+            let re = REGEX_CACHE.entry(pat.clone()).or_try_insert_with(|| {
+                regex::Regex::new(pat).map_err(|e| SchemaValidationError::InvalidPattern {
+                    path: path.to_string(),
+                    pattern: pat.clone(),
+                    reason: e.to_string(),
+                })
             })?;
             if !re.is_match(value) {
                 return Err(SchemaValidationError::PatternMismatch {

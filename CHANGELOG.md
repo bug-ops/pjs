@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `AdaptiveFrameStream::poll_next` now respects `buffer_size`: frames are prefetched into `current_buffer` and drained per-poll, enabling batched delivery (#163)
+- `AdaptiveFrameStream::with_compression(true)` now applies `SecureCompressor` (Gzip) to each formatted frame when the `compression` feature is active (#163)
+- `ValidationService::validate_string` no longer recompiles regex patterns on every call; compiled patterns are cached in a static `DashMap` and reused across invocations (#154)
+
 ### Added
 
 - Wire-level WebSocket integration tests that perform real protocol upgrades, frame exchange, and connection close verification (closes #158)
