@@ -21,6 +21,7 @@ categories = ["encoding", "network-programming", "parser-implementations"]
 
 [workspace.dependencies]
 ahash = "0.8"
+async-stream = "0.3"
 axum = "0.8"
 brotli = { version = "8", default-features = false, features = ["std"] }
 
@@ -71,6 +72,7 @@ socket2 = "0.6"
 sonic-rs = "0.5"
 thiserror = "2.0"
 tokio = "1.52"
+tokio-test = "0.4"
 tokio-tungstenite = "0.29"
 tower = "0.5"
 tower-http = "0.6"

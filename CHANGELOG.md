@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GetActiveSessionsQuery` now routes through `find_sessions_by_criteria` with a bounded `Pagination` instead of the unbounded `find_active_sessions()` — eliminates the load-all-then-paginate allocation at large session counts (closes #136)
 - `SearchSessionsQuery` enforces a maximum page size of 100 and correctly reports `has_more` in the response
 - `SessionsResponse` gains a `has_more: bool` field indicating whether additional pages exist
+- Stream adapters (`AdaptiveFrameStream`, `BatchFrameStream`, `PriorityFrameStream`) migrated from hand-rolled `poll_next` to `async-stream::try_stream!` to eliminate latent waker-contract bugs (#166). Consume the named builder via `.into_stream()` before `.collect()` / `.next()`.
+- **BREAKING** (#167): `BatchFrameStream` with `StreamFormat::Json` now emits one JSON object per line per frame (NDJSON-of-objects), matching `StreamFormat::NdJson`'s wire format. Previously emitted one JSON array per batch. Pre-1.0 breaking change — no deprecation cycle. Consumers parsing each line should expect `serde_json::Value::Object`, not `Value::Array`.
 
 ### Added
 
@@ -23,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `JwtAuthLayer` Tower middleware for JWT authentication, gated behind the `http-auth-jwt` feature flag using `jsonwebtoken`
 - `create_pjs_router_with_auth` and `create_pjs_router_with_rate_limit_and_auth` factory functions; `/pjs/health` remains unauthenticated via nested router design
 - `AuthConfigError` error type for `ApiKeyConfig` construction failures
+- `PendingThenReady<I>` adversarial test harness and 5 new waker-contract tests using `tokio_test::block_on` to deterministically catch `poll_next` waker bugs (#168).
+
+### Removed
+
+- Direct `Stream` impl on `AdaptiveFrameStream`, `BatchFrameStream`, and `PriorityFrameStream` types — use `.into_stream()` to obtain the underlying `impl Stream<...>` (#166).
+- `BatchFrameStream` half-batch-on-`Pending` heuristic (source of starvation under deterministic schedulers) (#166).
 
 ### Fixed
 
