@@ -178,17 +178,16 @@ impl StreamingCompressor {
 
         // Extract dictionary mappings
         for (key, value) in &compressed_data.compression_metadata {
-            if key.starts_with("dict_") {
-                if let Ok(index) = key.strip_prefix("dict_").unwrap().parse::<u16>()
+            if let Some(suffix) = key.strip_prefix("dict_") {
+                if let Ok(index) = suffix.parse::<u16>()
                     && let Some(string_val) = value.as_str()
                 {
                     dictionary_map.insert(index, string_val.to_string());
                 }
-            } else if key.starts_with("base_") {
-                let path = key.strip_prefix("base_").unwrap();
-                if let Some(num) = value.as_f64() {
-                    delta_bases.insert(path.to_string(), num);
-                }
+            } else if let Some(path) = key.strip_prefix("base_")
+                && let Some(num) = value.as_f64()
+            {
+                delta_bases.insert(path.to_string(), num);
             }
         }
 
