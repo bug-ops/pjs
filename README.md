@@ -68,16 +68,11 @@ async fn main() {
 Start server and test:
 
 ```bash
-# Run example server
-cargo run --example axum_server
+# Run priority streaming demo
+cargo run --example simple_priority_demo
 
-# Create session
-curl -X POST http://localhost:3000/pjs/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"max_concurrent_streams": 5}'
-
-# Stream data with priority
-curl http://localhost:3000/pjs/stream/SESSION_ID/sse
+# Or run with compression support
+cargo run --example compression_demo --features compression
 ```
 
 ### WebAssembly (Browser)
@@ -228,11 +223,15 @@ cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 | `simd-avx2` | Force AVX2 SIMD | No |
 | `simd-neon` | Force ARM NEON | No |
 | `schema-validation` | Schema validation engine | ✅ Yes |
-| `compression` | Schema-based compression | No |
-| `http-server` | Axum HTTP server | No |
-| `websocket-server` | WebSocket streaming | No |
-| `jemalloc` | Use jemalloc allocator | No |
-| `mimalloc` | Use mimalloc allocator | No |
+| `compression` | zlib/gzip/brotli decompression | ✅ Yes |
+| `http-server` | Axum HTTP server and CQRS endpoints | ✅ Yes |
+| `http-client` | reqwest-based HTTP client | ✅ Yes |
+| `websocket-server` | WebSocket transport (server) | ✅ Yes |
+| `websocket-client` | WebSocket transport (client) | ✅ Yes |
+| `mimalloc` | Use mimalloc as global allocator | No |
+| `metrics` | Prometheus metrics endpoint | No |
+
+> **Note:** The `jemalloc` feature was removed in v0.6.0 (breaking change). Switch to `mimalloc` or the system allocator.
 
 ## Security
 
