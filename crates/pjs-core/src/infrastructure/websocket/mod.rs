@@ -378,6 +378,36 @@ impl AdaptiveStreamController {
         Ok(())
     }
 
+    /// Remove a single session by id.
+    ///
+    /// Returns `true` if the session existed and was removed, `false` if the id
+    /// was not present. Callers may safely invoke this multiple times — the
+    /// second call is a no-op.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use pjson_rs::infrastructure::websocket::{AdaptiveStreamController, StreamOptions};
+    /// # use serde_json::json;
+    /// # #[tokio::main] async fn main() {
+    /// let controller = AdaptiveStreamController::new();
+    /// let id = controller.create_session(json!({}), StreamOptions::default()).await.unwrap();
+    /// assert!(controller.remove_session(&id).await);
+    /// // Idempotent — second call is a no-op:
+    /// assert!(!controller.remove_session(&id).await);
+    /// # }
+    /// ```
+    pub async fn remove_session(&self, session_id: &str) -> bool {
+        let mut sessions = self.sessions.write().await;
+        let removed = sessions.remove(session_id).is_some();
+        if removed {
+            info!("Removed streaming session: {}", session_id);
+        } else {
+            debug!("remove_session called on unknown id: {}", session_id);
+        }
+        removed
+    }
+
     /// Clean up expired sessions
     pub async fn cleanup_expired_sessions(&self, max_age: Duration) {
         let mut sessions = self.sessions.write().await;

@@ -950,3 +950,34 @@ fn test_rle_count_platform_limit() {
     // Should fail either on MAX_RLE_COUNT check or platform maximum check
     assert!(error_msg.contains("exceeds"));
 }
+
+// ============ Coverage gap fills (#132) ============
+
+/// Covers the error path at compression_integration.rs L415–L418:
+/// `decompress_delta_array` returns an error when `delta_base` is present
+/// but its value cannot be coerced to `f64`.
+///
+/// The public entry point `decompress_delta` routes to `decompress_delta_array`
+/// when the first array element is an object containing both `delta_base` and
+/// `delta_type` keys, regardless of the actual value types.
+#[test]
+fn test_decompress_delta_array_missing_delta_base_errors() {
+    let decompressor = StreamingDecompressor::new();
+
+    // `delta_base` is a string — `as_f64()` returns `None`, triggering the
+    // `ok_or_else` error at L414–L418 in compression_integration.rs.
+    let data = json!([
+        {"delta_base": "not_a_number", "delta_type": "numeric_sequence"},
+        1.0,
+        2.0
+    ]);
+
+    let result = decompressor.decompress_delta(&data);
+    assert!(result.is_err(), "expected error for non-numeric delta_base");
+
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("delta_base"),
+        "error message should mention 'delta_base', got: {err_msg}"
+    );
+}
