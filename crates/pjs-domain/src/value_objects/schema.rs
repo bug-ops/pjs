@@ -216,6 +216,17 @@ pub enum SchemaValidationError {
         pattern: String,
     },
 
+    /// Invalid regex pattern in schema
+    #[error("Invalid pattern at '{path}': pattern '{pattern}' is not valid regex: {reason}")]
+    InvalidPattern {
+        /// JSON path where error occurred
+        path: String,
+        /// The invalid pattern string
+        pattern: String,
+        /// Regex compilation error message
+        reason: String,
+    },
+
     /// Array size constraint violation
     #[error("Array size constraint at '{path}': size {actual} not in [{min}, {max}]")]
     ArraySizeConstraint {
