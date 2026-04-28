@@ -57,8 +57,8 @@ pub struct AdaptiveFrameStream<S> {
     format: StreamFormat,
     compression: bool,
     buffer_size: usize,
-    #[allow(dead_code)] // Future feature: adaptive batching implementation
-    current_buffer: Vec<String>,
+    current_buffer: Vec<Frame>,
+    inner_done: bool,
 }
 
 impl<S> AdaptiveFrameStream<S>
@@ -72,6 +72,7 @@ where
             compression: false,
             buffer_size: 10,
             current_buffer: Vec::new(),
+            inner_done: false,
         }
     }
 
@@ -101,11 +102,23 @@ where
             StreamFormat::ServerSentEvents => {
                 Ok(format!("data: {}\n\n", serde_json::to_string(&frame_data)?))
             }
-            StreamFormat::Binary => {
-                // Simplified binary format - would use more efficient encoding in production
-                Ok(serde_json::to_string(&frame_data)?)
-            }
+            StreamFormat::Binary => Ok(serde_json::to_string(&frame_data)?),
         }
+    }
+
+    fn maybe_compress(&self, formatted: String) -> Result<String, StreamError> {
+        #[cfg(feature = "compression")]
+        if self.compression {
+            use crate::compression::secure::{ByteCodec, SecureCompressor};
+            let compressor = SecureCompressor::with_default_security(ByteCodec::Gzip);
+            let compressed = compressor
+                .compress(formatted.as_bytes())
+                .map_err(|e| StreamError::Io(e.to_string()))?;
+            return Ok(String::from_utf8_lossy(&compressed.data).into_owned());
+        }
+        #[cfg(not(feature = "compression"))]
+        let _ = self.compression;
+        Ok(formatted)
     }
 }
 
@@ -116,14 +129,50 @@ where
     type Item = Result<String, StreamError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(frame)) => {
-                let formatted = self.format_frame(&frame);
-                Poll::Ready(Some(formatted))
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+        // Drain a ready frame from the prefetch buffer before hitting the inner stream.
+        if !self.current_buffer.is_empty() {
+            let frame = self.current_buffer.remove(0);
+            let result = self
+                .format_frame(&frame)
+                .and_then(|s| self.maybe_compress(s));
+            return Poll::Ready(Some(result));
         }
+
+        if self.inner_done {
+            return Poll::Ready(None);
+        }
+
+        // Fill the prefetch buffer up to buffer_size from the inner stream.
+        loop {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(frame)) => {
+                    self.current_buffer.push(frame);
+                    if self.current_buffer.len() >= self.buffer_size {
+                        break;
+                    }
+                }
+                Poll::Ready(None) => {
+                    self.inner_done = true;
+                    break;
+                }
+                Poll::Pending => {
+                    if self.current_buffer.is_empty() {
+                        return Poll::Pending;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if self.current_buffer.is_empty() {
+            return Poll::Ready(None);
+        }
+
+        let frame = self.current_buffer.remove(0);
+        let result = self
+            .format_frame(&frame)
+            .and_then(|s| self.maybe_compress(s));
+        Poll::Ready(Some(result))
     }
 }
 
