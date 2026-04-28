@@ -467,6 +467,7 @@ where
             "/pjs/sessions/{session_id}/streams/{stream_id}/frames",
             get(get_stream_frames::<R, P, S>),
         )
+        .route("/pjs/sessions/search", get(search_sessions::<R, P, S>))
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
         .route("/pjs/stats", get(get_system_stats::<R, P, S>))
 }
@@ -717,9 +718,63 @@ where
     Ok(Json(response))
 }
 
+/// Search sessions with filters and sorting.
+async fn search_sessions<R, P, S>(
+    State(state): State<PjsAppState<R, P, S>>,
+    Query(params): Query<SearchSessionsParams>,
+) -> Result<Json<SessionsResponse>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let sort_by = params.sort_by.as_deref().and_then(|s| match s {
+        "created_at" => Some(SessionSortField::CreatedAt),
+        "updated_at" => Some(SessionSortField::UpdatedAt),
+        "stream_count" => Some(SessionSortField::StreamCount),
+        "total_bytes" => Some(SessionSortField::TotalBytes),
+        _ => None,
+    });
+    let sort_order = params.sort_order.as_deref().and_then(|s| match s {
+        "ascending" | "asc" => Some(SortOrder::Ascending),
+        "descending" | "desc" => Some(SortOrder::Descending),
+        _ => None,
+    });
+    let query = SearchSessionsQuery {
+        filters: SessionFilters {
+            state: params.state,
+            created_after: None,
+            created_before: None,
+            client_info: None,
+            has_active_streams: None,
+        },
+        sort_by,
+        sort_order,
+        limit: params.limit,
+        offset: params.offset,
+    };
+    let response = <SessionQueryHandler<R> as QueryHandlerGat<SearchSessionsQuery>>::handle(
+        &*state.session_query_handler,
+        query,
+    )
+    .await
+    .map_err(PjsError::Application)?;
+    Ok(Json(response))
+}
+
 /// Pagination parameters
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// Query parameters for session search endpoint.
+#[derive(Debug, Deserialize)]
+pub struct SearchSessionsParams {
+    pub state: Option<String>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -1325,5 +1380,31 @@ mod tests {
                 &HttpServerConfig::default(),
             )
             .expect("router should build successfully with metrics feature");
+    }
+
+    #[tokio::test]
+    async fn search_sessions_route_returns_ok() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/pjs/sessions/search")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
