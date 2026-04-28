@@ -12,6 +12,7 @@ categories = { workspace = true }
 readme = { workspace = true }
 exclude = ["/target", "/benches", "/tests", "examples/*"]
 publish = true
+build = "build.rs"
 
 [dependencies]
 axum = { workspace = true, optional = true, features = ["ws"] }

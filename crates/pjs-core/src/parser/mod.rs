@@ -32,11 +32,7 @@ use crate::{Result, SemanticMeta};
 pub struct Parser {
     sonic: SonicParser,
     simple: SimpleParser,
-    #[allow(dead_code)] // Future: zero-copy SIMD parser integration
-    zero_copy_simd: Option<SimdZeroCopyParser<'static>>,
     use_sonic: bool,
-    #[allow(dead_code)] // Future: zero-copy mode selection logic
-    use_zero_copy: bool,
 }
 
 impl Parser {
@@ -45,9 +41,7 @@ impl Parser {
         Self {
             sonic: SonicParser::new(),
             simple: SimpleParser::new(),
-            zero_copy_simd: None, // Lazy initialization
             use_sonic: true,
-            use_zero_copy: true, // Enable zero-copy by default
         }
     }
 
@@ -61,9 +55,7 @@ impl Parser {
         Self {
             sonic: SonicParser::with_config(sonic_config),
             simple: SimpleParser::with_config(config),
-            zero_copy_simd: None, // Lazy initialization
             use_sonic: true,
-            use_zero_copy: true,
         }
     }
 
@@ -72,9 +64,7 @@ impl Parser {
         Self {
             sonic: SonicParser::new(),
             simple: SimpleParser::new(),
-            zero_copy_simd: None,
             use_sonic: false,
-            use_zero_copy: false, // Disable zero-copy for compatibility
         }
     }
 
@@ -83,9 +73,7 @@ impl Parser {
         Self {
             sonic: SonicParser::new(),
             simple: SimpleParser::new(),
-            zero_copy_simd: None, // Will be initialized on first use
-            use_sonic: false,     // Use zero-copy instead
-            use_zero_copy: true,
+            use_sonic: false,
         }
     }
 

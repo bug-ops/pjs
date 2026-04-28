@@ -1,0 +1,10 @@
+# Activate native CPU codegen on host builds so sonic-rs and `target_feature`
+# hot paths actually compile to SIMD instructions. Override per-target as needed
+# (e.g. for cross-compiling release artifacts to a generic baseline).
+#
+# Note: release.yml already sets RUSTFLAGS="-D warnings" at the job level, which
+# takes precedence over these flags for CI runs. crates.io publishes source only,
+# so target-cpu=native does not affect distributed artifacts.
+
+[target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))']
+rustflags = ["-C", "target-cpu=native"]
