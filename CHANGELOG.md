@@ -16,8 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `GET /pjs/sessions/search` HTTP route dispatching to `SearchSessionsQuery`; supports `state`, `sort_by` (`created_at`, `updated_at`, `stream_count`, `total_bytes`), `sort_order` (`asc`/`ascending`, `desc`/`descending`), `limit`, and `offset` query parameters (closes #209)
+- **`feature = "compression"`** — `ZstdDictCompressor` with per-session trained-dictionary compression (zstd 0.13, `zdict_builder`). Exposes `ZstdDictionary` newtype (type invariant: `len() ≤ 112 KiB`), `ZstdDictCompressor::train`, `compress`, and `decompress` (closes #144).
+- `ByteCodec::ZstdDict(Arc<ZstdDictionary>)` variant in `SecureCompressor` — encode/decode arms route through the bomb-detector byte-counting `run!` macro, same as all other codecs.
+- `DictionaryStore` trait and `NoopDictionaryStore` (zero-dep default) in `domain::ports` — hand-rolled `Pin<Box<dyn Future>>` port; no `async-trait` dependency.
+- `InMemoryDictionaryStore` (behind `compression` + non-wasm32) — per-session corpus accumulation with `tokio::sync::OnceCell`-guarded one-time training. `register()` for pre-trained dictionaries; `train_if_ready()` for incremental corpus growth. Both call the bomb-detector as a size-budget gate.
+- `GET /pjs/sessions/{session_id}/dictionary` HTTP endpoint (behind `http-server` + `compression` + non-wasm32) — returns the trained dictionary with `Content-Type: application/zstd-dictionary` and `Cache-Control: private, max-age=300` once `N_TRAIN` (32) frame samples are accumulated.
+- `PjsAppState::with_dictionary_store(repo, publisher, store, dict_store)` — four-arg constructor that enables the dictionary endpoint end-to-end; existing `PjsAppState::new` defaults to `NoopDictionaryStore` (no behaviour change for existing callers).
+- `pjs-demo`: interactive demo server now instantiates `InMemoryDictionaryStore` at startup and prints the dictionary endpoint path.
 
 ### Changed
+
+- **BREAKING** `ByteCodec` no longer implements `Copy` — the new `ZstdDict(Arc<ZstdDictionary>)` variant requires `Clone`. Callers that relied on implicit copy semantics must call `.clone()` explicitly. Pre-1.0 breaking change; no deprecation cycle.
 
 - `AuthConfigError::RngFailure` now wraps the underlying `getrandom::Error` instead of discarding it, providing operators with actionable diagnostic information when the system RNG fails in sandboxed environments (closes #203)
 - Fixed inverted layer ordering diagram in `create_pjs_router_with_rate_limit_and_auth` doc comment; the diagram now correctly shows `rate_limit` as the outermost layer wrapping both public and protected sub-routers, with `auth` as an inner layer on protected routes only (closes #204)

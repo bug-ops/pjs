@@ -23,6 +23,8 @@ use crate::{
 use std::io::Write;
 use std::io::{Cursor, Read};
 use tracing::{debug, info, warn};
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+use zstd;
 
 /// Byte-level compression algorithms used by [`SecureCompressor`].
 ///
@@ -31,7 +33,13 @@ use tracing::{debug, info, warn};
 /// (Layer B).
 ///
 /// Codecs other than `None` require the `compression` feature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// # Breaking change (pre-1.0)
+///
+/// `Copy` was removed from this enum when `ZstdDict` was added (it carries an
+/// `Arc<ZstdDictionary>`).  Code that relied on implicit copy can use `.clone()`
+/// (one atomic refcount bump for `ZstdDict`; a no-op for the other variants).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ByteCodec {
     /// No compression — bytes stored verbatim. Always available.
     #[default]
@@ -52,6 +60,20 @@ pub enum ByteCodec {
     ///
     /// Requires `feature = "compression"`.
     Brotli,
+    /// Trained zstd dictionary compression.
+    ///
+    /// A single `Arc<ZstdDictionary>` is the canonical sharing primitive. The inner
+    /// `Vec<u8>` inside [`crate::compression::zstd::ZstdDictionary`] is **not**
+    /// `Arc`-wrapped — sharing happens exactly once at this enum level (avoids
+    /// double indirection). Cloning this variant performs one atomic refcount
+    /// increment and no allocation.
+    ///
+    /// Equality compares the underlying bytes via `Arc<T>: PartialEq where T: PartialEq`.
+    /// When both sides share the same `Arc` allocation, `Arc::ptr_eq` provides a fast path.
+    ///
+    /// Requires `feature = "compression"` on a non-`wasm32` target.
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    ZstdDict(std::sync::Arc<crate::compression::zstd::ZstdDictionary>),
 }
 
 /// Quality knob for byte-level codecs.
@@ -176,7 +198,7 @@ impl SecureCompressor {
         Ok(SecureCompressedData {
             original_size: data.len(),
             compression_ratio,
-            codec: self.codec,
+            codec: self.codec.clone(),
             data: compressed_bytes,
         })
     }
@@ -188,7 +210,7 @@ impl SecureCompressor {
     pub fn decompress_protected(&self, compressed: &SecureCompressedData) -> Result<Vec<u8>> {
         self.detector
             .validate_pre_decompression(compressed.data.len())?;
-        self.decode_with_protection(&compressed.data, compressed.codec, None)
+        self.decode_with_protection(&compressed.data, compressed.codec.clone(), None)
     }
 
     /// Decompress nested/chained compression with depth tracking.
@@ -202,12 +224,12 @@ impl SecureCompressor {
     ) -> Result<Vec<u8>> {
         self.detector
             .validate_pre_decompression(compressed.data.len())?;
-        self.decode_with_protection(&compressed.data, compressed.codec, Some(depth))
+        self.decode_with_protection(&compressed.data, compressed.codec.clone(), Some(depth))
     }
 
     /// Encode `data` with the configured codec. Returns compressed bytes only.
     fn encode(&self, data: &[u8]) -> Result<Vec<u8>> {
-        match self.codec {
+        match &self.codec {
             ByteCodec::None => {
                 debug!("No compression applied");
                 Ok(data.to_vec())
@@ -243,6 +265,11 @@ impl SecureCompressor {
                 brotli::BrotliCompress(&mut Cursor::new(data), &mut out, &params)
                     .map_err(|e| Error::CompressionError(format!("brotli encode: {e}")))?;
                 Ok(out)
+            }
+
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            ByteCodec::ZstdDict(dict) => {
+                crate::compression::zstd::ZstdDictCompressor::compress(data, dict.as_ref())
             }
 
             #[cfg(not(feature = "compression"))]
@@ -315,6 +342,20 @@ impl SecureCompressor {
 
             #[cfg(feature = "compression")]
             ByteCodec::Brotli => run!(brotli::Decompressor::new(Cursor::new(data), 4096)),
+
+            // ZstdDict uses the streaming decoder so every decompressed byte
+            // passes through the CompressionBombProtector's read loop (run!).
+            // Bulk `zstd::bulk::Decompressor::decompress` is intentionally
+            // avoided here — it would bypass the byte-level output cap.
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            ByteCodec::ZstdDict(dict) => {
+                let decoder = zstd::stream::read::Decoder::with_dictionary(
+                    Cursor::new(data),
+                    dict.as_bytes(),
+                )
+                .map_err(|e| Error::CompressionError(format!("zstd decoder init: {e}")))?;
+                run!(decoder)
+            }
 
             #[cfg(not(feature = "compression"))]
             ByteCodec::Deflate | ByteCodec::Gzip | ByteCodec::Brotli => Err(
@@ -652,9 +693,9 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_codec_clone_and_copy() {
+    fn test_byte_codec_clone() {
         let codec = ByteCodec::None;
-        let cloned = codec;
+        let cloned = codec.clone();
         assert_eq!(codec, cloned);
     }
 
@@ -693,6 +734,124 @@ mod tests {
         let compressed = c.compress(data).unwrap();
         let decompressed = c.decompress_nested(&compressed, 0).unwrap();
         assert_eq!(decompressed.as_slice(), data);
+    }
+
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    mod zstd_dict_tests {
+        use super::*;
+        use crate::compression::zstd::{MAX_DICT_SIZE, N_TRAIN, ZstdDictCompressor};
+        use crate::security::CompressionBombConfig;
+        use std::sync::Arc;
+
+        fn repetitive_json() -> Vec<u8> {
+            let item = br#"{"id":1,"name":"test","value":42,"active":true}"#;
+            item.repeat(100)
+        }
+
+        fn trained_dict() -> crate::compression::zstd::ZstdDictionary {
+            let samples: Vec<Vec<u8>> = (0..N_TRAIN)
+                .map(|i| {
+                    format!(
+                        r#"{{"id":{i},"name":"item-{i}","value":{},"active":true}}"#,
+                        i * 10
+                    )
+                    .into_bytes()
+                })
+                .collect();
+            ZstdDictCompressor::train(&samples, MAX_DICT_SIZE).unwrap()
+        }
+
+        #[test]
+        fn test_zstd_dict_roundtrip_via_secure_compressor() {
+            let dict = Arc::new(trained_dict());
+            let compressor =
+                SecureCompressor::with_default_security(ByteCodec::ZstdDict(dict.clone()));
+            let data = repetitive_json();
+
+            let compressed = compressor.compress(&data).unwrap();
+            assert!(matches!(compressed.codec, ByteCodec::ZstdDict(_)));
+            assert!(
+                compressed.data.len() < data.len(),
+                "zstd dict must reduce size on repetitive data"
+            );
+
+            let decompressed = compressor.decompress_protected(&compressed).unwrap();
+            assert_eq!(decompressed, data);
+        }
+
+        #[test]
+        fn test_zstd_dict_bomb_detection() {
+            let dict = Arc::new(trained_dict());
+            let producer =
+                SecureCompressor::with_default_security(ByteCodec::ZstdDict(dict.clone()));
+            let data = repetitive_json();
+            let compressed = producer.compress(&data).unwrap();
+
+            let config = CompressionBombConfig {
+                max_decompressed_size: 200,
+                max_compressed_size: 10_000,
+                max_ratio: 300.0,
+                check_interval_bytes: 64,
+                ..Default::default()
+            };
+            let strict = SecureCompressor::new(
+                crate::security::CompressionBombDetector::new(config),
+                ByteCodec::ZstdDict(dict),
+            );
+            let result = strict.decompress_protected(&compressed);
+            assert!(
+                result.is_err(),
+                "bomb detector must block oversized zstd dict output"
+            );
+        }
+
+        #[test]
+        fn test_zstd_dict_codec_mismatch_errors() {
+            let dict = Arc::new(trained_dict());
+            let c = SecureCompressor::with_default_security(ByteCodec::ZstdDict(dict));
+            let data = b"codec mismatch test data";
+            let mut compressed = c.compress(data).unwrap();
+            // Lie about the codec — decoding as Gzip must fail.
+            compressed.codec = ByteCodec::Gzip;
+            assert!(
+                c.decompress_protected(&compressed).is_err(),
+                "wrong codec must produce an error"
+            );
+        }
+
+        #[test]
+        fn test_zstd_dict_empty_payload_roundtrip() {
+            let dict = Arc::new(trained_dict());
+            let c = SecureCompressor::with_default_security(ByteCodec::ZstdDict(dict));
+            let compressed = c.compress(b"").unwrap();
+            let decompressed = c.decompress_protected(&compressed).unwrap();
+            assert_eq!(decompressed, b"");
+        }
+
+        #[test]
+        fn test_zstd_dict_wrong_dictionary_errors() {
+            // Build two independent dictionaries from distinct corpora.
+            let samples_a: Vec<Vec<u8>> = (0..N_TRAIN)
+                .map(|i| format!(r#"{{"corpus":"alpha","id":{i},"score":{}}}"#, i * 7).into_bytes())
+                .collect();
+            let samples_b: Vec<Vec<u8>> = (0..N_TRAIN)
+                .map(|i| format!(r#"{{"corpus":"beta","seq":{i},"label":"x-{i}"}}"#).into_bytes())
+                .collect();
+
+            let dict_a = ZstdDictCompressor::train(&samples_a, MAX_DICT_SIZE).unwrap();
+            let dict_b = ZstdDictCompressor::train(&samples_b, MAX_DICT_SIZE).unwrap();
+
+            let data = b"some representative payload data";
+            let compressed =
+                ZstdDictCompressor::compress(data, &dict_a).expect("compress with dict_a");
+
+            // Decompressing dict_a-compressed bytes with dict_b must fail at libzstd level.
+            let result = ZstdDictCompressor::decompress(&compressed, &dict_b, data.len() * 4);
+            assert!(
+                result.is_err(),
+                "wrong dictionary must produce a libzstd error"
+            );
+        }
     }
 
     #[cfg(feature = "compression")]
@@ -867,10 +1026,11 @@ mod tests {
         #[test]
         fn test_empty_payload_all_codecs() {
             for codec in [ByteCodec::Deflate, ByteCodec::Gzip, ByteCodec::Brotli] {
+                let label = format!("{codec:?}");
                 let c = SecureCompressor::with_default_security(codec);
                 let compressed = c.compress(b"").unwrap();
                 let decompressed = c.decompress_protected(&compressed).unwrap();
-                assert_eq!(decompressed, b"", "empty roundtrip failed for {codec:?}");
+                assert_eq!(decompressed, b"", "empty roundtrip failed for {label}");
             }
         }
     }
