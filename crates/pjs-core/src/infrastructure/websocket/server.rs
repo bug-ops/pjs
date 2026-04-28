@@ -13,17 +13,21 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error, info, warn};
 use uuid;
 
 /// Axum WebSocket transport implementation
 pub struct AxumWebSocketTransport {
     controller: Arc<AdaptiveStreamController>,
-    // Store connection IDs instead of WebSocket objects for Send/Sync compatibility
+    /// Active connection IDs for tracking open sockets
     active_connections: Arc<RwLock<Vec<String>>>,
+    /// Per-connection outgoing senders; keyed by connection ID
+    outgoing_channels: Arc<RwLock<HashMap<String, UnboundedSender<WsMessage>>>>,
 }
 
 impl AxumWebSocketTransport {
@@ -31,6 +35,7 @@ impl AxumWebSocketTransport {
         Self {
             controller: Arc::new(AdaptiveStreamController::new()),
             active_connections: Arc::new(RwLock::new(Vec::new())),
+            outgoing_channels: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -54,8 +59,13 @@ impl AxumWebSocketTransport {
 
         let frame_rx = self.controller.subscribe_frames();
 
-        // Create channels for communication between tasks
-        let (_outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<WsMessage>();
+        // Create channel for sending outgoing messages to this connection
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<WsMessage>();
+        self.outgoing_channels
+            .write()
+            .await
+            .insert(connection_id.clone(), outgoing_tx);
+
         let (mut sender, mut receiver) = socket.split();
 
         // Spawn single task to handle both sending and receiving
@@ -144,7 +154,8 @@ impl AxumWebSocketTransport {
             error!("WebSocket task failed: {}", e);
         }
 
-        // Clean up connection
+        // Clean up outgoing channel and connection record
+        self.outgoing_channels.write().await.remove(&connection_id);
         let mut connections = self.active_connections.write().await;
         connections.retain(|conn_id| *conn_id != connection_id);
         info!("WebSocket connection closed");
@@ -180,7 +191,8 @@ impl AxumWebSocketTransport {
                 data,
                 options,
             } => {
-                let _session_id = self.controller.create_session(data, options).await?;
+                let session_id = self.controller.create_session(data, options).await?;
+                self.controller.start_streaming(&session_id).await?;
                 info!(
                     "Created new streaming session for connection {}",
                     connection_id
@@ -243,18 +255,20 @@ impl WebSocketTransport for AxumWebSocketTransport {
 
     fn send_frame(
         &self,
-        _connection: Arc<Self::Connection>,
+        connection: Arc<Self::Connection>,
         message: WsMessage,
     ) -> Self::SendFrameFuture<'_> {
         async move {
-            let json_str = serde_json::to_string(&message)
-                .map_err(|e| PjsError::Serialization(e.to_string()))?;
-
-            // Note: In practice, this would need to be handled differently
-            // since we can't directly send through Arc<WebSocket>
-            // The actual sending is handled in handle_socket via frame subscription
-
-            debug!("Frame queued for transmission: {}", json_str);
+            let channels = self.outgoing_channels.read().await;
+            if let Some(tx) = channels.get(connection.as_ref()) {
+                tx.send(message)
+                    .map_err(|e| PjsError::Other(format!("Failed to queue frame: {}", e)))?;
+            } else {
+                warn!(
+                    "send_frame: no outgoing channel for connection {}",
+                    connection.as_ref()
+                );
+            }
             Ok(())
         }
     }
