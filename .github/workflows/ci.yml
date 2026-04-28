@@ -32,12 +32,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Tier 0: entry gate ─────────────────────────────────────────────────────
-  # Everything else is blocked until fmt + clippy pass.
+  # ── Tier 0: path detection ────────────────────────────────────────────────
+  # Detects which parts of the codebase changed so downstream jobs can be
+  # conditionally skipped.  On push/schedule/workflow_dispatch every filter
+  # evaluates to true so nothing is skipped.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      wasm: ${{ steps.filter.outputs.wasm }}
+      js:   ${{ steps.filter.outputs.js }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/pjs-core/**'
+              - 'crates/pjs-domain/**'
+              - 'crates/pjs-wasm/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+            wasm:
+              - 'crates/pjs-wasm/**'
+              - 'crates/pjs-domain/**'
+              - 'crates/pjs-core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+            js:
+              - 'crates/pjs-js-client/**'
+
+  # ── Tier 1: entry gate ───────────────────────────────────────────────────
+  # fmt + clippy gate.  Skipped when only JS files changed.
   quality:
     name: Code Quality
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: [changes]
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -56,20 +97,19 @@ jobs:
       - name: Run clippy (strict mode)
         run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
-  # ── Tier 1: parallel workloads after quality ───────────────────────────────
-  # test, coverage, and wasm-test all start simultaneously once quality passes.
-  # The old standalone `build` job has been removed: `test --all-targets`
-  # already compiles every crate, making a separate build step redundant.
-
-  # Cross-platform test matrix: 3 OS × 2 allocators = 6 parallel jobs.
-  # Uses an explicit two-dimension matrix so every OS gets both allocator
-  # variants (the previous single-dimension + include pattern only produced
-  # 3 entries, all with the system allocator on non-ubuntu runners).
+  # ── Tier 2a: Rust host tests ─────────────────────────────────────────────
+  # 3 OS × 2 allocators = 6 parallel jobs (Windows skips mimalloc).
+  # Skipped when only JS files changed.
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.allocator }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    needs: [quality]
+    needs: [changes, quality]
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -81,8 +121,6 @@ jobs:
           - allocator: mimalloc
             features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,mimalloc"
         exclude:
-          # jemalloc has limited MSVC support; mimalloc works but skip on
-          # Windows until confirmed stable (revisit when issue-160 lands).
           - os: windows-latest
             allocator: mimalloc
 
@@ -102,22 +140,24 @@ jobs:
         with:
           tool: nextest
 
-      # TODO(critic): if mimalloc flakes intermittently on macos-latest,
-      # pin --test-threads=4 for the mimalloc variant.
-      # See critic handoff 2026-04-28T18-05-00-critic.md MINOR-3.
       - name: Run tests
         run: cargo nextest run --workspace --features "${{ matrix.features }}" --all-targets --no-fail-fast
 
       - name: Run doctests
         run: cargo test --workspace --doc --features "${{ matrix.features }}"
 
-  # Coverage runs on ubuntu only; does not wait for the cross-platform test
-  # matrix because it has no dependency on those results.
+  # Coverage runs on ubuntu only; does not wait for the cross-platform matrix.
+  # Skipped when only JS files changed.
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [quality]
+    needs: [changes, quality]
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -147,19 +187,20 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
 
-  # WASM library tests run immediately after quality — they do not depend on
-  # the host test matrix because they compile for wasm32 (a separate target).
+  # ── Tier 2b: WASM library tests ──────────────────────────────────────────
+  # Runs in parallel with the Rust host matrix — does NOT wait for it.
+  # Triggered by any Rust change (pjs-core, pjs-domain, pjs-wasm, Cargo files)
+  # or explicit dispatch/push.  Skipped on JS-only PRs.
   wasm-test:
     name: WASM Library Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [quality]
+    needs: [changes, quality]
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.wasm == 'true' ||
       github.event_name == 'push' ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-domain/') ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/')
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -187,20 +228,19 @@ jobs:
           cargo test -p pjs-wasm --doc
           cargo test -p pjson-rs-domain --doc
 
-  # ── Tier 2: WASM artefact jobs after wasm-test ─────────────────────────────
-  # wasm-build starts as soon as wasm-test passes; it does NOT wait for the
-  # host test matrix.  Three wasm-pack targets run in parallel.
+  # ── Tier 3: WASM artefact builds ─────────────────────────────────────────
+  # Three wasm-pack targets in parallel; starts as soon as wasm-test passes.
+  # Same trigger condition as wasm-test.
   wasm-build:
     name: Build WASM (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [wasm-test]
+    needs: [changes, wasm-test]
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.wasm == 'true' ||
       github.event_name == 'push' ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-domain/') ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/')
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -245,18 +285,19 @@ jobs:
           path: crates/pjs-wasm/pkg-${{ matrix.target }}/
           retention-days: 7
 
-  # ── Tier 3: WASM post-build jobs (all depend only on wasm-build) ───────────
-
+  # ── Tier 4: WASM post-build checks ───────────────────────────────────────
+  # All three depend only on wasm-build; they run in parallel.
+  # Triggered by wasm OR js changes (js-client examples live in crates/pjs-js-client).
   wasm-bundle-size:
     name: WASM Bundle Size
-    needs: [wasm-build]
+    needs: [changes, wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.wasm == 'true' ||
       github.event_name == 'push' ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-domain/')
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -283,9 +324,6 @@ jobs:
               fi
 
               echo "| $target | $raw_size | $gzipped_size | $status |" >> bundle-report.md
-
-              echo "${target}_raw_kb=$raw_size" >> $GITHUB_OUTPUT
-              echo "${target}_gzipped_kb=$gzipped_size" >> $GITHUB_OUTPUT
             fi
           done
 
@@ -314,14 +352,15 @@ jobs:
 
   wasm-node-example:
     name: Node.js Example Test
-    needs: [wasm-build]
+    needs: [changes, wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.wasm == 'true' ||
+      needs.changes.outputs.js == 'true' ||
       github.event_name == 'push' ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/')
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -342,13 +381,14 @@ jobs:
 
   wasm-package-validation:
     name: NPM Package Validation
-    needs: [wasm-build]
+    needs: [changes, wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.wasm == 'true' ||
       github.event_name == 'push' ||
-      contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/')
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -387,7 +427,7 @@ jobs:
           path: wasm-pkg/
           retention-days: 7
 
-  # ── Security (independent, no Rust build required) ─────────────────────────
+  # ── Security (independent, no Rust build required) ────────────────────────
   security-osv:
     name: OSV Security Scan
     runs-on: ubuntu-latest
@@ -400,14 +440,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
 
-  # ── Single gate job for branch protection ──────────────────────────────────
-  # Branch protection rules should key off `ci-success` only.
-  # This job aggregates both the Rust host jobs and the WASM pipeline.
-  # WASM jobs use `if` conditions that may skip them on non-WASM PRs; treat
-  # skipped results as success so the gate does not block those PRs.
+  # ── Single gate for branch protection ────────────────────────────────────
+  # Keys off this job name in branch protection settings.
+  # Skipped jobs (wasm/rust on JS-only PRs, security on push) are treated as
+  # success — the gate fails only on actual failure or cancellation.
   ci-success:
     name: CI Success
     needs:
+      - changes
       - quality
       - test
       - coverage
@@ -429,12 +469,13 @@ jobs:
               exit 1
             fi
           }
-          check quality    "${{ needs.quality.result }}"
-          check test       "${{ needs.test.result }}"
-          check coverage   "${{ needs.coverage.result }}"
-          check wasm-test  "${{ needs.wasm-test.result }}"
-          check wasm-build "${{ needs.wasm-build.result }}"
-          check wasm-bundle-size         "${{ needs.wasm-bundle-size.result }}"
-          check wasm-node-example        "${{ needs.wasm-node-example.result }}"
-          check wasm-package-validation  "${{ needs.wasm-package-validation.result }}"
+          check quality                   "${{ needs.quality.result }}"
+          check test                      "${{ needs.test.result }}"
+          check coverage                  "${{ needs.coverage.result }}"
+          check wasm-test                 "${{ needs.wasm-test.result }}"
+          check wasm-build                "${{ needs.wasm-build.result }}"
+          check wasm-bundle-size          "${{ needs.wasm-bundle-size.result }}"
+          check wasm-node-example         "${{ needs.wasm-node-example.result }}"
+          check wasm-package-validation   "${{ needs.wasm-package-validation.result }}"
+          check security-osv              "${{ needs.security-osv.result }}"
           echo "All required jobs passed or were skipped."
