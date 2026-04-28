@@ -143,8 +143,7 @@ jobs:
       # recompiling.
       - name: Build test archive
         run: >-
-          cargo nextest run
-          --no-run
+          cargo nextest archive
           --workspace
           --features "default${{ matrix.extra_features }}"
           --lib --bins
@@ -165,7 +164,7 @@ jobs:
     name: Test (${{ matrix.os }}, ${{ matrix.allocator }}, ${{ matrix.partition }}/4)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    needs: [build]
+    needs: [build, quality]
     strategy:
       fail-fast: false
       matrix:
