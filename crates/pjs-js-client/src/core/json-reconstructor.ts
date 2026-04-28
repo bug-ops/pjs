@@ -212,17 +212,17 @@ export class JsonReconstructor {
       JsonReconstructor.assertSafeKey(key);
 
       if (index !== null) {
-        // Use own-property access to prevent prototype chain traversal
         if (!Object.prototype.hasOwnProperty.call(current, key)) {
           throw new Error(`Path segment not found: ${key}`);
         }
-        current = (current as Record<string, unknown>)[key];
-        current = (current as unknown[])[index];
+        current = current[key];
+        current = current[index];
       } else {
         if (!Object.prototype.hasOwnProperty.call(current, key)) {
-          Object.defineProperty(current, key, { value: {}, writable: true, enumerable: true, configurable: true });
+          // Use Object.create(null) so nested objects have no prototype chain
+          Object.defineProperty(current, key, { value: Object.create(null), writable: true, enumerable: true, configurable: true });
         }
-        current = (current as Record<string, unknown>)[key];
+        current = current[key];
       }
     }
 
@@ -231,10 +231,10 @@ export class JsonReconstructor {
     JsonReconstructor.assertSafeKey(key);
 
     if (index !== null) {
-      if (!Object.prototype.hasOwnProperty.call(current, key) || !Array.isArray((current as Record<string, unknown>)[key])) {
+      if (!Object.prototype.hasOwnProperty.call(current, key) || !Array.isArray(current[key])) {
         Object.defineProperty(current, key, { value: [], writable: true, enumerable: true, configurable: true });
       }
-      return { parent: (current as Record<string, unknown>)[key], key: index.toString() };
+      return { parent: current[key], key: index.toString() };
     }
     return { parent: current, key };
   }
@@ -251,12 +251,12 @@ export class JsonReconstructor {
     if (obj === null || typeof obj !== 'object') return obj;
     if (obj instanceof Date) return new Date((obj as any).getTime()) as T;
     if (Array.isArray(obj)) return (obj as any[]).map(item => this.deepClone(item)) as T;
-    const cloned = {} as T;
-    for (const key in obj) {
-      if (Object.prototype.hasOwnProperty.call(obj, key)) {
-        cloned[key] = this.deepClone((obj as any)[key]);
-      }
+    // Object.create(null) produces a prototype-free object, preventing prototype
+    // pollution if user-controlled keys like __proto__ appear in the data.
+    const cloned: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(obj as object)) {
+      cloned[key] = this.deepClone((obj as any)[key]);
     }
-    return cloned;
+    return cloned as T;
   }
 }
