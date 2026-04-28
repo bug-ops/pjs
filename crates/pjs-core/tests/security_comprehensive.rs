@@ -484,22 +484,4 @@ mod performance_security_tests {
             "Parsing should complete within timeout"
         );
     }
-
-    #[test]
-    fn test_memory_usage_bounds() {
-        use pjson_rs::ArenaJsonParser;
-
-        let mut parser = ArenaJsonParser::new();
-
-        // Parse multiple documents to test memory usage
-        for i in 0..100 {
-            let json = format!(r#"{{"iteration": {}, "data": "test"}}"#, i);
-            let result = parser.parse(&json);
-            assert!(result.is_ok(), "JSON parsing should succeed");
-        }
-
-        let stats = parser.arena_stats();
-        // Ensure arena is recycling memory appropriately
-        assert!(stats.values_allocated < 1000, "Arena should recycle memory");
-    }
 }

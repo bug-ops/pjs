@@ -90,7 +90,7 @@ pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
 #[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
 pub use infrastructure::websocket::SecureWebSocketHandler;
-pub use memory::{ArenaJsonParser, CombinedArenaStats, JsonArena};
+pub use memory::{CombinedArenaStats, JsonArena};
 pub use parser::{
     LazyParser, ParseConfig, ParseStats, Parser, SimpleParser, SonicParser, ZeroCopyParser,
 };

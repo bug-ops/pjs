@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Replace `Mutex<PoolStats>` with `AtomicUsize` counters in `ObjectPool` to eliminate stat-tracking lock contention; `Vec<u8>` pool now performs comparably to stdlib allocation (#110)
 - Move orphaned `tests/websocket_security.rs` into `crates/pjs-core/tests/` and wire it to the test harness; fix crate name import and two logic bugs in rate-limiting assertions (#111)
+- `StringArena::intern()` now stores raw pointers instead of `&'static str` transmutes, eliminating potential use-after-free UB (#124)
+- `StringArena::memory_usage()` returns actual allocation counts and byte totals instead of hardcoded zeros (#123)
+- Remove `ArenaJsonParser` from the public API; it remains `pub(crate)` until arena-backed parsing is implemented (#119)
 
 ### Planned for v0.6.0
 
