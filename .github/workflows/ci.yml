@@ -32,22 +32,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Code quality checks - formatting and linting
+  # ── Tier 0: entry gate ─────────────────────────────────────────────────────
+  # Everything else is blocked until fmt + clippy pass.
   quality:
     name: Code Quality
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "quality"
           cache-on-failure: true
@@ -58,39 +56,15 @@ jobs:
       - name: Run clippy (strict mode)
         run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
-  # Build verification with different allocators
-  build:
-    name: Build (${{ matrix.allocator }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: [quality]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - allocator: system
-            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server"
-          - allocator: mimalloc
-            features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,mimalloc"
+  # ── Tier 1: parallel workloads after quality ───────────────────────────────
+  # test, coverage, and wasm-test all start simultaneously once quality passes.
+  # The old standalone `build` job has been removed: `test --all-targets`
+  # already compiles every crate, making a separate build step redundant.
 
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "build-${{ matrix.allocator }}"
-          cache-on-failure: true
-
-      - name: Build
-        run: cargo build -p pjson-rs --features "${{ matrix.features }}" --all-targets
-
-  # Cross-platform testing
+  # Cross-platform test matrix: 3 OS × 2 allocators = 6 parallel jobs.
+  # Uses an explicit two-dimension matrix so every OS gets both allocator
+  # variants (the previous single-dimension + include pattern only produced
+  # 3 entries, all with the system allocator on non-ubuntu runners).
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.allocator }})
     runs-on: ${{ matrix.os }}
@@ -100,61 +74,62 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        allocator: [system, mimalloc]
         include:
           - allocator: system
             features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server"
           - allocator: mimalloc
             features: "simd-auto,schema-validation,compression,http-server,http-client,websocket-client,websocket-server,mimalloc"
+        exclude:
+          # jemalloc has limited MSVC support; mimalloc works but skip on
+          # Windows until confirmed stable (revisit when issue-160 lands).
+          - os: windows-latest
+            allocator: mimalloc
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "test-${{ matrix.os }}-${{ matrix.allocator }}"
           cache-on-failure: true
 
-      - name: Install nextest
-        uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2
         with:
           tool: nextest
 
-      # TODO(critic): if the mimalloc test job flakes intermittently on macos-latest,
-      # pin --test-threads=4 for the mimalloc allocator variant. See critic handoff
-      # 2026-04-28T18-05-00-critic.md MINOR-3.
-      - name: Run tests (nextest)
+      # TODO(critic): if mimalloc flakes intermittently on macos-latest,
+      # pin --test-threads=4 for the mimalloc variant.
+      # See critic handoff 2026-04-28T18-05-00-critic.md MINOR-3.
+      - name: Run tests
         run: cargo nextest run --workspace --features "${{ matrix.features }}" --all-targets --no-fail-fast
 
       - name: Run doctests
         run: cargo test --workspace --doc --features "${{ matrix.features }}"
 
-  # Code coverage with threshold enforcement
+  # Coverage runs on ubuntu only; does not wait for the cross-platform test
+  # matrix because it has no dependency on those results.
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [quality]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
 
-      - name: Install llvm-cov and nextest
-        uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov,nextest
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "coverage"
           cache-on-failure: true
@@ -166,13 +141,14 @@ jobs:
             --status-level fail --final-status-level skip
 
       - name: Upload coverage to codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           fail_ci_if_error: false
 
-  # WASM build and tests
+  # WASM library tests run immediately after quality — they do not depend on
+  # the host test matrix because they compile for wasm32 (a separate target).
   wasm-test:
     name: WASM Library Tests
     runs-on: ubuntu-latest
@@ -185,21 +161,18 @@ jobs:
       contains(github.event.pull_request.changed_files, 'crates/pjs-domain/') ||
       contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "wasm-test"
           cache-on-failure: true
 
-      - name: Install nextest
-        uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2
         with:
           tool: nextest
 
@@ -214,11 +187,14 @@ jobs:
           cargo test -p pjs-wasm --doc
           cargo test -p pjson-rs-domain --doc
 
+  # ── Tier 2: WASM artefact jobs after wasm-test ─────────────────────────────
+  # wasm-build starts as soon as wasm-test passes; it does NOT wait for the
+  # host test matrix.  Three wasm-pack targets run in parallel.
   wasm-build:
     name: Build WASM (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [quality, wasm-test]
+    needs: [wasm-test]
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
@@ -232,29 +208,26 @@ jobs:
     env:
       WASM_PACK_CACHE_DIR: ~/.wasm-pack
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "wasm-build-${{ matrix.target }}"
           cache-on-failure: true
 
       - name: Cache wasm-pack
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ${{ env.WASM_PACK_CACHE_DIR }}
           key: wasm-pack-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             wasm-pack-${{ runner.os }}-
 
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack@latest
 
@@ -266,17 +239,17 @@ jobs:
             --release \
             --out-dir pkg-${{ matrix.target }}
 
-
-      - name: Upload WASM build artifacts
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: wasm-build-${{ matrix.target }}
           path: crates/pjs-wasm/pkg-${{ matrix.target }}/
           retention-days: 7
 
+  # ── Tier 3: WASM post-build jobs (all depend only on wasm-build) ───────────
+
   wasm-bundle-size:
     name: WASM Bundle Size
-    needs: wasm-build
+    needs: [wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: |
@@ -285,10 +258,9 @@ jobs:
       contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
       contains(github.event.pull_request.changed_files, 'crates/pjs-domain/')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
@@ -305,15 +277,13 @@ jobs:
               raw_size=$(($(wc -c < "artifacts/wasm-build-$target/pjs_wasm_bg.wasm") / 1024))
               gzipped_size=$(($(gzip -c < "artifacts/wasm-build-$target/pjs_wasm_bg.wasm" | wc -c) / 1024))
 
-              # Check size constraints (raw < 200 KB, gzipped < 80 KB)
-              status="✓ PASS"
+              status="PASS"
               if [ $raw_size -gt 200 ] || [ $gzipped_size -gt 80 ]; then
-                status="⚠ WARNING"
+                status="WARNING"
               fi
 
               echo "| $target | $raw_size | $gzipped_size | $status |" >> bundle-report.md
 
-              # Export for PR comment
               echo "${target}_raw_kb=$raw_size" >> $GITHUB_OUTPUT
               echo "${target}_gzipped_kb=$gzipped_size" >> $GITHUB_OUTPUT
             fi
@@ -321,8 +291,7 @@ jobs:
 
           cat bundle-report.md
 
-      - name: Upload bundle size report
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: bundle-size-report
           path: bundle-report.md
@@ -331,12 +300,11 @@ jobs:
       - name: Comment PR with bundle sizes
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        uses: actions/github-script@v9
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('bundle-report.md', 'utf8');
-
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -346,7 +314,7 @@ jobs:
 
   wasm-node-example:
     name: Node.js Example Test
-    needs: wasm-build
+    needs: [wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: |
@@ -355,26 +323,18 @@ jobs:
       contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
       contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Download web build artifact
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v4
         with:
           name: wasm-build-web
           path: crates/pjs-js-client/examples/browser-wasm/pkg
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
 
-      - name: Run Node.js example
-        working-directory: crates/pjs-js-client/examples/browser-wasm
-        run: |
-          echo "Running Node.js example with WASM..."
-          node example.js
-
-      - name: Verify example output
+      - name: Run and verify Node.js example
         working-directory: crates/pjs-js-client/examples/browser-wasm
         run: |
           node example.js | grep -q "Example 1: Basic Usage" || (echo "Example failed" && exit 1)
@@ -382,7 +342,7 @@ jobs:
 
   wasm-package-validation:
     name: NPM Package Validation
-    needs: wasm-build
+    needs: [wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: |
@@ -390,27 +350,25 @@ jobs:
       github.event_name == 'push' ||
       contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Download web build artifact
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v4
         with:
           name: wasm-build-web
           path: wasm-pkg
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
 
-      - name: Validate package.json
+      - name: Validate package.json fields
         run: |
           node -e "
             const pkg = require('./wasm-pkg/package.json');
             const required = ['name', 'version', 'files', 'main', 'types'];
             for (const field of required) {
               if (!pkg[field]) {
-                console.error(\`Missing required field: \${field}\`);
+                console.error('Missing required field: ' + field);
                 process.exit(1);
               }
             }
@@ -423,14 +381,13 @@ jobs:
           grep -q "class PriorityConfigBuilder" wasm-pkg/pjs_wasm.d.ts || (echo "Missing PriorityConfigBuilder" && exit 1)
           grep -q "export function version" wasm-pkg/pjs_wasm.d.ts || (echo "Missing version function" && exit 1)
 
-      - name: Upload validated package
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: validated-wasm-package
           path: wasm-pkg/
           retention-days: 7
 
-  # Security scanning with OSV-Scanner
+  # ── Security (independent, no Rust build required) ─────────────────────────
   security-osv:
     name: OSV Security Scan
     runs-on: ubuntu-latest
@@ -440,50 +397,43 @@ jobs:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
 
-  # Final success indicator
+  # ── Single gate job for branch protection ──────────────────────────────────
+  # Branch protection rules should key off `ci-success` only.
+  # This job aggregates both the Rust host jobs and the WASM pipeline.
+  # WASM jobs use `if` conditions that may skip them on non-WASM PRs; treat
+  # skipped results as success so the gate does not block those PRs.
   ci-success:
     name: CI Success
     needs:
       - quality
-      - build
       - test
       - coverage
+      - wasm-test
+      - wasm-build
+      - wasm-bundle-size
+      - wasm-node-example
+      - wasm-package-validation
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Check all CI jobs passed
+      - name: Check required jobs
         run: |
-          if [[ "${{ needs.quality.result }}" != "success" ]] || \
-             [[ "${{ needs.build.result }}" != "success" ]] || \
-             [[ "${{ needs.test.result }}" != "success" ]] || \
-             [[ "${{ needs.coverage.result }}" != "success" ]]; then
-            echo "One or more CI jobs failed"
-            exit 1
-          fi
-
-  # WASM CI success (separate indicator)
-  wasm-ci-success:
-    name: WASM CI Success
-    needs: [wasm-test, wasm-build, wasm-bundle-size, wasm-node-example, wasm-package-validation]
-    runs-on: ubuntu-latest
-    if: |
-      always() &&
-      (github.event_name == 'workflow_dispatch' ||
-       github.event_name == 'push' ||
-       contains(github.event.pull_request.changed_files, 'crates/pjs-wasm/') ||
-       contains(github.event.pull_request.changed_files, 'crates/pjs-domain/') ||
-       contains(github.event.pull_request.changed_files, 'crates/pjs-js-client/examples/browser-wasm/'))
-    steps:
-      - name: Check all WASM jobs passed
-        run: |
-          if [[ "${{ needs.wasm-test.result }}" != "success" ]] || \
-             [[ "${{ needs.wasm-build.result }}" != "success" ]] || \
-             [[ "${{ needs.wasm-bundle-size.result }}" != "success" ]] || \
-             [[ "${{ needs.wasm-node-example.result }}" != "success" ]] || \
-             [[ "${{ needs.wasm-package-validation.result }}" != "success" ]]; then
-            echo "One or more WASM CI jobs failed"
-            exit 1
-          fi
+          check() {
+            local job=$1 result=$2
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "Job '$job' did not pass (result: $result)"
+              exit 1
+            fi
+          }
+          check quality    "${{ needs.quality.result }}"
+          check test       "${{ needs.test.result }}"
+          check coverage   "${{ needs.coverage.result }}"
+          check wasm-test  "${{ needs.wasm-test.result }}"
+          check wasm-build "${{ needs.wasm-build.result }}"
+          check wasm-bundle-size         "${{ needs.wasm-bundle-size.result }}"
+          check wasm-node-example        "${{ needs.wasm-node-example.result }}"
+          check wasm-package-validation  "${{ needs.wasm-package-validation.result }}"
+          echo "All required jobs passed or were skipped."
