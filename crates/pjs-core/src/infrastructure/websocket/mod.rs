@@ -4,8 +4,7 @@
 //! and backpressure handling for optimal client performance.
 
 use crate::{
-    Error as PjsError, PriorityStreamer, Result as PjsResult, StreamFrame, domain::Priority,
-    security::RateLimitGuard,
+    Error as PjsError, Result as PjsResult, StreamFrame, domain::Priority, security::RateLimitGuard,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -201,8 +200,6 @@ pub trait WebSocketTransport: Send + Sync {
 /// Adaptive streaming controller
 pub struct AdaptiveStreamController {
     sessions: Arc<RwLock<HashMap<String, StreamSession>>>,
-    #[allow(dead_code)] // Future feature: PriorityStreamer integration
-    streamer: PriorityStreamer,
     frame_tx: broadcast::Sender<(String, WsMessage)>,
 }
 
@@ -212,7 +209,6 @@ impl AdaptiveStreamController {
 
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            streamer: PriorityStreamer::new(),
             frame_tx,
         }
     }

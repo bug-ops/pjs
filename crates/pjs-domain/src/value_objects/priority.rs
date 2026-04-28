@@ -148,87 +148,68 @@ impl TryFrom<u8> for Priority {
     }
 }
 
-/// Priority validation rules (reserved for future use)
-#[allow(dead_code)]
-pub trait PriorityRule {
-    fn validate(&self, priority: Priority) -> bool;
-    fn name(&self) -> &'static str;
-}
-
-/// Rule: Priority must be at least minimum value (reserved for future use)
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct MinimumPriority(pub Priority);
-
-#[allow(dead_code)]
-impl PriorityRule for MinimumPriority {
-    fn validate(&self, priority: Priority) -> bool {
-        priority >= self.0
-    }
-
-    fn name(&self) -> &'static str {
-        "minimum_priority"
-    }
-}
-
-/// Rule: Priority must be within range (reserved for future use)
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct PriorityRange {
-    pub min: Priority,
-    pub max: Priority,
-}
-
-#[allow(dead_code)]
-impl PriorityRule for PriorityRange {
-    fn validate(&self, priority: Priority) -> bool {
-        priority >= self.min && priority <= self.max
-    }
-
-    fn name(&self) -> &'static str {
-        "priority_range"
-    }
-}
-
-/// Collection of priority rules for validation (reserved for future use)
-#[allow(dead_code)]
-pub struct PriorityRules {
-    rules: Vec<Box<dyn PriorityRule + Send + Sync>>,
-}
-
-#[allow(dead_code)]
-impl PriorityRules {
-    pub fn new() -> Self {
-        Self { rules: Vec::new() }
-    }
-
-    pub fn add_rule(mut self, rule: impl PriorityRule + Send + Sync + 'static) -> Self {
-        self.rules.push(Box::new(rule));
-        self
-    }
-
-    pub fn validate(&self, priority: Priority) -> DomainResult<()> {
-        for rule in &self.rules {
-            if !rule.validate(priority) {
-                return Err(DomainError::InvalidPriority(format!(
-                    "Priority {priority} violates rule: {}",
-                    rule.name()
-                )));
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Default for PriorityRules {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    trait PriorityRule {
+        fn validate(&self, priority: Priority) -> bool;
+        fn name(&self) -> &'static str;
+    }
+
+    struct MinimumPriority(Priority);
+
+    impl PriorityRule for MinimumPriority {
+        fn validate(&self, priority: Priority) -> bool {
+            priority >= self.0
+        }
+
+        fn name(&self) -> &'static str {
+            "minimum_priority"
+        }
+    }
+
+    struct PriorityRange {
+        min: Priority,
+        max: Priority,
+    }
+
+    impl PriorityRule for PriorityRange {
+        fn validate(&self, priority: Priority) -> bool {
+            priority >= self.min && priority <= self.max
+        }
+
+        fn name(&self) -> &'static str {
+            "priority_range"
+        }
+    }
+
+    struct PriorityRules {
+        rules: Vec<Box<dyn PriorityRule + Send + Sync>>,
+    }
+
+    impl PriorityRules {
+        fn new() -> Self {
+            Self { rules: Vec::new() }
+        }
+
+        fn add_rule(mut self, rule: impl PriorityRule + Send + Sync + 'static) -> Self {
+            self.rules.push(Box::new(rule));
+            self
+        }
+
+        fn validate(&self, priority: Priority) -> DomainResult<()> {
+            for rule in &self.rules {
+                if !rule.validate(priority) {
+                    return Err(DomainError::InvalidPriority(format!(
+                        "Priority {priority} violates rule: {}",
+                        rule.name()
+                    )));
+                }
+            }
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_priority_constants() {

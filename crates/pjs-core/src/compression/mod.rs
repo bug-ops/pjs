@@ -85,8 +85,6 @@ pub struct SchemaAnalyzer {
 #[derive(Debug, Clone)]
 struct PatternInfo {
     frequency: u32,
-    #[allow(dead_code)] // Future: used for compression ratio calculation
-    total_size: usize,
     compression_potential: f32,
 }
 
@@ -189,7 +187,6 @@ impl SchemaAnalyzer {
             if matching_count > self.config.min_frequency_count as usize {
                 let info = PatternInfo {
                     frequency: matching_count as u32,
-                    total_size: pattern.len() * matching_count,
                     compression_potential: (matching_count as f32 - 1.0) / matching_count as f32,
                 };
                 self.patterns.insert(structure_key, info);
@@ -213,7 +210,6 @@ impl SchemaAnalyzer {
                 if count > self.config.min_frequency_count {
                     let info = PatternInfo {
                         frequency: count,
-                        total_size: value_key.len() * count as usize,
                         compression_potential: (count as f32 - 1.0) / count as f32,
                     };
                     self.patterns
@@ -243,7 +239,6 @@ impl SchemaAnalyzer {
                     .entry(format!("url_prefix:{prefix}"))
                     .or_insert(PatternInfo {
                         frequency: 0,
-                        total_size: 0,
                         compression_potential: 0.0,
                     })
                     .frequency += 1;
@@ -255,7 +250,6 @@ impl SchemaAnalyzer {
                     .entry("uuid_pattern".to_string())
                     .or_insert(PatternInfo {
                         frequency: 0,
-                        total_size: 36,
                         compression_potential: self.config.uuid_compression_potential,
                     })
                     .frequency += 1;

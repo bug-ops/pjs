@@ -177,48 +177,6 @@ pub struct CombinedArenaStats {
     pub values_allocated: usize,
 }
 
-/// Arena-aware JSON parser for high-performance parsing
-#[allow(dead_code)]
-pub(crate) struct ArenaJsonParser {
-    arena: JsonArena,
-    reuse_threshold: usize,
-}
-
-#[allow(dead_code)]
-impl ArenaJsonParser {
-    /// Create new arena-backed parser
-    pub fn new() -> Self {
-        Self {
-            arena: JsonArena::new(),
-            reuse_threshold: 1000, // Reset arena after 1000 allocations
-        }
-    }
-
-    /// Parse JSON using arena allocation
-    pub fn parse(&mut self, json: &str) -> Result<serde_json::Value, serde_json::Error> {
-        // Check if we should reset arena to prevent unbounded growth
-        let stats = self.arena.stats();
-        if stats.values_allocated > self.reuse_threshold {
-            self.arena.reset();
-        }
-
-        // For now, fall back to standard parsing
-        // In a full implementation, you'd integrate arena allocation with the parser
-        serde_json::from_str(json)
-    }
-
-    /// Get current arena statistics
-    pub fn arena_stats(&self) -> CombinedArenaStats {
-        self.arena.stats()
-    }
-}
-
-impl Default for ArenaJsonParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,16 +212,6 @@ mod tests {
         assert_eq!(stats.objects_allocated, 0);
         assert_eq!(stats.arrays_allocated, 0);
         assert_eq!(stats.values_allocated, 0);
-    }
-
-    #[test]
-    fn test_arena_parser() {
-        let mut parser = ArenaJsonParser::new();
-        let result = parser.parse(r#"{"key": "value"}"#);
-
-        assert!(result.is_ok());
-        let value = result.unwrap();
-        assert!(value.is_object());
     }
 
     #[test]

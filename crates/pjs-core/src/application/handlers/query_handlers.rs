@@ -9,7 +9,7 @@ use crate::{
         ports::{StreamRepositoryGat, StreamStoreGat},
     },
 };
-use std::{sync::Arc, time::Instant};
+use std::{marker::PhantomData, sync::Arc, time::Instant};
 
 /// Handler for session-related queries
 #[derive(Debug)]
@@ -296,8 +296,7 @@ where
     S: StreamStoreGat + 'static,
 {
     session_repository: Arc<R>,
-    #[allow(dead_code)]
-    stream_store: Arc<S>,
+    _phantom: PhantomData<S>,
 }
 
 impl<R, S> StreamQueryHandler<R, S>
@@ -305,10 +304,10 @@ where
     R: StreamRepositoryGat + 'static,
     S: StreamStoreGat + 'static,
 {
-    pub fn new(session_repository: Arc<R>, stream_store: Arc<S>) -> Self {
+    pub fn new(session_repository: Arc<R>, _stream_store: Arc<S>) -> Self {
         Self {
             session_repository,
-            stream_store,
+            _phantom: PhantomData,
         }
     }
 }

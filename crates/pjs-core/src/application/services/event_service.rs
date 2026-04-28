@@ -336,53 +336,9 @@ where
 mod tests {
     use super::*;
     use crate::domain::{
-        events::{EventSubscriber, InMemoryEventStore},
+        events::InMemoryEventStore,
         value_objects::{SessionId, StreamId},
     };
-
-    // Mock subscriber for testing
-    #[allow(dead_code)] // Future test utility
-    struct MockSubscriber {
-        received_events: std::sync::Mutex<Vec<DomainEvent>>,
-    }
-
-    #[allow(dead_code)] // Future test utility
-    impl MockSubscriber {
-        fn new() -> Self {
-            Self {
-                received_events: std::sync::Mutex::new(Vec::new()),
-            }
-        }
-
-        fn event_count(&self) -> usize {
-            self.received_events
-                .lock()
-                .map(|events| events.len())
-                .unwrap_or(0)
-        }
-    }
-
-    impl EventSubscriber for MockSubscriber {
-        type HandleFuture<'a>
-            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
-        where
-            Self: 'a;
-
-        fn handle(&self, event: &DomainEvent) -> Self::HandleFuture<'_> {
-            let event = event.clone();
-            async move {
-                self.received_events
-                    .lock()
-                    .map_err(|_| {
-                        crate::domain::DomainError::Logic(
-                            "Event subscriber lock poisoned".to_string(),
-                        )
-                    })?
-                    .push(event);
-                Ok(())
-            }
-        }
-    }
 
     #[tokio::test]
     async fn test_event_service_creation() {

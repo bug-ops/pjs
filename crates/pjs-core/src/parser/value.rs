@@ -30,9 +30,6 @@ pub struct LazyArray<'a> {
     raw: &'a [u8],
     /// Pre-computed element boundaries using SIMD scanning
     boundaries: SmallVec<[Range; 32]>,
-    /// Cache for parsed elements
-    #[allow(dead_code)] // Future: caching for repeated element access
-    cache: std::collections::HashMap<usize, JsonValue<'a>>,
 }
 
 /// Lazy object that parses fields on-demand
@@ -42,9 +39,6 @@ pub struct LazyObject<'a> {
     raw: &'a [u8],
     /// Pre-computed key-value boundaries
     fields: SmallVec<[FieldRange; 16]>,
-    /// Cache for parsed fields
-    #[allow(dead_code)] // Future: caching for repeated field access
-    cache: std::collections::HashMap<String, JsonValue<'a>>,
 }
 
 /// Field boundary information
@@ -130,11 +124,7 @@ impl<'a> LazyArray<'a> {
         // Extract array element boundaries from scan result
         let boundaries = Self::extract_element_boundaries(raw, &scan_result);
 
-        Self {
-            raw,
-            boundaries,
-            cache: std::collections::HashMap::new(),
-        }
+        Self { raw, boundaries }
     }
 
     /// Get array length
@@ -292,11 +282,7 @@ impl<'a> LazyObject<'a> {
     pub fn from_scan(raw: &'a [u8], scan_result: ScanResult) -> Self {
         let fields = Self::extract_field_boundaries(raw, &scan_result);
 
-        Self {
-            raw,
-            fields,
-            cache: std::collections::HashMap::new(),
-        }
+        Self { raw, fields }
     }
 
     /// Get number of fields

@@ -374,13 +374,6 @@ pub enum PatchOperation {
     Delete,
 }
 
-/// Patch payload structure (reserved for future use)
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PatchPayload {
-    patches: Vec<FramePatch>,
-}
-
 impl FramePatch {
     /// Create set operation patch
     pub fn set(path: JsonPath, value: JsonData) -> Self {

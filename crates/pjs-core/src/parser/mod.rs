@@ -22,7 +22,7 @@ pub use simd_zero_copy::{
     SimdParseResult, SimdParsingStats, SimdZeroCopyConfig, SimdZeroCopyParser,
 };
 pub use simple::{ParseConfig, ParseStats, SimpleParser};
-pub use sonic::{LazyFrame, SonicConfig, SonicParser};
+pub use sonic::{SonicConfig, SonicParser};
 pub use value::{JsonValue, LazyArray, LazyObject};
 pub use zero_copy::{IncrementalParser, LazyJsonValue, LazyParser, MemoryUsage, ZeroCopyParser};
 

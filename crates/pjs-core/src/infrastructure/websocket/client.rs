@@ -36,12 +36,6 @@ struct StreamSession {
 /// Frame received by client
 #[derive(Debug, Clone)]
 struct ReceivedFrame {
-    #[allow(dead_code)] // Future feature: frame verification and replay
-    frame_id: u32,
-    #[allow(dead_code)] // Future feature: priority-based processing
-    priority: u8,
-    #[allow(dead_code)] // Future feature: frame-level data access
-    payload: Value,
     received_at: Instant,
     processed_at: Option<Instant>,
 }
@@ -260,7 +254,7 @@ impl PjsWebSocketClient {
             WsMessage::StreamFrame {
                 session_id,
                 frame_id,
-                priority,
+                priority: _priority,
                 payload,
                 is_complete,
             } => {
@@ -273,9 +267,6 @@ impl PjsWebSocketClient {
                     if let Some(session) = sessions.get_mut(&session_id) {
                         // Store received frame
                         let frame = ReceivedFrame {
-                            frame_id,
-                            priority,
-                            payload: payload.clone(),
                             received_at: processing_start,
                             processed_at: None,
                         };
