@@ -84,7 +84,7 @@ mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 
 # Optional features
 compression = ["dep:brotli", "dep:flate2"]
-schema-validation = []
+schema-validation = ["dep:regex"]
 
 # Infrastructure features
 http-client = ["dep:reqwest"]
