@@ -1,5 +1,6 @@
 //! Security configuration and limits
 
+use crate::config::ConfigError;
 use crate::security::compression_bomb::CompressionBombConfig;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -188,6 +189,91 @@ impl Default for SessionLimits {
 }
 
 impl SecurityConfig {
+    /// Validate all security configuration values.
+    ///
+    /// Returns `Err` if any invariant is violated (e.g. `min_session_id_length`
+    /// exceeds `max_session_id_length`, or a size limit is zero).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::MustBePositive`] when a size field is zero.
+    /// Returns [`ConfigError::InconsistentBounds`] when min > max for session
+    /// ID length.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::config::SecurityConfig;
+    ///
+    /// SecurityConfig::default().validate().expect("defaults are valid");
+    /// ```
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let s = "security.sessions";
+
+        if self.sessions.min_session_id_length > self.sessions.max_session_id_length {
+            return Err(ConfigError::InconsistentBounds {
+                section: s,
+                message: "min_session_id_length must be <= max_session_id_length",
+            });
+        }
+
+        macro_rules! must_be_positive {
+            ($section:expr, $field:expr, $value:expr) => {
+                if $value == 0 {
+                    return Err(ConfigError::MustBePositive {
+                        section: $section,
+                        field: $field,
+                    });
+                }
+            };
+        }
+
+        must_be_positive!("security.json", "max_input_size", self.json.max_input_size);
+        must_be_positive!("security.json", "max_depth", self.json.max_depth);
+        must_be_positive!(
+            "security.json",
+            "max_string_length",
+            self.json.max_string_length
+        );
+        must_be_positive!(
+            "security.buffers",
+            "max_buffer_size",
+            self.buffers.max_buffer_size
+        );
+        must_be_positive!(
+            "security.buffers",
+            "max_total_memory",
+            self.buffers.max_total_memory
+        );
+        must_be_positive!(
+            "security.network",
+            "max_websocket_frame_size",
+            self.network.max_websocket_frame_size
+        );
+        must_be_positive!(
+            "security.network",
+            "max_http_payload_size",
+            self.network.max_http_payload_size
+        );
+        must_be_positive!(
+            "security.sessions",
+            "max_session_id_length",
+            self.sessions.max_session_id_length
+        );
+        must_be_positive!(
+            "security.sessions",
+            "min_session_id_length",
+            self.sessions.min_session_id_length
+        );
+        must_be_positive!(
+            "security.sessions",
+            "max_session_data_size",
+            self.sessions.max_session_data_size
+        );
+
+        Ok(())
+    }
+
     /// Create a configuration optimized for high-throughput scenarios
     pub fn high_throughput() -> Self {
         Self {
@@ -336,6 +422,7 @@ impl SecurityConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigError;
 
     #[test]
     fn test_default_security_config() {
@@ -346,6 +433,28 @@ mod tests {
         assert!(config.buffers.max_buffer_size > 0);
         assert!(config.network.max_concurrent_connections > 0);
         assert!(config.sessions.max_session_id_length >= config.sessions.min_session_id_length);
+    }
+
+    #[test]
+    fn test_security_config_default_validates() {
+        SecurityConfig::default()
+            .validate()
+            .expect("SecurityConfig::default() must be valid");
+    }
+
+    #[test]
+    fn test_rejects_min_session_id_length_greater_than_max() {
+        let mut config = SecurityConfig::default();
+        config.sessions.min_session_id_length = 200;
+        config.sessions.max_session_id_length = 100;
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InconsistentBounds {
+                section: "security.sessions",
+                ..
+            }
+        ));
     }
 
     #[test]

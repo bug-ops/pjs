@@ -273,8 +273,6 @@ where
 /// };
 /// let router = create_pjs_router_with_config::<R, P, S>(&config)?;
 /// ```
-// TODO(critic): Extract shared route table from create_pjs_router_with_config and
-// create_pjs_router_with_rate_limit_and_config — currently ~40 lines duplicated.
 pub fn create_pjs_router_with_config<R, P, S>(
     config: &HttpServerConfig,
 ) -> Result<Router<PjsAppState<R, P, S>>, PjsError>
@@ -283,49 +281,8 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let cors = build_cors_layer(config)?;
-    let router = Router::new()
-        .route("/pjs/sessions", post(create_session::<R, P, S>))
-        .route("/pjs/sessions/{session_id}", get(get_session::<R, P, S>))
-        .route(
-            "/pjs/sessions/{session_id}/health",
-            get(session_health::<R, P, S>),
-        )
-        .route(
-            "/pjs/sessions/{session_id}/stats",
-            get(get_session_stats::<R, P, S>),
-        )
-        .route(
-            "/pjs/sessions/{session_id}/streams",
-            post(create_stream::<R, P, S>),
-        )
-        .route(
-            "/pjs/sessions/{session_id}/streams/{stream_id}/start",
-            post(start_stream::<R, P, S>),
-        )
-        .route(
-            "/pjs/sessions/{session_id}/streams/{stream_id}",
-            get(get_stream::<R, P, S>),
-        )
-        .route(
-            "/pjs/sessions/{session_id}/streams/{stream_id}/frames",
-            get(get_stream_frames::<R, P, S>),
-        )
-        .route("/pjs/sessions", get(list_sessions::<R, P, S>))
-        .route("/pjs/health", get(system_health))
-        .route("/pjs/stats", get(get_system_stats::<R, P, S>));
-
-    #[cfg(feature = "metrics")]
-    let router = router.route(
-        "/metrics",
-        get(crate::infrastructure::http::metrics::metrics_handler),
-    );
-
-    Ok(router
-        .layer(middleware::from_fn(security_middleware))
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(cors)
-        .layer(TraceLayer::new_for_http()))
+    let all_routes = public_routes::<R, P, S>().merge(protected_routes::<R, P, S>());
+    apply_common_layers(all_routes, config)
 }
 
 /// Create PJS-enabled Axum router with rate limiting and the default CORS configuration.
@@ -370,8 +327,117 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let cors = build_cors_layer(config)?;
-    let router = Router::new()
+    let all_routes = public_routes::<R, P, S>()
+        .merge(protected_routes::<R, P, S>())
+        .layer(rate_limit_middleware);
+    apply_common_layers(all_routes, config)
+}
+
+/// Create PJS-enabled Axum router with API key authentication and a custom [`HttpServerConfig`].
+///
+/// The health endpoint (`/pjs/health`) is **not** protected by auth — it lives in a
+/// separate public sub-router that is merged without the auth layer. All other routes
+/// require a valid API key.
+///
+/// # Errors
+///
+/// Returns [`PjsError::HttpError`] if `config` contains invalid CORS origins.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pjson_rs::infrastructure::http::{
+///     HttpServerConfig, auth::{ApiKeyConfig, ApiKeyAuthLayer},
+///     create_pjs_router_with_auth,
+/// };
+///
+/// let api_config = ApiKeyConfig::new(&["my-api-key"])?;
+/// let auth_layer = ApiKeyAuthLayer::new(api_config);
+/// let config = HttpServerConfig::default();
+/// let router = create_pjs_router_with_auth::<R, P, S>(&config, auth_layer)?;
+/// ```
+#[cfg(feature = "http-server")]
+pub fn create_pjs_router_with_auth<R, P, S>(
+    config: &HttpServerConfig,
+    auth: crate::infrastructure::http::auth::ApiKeyAuthLayer,
+) -> Result<Router<PjsAppState<R, P, S>>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    // Auth wraps only the protected sub-router. Public routes (health, metrics) are
+    // merged separately so there is zero path-string comparison logic in the auth layer.
+    let protected = protected_routes::<R, P, S>().layer(auth);
+    let merged = public_routes::<R, P, S>().merge(protected);
+    apply_common_layers(merged, config)
+}
+
+/// Create PJS-enabled Axum router with both rate limiting and API key authentication.
+///
+/// Layer ordering (Tower applies layers outer-to-inner on the protected sub-router):
+/// ```text
+/// auth        ← outermost: rejects unauthenticated requests before consuming rate-limit quota
+/// rate_limit  ← applied after auth; unauthenticated traffic does not count against quota
+/// handlers
+/// ```
+///
+/// Rate limiting is applied to **both** the public and protected sub-routers (DoS
+/// protection for `/pjs/health` is still desirable).
+///
+/// # Errors
+///
+/// Returns [`PjsError::HttpError`] if `config` contains invalid CORS origins.
+#[cfg(feature = "http-server")]
+pub fn create_pjs_router_with_rate_limit_and_auth<R, P, S>(
+    config: &HttpServerConfig,
+    rate_limit: RateLimitMiddleware,
+    auth: crate::infrastructure::http::auth::ApiKeyAuthLayer,
+) -> Result<Router<PjsAppState<R, P, S>>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    // Auth runs before rate limit on the protected sub-router so that unauthenticated
+    // traffic does not consume rate-limit quota and cannot starve legitimate clients.
+    let protected = protected_routes::<R, P, S>().layer(auth);
+    let merged = public_routes::<R, P, S>()
+        .merge(protected)
+        .layer(rate_limit);
+    apply_common_layers(merged, config)
+}
+
+// ── Route table helpers ────────────────────────────────────────────────────────────
+
+/// Routes that are always public — no authentication applied.
+///
+/// Currently: `/pjs/health` and (when the `metrics` feature is enabled) `/metrics`.
+fn public_routes<R, P, S>() -> Router<PjsAppState<R, P, S>>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let router = Router::new().route("/pjs/health", get(system_health));
+
+    #[cfg(feature = "metrics")]
+    let router = router.route(
+        "/metrics",
+        get(crate::infrastructure::http::metrics::metrics_handler),
+    );
+
+    router
+}
+
+/// Routes that require authentication when an auth layer is applied.
+fn protected_routes<R, P, S>() -> Router<PjsAppState<R, P, S>>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    Router::new()
         .route("/pjs/sessions", post(create_session::<R, P, S>))
         .route("/pjs/sessions/{session_id}", get(get_session::<R, P, S>))
         .route(
@@ -399,17 +465,29 @@ where
             get(get_stream_frames::<R, P, S>),
         )
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
-        .route("/pjs/health", get(system_health))
-        .route("/pjs/stats", get(get_system_stats::<R, P, S>));
+        .route("/pjs/stats", get(get_system_stats::<R, P, S>))
+}
 
-    #[cfg(feature = "metrics")]
-    let router = router.route(
-        "/metrics",
-        get(crate::infrastructure::http::metrics::metrics_handler),
-    );
-
+/// Apply the cross-cutting middleware stack shared by all router variants.
+///
+/// Order (Tower applies outer-to-inner):
+/// ```text
+/// security_middleware   ← security headers
+/// DefaultBodyLimit      ← body size guard
+/// CorsLayer             ← CORS (outside auth, so preflight is answered before auth)
+/// TraceLayer            ← distributed tracing
+/// ```
+fn apply_common_layers<R, P, S>(
+    router: Router<PjsAppState<R, P, S>>,
+    config: &HttpServerConfig,
+) -> Result<Router<PjsAppState<R, P, S>>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let cors = build_cors_layer(config)?;
     Ok(router
-        .layer(rate_limit_middleware)
         .layer(middleware::from_fn(security_middleware))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(cors)
