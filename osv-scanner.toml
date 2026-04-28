@@ -1,2 +1,6 @@
 # OSV Scanner configuration
 # https://google.github.io/osv-scanner/configuration/
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+reason = "paste 1.0.x is unmaintained; migration to pastey tracked separately"
