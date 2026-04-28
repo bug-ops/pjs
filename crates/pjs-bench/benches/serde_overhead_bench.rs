@@ -1,5 +1,5 @@
 use chrono::Utc;
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use pjson_rs_domain::events::DomainEvent;
 use pjson_rs_domain::value_objects::{Priority, SessionId, StreamId};
 use std::hint::black_box;
@@ -11,11 +11,11 @@ fn benchmark_custom_serde_serialization(c: &mut Criterion) {
     // Create test data
     let session_id = SessionId::new();
     let stream_id = StreamId::new();
-    let priority = Priority::new(50).unwrap();
+    let _priority = Priority::new(50).unwrap();
 
     // Benchmark SessionActivated event serialization
     let event = DomainEvent::SessionActivated {
-        session_id: session_id.clone(),
+        session_id,
         timestamp: Utc::now(),
     };
 
@@ -29,8 +29,8 @@ fn benchmark_custom_serde_serialization(c: &mut Criterion) {
 
     // Benchmark StreamCreated event serialization (has multiple custom serde fields)
     let event = DomainEvent::StreamCreated {
-        stream_id: stream_id.clone(),
-        session_id: session_id.clone(),
+        stream_id,
+        session_id,
         timestamp: Utc::now(),
     };
 
@@ -87,14 +87,14 @@ fn benchmark_custom_serde_deserialization(c: &mut Criterion) {
     let stream_id = StreamId::new();
 
     let session_activated_json = serde_json::to_string(&DomainEvent::SessionActivated {
-        session_id: session_id.clone(),
+        session_id,
         timestamp: Utc::now(),
     })
     .unwrap();
 
     let stream_created_json = serde_json::to_string(&DomainEvent::StreamCreated {
-        stream_id: stream_id.clone(),
-        session_id: session_id.clone(),
+        stream_id,
+        session_id,
         timestamp: Utc::now(),
     })
     .unwrap();
@@ -154,9 +154,7 @@ fn benchmark_value_object_creation(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1000));
     group.bench_function("Priority::new", |b| {
         b.iter(|| {
-            let priorities: Vec<Priority> = (1..=100)
-                .map(|i| Priority::new(i).unwrap())
-                .collect();
+            let priorities: Vec<Priority> = (1..=100).map(|i| Priority::new(i).unwrap()).collect();
             black_box(priorities);
         });
     });

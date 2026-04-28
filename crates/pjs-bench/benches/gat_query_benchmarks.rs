@@ -5,25 +5,17 @@
 //! - Zero Box<dyn Future> allocations
 //! - Lock-free DashMap operations
 
-#![feature(impl_trait_in_assoc_type)]
-
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use chrono::{Duration, Utc};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use pjson_rs::{
     domain::{
         aggregates::{StreamSession, stream_session::SessionConfig},
-        ports::{
-            Pagination, SessionQueryCriteria, SessionQueryResult, StreamRepositoryGat,
-            SessionHealthSnapshot, StreamStoreGat, StreamFilter, StreamStatistics,
-            StreamStatus, PriorityDistribution,
-        },
-        entities::Stream,
-        value_objects::{SessionId, StreamId, Priority},
-        DomainResult,
+        ports::{Pagination, SessionQueryCriteria, StreamRepositoryGat},
+        value_objects::SessionId,
     },
     infrastructure::adapters::GatInMemoryStreamRepository,
 };
-use chrono::{Duration, Utc};
-use std::{collections::HashMap, future::Future, sync::Arc, time::Instant};
+use std::{hint::black_box, sync::Arc};
 
 // Re-export the real repository implementation
 fn create_repository_with_sessions(count: usize) -> GatInMemoryStreamRepository {
@@ -59,7 +51,10 @@ fn bench_find_session(c: &mut Criterion) {
         // Get a valid session ID for lookup
         let session_id = rt.block_on(async {
             let sessions = repo.find_active_sessions().await.unwrap();
-            sessions.first().map(|s| s.id()).unwrap_or_else(SessionId::new)
+            sessions
+                .first()
+                .map(|s| s.id())
+                .unwrap_or_else(SessionId::new)
         });
 
         group.bench_with_input(BenchmarkId::new("O(1)_lookup", size), size, |b, _| {
@@ -128,7 +123,7 @@ fn bench_find_sessions_by_criteria(c: &mut Criterion) {
                         let result = repo
                             .find_sessions_by_criteria(
                                 black_box(criteria.clone()),
-                                black_box(pagination),
+                                black_box(pagination.clone()),
                             )
                             .await;
                         black_box(result)
@@ -153,7 +148,10 @@ fn bench_session_exists(c: &mut Criterion) {
 
         let session_id = rt.block_on(async {
             let sessions = repo.find_active_sessions().await.unwrap();
-            sessions.first().map(|s| s.id()).unwrap_or_else(SessionId::new)
+            sessions
+                .first()
+                .map(|s| s.id())
+                .unwrap_or_else(SessionId::new)
         });
 
         group.bench_with_input(BenchmarkId::new("O(1)_check", size), size, |b, _| {
@@ -181,7 +179,10 @@ fn bench_get_session_health(c: &mut Criterion) {
 
         let session_id = rt.block_on(async {
             let sessions = repo.find_active_sessions().await.unwrap();
-            sessions.first().map(|s| s.id()).unwrap_or_else(SessionId::new)
+            sessions
+                .first()
+                .map(|s| s.id())
+                .unwrap_or_else(SessionId::new)
         });
 
         group.bench_with_input(BenchmarkId::new("O(s)_aggregation", size), size, |b, _| {
@@ -231,7 +232,7 @@ fn bench_concurrent_operations(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("mixed_read_write", size),
             size,
-            |b, &size| {
+            |b, _size| {
                 b.iter(|| {
                     rt.block_on(async {
                         let mut handles = vec![];
@@ -277,7 +278,10 @@ fn bench_latency_distribution(c: &mut Criterion) {
 
     let session_id = rt.block_on(async {
         let sessions = repo.find_active_sessions().await.unwrap();
-        sessions.first().map(|s| s.id()).unwrap_or_else(SessionId::new)
+        sessions
+            .first()
+            .map(|s| s.id())
+            .unwrap_or_else(SessionId::new)
     });
 
     group.bench_function("p99_find_session", |b| {
@@ -301,109 +305,6 @@ fn bench_latency_distribution(c: &mut Criterion) {
     group.finish();
 }
 
-fn measure_raw_performance() {
-    println!("\n=== GAT Query Raw Performance Measurements ===\n");
-
-    let repo = create_repository_with_sessions(1000);
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let session_id = rt.block_on(async {
-        let sessions = repo.find_active_sessions().await.unwrap();
-        sessions.first().map(|s| s.id()).unwrap_or_else(SessionId::new)
-    });
-
-    const ITERATIONS: u32 = 10_000;
-
-    // find_session benchmark
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        rt.block_on(async {
-            let _ = repo.find_session(session_id).await;
-        });
-    }
-    let duration = start.elapsed();
-    let avg_ns = duration.as_nanos() / ITERATIONS as u128;
-    println!(
-        "find_session:              {:>8} ns/op  ({:.3} ms for 1000 calls)",
-        avg_ns,
-        (avg_ns * 1000) as f64 / 1_000_000.0
-    );
-
-    // session_exists benchmark
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        rt.block_on(async {
-            let _ = repo.session_exists(session_id).await;
-        });
-    }
-    let duration = start.elapsed();
-    let avg_ns = duration.as_nanos() / ITERATIONS as u128;
-    println!(
-        "session_exists:            {:>8} ns/op  ({:.3} ms for 1000 calls)",
-        avg_ns,
-        (avg_ns * 1000) as f64 / 1_000_000.0
-    );
-
-    // find_active_sessions benchmark
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        rt.block_on(async {
-            let _ = repo.find_active_sessions().await;
-        });
-    }
-    let duration = start.elapsed();
-    let avg_ns = duration.as_nanos() / ITERATIONS as u128;
-    println!(
-        "find_active_sessions:      {:>8} ns/op  ({:.3} ms for 1000 calls)",
-        avg_ns,
-        (avg_ns * 1000) as f64 / 1_000_000.0
-    );
-
-    // get_session_health benchmark
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        rt.block_on(async {
-            let _ = repo.get_session_health(session_id).await;
-        });
-    }
-    let duration = start.elapsed();
-    let avg_ns = duration.as_nanos() / ITERATIONS as u128;
-    println!(
-        "get_session_health:        {:>8} ns/op  ({:.3} ms for 1000 calls)",
-        avg_ns,
-        (avg_ns * 1000) as f64 / 1_000_000.0
-    );
-
-    // find_sessions_by_criteria benchmark
-    let criteria = SessionQueryCriteria::default();
-    let pagination = Pagination {
-        offset: 0,
-        limit: 100,
-        ..Default::default()
-    };
-
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        rt.block_on(async {
-            let _ = repo
-                .find_sessions_by_criteria(criteria.clone(), pagination)
-                .await;
-        });
-    }
-    let duration = start.elapsed();
-    let avg_ns = duration.as_nanos() / ITERATIONS as u128;
-    println!(
-        "find_sessions_by_criteria: {:>8} ns/op  ({:.3} ms for 1000 calls)",
-        avg_ns,
-        (avg_ns * 1000) as f64 / 1_000_000.0
-    );
-
-    println!("\n=== Target: All operations < 1ms for 1000 items ===\n");
-}
-
 criterion_group!(
     benches,
     bench_find_session,
@@ -417,13 +318,3 @@ criterion_group!(
 );
 
 criterion_main!(benches);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_measure_raw_performance() {
-        measure_raw_performance();
-    }
-}
