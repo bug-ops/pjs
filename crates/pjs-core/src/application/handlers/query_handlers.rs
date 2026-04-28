@@ -9,7 +9,7 @@ use crate::{
         ports::{StreamRepositoryGat, StreamStoreGat},
     },
 };
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 /// Handler for session-related queries
 #[derive(Debug)]
@@ -196,6 +196,44 @@ where
     }
 }
 
+impl<R> QueryHandlerGat<GetSessionStatsQuery> for SessionQueryHandler<R>
+where
+    R: StreamRepositoryGat + Send + Sync,
+{
+    type Response = SessionStatsResponse;
+
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetSessionStatsQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let session = self
+                .repository
+                .find_session(query.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", query.session_id))
+                })?;
+
+            let streams = session.streams();
+            let active_stream_count = streams.values().filter(|s| s.is_active()).count();
+
+            Ok(SessionStatsResponse {
+                session_id: session.id().into(),
+                stats: session.stats().clone(),
+                stream_count: streams.len(),
+                active_stream_count,
+                created_at: session.created_at(),
+                updated_at: session.updated_at(),
+                duration_ms: session.duration().map(|d| d.num_milliseconds()),
+            })
+        }
+    }
+}
+
 impl<R> SessionQueryHandler<R>
 where
     R: StreamRepositoryGat + 'static,
@@ -345,6 +383,46 @@ where
     }
 }
 
+impl<R, S> QueryHandlerGat<GetStreamFramesQuery> for StreamQueryHandler<R, S>
+where
+    R: StreamRepositoryGat + Send + Sync,
+    S: StreamStoreGat + Send + Sync,
+{
+    type Response = FramesResponse;
+
+    type HandleFuture<'a>
+        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn handle(&self, query: GetStreamFramesQuery) -> Self::HandleFuture<'_> {
+        async move {
+            let session = self
+                .session_repository
+                .find_session(query.session_id.into())
+                .await
+                .map_err(ApplicationError::Domain)?
+                .ok_or_else(|| {
+                    ApplicationError::NotFound(format!("Session {} not found", query.session_id))
+                })?;
+
+            // Validate stream exists within the session.
+            let _ = session.get_stream(query.stream_id.into()).ok_or_else(|| {
+                ApplicationError::NotFound(format!("Stream {} not found", query.stream_id))
+            })?;
+
+            // The Stream entity does not persist generated frames — StreamStats only
+            // tracks counts. Return an empty validated page until a FrameStore exists.
+            // Filters are acknowledged but cannot be applied against an empty set.
+            let _ = (query.since_sequence, query.priority_filter, query.limit);
+            Ok(FramesResponse {
+                frames: vec![],
+                total_count: 0,
+            })
+        }
+    }
+}
+
 /// Handler for event-related queries
 #[derive(Debug)]
 pub struct EventQueryHandler<E>
@@ -451,14 +529,36 @@ where
     R: StreamRepositoryGat + 'static,
 {
     repository: Arc<R>,
+    started_at: Instant,
 }
 
 impl<R> SystemQueryHandler<R>
 where
     R: StreamRepositoryGat + 'static,
 {
+    /// Create a new handler, recording `Instant::now()` as the startup time.
     pub fn new(repository: Arc<R>) -> Self {
-        Self { repository }
+        Self {
+            repository,
+            started_at: Instant::now(),
+        }
+    }
+
+    /// Create a handler with an explicit startup instant.
+    ///
+    /// Useful when multiple handlers share a single process-start time.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let started_at = std::time::Instant::now();
+    /// let handler = SystemQueryHandler::with_start_time(repo, started_at);
+    /// ```
+    pub fn with_start_time(repository: Arc<R>, started_at: Instant) -> Self {
+        Self {
+            repository,
+            started_at,
+        }
     }
 }
 
@@ -510,8 +610,8 @@ where
                 0.0
             };
 
-            // Calculate rates (simplified - would need time-based tracking in production)
-            let uptime_seconds = 3600; // Placeholder - would track actual uptime
+            // Floor to 1 to avoid divide-by-zero when the query runs immediately on startup.
+            let uptime_seconds = self.started_at.elapsed().as_secs().max(1);
             let frames_per_second = total_frames as f64 / uptime_seconds as f64;
             let bytes_per_second = total_bytes as f64 / uptime_seconds as f64;
 
@@ -525,7 +625,7 @@ where
                 average_session_duration_seconds,
                 frames_per_second,
                 bytes_per_second,
-                uptime_seconds: uptime_seconds as u64,
+                uptime_seconds,
             })
         }
     }
@@ -974,6 +1074,144 @@ mod tests {
             handler.repository.as_ref(),
             repository.as_ref()
         ));
+    }
+
+    #[tokio::test]
+    async fn test_system_handler_real_uptime() {
+        use std::time::{Duration, Instant};
+
+        let repository = Arc::new(MockRepository::new());
+        // Simulate a handler that started 10 seconds ago.
+        let started_at = Instant::now() - Duration::from_secs(10);
+        let handler = SystemQueryHandler::with_start_time(repository, started_at);
+
+        let query = GetSystemStatsQuery {
+            include_historical: false,
+        };
+        let result = QueryHandlerGat::handle(&handler, query).await.unwrap();
+
+        assert!(
+            result.uptime_seconds >= 10,
+            "uptime_seconds should be at least 10, got {}",
+            result.uptime_seconds
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_stream_frames_session_not_found() {
+        use crate::domain::value_objects::{SessionId, StreamId};
+
+        let session_repository = Arc::new(MockRepository::new());
+        let stream_store = Arc::new(MockStreamStore);
+        let handler = StreamQueryHandler::new(session_repository, stream_store);
+
+        let query = GetStreamFramesQuery {
+            session_id: SessionId::new().into(),
+            stream_id: StreamId::new().into(),
+            since_sequence: None,
+            priority_filter: None,
+            limit: None,
+        };
+
+        let result: ApplicationResult<FramesResponse> =
+            QueryHandlerGat::handle(&handler, query).await;
+        assert!(matches!(result, Err(ApplicationError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_stream_frames_stream_not_found() {
+        use crate::domain::value_objects::StreamId;
+
+        let session_repository = Arc::new(MockRepository::new());
+        let mut session = StreamSession::new(SessionConfig::default());
+        let _ = session.activate();
+        let session_id = session.id();
+        session_repository.add_session(session);
+
+        let stream_store = Arc::new(MockStreamStore);
+        let handler = StreamQueryHandler::new(session_repository, stream_store);
+
+        let query = GetStreamFramesQuery {
+            session_id: session_id.into(),
+            stream_id: StreamId::new().into(),
+            since_sequence: None,
+            priority_filter: None,
+            limit: None,
+        };
+
+        let result: ApplicationResult<FramesResponse> =
+            QueryHandlerGat::handle(&handler, query).await;
+        assert!(matches!(result, Err(ApplicationError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_stream_frames_returns_empty() {
+        use crate::domain::value_objects::JsonData;
+
+        let session_repository = Arc::new(MockRepository::new());
+        let mut session = StreamSession::new(SessionConfig::default());
+        let _ = session.activate();
+        let session_id = session.id();
+        let stream_id = session
+            .create_stream(JsonData::from(serde_json::json!({"k": "v"})))
+            .unwrap();
+        session_repository.add_session(session);
+
+        let stream_store = Arc::new(MockStreamStore);
+        let handler = StreamQueryHandler::new(session_repository, stream_store);
+
+        let query = GetStreamFramesQuery {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+            since_sequence: None,
+            priority_filter: None,
+            limit: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await.unwrap();
+        assert_eq!(result.frames.len(), 0);
+        assert_eq!(result.total_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_session_stats_not_found() {
+        use crate::domain::value_objects::SessionId;
+
+        let repository = Arc::new(MockRepository::new());
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = GetSessionStatsQuery {
+            session_id: SessionId::new().into(),
+        };
+
+        let result: ApplicationResult<SessionStatsResponse> =
+            QueryHandlerGat::handle(&handler, query).await;
+        assert!(matches!(result, Err(ApplicationError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_session_stats_returns_metadata() {
+        use crate::domain::value_objects::JsonData;
+
+        let repository = Arc::new(MockRepository::new());
+        let mut session = StreamSession::new(SessionConfig::default());
+        let _ = session.activate();
+        let session_id = session.id();
+        let created_at = session.created_at();
+        // Add two streams so we can assert stream_count.
+        let _ = session.create_stream(JsonData::from(serde_json::json!({"a": 1})));
+        let _ = session.create_stream(JsonData::from(serde_json::json!({"b": 2})));
+        repository.add_session(session);
+
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = GetSessionStatsQuery {
+            session_id: session_id.into(),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await.unwrap();
+        assert_eq!(result.stream_count, 2);
+        assert_eq!(result.created_at, created_at);
     }
 
     // ===== Additional Query Handler Tests for CQ-003 (Coverage Improvement) =====
