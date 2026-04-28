@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Dead `parser/hybrid.rs` stub (`HybridParser`, `SimdBackend`, `SerdeBackend`, `BackendThresholds`, `ParserMetrics`): 406-line file was never wired into the module tree (#126)
 - Dead fields `Parser::zero_copy_simd` and `Parser::use_zero_copy` from `crates/pjs-core/src/parser/mod.rs`; `Parser` now has exactly three fields: `sonic`, `simple`, `use_sonic` (#126)
+- Orphaned application service files (`session_service`, `stream_orchestrator`, `streaming_service`) — never compiled, reference non-existent `CommandHandler` trait (closes #129)
+- Unused command structs (`ActivateSessionCommand`, `FailStreamCommand`, `CancelStreamCommand`, `UpdateStreamConfigCommand`) — no handlers, no callers (closes #130)
 
 ### Fixed
 
