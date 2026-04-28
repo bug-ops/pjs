@@ -14,12 +14,6 @@ pub struct CreateSessionCommand {
     pub ip_address: Option<String>,
 }
 
-/// Activate an existing session
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivateSessionCommand {
-    pub session_id: SessionIdDto,
-}
-
 /// Create new stream within a session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateStreamCommand {
@@ -50,29 +44,6 @@ pub struct CompleteStreamCommand {
     pub session_id: SessionIdDto,
     pub stream_id: StreamIdDto,
     pub checksum: Option<String>,
-}
-
-/// Fail a stream with error
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FailStreamCommand {
-    pub session_id: SessionIdDto,
-    pub stream_id: StreamIdDto,
-    pub error: String,
-}
-
-/// Cancel a stream
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CancelStreamCommand {
-    pub session_id: SessionIdDto,
-    pub stream_id: StreamIdDto,
-}
-
-/// Update stream configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateStreamConfigCommand {
-    pub session_id: SessionIdDto,
-    pub stream_id: StreamIdDto,
-    pub config: StreamConfig,
 }
 
 /// Close session gracefully
