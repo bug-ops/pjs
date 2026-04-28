@@ -695,3 +695,184 @@ fn test_patch_with_null_value() {
 
     assert!(frame.validate().is_ok());
 }
+
+// ============================================================================
+// Frame Serde Round-Trip Tests
+// ============================================================================
+
+fn roundtrip(frame: &Frame) -> Frame {
+    let json = serde_json::to_string(frame).expect("serialization must succeed");
+    serde_json::from_str(&json).expect("deserialization must succeed")
+}
+
+#[test]
+fn test_frame_roundtrip_skeleton() {
+    let stream_id = StreamId::new();
+    let frame = Frame::skeleton(stream_id, 1, JsonData::Object(HashMap::new()));
+    let rt = roundtrip(&frame);
+
+    assert_eq!(frame, rt);
+    assert_eq!(frame.stream_id(), rt.stream_id());
+    assert_eq!(frame.frame_type(), rt.frame_type());
+    assert_eq!(frame.priority(), rt.priority());
+    assert_eq!(frame.sequence(), rt.sequence());
+    assert_eq!(frame.payload(), rt.payload());
+    assert_eq!(frame.metadata(), rt.metadata());
+}
+
+#[test]
+fn test_frame_roundtrip_complete_with_checksum() {
+    let stream_id = StreamId::new();
+    let frame = Frame::complete(stream_id, 5, Some("abc123".to_string()));
+    let rt = roundtrip(&frame);
+
+    assert_eq!(frame, rt);
+    assert_eq!(
+        rt.payload().get("checksum").and_then(|v| v.as_str()),
+        Some("abc123")
+    );
+}
+
+#[test]
+fn test_frame_roundtrip_complete_no_checksum() {
+    let stream_id = StreamId::new();
+    let frame = Frame::complete(stream_id, 3, None);
+    let rt = roundtrip(&frame);
+
+    assert_eq!(frame, rt);
+}
+
+#[test]
+fn test_frame_roundtrip_error_frame() {
+    let stream_id = StreamId::new();
+    let frame = Frame::error(
+        stream_id,
+        7,
+        "something went wrong".to_string(),
+        Some("E001".to_string()),
+    );
+    let rt = roundtrip(&frame);
+
+    assert_eq!(frame, rt);
+    assert_eq!(
+        rt.payload().get("message").and_then(|v| v.as_str()),
+        Some("something went wrong")
+    );
+    assert_eq!(
+        rt.payload().get("code").and_then(|v| v.as_str()),
+        Some("E001")
+    );
+}
+
+#[test]
+fn test_frame_roundtrip_preserves_priority() {
+    let stream_id = StreamId::new();
+    for priority in [
+        Priority::CRITICAL,
+        Priority::HIGH,
+        Priority::MEDIUM,
+        Priority::LOW,
+    ] {
+        let frame = Frame::skeleton(stream_id, 1, JsonData::Null)
+            .with_metadata("priority_label".to_string(), format!("{:?}", priority));
+        let rt = roundtrip(&frame);
+        assert_eq!(frame.metadata(), rt.metadata());
+    }
+
+    // Patch frames can carry any priority
+    for priority in [Priority::HIGH, Priority::MEDIUM, Priority::LOW] {
+        let path = JsonPath::new("$.x").unwrap();
+        let patch = FramePatch::set(path, JsonData::Integer(1));
+        let frame = Frame::patch(stream_id, 2, priority, vec![patch]).unwrap();
+        let rt = roundtrip(&frame);
+        assert_eq!(frame.priority(), rt.priority());
+    }
+}
+
+#[test]
+fn test_frame_roundtrip_preserves_stream_id() {
+    let stream_id = StreamId::new();
+    let frame = Frame::skeleton(stream_id, 1, JsonData::Null);
+    let rt = roundtrip(&frame);
+    assert_eq!(frame.stream_id().as_uuid(), rt.stream_id().as_uuid());
+}
+
+#[test]
+fn test_frame_roundtrip_preserves_metadata() {
+    let stream_id = StreamId::new();
+    let frame = Frame::skeleton(stream_id, 1, JsonData::Null)
+        .with_metadata("key1".to_string(), "value1".to_string())
+        .with_metadata("key2".to_string(), "value2".to_string())
+        .with_metadata("key3".to_string(), "value3".to_string());
+    let rt = roundtrip(&frame);
+    assert_eq!(frame.metadata(), rt.metadata());
+}
+
+#[test]
+fn test_frame_roundtrip_all_patch_operations() {
+    let stream_id = StreamId::new();
+    let operations = vec![
+        FramePatch::set(JsonPath::new("$.a").unwrap(), JsonData::Integer(1)),
+        FramePatch::append(
+            JsonPath::new("$.b").unwrap(),
+            JsonData::String("x".to_string()),
+        ),
+        FramePatch::merge(
+            JsonPath::new("$.c").unwrap(),
+            JsonData::Object(HashMap::new()),
+        ),
+        FramePatch::delete(JsonPath::new("$.d").unwrap()),
+    ];
+
+    for patch in operations {
+        let frame = Frame::patch(stream_id, 1, Priority::HIGH, vec![patch]).unwrap();
+        let rt = roundtrip(&frame);
+        assert_eq!(frame, rt);
+    }
+}
+
+#[test]
+fn test_frame_serialize_format_stable() {
+    let stream_id = StreamId::new();
+    let frame = Frame::skeleton(stream_id, 1, JsonData::Null);
+    let json = serde_json::to_string(&frame).unwrap();
+
+    for field in &[
+        "stream_id",
+        "frame_type",
+        "priority",
+        "sequence",
+        "timestamp",
+        "payload",
+        "metadata",
+    ] {
+        assert!(json.contains(field), "missing field: {field}");
+    }
+}
+
+#[test]
+fn test_frame_deserialize_rejects_invalid_priority() {
+    // Priority::new rejects 0
+    let bad_json = r#"{"stream_id":"550e8400-e29b-41d4-a716-446655440000","frame_type":"Skeleton","priority":0,"sequence":1,"timestamp":"2024-01-01T00:00:00Z","payload":null,"metadata":{}}"#;
+    let result = serde_json::from_str::<Frame>(bad_json);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_frame_roundtrip_unicode_metadata() {
+    let stream_id = StreamId::new();
+    let frame = Frame::skeleton(stream_id, 1, JsonData::Null)
+        .with_metadata("🦀".to_string(), "Rust!".to_string())
+        .with_metadata("日本語".to_string(), "テスト".to_string());
+    let rt = roundtrip(&frame);
+    assert_eq!(frame.metadata(), rt.metadata());
+}
+
+#[test]
+fn test_frame_roundtrip_large_payload() {
+    let large_str = "x".repeat(10_240);
+    let stream_id = StreamId::new();
+    let frame = Frame::skeleton(stream_id, 1, JsonData::String(large_str.clone()));
+    let rt = roundtrip(&frame);
+    assert_eq!(frame.payload(), rt.payload());
+}

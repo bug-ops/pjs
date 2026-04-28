@@ -3,6 +3,7 @@
 //! Provides a Clean Architecture compliant representation of JSON data
 //! without depending on external serialization libraries in the domain layer.
 
+use crate::{DomainError, DomainResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -44,9 +45,28 @@ impl JsonData {
         Self::Integer(value)
     }
 
-    /// Create a new float value
-    pub fn float(value: f64) -> Self {
-        Self::Float(value)
+    /// Create a new float value.
+    ///
+    /// Returns `Err` when `value` is NaN or infinite. JSON (RFC 8259 §6) does not
+    /// allow non-finite numbers, so a `JsonData` containing one could never be
+    /// serialized to valid JSON.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs_domain::value_objects::JsonData;
+    ///
+    /// assert!(JsonData::float(3.14).is_ok());
+    /// assert!(JsonData::float(f64::NAN).is_err());
+    /// assert!(JsonData::float(f64::INFINITY).is_err());
+    /// ```
+    pub fn float(value: f64) -> DomainResult<Self> {
+        if value.is_nan() || value.is_infinite() {
+            return Err(DomainError::InvalidInput(
+                "JSON does not support NaN or infinite float values (RFC 8259 §6)".to_string(),
+            ));
+        }
+        Ok(Self::Float(value))
     }
 
     /// Create a new string value
@@ -330,12 +350,6 @@ impl From<bool> for JsonData {
     }
 }
 
-impl From<f64> for JsonData {
-    fn from(value: f64) -> Self {
-        Self::Float(value)
-    }
-}
-
 impl From<i64> for JsonData {
     fn from(value: i64) -> Self {
         Self::Integer(value)
@@ -404,7 +418,7 @@ mod tests {
     fn test_json_data_creation() {
         assert_eq!(JsonData::null(), JsonData::Null);
         assert_eq!(JsonData::bool(true), JsonData::Bool(true));
-        assert_eq!(JsonData::float(42.0), JsonData::Float(42.0));
+        assert_eq!(JsonData::float(42.0).unwrap(), JsonData::Float(42.0));
         assert_eq!(
             JsonData::string("hello"),
             JsonData::String("hello".to_string())
@@ -415,7 +429,7 @@ mod tests {
     fn test_json_data_type_checks() {
         assert!(JsonData::null().is_null());
         assert!(JsonData::bool(true).is_bool());
-        assert!(JsonData::float(42.0).is_number());
+        assert!(JsonData::float(42.0).unwrap().is_number());
         assert!(JsonData::string("hello").is_string());
         assert!(JsonData::array(vec![]).is_array());
         assert!(JsonData::object(HashMap::new()).is_object());
@@ -424,7 +438,7 @@ mod tests {
     #[test]
     fn test_json_data_conversions() {
         assert_eq!(JsonData::bool(true).as_bool(), Some(true));
-        assert_eq!(JsonData::float(42.0).as_f64(), Some(42.0));
+        assert_eq!(JsonData::float(42.0).unwrap().as_f64(), Some(42.0));
         assert_eq!(JsonData::integer(42).as_i64(), Some(42));
         assert_eq!(JsonData::string("hello").as_str(), Some("hello"));
     }

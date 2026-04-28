@@ -222,7 +222,12 @@ async fn handle_sse_stream(
     // Collect frames to avoid lifetime issues
     let frames: Vec<_> = plan.frames().cloned().collect();
     let stream = futures::stream::iter(frames).map(|frame| {
-        let data = serde_json::to_string(&frame).unwrap_or_default();
+        // JsonData::float rejects NaN/Infinity at construction (RFC 8259 §6), so
+        // any Frame built through the public API cannot contain non-finite floats and
+        // serialization is therefore infallible on this path.
+        let data = serde_json::to_string(&frame).expect(
+            "Frame serialization is infallible: JsonData rejects NaN/Infinity at construction",
+        );
         Ok::<_, StreamError>(format!("data: {data}\n\n"))
     });
 

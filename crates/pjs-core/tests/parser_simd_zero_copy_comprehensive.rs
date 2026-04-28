@@ -1531,3 +1531,517 @@ mod complex_json_tests {
         }
     }
 }
+
+mod serde_json_reference_correctness {
+    use super::*;
+
+    /// Returns true if the current platform supports SIMD (AVX2 on x86_64).
+    #[allow(dead_code)]
+    fn simd_available() -> bool {
+        #[cfg(target_arch = "x86_64")]
+        {
+            std::arch::is_x86_feature_detected!("avx2")
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            false
+        }
+    }
+
+    #[test]
+    fn test_large_object_parses_to_valid_json() {
+        let mut parser = SimdZeroCopyParser::new();
+        let pairs: Vec<String> = (0..30)
+            .map(|i| format!(r#""key_{i}": "value_{i}""#))
+            .collect();
+        let input = format!("{{{}}}", pairs.join(", "));
+        assert!(
+            input.len() > 256,
+            "input must exceed 256 bytes to test SIMD path"
+        );
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("parse should succeed");
+        match result.value {
+            LazyJsonValue::ObjectSlice(bytes) => {
+                let parsed: serde_json::Value =
+                    serde_json::from_slice(bytes).expect("ObjectSlice must be valid JSON");
+                assert!(parsed.is_object());
+            }
+            _ => panic!("Expected ObjectSlice"),
+        }
+    }
+
+    #[test]
+    fn test_large_array_parses_to_valid_json() {
+        let mut parser = SimdZeroCopyParser::new();
+        let items: Vec<String> = (0..100).map(|i| i.to_string()).collect();
+        let input = format!("[{}]", items.join(", "));
+        assert!(input.len() > 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("parse should succeed");
+        match result.value {
+            LazyJsonValue::ArraySlice(bytes) => {
+                let parsed: serde_json::Value =
+                    serde_json::from_slice(bytes).expect("ArraySlice must be valid JSON");
+                assert!(parsed.is_array());
+                assert_eq!(parsed.as_array().unwrap().len(), 100);
+            }
+            _ => panic!("Expected ArraySlice"),
+        }
+    }
+
+    #[test]
+    fn test_number_parses_to_same_f64_as_serde_json() {
+        let cases: &[&[u8]] = &[b"42", b"3.14", b"-0", b"1e10", b"2.5e-5", b"0.000001"];
+        for input in cases {
+            let mut parser = SimdZeroCopyParser::new();
+            let result = parser.parse_simd(input).expect("parse should succeed");
+            match result.value {
+                LazyJsonValue::NumberSlice(bytes) => {
+                    let our_f64: f64 = std::str::from_utf8(bytes).unwrap().parse().unwrap();
+                    let serde_f64: f64 = serde_json::from_slice(input).unwrap();
+                    assert!(
+                        (our_f64 - serde_f64).abs() < f64::EPSILON || our_f64 == serde_f64,
+                        "mismatch for {:?}: our={our_f64} serde={serde_f64}",
+                        std::str::from_utf8(input).unwrap()
+                    );
+                }
+                _ => panic!(
+                    "Expected NumberSlice for {:?}",
+                    std::str::from_utf8(input).unwrap()
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_string_unescaping_matches_serde_json() {
+        let cases: &[&[u8]] = &[
+            br#""hello\nworld""#,
+            br#""tab\there""#,
+            br#""quote\"here""#,
+            br#""backslash\\here""#,
+        ];
+        for input in cases {
+            let mut parser = SimdZeroCopyParser::new();
+            let result = parser.parse_simd(input).expect("parse should succeed");
+            let our_str = match &result.value {
+                LazyJsonValue::StringOwned(s) => s.clone(),
+                LazyJsonValue::StringBorrowed(b) => std::str::from_utf8(b).unwrap().to_string(),
+                _ => panic!("Expected string variant"),
+            };
+            let serde_str: String = serde_json::from_slice(input).unwrap();
+            assert_eq!(
+                our_str,
+                serde_str,
+                "mismatch for {:?}",
+                std::str::from_utf8(input).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_boolean_matches_serde_json() {
+        for (input, expected) in [(b"true" as &[u8], true), (b"false", false)] {
+            let mut parser = SimdZeroCopyParser::new();
+            let result = parser.parse_simd(input).expect("parse should succeed");
+            let serde_bool: bool = serde_json::from_slice(input).unwrap();
+            assert_eq!(result.value, LazyJsonValue::Boolean(serde_bool));
+            assert_eq!(result.value, LazyJsonValue::Boolean(expected));
+        }
+    }
+
+    #[test]
+    fn test_null_matches_serde_json() {
+        let mut parser = SimdZeroCopyParser::new();
+        let result = parser.parse_simd(b"null").expect("parse should succeed");
+        let serde_val: serde_json::Value = serde_json::from_slice(b"null").unwrap();
+        assert_eq!(result.value, LazyJsonValue::Null);
+        assert_eq!(serde_val, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn test_corpus_against_serde_json() {
+        // (input, should_succeed)
+        let cases: &[(&[u8], bool)] = &[
+            (b"{}", true),
+            (b"[]", true),
+            (br#""hello""#, true),
+            (b"42", true),
+            (b"true", true),
+            (b"false", true),
+            (b"null", true),
+            (br#"{"a":1,"b":"two","c":true,"d":null}"#, true),
+            (br#"[1,"two",true,null,{},[]]"#, true),
+            (br#""escape\ntest""#, true),
+            ("\"unicode: caf\u{00e9}\"".as_bytes(), true),
+            (b"-3.14e10", true),
+            (b"0", true),
+            (b"-0", true),
+            (b"@invalid", false),
+            (b"", false),
+            (b"   ", false),
+        ];
+        for (input, should_succeed) in cases {
+            let mut parser = SimdZeroCopyParser::new();
+            let our_result = parser.parse_simd(input);
+            let serde_result = serde_json::from_slice::<serde_json::Value>(input);
+            assert_eq!(
+                our_result.is_ok(),
+                *should_succeed,
+                "our parser disagreed on {:?}",
+                std::str::from_utf8(input).unwrap_or("<binary>")
+            );
+            // For valid inputs, serde_json must also agree
+            if *should_succeed {
+                assert!(
+                    serde_result.is_ok(),
+                    "serde_json rejected valid input {:?}",
+                    std::str::from_utf8(input).unwrap_or("<binary>")
+                );
+            }
+        }
+    }
+}
+
+mod simd_path_forced {
+    use super::*;
+
+    /// Returns true if SIMD (AVX2) is available on this platform.
+    fn simd_available() -> bool {
+        #[cfg(target_arch = "x86_64")]
+        {
+            std::arch::is_x86_feature_detected!("avx2")
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            false
+        }
+    }
+
+    #[test]
+    fn test_large_object_30_keys_above_threshold() {
+        let mut parser = SimdZeroCopyParser::new();
+        let pairs: Vec<String> = (0..30)
+            .map(|i| format!(r#""key_{i:02}": "val_{i:02}""#))
+            .collect();
+        let input = format!("{{{}}}", pairs.join(", "));
+        assert!(input.len() >= 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("large object should parse");
+        match result.value {
+            LazyJsonValue::ObjectSlice(_) => {}
+            _ => panic!("Expected ObjectSlice"),
+        }
+        assert_eq!(result.simd_used, simd_available());
+    }
+
+    #[test]
+    fn test_large_array_100_integers_above_threshold() {
+        let mut parser = SimdZeroCopyParser::new();
+        let items: Vec<String> = (0..100).map(|i| i.to_string()).collect();
+        let input = format!("[{}]", items.join(","));
+        assert!(input.len() >= 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("large array should parse");
+        match result.value {
+            LazyJsonValue::ArraySlice(_) => {}
+            _ => panic!("Expected ArraySlice"),
+        }
+        assert_eq!(result.simd_used, simd_available());
+    }
+
+    #[test]
+    fn test_large_string_300_chars_no_escapes() {
+        let mut parser = SimdZeroCopyParser::new();
+        let content = "a".repeat(300);
+        let input = format!(r#""{content}""#);
+        assert!(input.len() >= 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("large string should parse");
+        match result.value {
+            LazyJsonValue::StringBorrowed(bytes) => {
+                assert_eq!(bytes.len(), 300);
+                assert!(bytes.iter().all(|&b| b == b'a'));
+            }
+            _ => panic!("Expected StringBorrowed (no escapes in input)"),
+        }
+        assert_eq!(result.simd_used, simd_available());
+    }
+
+    #[test]
+    fn test_large_string_with_escape_sequences() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Build a JSON string literal where escape sequences are represented as two-byte
+        // sequences in the source (e.g. backslash + 'n'), so the raw byte slice is > 256.
+        // We use a raw string to avoid Rust interpreting the backslashes.
+        let plain = "x".repeat(246);
+        // Each r"\n" below is two bytes in the JSON literal: '\' and 'n'
+        let escape_suffix = r"\n\t\r\\";
+        let inner = format!("{plain}{escape_suffix}");
+        // Wrap in JSON string quotes
+        let input = format!("\"{inner}\"");
+        assert!(
+            input.len() >= 256,
+            "input is {} bytes, need >= 256",
+            input.len()
+        );
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("large escaped string should parse");
+        match result.value {
+            LazyJsonValue::StringOwned(s) => {
+                assert!(s.contains('\n'));
+                assert!(s.contains('\t'));
+            }
+            _ => panic!("Expected StringOwned due to escape sequences"),
+        }
+    }
+
+    #[test]
+    fn test_large_number_300_digits() {
+        let mut parser = SimdZeroCopyParser::new();
+        // A valid number consisting of many digits
+        let input = format!("1{}", "0".repeat(299));
+        assert!(input.len() >= 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("large number should parse");
+        match result.value {
+            LazyJsonValue::NumberSlice(_) => {}
+            _ => panic!("Expected NumberSlice"),
+        }
+    }
+
+    #[test]
+    fn test_boundary_at_exactly_256_bytes() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Construct input of exactly 256 bytes: {"k":"<padding>"}
+        // Outer wrapper is 8 bytes: {"k":""}  → pad to 256-8 = 248 chars
+        let padding = "x".repeat(248);
+        let input = format!(r#"{{"k":"{padding}"}}"#);
+        assert_eq!(input.len(), 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("256-byte input should parse");
+        match result.value {
+            LazyJsonValue::ObjectSlice(_) => {}
+            _ => panic!("Expected ObjectSlice"),
+        }
+        assert_eq!(result.simd_used, simd_available());
+    }
+
+    #[test]
+    fn test_boundary_at_255_bytes_no_simd() {
+        let mut parser = SimdZeroCopyParser::new();
+        // 255 bytes — one below the threshold
+        let padding = "x".repeat(247);
+        let input = format!(r#"{{"k":"{padding}"}}"#);
+        assert_eq!(input.len(), 255);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("255-byte input should parse");
+        // Regardless of platform, input below threshold must not use SIMD
+        assert!(!result.simd_used, "inputs < 256 bytes must not use SIMD");
+    }
+
+    #[test]
+    fn test_malformed_large_object_unmatched_braces() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Object where open braces outnumber close braces
+        let pairs: Vec<String> = (0..30).map(|i| format!(r#""k{i}":"v{i}""#)).collect();
+        let input = format!("{{{{{}}}", pairs.join(","));
+        // Has 2 open braces and 1 close brace → unmatched
+        assert!(input.len() >= 256);
+
+        let result = parser.parse_simd(input.as_bytes());
+        // Must either error or succeed gracefully — must not panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_malformed_large_array_unmatched_brackets() {
+        let mut parser = SimdZeroCopyParser::new();
+        let items: Vec<String> = (0..100).map(|i| i.to_string()).collect();
+        // Missing closing bracket
+        let input = format!("[{}", items.join(","));
+        assert!(input.len() >= 256);
+
+        let result = parser.parse_simd(input.as_bytes());
+        assert!(result.is_err(), "array missing closing bracket should fail");
+    }
+
+    #[test]
+    fn test_simd_disabled_large_input_uses_fallback() {
+        let config = SimdZeroCopyConfig {
+            enable_simd: false,
+            ..Default::default()
+        };
+        let mut parser = SimdZeroCopyParser::with_config(config);
+
+        let pairs: Vec<String> = (0..30).map(|i| format!(r#""k{i}":"v{i}""#)).collect();
+        let input = format!("{{{}}}", pairs.join(","));
+        assert!(input.len() >= 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("large input should parse without SIMD");
+        assert!(
+            !result.simd_used,
+            "SIMD must be off when disabled in config"
+        );
+        match result.value {
+            LazyJsonValue::ObjectSlice(_) => {}
+            _ => panic!("Expected ObjectSlice"),
+        }
+    }
+}
+
+mod edge_cases_large_input {
+    use super::*;
+
+    #[test]
+    fn test_1mb_json_object() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Build a ~1 MB JSON object: 1000 keys with ~1 KB values each
+        let pairs: Vec<String> = (0..1000)
+            .map(|i| format!(r#""key_{i:04}": "{}""#, "v".repeat(1000)))
+            .collect();
+        let input = format!("{{{}}}", pairs.join(", "));
+        assert!(input.len() > 1_000_000);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("1 MB object should parse");
+        match result.value {
+            LazyJsonValue::ObjectSlice(_) => {}
+            _ => panic!("Expected ObjectSlice"),
+        }
+    }
+
+    #[test]
+    fn test_large_scale_empty_nested_structures() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Array of 200 empty objects and nested empty arrays
+        let items: Vec<&str> = (0..100).map(|_| "{}").collect();
+        let nested: Vec<String> = (0..100).map(|_| "[]".to_string()).collect();
+        let all: Vec<&str> = items
+            .iter()
+            .map(|s| s.as_ref())
+            .chain(nested.iter().map(|s| s.as_ref()))
+            .collect();
+        let input = format!("[{}]", all.join(", "));
+        assert!(input.len() > 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("large nested structures should parse");
+        match result.value {
+            LazyJsonValue::ArraySlice(_) => {}
+            _ => panic!("Expected ArraySlice"),
+        }
+    }
+
+    #[test]
+    fn test_unicode_in_large_string() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Mix ASCII and multi-byte Unicode to exceed 256 bytes
+        let unicode_block = "日本語テスト".repeat(20); // ~240+ bytes in UTF-8
+        let input = format!(r#""{unicode_block}""#);
+        assert!(input.len() > 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("unicode large string should parse");
+        // No escapes → borrowed
+        match result.value {
+            LazyJsonValue::StringBorrowed(_) | LazyJsonValue::StringOwned(_) => {}
+            _ => panic!("Expected string variant"),
+        }
+    }
+
+    #[test]
+    fn test_mixed_escape_sequences_large_string() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Build a large string with multiple escape types distributed throughout
+        let segment = r#"line\n\ttab\r\\"#;
+        // Repeat until we exceed 256 bytes
+        let repeated = segment.repeat(20);
+        let input = format!(r#""{repeated}""#);
+        assert!(input.len() > 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("large escaped string should parse");
+        match result.value {
+            LazyJsonValue::StringOwned(s) => {
+                assert!(s.contains('\n'));
+                assert!(s.contains('\t'));
+            }
+            _ => panic!("Expected StringOwned due to escape sequences"),
+        }
+    }
+
+    #[test]
+    fn test_deeply_nested_large_valid_object() {
+        let mut parser = SimdZeroCopyParser::new();
+        // 8 levels of nesting with padding to push total size above 256 bytes
+        let padding = "x".repeat(30);
+        let inner = format!(r#""leaf": "{padding}""#);
+        let level7 = format!(r#"{{"l7": {{{inner}}}}}"#);
+        let level6 = format!(r#"{{"l6": {level7}}}"#);
+        let level5 = format!(r#"{{"l5": {level6}}}"#);
+        let level4 = format!(r#"{{"l4": {level5}}}"#);
+        let level3 = format!(r#"{{"l3": {level4}}}"#);
+        let level2 = format!(r#"{{"l2": {level3}}}"#);
+        let level1 = format!(r#"{{"l1": {level2}}}"#);
+
+        let result = parser
+            .parse_simd(level1.as_bytes())
+            .expect("deeply nested object should parse");
+        match result.value {
+            LazyJsonValue::ObjectSlice(_) => {}
+            _ => panic!("Expected ObjectSlice"),
+        }
+    }
+
+    #[test]
+    fn test_large_array_mixed_types_above_threshold() {
+        let mut parser = SimdZeroCopyParser::new();
+        // Mix strings, numbers, booleans, nulls and nested objects in a large array
+        let mut items: Vec<String> = Vec::with_capacity(60);
+        for i in 0..20 {
+            items.push(format!(r#""string_{i}""#));
+            items.push(i.to_string());
+            items.push(if i % 2 == 0 {
+                "true".into()
+            } else {
+                "false".into()
+            });
+        }
+        let input = format!("[{}]", items.join(","));
+        assert!(input.len() > 256);
+
+        let result = parser
+            .parse_simd(input.as_bytes())
+            .expect("mixed large array should parse");
+        match result.value {
+            LazyJsonValue::ArraySlice(_) => {}
+            _ => panic!("Expected ArraySlice"),
+        }
+    }
+}
