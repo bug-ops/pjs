@@ -6,7 +6,10 @@ use crate::{
         aggregates::StreamSession,
         entities::Stream,
         events::EventStore,
-        ports::{StreamRepositoryGat, StreamStoreGat},
+        ports::{
+            Pagination, SessionQueryCriteria, SortOrder as RepoSortOrder, StreamRepositoryGat,
+            StreamStoreGat,
+        },
     },
 };
 use std::{marker::PhantomData, sync::Arc, time::Instant};
@@ -69,32 +72,27 @@ where
 
     fn handle(&self, query: GetActiveSessionsQuery) -> Self::HandleFuture<'_> {
         async move {
-            // TODO(CQ-010): Implement cursor-based pagination at repository layer
-            // Current implementation loads all sessions into memory - inefficient with large datasets
-            let mut sessions = self
+            const MAX_PAGE_SIZE: usize = 100;
+            let limit = query.limit.unwrap_or(MAX_PAGE_SIZE).min(MAX_PAGE_SIZE);
+            let offset = query.offset.unwrap_or(0);
+
+            let pagination = Pagination {
+                offset,
+                limit,
+                sort_by: None,
+                sort_order: RepoSortOrder::Ascending,
+            };
+
+            let result = self
                 .repository
-                .find_active_sessions()
+                .find_sessions_by_criteria(SessionQueryCriteria::default(), pagination)
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Apply pagination
-            let total_count = sessions.len();
-
-            if let Some(offset) = query.offset {
-                if offset < sessions.len() {
-                    sessions = sessions.into_iter().skip(offset).collect();
-                } else {
-                    sessions.clear();
-                }
-            }
-
-            if let Some(limit) = query.limit {
-                sessions.truncate(limit);
-            }
-
             Ok(SessionsResponse {
-                sessions,
-                total_count,
+                sessions: result.sessions,
+                total_count: result.total_count,
+                has_more: result.has_more,
             })
         }
     }
@@ -173,24 +171,19 @@ where
                 });
             }
 
-            // Apply pagination
+            // Apply pagination with bounded page size
+            const MAX_PAGE_SIZE: usize = 100;
             let total_count = sessions.len();
+            let offset = query.offset.unwrap_or(0);
+            let limit = query.limit.unwrap_or(MAX_PAGE_SIZE).min(MAX_PAGE_SIZE);
 
-            if let Some(offset) = query.offset {
-                if offset < sessions.len() {
-                    sessions = sessions.into_iter().skip(offset).collect();
-                } else {
-                    sessions.clear();
-                }
-            }
-
-            if let Some(limit) = query.limit {
-                sessions.truncate(limit);
-            }
+            let sessions: Vec<_> = sessions.into_iter().skip(offset).take(limit).collect();
+            let has_more = offset + sessions.len() < total_count;
 
             Ok(SessionsResponse {
                 sessions,
                 total_count,
+                has_more,
             })
         }
     }
