@@ -7,7 +7,8 @@ use crossbeam::queue::ArrayQueue;
 use once_cell::sync::Lazy;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Thread-safe object pool for reusable data structures
 pub struct ObjectPool<T> {
@@ -18,10 +19,20 @@ pub struct ObjectPool<T> {
     /// Maximum pool capacity
     #[allow(dead_code)] // Future: used for pool size enforcement
     max_capacity: usize,
-    /// Pool statistics
-    stats: Arc<Mutex<PoolStats>>,
+    /// Best-effort stat counters — Relaxed ordering is intentional; these are
+    /// metrics, not synchronization points, so occasional imprecision is acceptable.
+    stat_created: AtomicUsize,
+    stat_reused: AtomicUsize,
+    stat_returned: AtomicUsize,
+    stat_peak: AtomicUsize,
+    stat_pool_size: AtomicUsize,
 }
 
+/// Snapshot of pool statistics at a point in time.
+///
+/// Counters are collected from independent atomics, so the snapshot is
+/// not perfectly consistent across fields under concurrent load — use it
+/// for monitoring and diagnostics only.
 #[derive(Debug, Clone, Default)]
 pub struct PoolStats {
     pub objects_created: usize,
@@ -41,28 +52,31 @@ impl<T> ObjectPool<T> {
             objects: ArrayQueue::new(capacity),
             factory: Arc::new(factory),
             max_capacity: capacity,
-            stats: Arc::new(Mutex::new(PoolStats::default())),
+            stat_created: AtomicUsize::new(0),
+            stat_reused: AtomicUsize::new(0),
+            stat_returned: AtomicUsize::new(0),
+            stat_peak: AtomicUsize::new(0),
+            stat_pool_size: AtomicUsize::new(0),
         }
     }
 
     /// Get an object from the pool, creating a new one if needed
     pub fn get(&self) -> PooledObject<'_, T> {
         let obj = if let Some(obj) = self.objects.pop() {
-            // Update stats for reuse
-            if let Ok(mut stats) = self.stats.lock() {
-                stats.objects_reused += 1;
-                stats.current_pool_size = stats.current_pool_size.saturating_sub(1);
-            }
+            self.stat_reused.fetch_add(1, Ordering::Relaxed);
+            self.stat_pool_size.fetch_sub(1, Ordering::Relaxed);
             obj
         } else {
-            // Create new object
             let obj = (self.factory)();
-            if let Ok(mut stats) = self.stats.lock() {
-                stats.objects_created += 1;
-                stats.peak_usage = stats
-                    .peak_usage
-                    .max(stats.objects_created - stats.current_pool_size);
-            }
+            let created = self.stat_created.fetch_add(1, Ordering::Relaxed) + 1;
+            let pool_size = self.stat_pool_size.load(Ordering::Relaxed);
+            // Best-effort peak tracking: imprecision under concurrency is acceptable.
+            let in_use = created.saturating_sub(pool_size);
+            let _ = self
+                .stat_peak
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
+                    if in_use > prev { Some(in_use) } else { None }
+                });
             obj
         };
 
@@ -74,12 +88,9 @@ impl<T> ObjectPool<T> {
 
     /// Return an object to the pool
     fn return_object(&self, obj: T) {
-        // Try to return to pool
-        if self.objects.push(obj).is_ok()
-            && let Ok(mut stats) = self.stats.lock()
-        {
-            stats.objects_returned += 1;
-            stats.current_pool_size += 1;
+        if self.objects.push(obj).is_ok() {
+            self.stat_returned.fetch_add(1, Ordering::Relaxed);
+            self.stat_pool_size.fetch_add(1, Ordering::Relaxed);
         }
         // If pool is full, object is dropped (let GC handle it)
     }
@@ -93,10 +104,13 @@ impl<T> ObjectPool<T> {
 
     /// Get current pool statistics
     pub fn stats(&self) -> PoolStats {
-        self.stats
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+        PoolStats {
+            objects_created: self.stat_created.load(Ordering::Relaxed),
+            objects_reused: self.stat_reused.load(Ordering::Relaxed),
+            objects_returned: self.stat_returned.load(Ordering::Relaxed),
+            peak_usage: self.stat_peak.load(Ordering::Relaxed),
+            current_pool_size: self.stat_pool_size.load(Ordering::Relaxed),
+        }
     }
 }
 
