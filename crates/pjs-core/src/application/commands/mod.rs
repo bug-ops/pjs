@@ -59,11 +59,3 @@ pub struct BatchGenerateFramesCommand {
     pub priority_threshold: PriorityDto,
     pub max_frames: usize,
 }
-
-/// Adjust priority thresholds based on performance metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdjustPriorityThresholdCommand {
-    pub session_id: SessionIdDto,
-    pub new_threshold: PriorityDto,
-    pub reason: String,
-}
