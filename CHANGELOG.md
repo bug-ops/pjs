@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- CI job `docs` enforcing `RUSTDOCFLAGS=--deny rustdoc::broken_intra_doc_links` on `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain`. Wired into the `ci-success` gate so broken intra-doc links now block merges instead of slipping through review (closes #236).
+
 ### Changed
 
 - **BREAKING** `AdaptiveFrameStream::into_stream`, `BatchFrameStream::into_stream`, `PriorityFrameStream::into_stream`, `create_streaming_response`, and `create_streaming_response_with_content_type` now operate on `Vec<u8>` instead of `String`. Threading bytes end-to-end is what makes `AdaptiveFrameStream::with_compression(true)` actually usable — the previous `String` pipeline rejected gzip output (which is binary, not UTF-8) with `StreamError::Io("compressed output is not valid UTF-8")` for every chunk. Callers that need a textual view of an uncompressed frame can decode each payload with `std::str::from_utf8`. Pre-1.0 breaking change; no deprecation cycle (closes #226).

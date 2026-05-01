@@ -267,6 +267,40 @@ jobs:
       - name: Print sccache stats
         run: sccache --show-stats
 
+  # Intra-doc link check.  Enforces the project rule from
+  # `.claude/rules/branching.md`: rustdoc must not emit broken intra-doc links.
+  # Doc generation is OS-independent, so this runs on ubuntu only.
+  docs:
+    name: Doc Links
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [changes, quality]
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Share the cache key with the system-allocator build on ubuntu so
+          # the compiler cache is warm when this job runs.
+          shared-key: "build-ubuntu-latest-system"
+          save-if: false
+          cache-on-failure: true
+          cache-directories: |
+            ~/.cargo/registry
+            ~/.cargo/git
+
+      - name: Check intra-doc links
+        env:
+          RUSTDOCFLAGS: "--deny rustdoc::broken_intra_doc_links"
+        run: cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain
+
   # Coverage runs on ubuntu only; does not wait for the cross-platform matrix.
   # Skipped when only JS files changed.
   coverage:
@@ -572,6 +606,7 @@ jobs:
       - build
       - test
       - doctest
+      - docs
       - coverage
       - wasm-build
       - wasm-bundle-size
@@ -595,6 +630,7 @@ jobs:
           check build                     "${{ needs.build.result }}"
           check test                      "${{ needs.test.result }}"
           check doctest                   "${{ needs.doctest.result }}"
+          check docs                      "${{ needs.docs.result }}"
           check coverage                  "${{ needs.coverage.result }}"
           check wasm-build                "${{ needs.wasm-build.result }}"
           check wasm-bundle-size          "${{ needs.wasm-bundle-size.result }}"
