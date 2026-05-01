@@ -298,7 +298,7 @@ jobs:
 
       - name: Check intra-doc links
         env:
-          RUSTDOCFLAGS: "--deny rustdoc::broken_intra_doc_links"
+          RUSTDOCFLAGS: "--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links"
         run: cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain
 
   # Coverage runs on ubuntu only; does not wait for the cross-platform matrix.
