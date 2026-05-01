@@ -19,6 +19,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use pjson_rs::infrastructure::websocket::{
     AxumWebSocketTransport, WsMessage, server::create_websocket_router,
 };
+use pjson_rs::security::RateLimitConfig;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -30,7 +31,14 @@ use pjson_rs::infrastructure::websocket::{
 /// immediately issue `connect_async` — the kernel queues the SYN until the
 /// accept loop runs.
 async fn spawn_ws_test_server() -> (SocketAddr, Arc<AxumWebSocketTransport>) {
-    let transport = Arc::new(AxumWebSocketTransport::new());
+    spawn_ws_test_server_with(AxumWebSocketTransport::new()).await
+}
+
+/// Spawn a WebSocket router with a caller-provided transport.
+async fn spawn_ws_test_server_with(
+    transport: AxumWebSocketTransport,
+) -> (SocketAddr, Arc<AxumWebSocketTransport>) {
+    let transport = Arc::new(transport);
     let app = create_websocket_router().with_state(transport.clone());
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -39,7 +47,11 @@ async fn spawn_ws_test_server() -> (SocketAddr, Arc<AxumWebSocketTransport>) {
     let addr = listener.local_addr().expect("local_addr");
 
     tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await;
     });
 
     (addr, transport)
@@ -243,5 +255,62 @@ async fn test_wire_invalid_json_does_not_crash() {
             assert_eq!(payload.as_ref(), b"probe", "pong payload must echo ping");
         }
         other => panic!("expected Pong, got {:?}", other),
+    }
+}
+
+/// Verify that inbound application frames are subject to per-connection rate
+/// limiting once the token bucket is exhausted.
+///
+/// The server is configured with a tiny token budget (1 message + 0 burst)
+/// so the second text frame must trigger a policy-violation close.
+#[tokio::test]
+async fn test_wire_inbound_messages_rate_limited() {
+    let config = RateLimitConfig {
+        max_requests_per_window: 100,
+        max_connections_per_ip: 10,
+        max_frame_size: 1024 * 1024,
+        max_messages_per_second: 1,
+        burst_allowance: 1,
+        ..Default::default()
+    };
+    let (addr, _transport) =
+        spawn_ws_test_server_with(AxumWebSocketTransport::with_rate_limit_config(config)).await;
+
+    let (mut ws, _) = connect_async(ws_url(addr))
+        .await
+        .expect("WebSocket handshake failed");
+
+    // First inbound frame consumes the only token. Use a benign payload that
+    // will not parse as a WsMessage so no streaming side-effects occur.
+    ws.send(Message::Text("{}".into()))
+        .await
+        .expect("send first frame");
+
+    // Second inbound frame must be rejected. The server closes the socket with
+    // code 1008 (Policy Violation).
+    ws.send(Message::Text("{}".into()))
+        .await
+        .expect("send second frame");
+
+    let close_seen = timeout(Duration::from_secs(5), async {
+        while let Some(msg) = ws.next().await {
+            match msg {
+                Ok(Message::Close(Some(frame))) => return Some(frame),
+                Ok(Message::Close(None)) => return None,
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+        None
+    })
+    .await
+    .expect("timed out waiting for rate-limit close");
+
+    if let Some(frame) = close_seen {
+        assert_eq!(
+            u16::from(frame.code),
+            1008,
+            "expected policy-violation close code"
+        );
     }
 }
