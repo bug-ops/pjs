@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING** Entire `crates/pjs-core/src/application/services/` directory (5 modules, 3172 LOC) and its 3 integration test files. `EventService`, `OptimizationService`, `PerformanceAnalysisService`, `PrioritizationService`, and `StreamContext`/`StreamSession`/`StreamConfig` from `stream_context` were never reached from production code — only the `tests/{event,optimization,prioritization}_service_comprehensive.rs` integration tests referenced them. Removal also eliminates the third `StreamSession` and the fourth `StreamConfig` name collision flagged in #239 / #241. Same precedent as #129 (orphaned `session_service.rs`) and #233 (orphaned `streaming_orchestrator.rs`); deletion is the project's standard resolution for orphaned modules. The `pub mod services;` declaration is removed from `application/mod.rs`. Closes #245.
 - Orphaned `crates/pjs-core/src/domain/services/streaming_orchestrator.rs` (402 lines). The file was never declared as a module in `domain/services/mod.rs`, so cargo never compiled it; its functionality is fully covered by `GatStreamingOrchestrator::stream_session_with_priority` (closes #233).
 
 ## [0.5.2] - 2026-04-29
