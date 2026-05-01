@@ -127,13 +127,93 @@ mod json_value_tests {
     }
 
     #[test]
-    fn test_json_value_parse_raw() {
-        let raw_bytes = b"null";
-        let mut val = JsonValue::Raw(raw_bytes);
-
-        assert!(val.parse_raw().is_ok());
-        // After parsing, should be null (simplified implementation)
+    fn test_json_value_parse_raw_null() {
+        let mut val = JsonValue::Raw(b"null");
+        val.parse_raw().unwrap();
         assert!(val.is_null());
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_true() {
+        let mut val = JsonValue::Raw(b"true");
+        val.parse_raw().unwrap();
+        assert_eq!(val.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_false() {
+        let mut val = JsonValue::Raw(b"false");
+        val.parse_raw().unwrap();
+        assert_eq!(val.as_bool(), Some(false));
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_integer() {
+        let mut val = JsonValue::Raw(b"42");
+        val.parse_raw().unwrap();
+        assert_eq!(val.as_i64(), Some(42));
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_negative_number() {
+        let mut val = JsonValue::Raw(b"-2.5");
+        val.parse_raw().unwrap();
+        assert_eq!(val.as_f64(), Some(-2.5));
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_string() {
+        let mut val = JsonValue::Raw(b"\"hello\"");
+        val.parse_raw().unwrap();
+        assert_eq!(val.as_str(), Some("hello"));
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_array() {
+        let mut val = JsonValue::Raw(b"[1, 2, 3]");
+        val.parse_raw().unwrap();
+        let arr = val.as_array().expect("expected array");
+        assert_eq!(arr.len(), 3);
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_object() {
+        let mut val = JsonValue::Raw(b"{\"a\": 1}");
+        val.parse_raw().unwrap();
+        let obj = val.as_object().expect("expected object");
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.get("a"), Some(b"1".as_ref()));
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_with_whitespace() {
+        let mut val = JsonValue::Raw(b"  \n42\t  ");
+        val.parse_raw().unwrap();
+        assert_eq!(val.as_i64(), Some(42));
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_empty() {
+        let mut val = JsonValue::Raw(b"");
+        assert!(val.parse_raw().is_err());
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_unterminated_string() {
+        let mut val = JsonValue::Raw(b"\"unterminated");
+        assert!(val.parse_raw().is_err());
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_escaped_string_rejected() {
+        let mut val = JsonValue::Raw(b"\"with \\\"quote\\\"\"");
+        assert!(val.parse_raw().is_err());
+    }
+
+    #[test]
+    fn test_json_value_parse_raw_invalid_token() {
+        let mut val = JsonValue::Raw(b"garbage");
+        assert!(val.parse_raw().is_err());
     }
 
     #[test]

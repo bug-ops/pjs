@@ -104,17 +104,78 @@ impl<'a> JsonValue<'a> {
         }
     }
 
-    /// Force parse raw bytes into structured value
+    /// Force parse raw bytes into the appropriate structured variant.
+    ///
+    /// Classifies the underlying bytes by their first non-whitespace character
+    /// and replaces `JsonValue::Raw` with the matching typed variant
+    /// (`Null`, `Bool`, `Number`, `String`, `Array`, or `Object`). Variants other
+    /// than `Raw` are left unchanged.
+    ///
+    /// Numbers, strings, arrays, and objects keep zero-copy semantics by borrowing
+    /// from the original byte slice. Strings containing escape sequences cannot be
+    /// represented in `JsonValue::String<&str>` without allocation and are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidJson`] when the bytes are empty, contain an
+    /// unterminated string, contain an escaped string (zero-copy not possible),
+    /// or do not begin with a recognised JSON token.
+    /// Returns [`Error::Utf8`] when string contents are not valid UTF-8.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::parser::JsonValue;
+    ///
+    /// let mut v = JsonValue::Raw(b"42");
+    /// v.parse_raw().unwrap();
+    /// assert_eq!(v.as_i64(), Some(42));
+    ///
+    /// let mut v = JsonValue::Raw(b"\"hello\"");
+    /// v.parse_raw().unwrap();
+    /// assert_eq!(v.as_str(), Some("hello"));
+    /// ```
     pub fn parse_raw(&mut self) -> Result<()> {
-        match self {
-            JsonValue::Raw(_bytes) => {
-                // This would use the main parser to parse the raw bytes
-                // For now, we'll leave this as a placeholder
-                *self = JsonValue::Null; // Simplified
-                Ok(())
+        let bytes = if let JsonValue::Raw(bytes) = self {
+            *bytes
+        } else {
+            return Ok(());
+        };
+
+        let Some(start) = bytes.iter().position(|b| !b.is_ascii_whitespace()) else {
+            return Err(Error::invalid_json(0, "empty input"));
+        };
+        let end = bytes
+            .iter()
+            .rposition(|b| !b.is_ascii_whitespace())
+            .map(|i| i + 1)
+            .unwrap_or(bytes.len());
+        let trimmed = &bytes[start..end];
+
+        *self = match trimmed[0] {
+            b'n' if trimmed == b"null" => JsonValue::Null,
+            b't' if trimmed == b"true" => JsonValue::Bool(true),
+            b'f' if trimmed == b"false" => JsonValue::Bool(false),
+            b'"' => {
+                if trimmed.len() < 2 || trimmed[trimmed.len() - 1] != b'"' {
+                    return Err(Error::invalid_json(start, "unterminated string"));
+                }
+                let inner = &trimmed[1..trimmed.len() - 1];
+                if inner.contains(&b'\\') {
+                    return Err(Error::invalid_json(
+                        start,
+                        "escaped strings cannot be represented zero-copy",
+                    ));
+                }
+                JsonValue::String(std::str::from_utf8(inner)?)
             }
-            _ => Ok(()),
-        }
+            b'[' => JsonValue::Array(LazyArray::from_scan(trimmed, ScanResult::new())),
+            b'{' => JsonValue::Object(LazyObject::from_scan(trimmed, ScanResult::new())),
+            b'-' | b'0'..=b'9' => JsonValue::Number(trimmed),
+            _ => return Err(Error::invalid_json(start, "unrecognised JSON value")),
+        };
+
+        Ok(())
     }
 }
 
