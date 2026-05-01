@@ -5,10 +5,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use pjson_rs::parser::{
-    BufferSize, LazyJsonValue, LazyParser, SimdZeroCopyConfig, SimdZeroCopyParser, ZeroCopyParser,
-    global_buffer_pool,
-};
+use pjson_rs::parser::{BufferSize, LazyJsonValue, LazyParser, ZeroCopyParser, global_buffer_pool};
 
 #[tokio::test]
 async fn test_zero_copy_parser_basic() {
@@ -59,29 +56,6 @@ async fn test_escaped_string_allocation() {
         }
         _ => panic!("Expected owned string due to escapes"),
     }
-}
-
-#[tokio::test]
-async fn test_simd_zero_copy_parser() {
-    let mut parser = SimdZeroCopyParser::new();
-    let input = br#"{"numbers": [1, 2, 3, 4, 5], "text": "sample"}"#;
-
-    let result = parser.parse_simd(input).unwrap();
-
-    // Check that we got a valid result
-    match result.value {
-        LazyJsonValue::ObjectSlice(bytes) => {
-            assert_eq!(bytes.len(), input.len());
-        }
-        _ => panic!("Expected object slice"),
-    }
-
-    // Check memory efficiency
-    assert!(result.memory_usage.efficiency() > 0.8); // Should be mostly zero-copy
-
-    // Check processing time is reasonable
-    assert!(result.processing_time_ns > 0);
-    assert!(result.processing_time_ns < 1_000_000); // Less than 1ms
 }
 
 #[tokio::test]
@@ -146,36 +120,19 @@ async fn test_memory_efficiency_comparison() {
 }
 
 #[tokio::test]
-async fn test_parser_performance_comparison() {
+async fn test_parser_performance() {
     let large_json = generate_large_test_json(1000);
     let input_bytes = large_json.as_bytes();
 
-    // Test zero-copy parser
     let start = std::time::Instant::now();
     let mut zero_copy_parser = ZeroCopyParser::new();
     let zero_copy_result = zero_copy_parser.parse_lazy(input_bytes).unwrap();
     let zero_copy_time = start.elapsed();
 
-    // Test SIMD zero-copy parser
-    let start = std::time::Instant::now();
-    let mut simd_parser = SimdZeroCopyParser::new();
-    let simd_result = simd_parser.parse_simd(input_bytes).unwrap();
-    let simd_time = start.elapsed();
-
     println!("Zero-copy parser: {:?}", zero_copy_time);
-    println!("SIMD zero-copy parser: {:?}", simd_time);
-    println!("SIMD processing time: {}ns", simd_result.processing_time_ns);
 
-    // Both should complete in reasonable time
-    assert!(zero_copy_time.as_millis() < 100); // Less than 100ms
-    assert!(simd_time.as_millis() < 100);
-
-    // Check memory efficiency
-    let zero_copy_efficiency = zero_copy_result.memory_usage();
-    let simd_efficiency = simd_result.memory_usage;
-
-    assert!(zero_copy_efficiency.efficiency() > 0.5);
-    assert!(simd_efficiency.efficiency() > 0.5);
+    assert!(zero_copy_time.as_millis() < 100);
+    assert!(zero_copy_result.memory_usage().efficiency() > 0.5);
 }
 
 #[tokio::test]
@@ -215,33 +172,6 @@ async fn test_incremental_parsing() {
     // TODO: This would test the IncrementalParser when fully implemented
     // For now, just verify it can be created
     let _parser = pjson_rs::parser::IncrementalParser::new();
-}
-
-#[tokio::test]
-async fn test_config_variations() {
-    // Test different configurations of SIMD parser
-    let configs = vec![
-        SimdZeroCopyConfig::default(),
-        SimdZeroCopyConfig::high_performance(),
-        SimdZeroCopyConfig::low_memory(),
-    ];
-
-    let input = br#"{"test": "configuration", "number": 123}"#;
-
-    for config in configs {
-        let mut parser = SimdZeroCopyParser::with_config(config);
-        let result = parser.parse_simd(input).unwrap();
-
-        // All configurations should produce valid results
-        match result.value {
-            LazyJsonValue::ObjectSlice(_) => {
-                // Expected
-            }
-            _ => panic!("Expected object slice"),
-        }
-
-        assert!(result.processing_time_ns > 0);
-    }
 }
 
 // Helper function to generate test data
