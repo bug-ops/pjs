@@ -472,10 +472,12 @@ impl SchemaCompressor {
 
         // Store base values
         for (path, base) in base_values {
-            metadata.insert(
-                format!("base_{path}"),
-                JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()),
-            );
+            let number = serde_json::Number::from_f64(*base).ok_or_else(|| {
+                DomainError::CompressionError(format!(
+                    "delta base value for path '{path}' is non-finite (NaN or Infinity); cannot compress"
+                ))
+            })?;
+            metadata.insert(format!("base_{path}"), JsonValue::Number(number));
         }
 
         // Apply delta compression
@@ -589,10 +591,12 @@ impl SchemaCompressor {
 
         // Add delta base values
         for (path, base) in numeric_deltas {
-            metadata.insert(
-                format!("base_{path}"),
-                JsonValue::Number(serde_json::Number::from_f64(*base).unwrap()),
-            );
+            let number = serde_json::Number::from_f64(*base).ok_or_else(|| {
+                DomainError::CompressionError(format!(
+                    "delta base value for path '{path}' is non-finite (NaN or Infinity); cannot compress"
+                ))
+            })?;
+            metadata.insert(format!("base_{path}"), JsonValue::Number(number));
         }
 
         // Apply both compression strategies
@@ -955,5 +959,67 @@ mod tests {
         let array = compressed_array.as_array().unwrap();
         let has_delta_base = array.iter().any(|v| v.get("delta_base").is_some());
         assert!(has_delta_base);
+    }
+
+    #[test]
+    fn test_delta_compression_rejects_nan_base() {
+        let mut base_values = HashMap::new();
+        base_values.insert("sequence".to_string(), f64::NAN);
+
+        let compressor =
+            SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+
+        let data = json!({ "sequence": [1.0, 2.0, 3.0] });
+
+        let err = compressor
+            .compress(&data)
+            .expect_err("expected error for NaN base");
+        match err {
+            DomainError::CompressionError(msg) => {
+                assert!(msg.contains("non-finite"), "unexpected message: {msg}");
+                assert!(msg.contains("sequence"), "expected path in message: {msg}");
+            }
+            other => panic!("expected CompressionError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_delta_compression_rejects_infinity_base() {
+        let mut base_values = HashMap::new();
+        base_values.insert("sequence".to_string(), f64::INFINITY);
+
+        let compressor =
+            SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+
+        let data = json!({ "sequence": [1.0, 2.0, 3.0] });
+
+        let err = compressor
+            .compress(&data)
+            .expect_err("expected error for Infinity base");
+        assert!(matches!(err, DomainError::CompressionError(_)));
+    }
+
+    #[test]
+    fn test_hybrid_compression_rejects_nan_base() {
+        let string_dict = HashMap::new();
+        let mut numeric_deltas = HashMap::new();
+        numeric_deltas.insert("sequence".to_string(), f64::NEG_INFINITY);
+
+        let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Hybrid {
+            string_dict,
+            numeric_deltas,
+        });
+
+        let data = json!({ "sequence": [1.0, 2.0, 3.0] });
+
+        let err = compressor
+            .compress(&data)
+            .expect_err("expected error for non-finite base");
+        match err {
+            DomainError::CompressionError(msg) => {
+                assert!(msg.contains("non-finite"), "unexpected message: {msg}");
+            }
+            other => panic!("expected CompressionError, got {other:?}"),
+        }
     }
 }
