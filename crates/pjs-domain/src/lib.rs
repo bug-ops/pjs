@@ -30,11 +30,13 @@ use alloc::{format, string::String, vec::Vec};
 
 pub mod entities;
 pub mod events;
+pub mod services;
 pub mod value_objects;
 
 // Re-export core types
 pub use entities::{Frame, Stream};
 pub use events::{DomainEvent, SessionState};
+pub use services::{PriorityHeuristicConfig, compute_priority};
 pub use value_objects::{JsonData, JsonPath, Priority, Schema, SessionId, StreamId};
 
 /// Domain Result type

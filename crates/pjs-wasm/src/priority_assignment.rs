@@ -1,227 +1,173 @@
-//! Priority assignment logic for WASM
+//! Priority assignment for the WebAssembly bindings.
 //!
-//! This module provides WASM-compatible priority assignment for JSON paths.
-//! It analyzes JSON structure and assigns priorities based on configurable rules.
+//! This module is a thin adapter on top of
+//! [`pjson_rs_domain::services::compute_priority`]. It exists so the
+//! WebAssembly transport produces the same priorities as the HTTP transport
+//! for the same payload — see issue #242 for the divergence this resolves.
+//!
+//! [`PriorityConfig`] is the JS-facing customisation surface (populated
+//! through [`crate::priority_config::PriorityConfigBuilder`]); the actual
+//! algorithm now lives entirely in the domain crate.
 
+use pjson_rs_domain::services::{PriorityHeuristicConfig, compute_priority};
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority};
 use std::collections::HashMap;
 
-/// Priority assignment rules configuration
+/// Configuration surface for the WASM priority assigner.
+///
+/// Field tier lists are forwarded to [`PriorityHeuristicConfig`] verbatim;
+/// matching is case-insensitive on the last path segment, just like the
+/// HTTP transport.
 #[derive(Debug, Clone)]
 pub struct PriorityConfig {
-    /// Field names that should have critical priority
+    /// Field names mapped to [`Priority::CRITICAL`].
     pub critical_fields: Vec<String>,
-    /// Field names that should have high priority
+    /// Field names mapped to [`Priority::HIGH`].
     pub high_fields: Vec<String>,
-    /// Field patterns that should have low priority
+    /// Field names mapped to [`Priority::LOW`]. (JS API: `addLowPattern`).
     pub low_patterns: Vec<String>,
-    /// Field patterns that should have background priority
+    /// Field names mapped to [`Priority::BACKGROUND`]. (JS API:
+    /// `addBackgroundPattern`).
     pub background_patterns: Vec<String>,
-    /// Maximum array size before downgrading priority
+    /// Arrays larger than this lose 40 priority points in the heuristic
+    /// fallback.
     pub large_array_threshold: usize,
-    /// Maximum string length before downgrading priority
+    /// Strings longer than this lose 20 priority points in the heuristic
+    /// fallback.
     pub large_string_threshold: usize,
 }
 
 impl Default for PriorityConfig {
     fn default() -> Self {
+        let domain = PriorityHeuristicConfig::default();
         Self {
-            critical_fields: vec![
-                "id".to_string(),
-                "uuid".to_string(),
-                "status".to_string(),
-                "type".to_string(),
-                "kind".to_string(),
-            ],
-            high_fields: vec![
-                "name".to_string(),
-                "title".to_string(),
-                "label".to_string(),
-                "email".to_string(),
-                "username".to_string(),
-            ],
-            low_patterns: vec![
-                "analytics".to_string(),
-                "stats".to_string(),
-                "meta".to_string(),
-                "metadata".to_string(),
-            ],
-            background_patterns: vec![
-                "reviews".to_string(),
-                "comments".to_string(),
-                "logs".to_string(),
-                "history".to_string(),
-            ],
-            large_array_threshold: 100,
-            large_string_threshold: 1000,
+            critical_fields: domain.critical_fields.clone(),
+            high_fields: domain.high_fields.clone(),
+            low_patterns: domain.low_fields.clone(),
+            background_patterns: domain.background_fields.clone(),
+            large_array_threshold: domain.large_array_threshold,
+            large_string_threshold: domain.large_string_threshold,
         }
     }
 }
 
 impl PriorityConfig {
-    /// Create new configuration with default values
+    /// Create configuration with the default rule set.
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Add critical field name
+    /// Add a critical-tier field name.
     pub fn add_critical_field(&mut self, field: String) {
-        if !self.critical_fields.contains(&field) {
-            self.critical_fields.push(field);
-        }
+        push_unique(&mut self.critical_fields, field);
     }
 
-    /// Add high priority field name
+    /// Add a high-tier field name.
     pub fn add_high_field(&mut self, field: String) {
-        if !self.high_fields.contains(&field) {
-            self.high_fields.push(field);
-        }
+        push_unique(&mut self.high_fields, field);
     }
 
-    /// Add low priority pattern
+    /// Add a low-tier field name (kept for JS API compatibility — the match is
+    /// exact and case-insensitive, not substring).
     pub fn add_low_pattern(&mut self, pattern: String) {
-        if !self.low_patterns.contains(&pattern) {
-            self.low_patterns.push(pattern);
-        }
+        push_unique(&mut self.low_patterns, pattern);
     }
 
-    /// Add background priority pattern
+    /// Add a background-tier field name.
     pub fn add_background_pattern(&mut self, pattern: String) {
-        if !self.background_patterns.contains(&pattern) {
-            self.background_patterns.push(pattern);
+        push_unique(&mut self.background_patterns, pattern);
+    }
+
+    /// Project this config onto the domain heuristic config so the parity
+    /// between transports is preserved by construction.
+    pub fn to_heuristic(&self) -> PriorityHeuristicConfig {
+        PriorityHeuristicConfig {
+            critical_fields: self.critical_fields.clone(),
+            high_fields: self.high_fields.clone(),
+            low_fields: self.low_patterns.clone(),
+            background_fields: self.background_patterns.clone(),
+            large_array_threshold: self.large_array_threshold,
+            large_string_threshold: self.large_string_threshold,
+            ..PriorityHeuristicConfig::default()
         }
     }
 }
 
-/// Priority assignment engine for JSON data
+fn push_unique(dest: &mut Vec<String>, value: String) {
+    if !dest.iter().any(|v| v == &value) {
+        dest.push(value);
+    }
+}
+
+/// Priority assignment engine for JSON data.
+///
+/// Internally it caches a [`PriorityHeuristicConfig`] derived from
+/// [`PriorityConfig`]; mutations through `config_mut` rebuild the cache lazily
+/// on the next priority call.
 #[derive(Debug)]
 pub struct PriorityAssigner {
     config: PriorityConfig,
+    heuristic: PriorityHeuristicConfig,
 }
 
 impl PriorityAssigner {
-    /// Create new priority assigner with default configuration
+    /// Create a priority assigner with the default configuration.
     pub fn new() -> Self {
-        Self {
-            config: PriorityConfig::default(),
-        }
+        let config = PriorityConfig::default();
+        let heuristic = config.to_heuristic();
+        Self { config, heuristic }
     }
 
-    /// Create priority assigner with custom configuration
+    /// Create a priority assigner with a custom configuration.
     pub fn with_config(config: PriorityConfig) -> Self {
-        Self { config }
+        let heuristic = config.to_heuristic();
+        Self { config, heuristic }
     }
 
-    /// Get reference to configuration
+    /// Borrow the underlying configuration.
     #[allow(dead_code)]
     pub fn config(&self) -> &PriorityConfig {
         &self.config
     }
 
-    /// Get mutable reference to configuration
+    /// Mutably borrow the configuration. The cached heuristic config is
+    /// rebuilt on the next [`Self::calculate_field_priority`] call.
     #[allow(dead_code)]
     pub fn config_mut(&mut self) -> &mut PriorityConfig {
         &mut self.config
     }
 
-    /// Calculate priority for a field based on path and value
+    fn refreshed_heuristic(&self) -> PriorityHeuristicConfig {
+        self.config.to_heuristic()
+    }
+
+    /// Calculate priority for a single `(path, value)` pair.
+    ///
+    /// Delegates entirely to
+    /// [`pjson_rs_domain::services::compute_priority`].
     pub fn calculate_field_priority(&self, path: &JsonPath, value: &JsonData) -> Priority {
-        // Extract field name from path
-        let field_name = if let Some(segment) = path.last_segment() {
-            match segment {
-                pjson_rs_domain::value_objects::PathSegment::Key(key) => Some(key),
-                _ => None,
-            }
+        // The cached heuristic is used when the config has not been mutated
+        // since construction; otherwise we project on the fly. The cost of
+        // projection is small (vector clones), and `config_mut` is rare on
+        // the hot path.
+        let derived = self.refreshed_heuristic();
+        let cfg = if heuristic_eq(&self.heuristic, &derived) {
+            &self.heuristic
         } else {
-            None
+            &derived
         };
-
-        // Check critical fields
-        if let Some(name) = &field_name {
-            if self.config.critical_fields.iter().any(|f| f == name) {
-                return Priority::CRITICAL;
-            }
-
-            // Check high priority fields
-            if self.config.high_fields.iter().any(|f| f == name) {
-                return Priority::HIGH;
-            }
-
-            // Check low priority patterns
-            if self
-                .config
-                .low_patterns
-                .iter()
-                .any(|p| name.contains(p.as_str()))
-            {
-                return Priority::LOW;
-            }
-
-            // Check background patterns
-            if self
-                .config
-                .background_patterns
-                .iter()
-                .any(|p| name.contains(p.as_str()))
-            {
-                return Priority::BACKGROUND;
-            }
-        }
-
-        // Content-based priority
-        match value {
-            JsonData::Array(arr) if arr.len() > self.config.large_array_threshold => {
-                Priority::BACKGROUND
-            }
-            JsonData::String(s) if s.len() > self.config.large_string_threshold => Priority::LOW,
-            JsonData::Object(obj) if obj.contains_key("timestamp") => Priority::MEDIUM,
-            _ => {
-                // Depth-based priority: shallower = higher priority
-                let depth = path.depth();
-                match depth {
-                    0..=1 => Priority::HIGH,
-                    2..=3 => Priority::MEDIUM,
-                    _ => Priority::LOW,
-                }
-            }
-        }
+        compute_priority(cfg, path, value)
     }
 
-    /// Calculate priority for array elements
-    #[allow(dead_code)]
-    pub fn calculate_array_priority(&self, path: &JsonPath, elements: &[JsonData]) -> Priority {
-        // Large arrays get background priority
-        if elements.len() > 50 {
-            return Priority::BACKGROUND;
-        }
-
-        // Check field name patterns
-        if let Some(pjson_rs_domain::value_objects::PathSegment::Key(key)) = path.last_segment() {
-            if self
-                .config
-                .background_patterns
-                .iter()
-                .any(|p| key.contains(p.as_str()))
-            {
-                return Priority::BACKGROUND;
-            }
-
-            if matches!(key.as_str(), "items" | "data" | "results") {
-                return Priority::MEDIUM;
-            }
-        }
-
-        Priority::MEDIUM
-    }
-
-    /// Extract all fields with priorities from JSON data
+    /// Extract every field with its priority, walking objects recursively up
+    /// to the security depth limit.
     #[allow(dead_code)]
     pub fn extract_prioritized_fields(&self, data: &JsonData) -> Vec<PrioritizedField> {
         self.extract_prioritized_fields_with_limit(data, crate::security::DEFAULT_MAX_DEPTH)
     }
 
-    /// Extract all fields with priorities from JSON data with custom depth limit
+    /// Extract every field with its priority using a custom depth limit.
     pub fn extract_prioritized_fields_with_limit(
         &self,
         data: &JsonData,
@@ -232,7 +178,6 @@ impl PriorityAssigner {
         fields
     }
 
-    /// Recursively extract fields with priorities (with depth tracking)
     fn extract_fields_recursive(
         &self,
         data: &JsonData,
@@ -241,9 +186,8 @@ impl PriorityAssigner {
         current_depth: usize,
         max_depth: usize,
     ) {
-        // Security: Check depth limit to prevent stack overflow
         if current_depth >= max_depth {
-            return; // Stop recursion at max depth
+            return;
         }
 
         match data {
@@ -258,7 +202,6 @@ impl PriorityAssigner {
                             value: value.clone(),
                         });
 
-                        // Recursively process nested structures
                         self.extract_fields_recursive(
                             value,
                             &field_path,
@@ -281,9 +224,7 @@ impl PriorityAssigner {
                     );
                 }
             }
-            _ => {
-                // Primitive values are handled by their parent object/array
-            }
+            _ => {}
         }
     }
 }
@@ -294,16 +235,33 @@ impl Default for PriorityAssigner {
     }
 }
 
-/// Field with assigned priority
+fn heuristic_eq(a: &PriorityHeuristicConfig, b: &PriorityHeuristicConfig) -> bool {
+    a.critical_fields == b.critical_fields
+        && a.high_fields == b.high_fields
+        && a.medium_fields == b.medium_fields
+        && a.low_fields == b.low_fields
+        && a.background_fields == b.background_fields
+        && a.large_array_threshold == b.large_array_threshold
+        && a.mid_array_threshold == b.mid_array_threshold
+        && a.large_string_threshold == b.large_string_threshold
+        && a.small_string_threshold == b.small_string_threshold
+        && a.large_object_threshold == b.large_object_threshold
+}
+
+/// A field paired with its assigned priority and value, returned by
+/// [`PriorityAssigner::extract_prioritized_fields`].
 #[derive(Debug, Clone)]
 pub struct PrioritizedField {
+    /// JSON path to the field.
     pub path: JsonPath,
+    /// Computed priority for the field.
     pub priority: Priority,
+    /// Value at this path (cloned at extraction time).
     pub value: JsonData,
 }
 
 impl PrioritizedField {
-    /// Create new prioritized field
+    /// Construct a prioritized field directly. Mostly useful in tests.
     #[allow(dead_code)]
     pub fn new(path: JsonPath, priority: Priority, value: JsonData) -> Self {
         Self {
@@ -314,18 +272,16 @@ impl PrioritizedField {
     }
 }
 
-/// Group prioritized fields by priority level
+/// Group prioritized fields by their priority level.
 pub fn group_by_priority(
     fields: Vec<PrioritizedField>,
 ) -> HashMap<Priority, Vec<PrioritizedField>> {
-    // Pre-allocate HashMap with capacity for typical priority levels (max 5: CRITICAL, HIGH, MEDIUM, LOW, BACKGROUND)
     let mut groups: HashMap<Priority, Vec<PrioritizedField>> = HashMap::with_capacity(5);
 
-    // Estimate average fields per priority for inner Vec pre-allocation
     let avg_fields_per_priority = if fields.len() < 3 {
         fields.len()
     } else {
-        fields.len() / 3 // Heuristic: assume fields distributed across ~3 priority levels
+        fields.len() / 3
     };
 
     for field in fields {
@@ -338,10 +294,10 @@ pub fn group_by_priority(
     groups
 }
 
-/// Sort priorities from highest to lowest
+/// Sort priorities from highest to lowest.
 pub fn sort_priorities(priorities: Vec<Priority>) -> Vec<Priority> {
     let mut sorted = priorities;
-    sorted.sort_by(|a, b| b.cmp(a)); // Descending order (highest first)
+    sorted.sort_by(|a, b| b.cmp(a));
     sorted
 }
 
@@ -350,7 +306,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config_creation() {
+    fn default_config_creation() {
         let config = PriorityConfig::default();
         assert!(config.critical_fields.contains(&"id".to_string()));
         assert!(config.high_fields.contains(&"name".to_string()));
@@ -358,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_modification() {
+    fn config_modification() {
         let mut config = PriorityConfig::new();
         config.add_critical_field("custom_id".to_string());
         assert!(config.critical_fields.contains(&"custom_id".to_string()));
@@ -368,27 +324,24 @@ mod tests {
     }
 
     #[test]
-    fn test_field_priority_calculation() {
+    fn field_priority_calculation_matches_domain() {
         let assigner = PriorityAssigner::new();
 
-        // Test critical field
-        let path = JsonPath::new("$.id").expect("Failed to create path in test");
+        let path = JsonPath::new("$.id").expect("valid path");
         let value = JsonData::Integer(123);
         assert_eq!(
             assigner.calculate_field_priority(&path, &value),
             Priority::CRITICAL
         );
 
-        // Test high priority field
-        let path = JsonPath::new("$.name").expect("Failed to create path in test");
+        let path = JsonPath::new("$.name").expect("valid path");
         let value = JsonData::String("John".to_string());
         assert_eq!(
             assigner.calculate_field_priority(&path, &value),
             Priority::HIGH
         );
 
-        // Test background pattern
-        let path = JsonPath::new("$.reviews").expect("Failed to create path in test");
+        let path = JsonPath::new("$.reviews").expect("valid path");
         let value = JsonData::Array(vec![]);
         assert_eq!(
             assigner.calculate_field_priority(&path, &value),
@@ -397,67 +350,71 @@ mod tests {
     }
 
     #[test]
-    fn test_depth_based_priority() {
+    fn depth_based_priority_uses_domain_fallback() {
         let assigner = PriorityAssigner::new();
 
-        // Shallow field (depth 1)
-        let path = JsonPath::new("$.field").expect("Failed to create path in test");
+        let path = JsonPath::new("$.field").expect("valid path");
         let value = JsonData::String("value".to_string());
         let priority = assigner.calculate_field_priority(&path, &value);
+        // depth-1 + short-string = MEDIUM (50) + 20 + 5 = 75 > MEDIUM (50)
+        assert!(priority > Priority::MEDIUM);
+
+        let path = JsonPath::new("$.a.b.c.d").expect("valid path");
+        let value = JsonData::String("value".to_string());
+        let priority = assigner.calculate_field_priority(&path, &value);
+        // depth 4 → no boost; short-string → +5 → 55 (still ≥ MEDIUM).
         assert!(priority >= Priority::MEDIUM);
 
-        // Deep field (depth 4+)
-        let path = JsonPath::new("$.a.b.c.d").expect("Failed to create path in test");
-        let value = JsonData::String("value".to_string());
+        // Truly deep field (depth > 5) loses 10 points.
+        let path = JsonPath::new("$.a.b.c.d.e.f").expect("valid path");
+        let value = JsonData::Object(HashMap::new());
         let priority = assigner.calculate_field_priority(&path, &value);
-        assert!(priority <= Priority::LOW);
+        assert!(priority < Priority::MEDIUM);
     }
 
     #[test]
-    fn test_large_array_priority() {
-        let assigner = PriorityAssigner::new();
-        let path = JsonPath::new("$.items").expect("Failed to create path in test");
+    fn config_mut_rebuilds_heuristic_cache() {
+        let mut assigner = PriorityAssigner::new();
+        assigner
+            .config_mut()
+            .add_critical_field("user_id".to_string());
 
-        // Small array
-        let small_arr = vec![JsonData::Integer(1.into()), JsonData::Integer(2.into())];
+        let path = JsonPath::new("$.user_id").expect("valid path");
+        let value = JsonData::Integer(1);
         assert_eq!(
-            assigner.calculate_array_priority(&path, &small_arr),
-            Priority::MEDIUM
-        );
-
-        // Large array (>50 elements)
-        let large_arr: Vec<JsonData> = (0..100).map(|i| JsonData::Integer(i.into())).collect();
-        assert_eq!(
-            assigner.calculate_array_priority(&path, &large_arr),
-            Priority::BACKGROUND
+            assigner.calculate_field_priority(&path, &value),
+            Priority::CRITICAL,
+            "mutating the config should be reflected in subsequent priority calls",
         );
     }
 
     #[test]
-    fn test_extract_prioritized_fields() {
+    fn extract_prioritized_fields_round_trip() {
         let assigner = PriorityAssigner::new();
 
         let mut obj = HashMap::new();
-        obj.insert("id".to_string(), JsonData::Integer(1.into()));
+        obj.insert("id".to_string(), JsonData::Integer(1));
         obj.insert("name".to_string(), JsonData::String("Test".to_string()));
         let data = JsonData::Object(obj);
 
         let fields = assigner.extract_prioritized_fields(&data);
         assert_eq!(fields.len(), 2);
 
-        // Find ID field
-        let id_field = fields.iter().find(|f| f.path.as_str() == "$.id");
-        assert!(id_field.is_some());
-        assert_eq!(id_field.unwrap().priority, Priority::CRITICAL);
+        let id_field = fields
+            .iter()
+            .find(|f| f.path.as_str() == "$.id")
+            .expect("id field present");
+        assert_eq!(id_field.priority, Priority::CRITICAL);
 
-        // Find name field
-        let name_field = fields.iter().find(|f| f.path.as_str() == "$.name");
-        assert!(name_field.is_some());
-        assert_eq!(name_field.unwrap().priority, Priority::HIGH);
+        let name_field = fields
+            .iter()
+            .find(|f| f.path.as_str() == "$.name")
+            .expect("name field present");
+        assert_eq!(name_field.priority, Priority::HIGH);
     }
 
     #[test]
-    fn test_group_by_priority() {
+    fn group_by_priority_buckets_correctly() {
         let fields = vec![
             PrioritizedField::new(
                 JsonPath::root(),
@@ -483,10 +440,9 @@ mod tests {
     }
 
     #[test]
-    fn test_sort_priorities() {
+    fn sort_priorities_descending() {
         let priorities = vec![Priority::LOW, Priority::CRITICAL, Priority::MEDIUM];
         let sorted = sort_priorities(priorities);
-
         assert_eq!(sorted[0], Priority::CRITICAL);
         assert_eq!(sorted[2], Priority::LOW);
     }

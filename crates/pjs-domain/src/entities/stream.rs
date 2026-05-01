@@ -3,7 +3,7 @@
 use crate::{
     DomainError, DomainResult,
     entities::Frame,
-    value_objects::{JsonData, JsonPath, PathSegment, Priority, SessionId, StreamId},
+    value_objects::{JsonData, JsonPath, Priority, SessionId, StreamId},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -533,61 +533,20 @@ impl Stream {
         Ok(())
     }
 
-    /// Compute a priority for a patch using field-name heuristics, the
-    /// per-stream `priority_rules` override map, and value-shape penalties.
+    /// Compute a priority for a patch by delegating to
+    /// [`crate::services::compute_priority`].
     ///
-    /// This duplicates the spirit of `pjs-core::PriorityService` but lives
-    /// in the domain layer to keep `pjs-domain` free of `pjs-core` deps.
+    /// The per-stream `priority_rules` map is mapped onto
+    /// [`PriorityHeuristicConfig::overrides`] so that user-provided rules keep
+    /// winning over the shared heuristic. This is the single entry point used
+    /// by both the HTTP transport (via `extract_patches`) and the WebAssembly
+    /// bindings; see #242 for the divergence this resolves.
     fn compute_priority(&self, path: &JsonPath, value: &JsonData) -> Priority {
-        let last_key = match path.last_segment() {
-            Some(PathSegment::Key(k)) => Some(k),
-            _ => None,
-        };
-
-        // 1. Per-stream override map wins over heuristics.
-        if let Some(key) = &last_key
-            && let Some(p) = self.config.priority_rules.get(key)
-        {
-            return *p;
+        let mut cfg = crate::services::PriorityHeuristicConfig::default();
+        if !self.config.priority_rules.is_empty() {
+            cfg.overrides = self.config.priority_rules.clone();
         }
-
-        // 2. Field-name heuristic.
-        if let Some(key) = &last_key {
-            match key.to_ascii_lowercase().as_str() {
-                "id" | "uuid" | "status" | "state" | "error" | "type" | "kind" => {
-                    return Priority::CRITICAL;
-                }
-                "name" | "title" | "label" | "email" | "username" | "description" | "message" => {
-                    return Priority::HIGH;
-                }
-                "content" | "body" | "value" | "data" => return Priority::MEDIUM,
-                "created_at" | "updated_at" | "version" | "metadata" => return Priority::LOW,
-                "analytics" | "debug" | "trace" | "logs" | "history" | "comments" | "reviews" => {
-                    return Priority::BACKGROUND;
-                }
-                _ => {}
-            }
-        }
-
-        // 3. Heuristic fallback: depth and value shape.
-        let mut priority = Priority::MEDIUM;
-        match path.depth() {
-            0 | 1 => priority = priority.increase_by(20),
-            2 => priority = priority.increase_by(10),
-            d if d > 5 => priority = priority.decrease_by(10),
-            _ => {}
-        }
-
-        match value {
-            JsonData::String(s) if s.len() > 1000 => priority = priority.decrease_by(20),
-            JsonData::String(s) if s.len() < 50 => priority = priority.increase_by(5),
-            JsonData::Array(arr) if arr.len() > 100 => priority = priority.decrease_by(40),
-            JsonData::Array(arr) if arr.len() > 10 => priority = priority.decrease_by(15),
-            JsonData::Object(obj) if obj.len() > 10 => priority = priority.decrease_by(10),
-            _ => {}
-        }
-
-        priority
+        crate::services::compute_priority(&cfg, path, value)
     }
 
     /// Private helper: Batch patches into frames.
