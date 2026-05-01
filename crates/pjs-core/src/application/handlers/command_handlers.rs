@@ -327,8 +327,9 @@ where
                 .create_patch_frames(priority, command.max_frames)
                 .map_err(ApplicationError::Domain)?;
 
-            // TODO(critic): Audit whether streaming/WebSocket frame paths bypass these
-            // command handlers — if so, pjs_frames_total underreports throughput.
+            // WebSocket frame production runs through a disjoint session model
+            // (`infrastructure/websocket`) and does not increment this counter, so
+            // `pjs_frames_total` reflects HTTP throughput only — see #239.
             #[cfg(feature = "metrics")]
             metrics::counter!("pjs_frames_total").increment(frames.len() as u64);
 
@@ -385,8 +386,9 @@ where
                 .create_priority_frames(command.max_frames)
                 .map_err(ApplicationError::Domain)?;
 
-            // TODO(critic): Audit whether streaming/WebSocket frame paths bypass these
-            // command handlers — if so, pjs_frames_total underreports throughput.
+            // WebSocket frame production runs through a disjoint session model
+            // (`infrastructure/websocket`) and does not increment this counter, so
+            // `pjs_frames_total` reflects HTTP throughput only — see #239.
             #[cfg(feature = "metrics")]
             metrics::counter!("pjs_frames_total").increment(frames.len() as u64);
 
