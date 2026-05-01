@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING** `StreamSession::get_stream_mut` removed. Child-stream mutation now flows through two new aggregate-root methods: `update_stream_config(stream_id, config)` and `create_stream_patch_frames(stream_id, priority_threshold, max_frames)`. Both bump the session-level `updated_at` timestamp and raise the appropriate domain events (`StreamConfigUpdated`, `FramesBatched`); `create_stream_patch_frames` additionally maintains `stats.total_frames` so session-level metrics stay consistent with the per-stream mutation. Previously `command_handlers.rs` reached inside the aggregate via `get_stream_mut` to call `Stream::update_config` (silent: no event, no timestamp bump) and `Stream::create_patch_frames` (silent: stale `stats.total_frames`, no `FramesBatched` event). The removal closes the longest-standing entry (D2) in the architectural-baseline drift register. Pre-1.0 breaking change; no deprecation cycle (closes #259).
+
 ### Added
 
 - `pjson_rs_domain::services::compute_priority` and `PriorityHeuristicConfig` — single source of truth for the priority heuristic shared by every transport. `Stream::compute_priority` (HTTP path) and `pjs_wasm::priority_assignment::PriorityAssigner` (WebAssembly path) now both delegate here, so the same `(path, value)` input yields the same `Priority` regardless of how it reaches the client (closes #242).

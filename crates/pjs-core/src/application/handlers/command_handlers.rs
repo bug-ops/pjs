@@ -167,11 +167,9 @@ where
                 .map_err(ApplicationError::Domain)?;
 
             // Update stream configuration if provided
-            if let Some(config) = command.config
-                && let Some(stream) = session.get_stream_mut(stream_id)
-            {
-                stream
-                    .update_config(config)
+            if let Some(config) = command.config {
+                session
+                    .update_stream_config(stream_id, config)
                     .map_err(ApplicationError::Domain)?;
             }
 
@@ -311,21 +309,20 @@ where
                     ApplicationError::NotFound(format!("Session {} not found", command.session_id))
                 })?;
 
-            // Get stream
-            let stream = session
-                .get_stream_mut(command.stream_id.into())
-                .ok_or_else(|| {
-                    ApplicationError::NotFound(format!("Stream {} not found", command.stream_id))
-                })?;
-
-            // Generate frames
+            // Generate frames through the aggregate root so session-level
+            // stats and events stay consistent with the child stream mutation.
             let priority = command
                 .priority_threshold
                 .try_into()
                 .map_err(ApplicationError::Domain)?;
-            let frames = stream
-                .create_patch_frames(priority, command.max_frames)
-                .map_err(ApplicationError::Domain)?;
+            let frames = session
+                .create_stream_patch_frames(command.stream_id.into(), priority, command.max_frames)
+                .map_err(|e| match e {
+                    crate::domain::DomainError::StreamNotFound(_) => ApplicationError::NotFound(
+                        format!("Stream {} not found", command.stream_id),
+                    ),
+                    other => ApplicationError::Domain(other),
+                })?;
 
             // WebSocket frame production runs through a disjoint session model
             // (`infrastructure/websocket`) and does not increment this counter, so
