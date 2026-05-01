@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING** `pjson_rs::infrastructure::websocket::StreamSession` renamed to `WebSocketStreamSession` to remove the name collision with the domain-layer `crate::domain::aggregates::StreamSession`. The two types remain deliberately disjoint — the WebSocket controller maintains an ephemeral, transport-local session model that does not share state with `POST /pjs/sessions`. The new name and the type's doc comment make this explicit at the call site (closes #239).
 - **BREAKING** `AdaptiveFrameStream::into_stream`, `BatchFrameStream::into_stream`, `PriorityFrameStream::into_stream`, `create_streaming_response`, and `create_streaming_response_with_content_type` now operate on `Vec<u8>` instead of `String`. Threading bytes end-to-end is what makes `AdaptiveFrameStream::with_compression(true)` actually usable — the previous `String` pipeline rejected gzip output (which is binary, not UTF-8) with `StreamError::Io("compressed output is not valid UTF-8")` for every chunk. Callers that need a textual view of an uncompressed frame can decode each payload with `std::str::from_utf8`. Pre-1.0 breaking change; no deprecation cycle (closes #226).
 
 ### Fixed

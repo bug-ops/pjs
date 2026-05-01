@@ -96,9 +96,22 @@ impl Default for StreamOptions {
     }
 }
 
-/// WebSocket streaming session state
+/// WebSocket streaming session state.
+///
+/// This type is intentionally distinct from the domain-layer
+/// [`crate::domain::aggregates::StreamSession`] aggregate. The WebSocket
+/// transport maintains an ephemeral, transport-local session model with raw
+/// `String` identifiers and an in-memory `HashMap` keyed off
+/// [`AdaptiveStreamController`]; it does **not** share state with the
+/// `StreamRepositoryGat`-backed domain session created by
+/// `POST /pjs/sessions`. Sessions created over WebSocket cannot be addressed
+/// over HTTP and vice versa, and dictionary training, auth, and rate-limit
+/// middleware applied to the HTTP router do not apply to this controller.
+///
+/// See issue #239 for the full rationale and the deliberate split between
+/// the two session models.
 #[derive(Debug)]
-pub struct StreamSession {
+pub struct WebSocketStreamSession {
     pub id: String,
     pub created_at: Instant,
     pub options: StreamOptions,
@@ -199,7 +212,7 @@ pub trait WebSocketTransport: Send + Sync {
 
 /// Adaptive streaming controller
 pub struct AdaptiveStreamController {
-    sessions: Arc<RwLock<HashMap<String, StreamSession>>>,
+    sessions: Arc<RwLock<HashMap<String, WebSocketStreamSession>>>,
     frame_tx: broadcast::Sender<(String, WsMessage)>,
 }
 
@@ -222,7 +235,7 @@ impl AdaptiveStreamController {
             metadata: std::collections::HashMap::new(),
         }]; // Simplified for now
 
-        let session = StreamSession {
+        let session = WebSocketStreamSession {
             id: session_id.clone(),
             created_at: Instant::now(),
             options,
