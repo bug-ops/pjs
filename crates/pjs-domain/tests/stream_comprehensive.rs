@@ -199,6 +199,8 @@ mod frame_creation_tests {
     #[test]
     fn test_create_patch_frames() {
         let session_id = SessionId::new();
+        // Root-level string at path `$` clears the MEDIUM threshold (depth=0
+        // shallow boost + short-string boost), so one patch frame is emitted.
         let source_data = JsonData::String("test".to_string());
         let mut stream = Stream::new(session_id, source_data, StreamConfig::default());
 
@@ -207,8 +209,7 @@ mod frame_creation_tests {
             .create_patch_frames(Priority::MEDIUM, 5)
             .expect("should create patches");
 
-        // Simplified implementation returns empty vec
-        assert_eq!(frames.len(), 0);
+        assert_eq!(frames.len(), 1, "root-level primitive yields one patch");
     }
 
     #[test]
