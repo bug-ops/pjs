@@ -5,7 +5,6 @@ use crate::{
     domain::{
         aggregates::StreamSession,
         entities::Stream,
-        events::EventStore,
         ports::{
             Pagination, SessionQueryCriteria, SortOrder as RepoSortOrder, StreamRepositoryGat,
             StreamStoreGat,
@@ -415,105 +414,6 @@ where
     }
 }
 
-/// Handler for event-related queries
-#[derive(Debug)]
-pub struct EventQueryHandler<E>
-where
-    E: EventStore,
-{
-    event_store: Arc<E>,
-}
-
-impl<E> EventQueryHandler<E>
-where
-    E: EventStore,
-{
-    pub fn new(event_store: Arc<E>) -> Self {
-        Self { event_store }
-    }
-}
-
-impl<E> QueryHandlerGat<GetSessionEventsQuery> for EventQueryHandler<E>
-where
-    E: EventStore + Send + Sync,
-{
-    type Response = EventsResponse;
-
-    type HandleFuture<'a>
-        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
-    where
-        Self: 'a;
-
-    fn handle(&self, query: GetSessionEventsQuery) -> Self::HandleFuture<'_> {
-        async move {
-            let mut events = self
-                .event_store
-                .get_events_for_session(query.session_id.into())
-                .map_err(ApplicationError::Logic)?;
-
-            // Apply time filter
-            if let Some(since) = query.since {
-                events.retain(|event| event.timestamp() > since);
-            }
-
-            // Apply event type filter
-            if let Some(ref event_types) = query.event_types {
-                events.retain(|event| event_types.contains(&event.event_type().to_string()));
-            }
-
-            let total_count = events.len();
-
-            // Apply limit
-            if let Some(limit) = query.limit {
-                events.truncate(limit);
-            }
-
-            Ok(EventsResponse {
-                events,
-                total_count,
-            })
-        }
-    }
-}
-
-impl<E> QueryHandlerGat<GetStreamEventsQuery> for EventQueryHandler<E>
-where
-    E: EventStore + Send + Sync,
-{
-    type Response = EventsResponse;
-
-    type HandleFuture<'a>
-        = impl std::future::Future<Output = ApplicationResult<Self::Response>> + Send + 'a
-    where
-        Self: 'a;
-
-    fn handle(&self, query: GetStreamEventsQuery) -> Self::HandleFuture<'_> {
-        async move {
-            let mut events = self
-                .event_store
-                .get_events_for_stream(query.stream_id.into())
-                .map_err(ApplicationError::Logic)?;
-
-            // Apply time filter
-            if let Some(since) = query.since {
-                events.retain(|event| event.timestamp() > since);
-            }
-
-            let total_count = events.len();
-
-            // Apply limit
-            if let Some(limit) = query.limit {
-                events.truncate(limit);
-            }
-
-            Ok(EventsResponse {
-                events,
-                total_count,
-            })
-        }
-    }
-}
-
 /// Handler for system statistics
 #[derive(Debug)]
 pub struct SystemQueryHandler<R>
@@ -868,44 +768,6 @@ mod tests {
         }
     }
 
-    struct MockEventStore;
-
-    impl MockEventStore {
-        fn new() -> Self {
-            Self
-        }
-    }
-
-    impl EventStore for MockEventStore {
-        fn append_events(
-            &mut self,
-            _events: Vec<crate::domain::events::DomainEvent>,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn get_events_for_session(
-            &self,
-            _session_id: SessionId,
-        ) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
-            Ok(vec![])
-        }
-
-        fn get_events_for_stream(
-            &self,
-            _stream_id: StreamId,
-        ) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
-            Ok(vec![])
-        }
-
-        fn get_events_since(
-            &self,
-            _since: chrono::DateTime<chrono::Utc>,
-        ) -> Result<Vec<crate::domain::events::DomainEvent>, String> {
-            Ok(vec![])
-        }
-    }
-
     #[tokio::test]
     async fn test_get_session_query() {
         let repository = Arc::new(MockRepository::new());
@@ -1084,18 +946,6 @@ mod tests {
         assert!(std::ptr::eq(
             handler.session_repository.as_ref(),
             session_repository.as_ref()
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_event_handler_creation() {
-        let event_store = Arc::new(MockEventStore::new());
-        let handler = EventQueryHandler::new(event_store.clone());
-
-        // Test that handlers can be created successfully
-        assert!(std::ptr::eq(
-            handler.event_store.as_ref(),
-            event_store.as_ref()
         ));
     }
 

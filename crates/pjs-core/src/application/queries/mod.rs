@@ -7,7 +7,6 @@ use crate::domain::{
         stream_session::{SessionHealth, SessionStats},
     },
     entities::{Frame, Stream},
-    events::DomainEvent,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -65,23 +64,6 @@ pub struct GetSessionStatsQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSystemStatsQuery {
     pub include_historical: bool,
-}
-
-/// Get events for a session
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetSessionEventsQuery {
-    pub session_id: SessionIdDto,
-    pub since: Option<DateTime<Utc>>,
-    pub event_types: Option<Vec<String>>,
-    pub limit: Option<usize>,
-}
-
-/// Get events for a stream
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetStreamEventsQuery {
-    pub stream_id: StreamIdDto,
-    pub since: Option<DateTime<Utc>>,
-    pub limit: Option<usize>,
 }
 
 /// Search sessions by criteria
@@ -161,13 +143,6 @@ pub struct FramesResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub health: SessionHealth,
-}
-
-/// Response for events queries
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EventsResponse {
-    pub events: Vec<DomainEvent>,
-    pub total_count: usize,
 }
 
 /// Response for session stats queries
