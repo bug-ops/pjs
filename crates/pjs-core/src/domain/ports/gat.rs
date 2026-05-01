@@ -401,7 +401,7 @@ gat_port! {
 /// Zero-cost writer factory with GAT futures
 ///
 /// Factory for creating frame sink and writer instances.
-/// Note: Returns associated types instead of Box<dyn Trait> for zero-cost.
+/// Note: Returns associated types instead of `Box<dyn Trait>` for zero-cost.
 pub trait WriterFactoryGat: Send + Sync {
     /// Associated type for stream writer implementation
     type StreamWriter: FrameSinkGat + Send;
