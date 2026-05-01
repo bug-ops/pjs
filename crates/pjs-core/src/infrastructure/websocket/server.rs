@@ -2,21 +2,27 @@
 
 #[cfg(feature = "http-server")]
 use super::{AdaptiveStreamController, StreamOptions, WebSocketTransport, WsMessage};
-use crate::{Error as PjsError, Result as PjsResult};
+use crate::{
+    Error as PjsError, Result as PjsResult,
+    security::{RateLimitConfig, RateLimitGuard, WebSocketRateLimiter},
+};
 #[cfg(feature = "http-server")]
 use axum::{
     extract::{
-        State, WebSocketUpgrade,
+        ConnectInfo, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    response::Response,
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error, info, warn};
 use uuid;
@@ -28,28 +34,77 @@ pub struct AxumWebSocketTransport {
     active_connections: Arc<RwLock<Vec<String>>>,
     /// Per-connection outgoing senders; keyed by connection ID
     outgoing_channels: Arc<RwLock<HashMap<String, UnboundedSender<WsMessage>>>>,
+    /// Per-IP rate limiter applied to upgrade requests, connection establishment,
+    /// and inbound application-level messages.
+    rate_limiter: Arc<WebSocketRateLimiter>,
 }
 
 impl AxumWebSocketTransport {
+    /// Create a transport with the default rate-limit configuration.
+    ///
+    /// See [`RateLimitConfig::default`] for the limits applied.
     pub fn new() -> Self {
+        Self::with_rate_limit_config(RateLimitConfig::default())
+    }
+
+    /// Create a transport with an explicit rate-limit configuration.
+    ///
+    /// Use [`RateLimitConfig::high_traffic`] or [`RateLimitConfig::low_resource`]
+    /// for preset profiles, or construct a custom [`RateLimitConfig`].
+    pub fn with_rate_limit_config(config: RateLimitConfig) -> Self {
         Self {
             controller: Arc::new(AdaptiveStreamController::new()),
             active_connections: Arc::new(RwLock::new(Vec::new())),
             outgoing_channels: Arc::new(RwLock::new(HashMap::new())),
+            rate_limiter: Arc::new(WebSocketRateLimiter::new(config)),
         }
     }
 
-    /// Handle WebSocket upgrade for Axum
+    /// Handle WebSocket upgrade for Axum.
+    ///
+    /// Extracts the peer address via [`ConnectInfo`] and rejects upgrade
+    /// requests that exceed the per-IP request budget with HTTP 429 before any
+    /// WebSocket frames are exchanged.
+    ///
+    /// The router must be served with
+    /// `into_make_service_with_connect_info::<SocketAddr>()` so the peer
+    /// address is populated; otherwise the upgrade response is HTTP 500.
     pub async fn upgrade_handler(
         ws: WebSocketUpgrade,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
         State(transport): State<Arc<Self>>,
     ) -> Response {
-        ws.on_upgrade(move |socket| transport.handle_socket(socket))
+        let client_ip = addr.ip();
+
+        if let Err(e) = transport.rate_limiter.check_request(client_ip) {
+            warn!("WebSocket upgrade denied for IP {}: {}", client_ip, e);
+            return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
+        }
+
+        ws.on_upgrade(move |socket| transport.handle_socket(socket, client_ip))
     }
 
     /// Handle WebSocket connection lifecycle
-    pub async fn handle_socket(self: Arc<Self>, socket: WebSocket) {
-        info!("New WebSocket connection established");
+    pub async fn handle_socket(self: Arc<Self>, socket: WebSocket, client_ip: IpAddr) {
+        info!("New WebSocket connection established from {}", client_ip);
+
+        let guard = match RateLimitGuard::new(self.rate_limiter.clone(), client_ip) {
+            Ok(g) => Arc::new(g),
+            Err(e) => {
+                warn!(
+                    "WebSocket connection rejected for IP {} (rate limit): {}",
+                    client_ip, e
+                );
+                let (mut sender, _) = socket.split();
+                let _ = sender
+                    .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                        code: 1008, // Policy Violation
+                        reason: e.to_string().into(),
+                    })))
+                    .await;
+                return;
+            }
+        };
 
         let connection_id = uuid::Uuid::new_v4().to_string();
         self.active_connections
@@ -71,22 +126,36 @@ impl AxumWebSocketTransport {
         // Spawn single task to handle both sending and receiving
         let transport_clone = self.clone();
         let connection_id_clone = connection_id.clone();
+        let guard_for_task = guard.clone();
         let websocket_task = {
             let mut frame_rx = frame_rx;
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
-                        // Handle frames from stream controller
-                        Ok((_session_id, message)) = frame_rx.recv() => {
-                            match serde_json::to_string(&message) {
-                                Ok(json_str) => {
-                                    if let Err(e) = sender.send(Message::Text(json_str.into())).await {
-                                        error!("Failed to send message to client: {}", e);
-                                        break;
+                        // Handle frames from stream controller. Match on the full
+                        // Result so Lagged is logged-and-skipped while Closed
+                        // ends the loop instead of busy-spinning.
+                        recv_result = frame_rx.recv() => {
+                            match recv_result {
+                                Ok((_session_id, message)) => {
+                                    match serde_json::to_string(&message) {
+                                        Ok(json_str) => {
+                                            if let Err(e) = sender.send(Message::Text(json_str.into())).await {
+                                                error!("Failed to send message to client: {}", e);
+                                                break;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to serialize message: {}", e);
+                                        }
                                     }
                                 }
-                                Err(e) => {
-                                    error!("Failed to serialize message: {}", e);
+                                Err(RecvError::Lagged(skipped)) => {
+                                    warn!("Frame broadcast lagged; skipped {} frames", skipped);
+                                }
+                                Err(RecvError::Closed) => {
+                                    debug!("Frame broadcast channel closed");
+                                    break;
                                 }
                             }
                         }
@@ -108,6 +177,19 @@ impl AxumWebSocketTransport {
                         Some(msg) = receiver.next() => {
                             match msg {
                                 Ok(Message::Text(text)) => {
+                                    if let Err(e) = guard_for_task.check_message(text.len()) {
+                                        warn!(
+                                            "Inbound text frame rejected for IP {} (rate limit): {}",
+                                            client_ip, e
+                                        );
+                                        let _ = sender
+                                            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                                                code: 1008,
+                                                reason: e.to_string().into(),
+                                            })))
+                                            .await;
+                                        break;
+                                    }
                                     match serde_json::from_str::<WsMessage>(&text) {
                                         Ok(ws_message) => {
                                             if let Err(e) = transport_clone.handle_websocket_message(connection_id_clone.clone(), ws_message).await {
@@ -120,6 +202,19 @@ impl AxumWebSocketTransport {
                                     }
                                 }
                                 Ok(Message::Binary(data)) => {
+                                    if let Err(e) = guard_for_task.check_message(data.len()) {
+                                        warn!(
+                                            "Inbound binary frame rejected for IP {} (rate limit): {}",
+                                            client_ip, e
+                                        );
+                                        let _ = sender
+                                            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                                                code: 1008,
+                                                reason: e.to_string().into(),
+                                            })))
+                                            .await;
+                                        break;
+                                    }
                                     debug!("Received binary data: {} bytes", data.len());
                                 }
                                 Ok(Message::Ping(data)) => {
@@ -146,6 +241,7 @@ impl AxumWebSocketTransport {
                         }
                     }
                 }
+                drop(guard_for_task);
             })
         };
 
@@ -154,11 +250,14 @@ impl AxumWebSocketTransport {
             error!("WebSocket task failed: {}", e);
         }
 
-        // Clean up outgoing channel and connection record
+        // Clean up outgoing channel and connection record. The rate-limit
+        // guard's connection counter is decremented when the last Arc<Guard>
+        // is dropped (here and when the spawned task ends).
         self.outgoing_channels.write().await.remove(&connection_id);
         let mut connections = self.active_connections.write().await;
         connections.retain(|conn_id| *conn_id != connection_id);
-        info!("WebSocket connection closed");
+        drop(guard);
+        info!("WebSocket connection closed for {}", client_ip);
     }
 
     pub fn controller(&self) -> Arc<AdaptiveStreamController> {
