@@ -18,14 +18,14 @@ use url::Url;
 /// WebSocket client for receiving PJS streams
 pub struct PjsWebSocketClient {
     url: Url,
-    sessions: Arc<RwLock<HashMap<String, StreamSession>>>,
+    sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
     message_tx: mpsc::UnboundedSender<WsMessage>,
     message_rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<WsMessage>>>>,
 }
 
 /// Client-side stream session
 #[derive(Debug)]
-struct StreamSession {
+struct ClientStreamSession {
     id: String,
     created_at: Instant,
     received_frames: HashMap<u32, ReceivedFrame>,
@@ -174,7 +174,7 @@ impl PjsWebSocketClient {
             .map_err(|e| PjsError::ClientError(format!("Failed to send stream request: {e}")))?;
 
         // Initialize session tracking
-        let session = StreamSession {
+        let session = ClientStreamSession {
             id: session_id.clone(),
             created_at: Instant::now(),
             received_frames: HashMap::new(),
@@ -246,7 +246,7 @@ impl PjsWebSocketClient {
     }
 
     async fn handle_incoming_message(
-        sessions: Arc<RwLock<HashMap<String, StreamSession>>>,
+        sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
         message_tx: mpsc::UnboundedSender<WsMessage>,
         message: WsMessage,
     ) -> PjsResult<()> {
