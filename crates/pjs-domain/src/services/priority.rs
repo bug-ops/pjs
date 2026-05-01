@@ -2,9 +2,9 @@
 //!
 //! This module owns the single source of truth for converting a JSON path and
 //! value into a [`Priority`]. Both the Rust HTTP path (via
-//! [`crate::Stream::extract_patches`]) and the WebAssembly bindings delegate
-//! here so that the same payload yields the same priority regardless of how
-//! it is delivered to the client.
+//! [`Stream::create_patch_frames`](crate::Stream::create_patch_frames)) and
+//! the WebAssembly bindings delegate here so that the same payload yields the
+//! same priority regardless of how it is delivered to the client.
 //!
 //! # Algorithm
 //!
