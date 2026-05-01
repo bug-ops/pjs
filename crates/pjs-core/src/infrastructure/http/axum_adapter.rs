@@ -22,6 +22,7 @@ use tower_http::{
 use crate::{
     application::{
         commands::*,
+        dto::PriorityDto,
         handlers::{
             CommandHandlerGat, QueryHandlerGat,
             command_handlers::SessionCommandHandler,
@@ -31,6 +32,7 @@ use crate::{
     },
     domain::{
         aggregates::stream_session::{SessionConfig, SessionHealth},
+        entities::Frame,
         ports::{
             DictionaryStore, EventPublisherGat, NoopDictionaryStore, StreamRepositoryGat,
             StreamStoreGat,
@@ -244,6 +246,31 @@ pub struct StreamParams {
     pub session_id: String,
     pub priority: Option<u8>,
     pub format: Option<String>,
+}
+
+/// Request body for generating priority-filtered frames on an existing stream.
+///
+/// Both fields are optional; defaults match the lowest-cost configuration that
+/// still drives the priority pipeline:
+/// - `priority_threshold` defaults to [`Priority::BACKGROUND`] (10) — accepts every frame.
+/// - `max_frames` defaults to 16 — bounded so a single request cannot emit an
+///   unbounded number of frames.
+#[derive(Debug, Default, Deserialize)]
+pub struct GenerateFramesRequest {
+    pub priority_threshold: Option<u8>,
+    pub max_frames: Option<usize>,
+}
+
+/// Response body for `POST .../streams/{stream_id}/generate-frames`.
+///
+/// Returns the frames produced by the stream's priority extractor, in the
+/// same shape as `GET .../frames` but freshly generated (and fed into the
+/// per-session dictionary training corpus when the `compression` feature
+/// is enabled).
+#[derive(Debug, Serialize)]
+pub struct GenerateFramesResponse {
+    pub frames: Vec<Frame>,
+    pub frame_count: usize,
 }
 
 /// Session health response
@@ -494,6 +521,10 @@ where
             post(start_stream::<R, P, S>),
         )
         .route(
+            "/pjs/sessions/{session_id}/streams/{stream_id}/generate-frames",
+            post(generate_frames::<R, P, S>),
+        )
+        .route(
             "/pjs/sessions/{session_id}/streams/{stream_id}",
             get(get_stream::<R, P, S>),
         )
@@ -703,6 +734,57 @@ where
         "stream_id": stream_id.to_string(),
         "status": "started"
     })))
+}
+
+/// Generate priority-filtered frames for an existing stream.
+///
+/// Dispatches [`GenerateFramesCommand`] so the produced frames are fed into
+/// the per-session dictionary-training corpus (see
+/// [`SessionCommandHandler::with_dictionary_store`]). Without this route the
+/// `GET /pjs/sessions/{id}/dictionary` endpoint stays at `404 Not Found` for
+/// HTTP-only clients regardless of how many sessions and streams they create.
+async fn generate_frames<R, P, S>(
+    State(state): State<PjsAppState<R, P, S>>,
+    AxumPath((session_id, stream_id)): AxumPath<(String, String)>,
+    request: Option<Json<GenerateFramesRequest>>,
+) -> Result<Json<GenerateFramesResponse>, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
+    let session_id = SessionId::from_string(&session_id)
+        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
+    let stream_id =
+        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
+
+    let Json(request) = request.unwrap_or_default();
+
+    let priority_value = request
+        .priority_threshold
+        .unwrap_or(Priority::BACKGROUND.value());
+    let priority_threshold =
+        PriorityDto::new(priority_value).map_err(|e| PjsError::InvalidPriority(e.to_string()))?;
+    let max_frames = request.max_frames.unwrap_or(16);
+
+    let command = GenerateFramesCommand {
+        session_id: session_id.into(),
+        stream_id: stream_id.into(),
+        priority_threshold,
+        max_frames,
+    };
+
+    let frames: Vec<Frame> = <SessionCommandHandler<R, P> as CommandHandlerGat<
+        GenerateFramesCommand,
+    >>::handle(&*state.command_handler, command)
+    .await
+    .map_err(PjsError::Application)?;
+
+    let frame_count = frames.len();
+    Ok(Json(GenerateFramesResponse {
+        frames,
+        frame_count,
+    }))
 }
 
 /// Get stream information
@@ -1448,5 +1530,128 @@ mod tests {
 
         let resp = router.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// End-to-end HTTP smoke test for the frame-generation route added in issue #230.
+    ///
+    /// Drives `create-session → create-stream → start-stream → generate-frames`
+    /// over the real Axum router and asserts each step succeeds. The frame count
+    /// is intentionally unconstrained: today `Stream::extract_patches` is a stub
+    /// that returns an empty `Vec` (separate gap), so this test only proves the
+    /// HTTP layer dispatches `GenerateFramesCommand` and surfaces its result —
+    /// which is the missing wiring identified by the issue.
+    #[tokio::test]
+    async fn generate_frames_route_dispatches_command_end_to_end() {
+        use axum::body::to_bytes;
+        use axum::http::{Method, Request};
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let create_session = Request::builder()
+            .method(Method::POST)
+            .uri("/pjs/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        let resp = router.clone().oneshot(create_session).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let session: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = session["session_id"].as_str().unwrap().to_string();
+
+        let create_stream = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/pjs/sessions/{session_id}/streams"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({ "data": { "items": [1, 2, 3] } }).to_string(),
+            ))
+            .unwrap();
+        let resp = router.clone().oneshot(create_stream).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let stream: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let stream_id = stream["stream_id"].as_str().unwrap().to_string();
+
+        let start = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/pjs/sessions/{session_id}/streams/{stream_id}/start"
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(start).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let generate = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/pjs/sessions/{session_id}/streams/{stream_id}/generate-frames"
+            ))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({ "max_frames": 4 }).to_string(),
+            ))
+            .unwrap();
+        let resp = router.oneshot(generate).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "POST .../generate-frames must be reachable end-to-end"
+        );
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(payload["frames"].is_array(), "response must carry frames[]");
+        assert!(
+            payload["frame_count"].is_number(),
+            "response must carry frame_count"
+        );
+    }
+
+    /// `priority_threshold = 0` is invalid per `Priority::new` — the route
+    /// must reject the request with `400 Bad Request` rather than reaching
+    /// the command handler.
+    #[tokio::test]
+    async fn generate_frames_route_rejects_invalid_priority() {
+        use axum::http::{Method, Request};
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let sid = SessionId::new();
+        let stream_id = StreamId::new();
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/pjs/sessions/{sid}/streams/{stream_id}/generate-frames"
+            ))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({ "priority_threshold": 0 }).to_string(),
+            ))
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

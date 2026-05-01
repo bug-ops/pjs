@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `POST /pjs/sessions/{session_id}/streams/{stream_id}/generate-frames` HTTP route dispatching `GenerateFramesCommand`. Body fields `priority_threshold: Option<u8>` (default `Priority::BACKGROUND` = 10) and `max_frames: Option<usize>` (default 16); response carries the produced `frames` array and a `frame_count` count. Closes the HTTP-layer gap that left `GenerateFramesCommand` and the dictionary-training corpus unreachable for HTTP-only clients (closes #230).
 - `SessionCommandHandler::with_dictionary_store(repository, event_publisher, dictionary_store)` constructor; the existing `new` constructor defaults to `NoopDictionaryStore` (no behaviour change for callers that do not opt in to dictionary training).
 - Regression tests in `application::handlers::command_handlers::tests::dictionary_wiring` verifying that the handler invokes `train_if_ready` for every accepted frame and that `N_TRAIN` frames produce a usable trained dictionary.
 
