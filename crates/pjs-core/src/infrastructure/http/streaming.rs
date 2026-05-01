@@ -62,13 +62,21 @@ fn frame_to_value(frame: &Frame) -> serde_json::Value {
     })
 }
 
-fn format_frame_owned(frame: &Frame, format: StreamFormat) -> Result<String, StreamError> {
+fn format_frame_owned(frame: &Frame, format: StreamFormat) -> Result<Vec<u8>, StreamError> {
     let v = frame_to_value(frame);
     match format {
-        StreamFormat::Json => Ok(serde_json::to_string(&v)?),
-        StreamFormat::NdJson => Ok(format!("{}\n", serde_json::to_string(&v)?)),
-        StreamFormat::ServerSentEvents => Ok(format!("data: {}\n\n", serde_json::to_string(&v)?)),
-        StreamFormat::Binary => Ok(serde_json::to_string(&v)?),
+        StreamFormat::Json | StreamFormat::Binary => Ok(serde_json::to_vec(&v)?),
+        StreamFormat::NdJson => {
+            let mut out = serde_json::to_vec(&v)?;
+            out.push(b'\n');
+            Ok(out)
+        }
+        StreamFormat::ServerSentEvents => {
+            let mut out = Vec::from(b"data: ".as_slice());
+            out.extend_from_slice(&serde_json::to_vec(&v)?);
+            out.extend_from_slice(b"\n\n");
+            Ok(out)
+        }
     }
 }
 
@@ -77,45 +85,51 @@ fn format_frame_owned(frame: &Frame, format: StreamFormat) -> Result<String, Str
 /// Each batch is serialized as newline-delimited JSON objects (one object per
 /// frame). `StreamFormat::Json` and `StreamFormat::NdJson` produce identical
 /// wire bytes; only `content_type()` differs.
-fn format_batch_owned(frames: &[Frame], format: StreamFormat) -> Result<String, StreamError> {
+fn format_batch_owned(frames: &[Frame], format: StreamFormat) -> Result<Vec<u8>, StreamError> {
     let values: Vec<_> = frames.iter().map(frame_to_value).collect();
     match format {
         // #167: NDJSON-of-objects — one JSON object per line per frame.
         // Identical wire bytes for Json and NdJson; only content_type() differs.
         StreamFormat::Json | StreamFormat::NdJson => {
-            let mut out = String::new();
+            let mut out = Vec::new();
             for v in values {
-                out.push_str(&serde_json::to_string(&v)?);
-                out.push('\n');
+                out.extend_from_slice(&serde_json::to_vec(&v)?);
+                out.push(b'\n');
             }
             Ok(out)
         }
         StreamFormat::ServerSentEvents => {
-            let mut out = String::new();
+            let mut out = Vec::new();
             for v in values {
-                out.push_str(&format!("data: {}\n\n", serde_json::to_string(&v)?));
+                out.extend_from_slice(b"data: ");
+                out.extend_from_slice(&serde_json::to_vec(&v)?);
+                out.extend_from_slice(b"\n\n");
             }
             Ok(out)
         }
-        StreamFormat::Binary => Ok(serde_json::to_string(&values)?),
+        StreamFormat::Binary => Ok(serde_json::to_vec(&values)?),
     }
 }
 
-fn maybe_compress_owned(s: String, enabled: bool) -> Result<String, StreamError> {
+/// Optionally gzip-compresses `bytes` in place.
+///
+/// When `enabled` and the `compression` feature is active, returns the gzip
+/// payload of `bytes`. The output is binary — callers must propagate it as
+/// `Vec<u8>`/`Bytes`, never as `String`. See #226 for the architectural fix
+/// that replaced the previous UTF-8-only path.
+fn maybe_compress(bytes: Vec<u8>, enabled: bool) -> Result<Vec<u8>, StreamError> {
     #[cfg(feature = "compression")]
     if enabled {
         use crate::compression::secure::{ByteCodec, SecureCompressor};
         let compressor = SecureCompressor::with_default_security(ByteCodec::Gzip);
         let compressed = compressor
-            .compress(s.as_bytes())
+            .compress(&bytes)
             .map_err(|e| StreamError::Io(e.to_string()))?;
-        // Gzip output is binary; reject rather than silently corrupt via lossy conversion.
-        return String::from_utf8(compressed.data)
-            .map_err(|e| StreamError::Io(format!("compressed output is not valid UTF-8: {e}")));
+        return Ok(compressed.data);
     }
     #[cfg(not(feature = "compression"))]
     let _ = enabled;
-    Ok(s)
+    Ok(bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,12 +172,18 @@ where
     }
 
     /// Consume the builder and return a `Stream` of formatted, optionally
-    /// compressed frame strings.
+    /// compressed frame payloads.
+    ///
+    /// Items are emitted as `Vec<u8>` because the optional gzip compression
+    /// step produces binary bytes that are not valid UTF-8 (#226). Callers
+    /// that need a textual view of an uncompressed frame can decode each
+    /// payload with `std::str::from_utf8` — but the stream type must remain
+    /// binary to support the compressed path.
     ///
     /// `ready_chunks(buffer_size)` polls the inner stream up to `buffer_size`
     /// times per wakeup, preserving the prefetch semantics of the original
     /// hand-rolled `poll_next` buffer loop.
-    pub fn into_stream(self) -> impl Stream<Item = Result<String, StreamError>> + Send + 'static {
+    pub fn into_stream(self) -> impl Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static {
         let Self {
             inner,
             format,
@@ -174,9 +194,9 @@ where
             let mut chunked = inner.ready_chunks(buffer_size);
             while let Some(batch) = chunked.next().await {
                 for frame in batch {
-                    let s = format_frame_owned(&frame, format)?;
-                    let s = maybe_compress_owned(s, compression)?;
-                    yield s;
+                    let bytes = format_frame_owned(&frame, format)?;
+                    let bytes = maybe_compress(bytes, compression)?;
+                    yield bytes;
                 }
             }
         }
@@ -218,12 +238,14 @@ where
         }
     }
 
-    /// Consume the builder and return a `Stream` of formatted batch strings.
+    /// Consume the builder and return a `Stream` of formatted batch payloads.
     ///
-    /// Each string contains one full batch. For `StreamFormat::Json` and
-    /// `StreamFormat::NdJson` the string holds one JSON object per frame,
-    /// one per line (NDJSON-of-objects, #167).
-    pub fn into_stream(self) -> impl Stream<Item = Result<String, StreamError>> + Send + 'static {
+    /// Each item is one full batch as `Vec<u8>`. For `StreamFormat::Json` and
+    /// `StreamFormat::NdJson` the bytes hold one JSON object per frame, one
+    /// per line (NDJSON-of-objects, #167). The stream item type is binary
+    /// (`Vec<u8>`, not `String`) for symmetry with `AdaptiveFrameStream` and
+    /// to leave room for future per-batch compression (#226).
+    pub fn into_stream(self) -> impl Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static {
         let Self {
             inner,
             format,
@@ -236,15 +258,15 @@ where
             while let Some(frame) = inner.next().await {
                 batch.push(frame);
                 if batch.len() >= batch_size {
-                    let s = format_batch_owned(&batch, format)?;
+                    let bytes = format_batch_owned(&batch, format)?;
                     batch.clear();
-                    yield s;
+                    yield bytes;
                 }
             }
 
             if !batch.is_empty() {
-                let s = format_batch_owned(&batch, format)?;
-                yield s;
+                let bytes = format_batch_owned(&batch, format)?;
+                yield bytes;
             }
         }
     }
@@ -300,10 +322,12 @@ where
     }
 
     /// Consume the builder and return a `Stream` of priority-ordered, formatted
-    /// frame strings.
+    /// frame payloads.
     ///
     /// Frames are buffered up to `buffer_size` and emitted highest-priority first.
-    pub fn into_stream(self) -> impl Stream<Item = Result<String, StreamError>> + Send + 'static {
+    /// Items are `Vec<u8>` for symmetry with the rest of the streaming pipeline
+    /// (#226).
+    pub fn into_stream(self) -> impl Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static {
         let Self {
             inner,
             format,
@@ -328,8 +352,8 @@ where
 
                 match heap.pop() {
                     Some(pf) => {
-                        let s = format_frame_owned(&pf.frame, format)?;
-                        yield s;
+                        let bytes = format_frame_owned(&pf.frame, format)?;
+                        yield bytes;
                     }
                     None if inner_done => break,
                     // Buffer empty but inner not done: inner.next().await above
@@ -366,12 +390,17 @@ pub enum StreamError {
 // ---------------------------------------------------------------------------
 
 /// Create a response with appropriate headers for the given streaming format.
+///
+/// The stream item type is `Vec<u8>` (binary). This is the canonical type for
+/// both UTF-8 textual formats (`Json`, `NdJson`, `ServerSentEvents`) and binary
+/// payloads (`Binary`, gzip-compressed output from
+/// [`AdaptiveFrameStream::with_compression`]).
 pub fn create_streaming_response<S>(
     stream: S,
     format: StreamFormat,
 ) -> Result<Response, StreamError>
 where
-    S: Stream<Item = Result<String, StreamError>> + Send + 'static,
+    S: Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static,
 {
     let body = axum::body::Body::from_stream(stream);
 
@@ -424,7 +453,7 @@ pub fn create_streaming_response_with_content_type<S>(
     content_type: &str,
 ) -> Result<Response, StreamError>
 where
-    S: Stream<Item = Result<String, StreamError>> + Send + 'static,
+    S: Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static,
 {
     let body = axum::body::Body::from_stream(stream);
     Response::builder()
@@ -543,7 +572,7 @@ mod tests {
 
         // batch_size=2 → two full batches of 2 and one remainder batch of 1
         let batch_stream = BatchFrameStream::new(frame_stream, StreamFormat::Json, 2);
-        let collected: Vec<Result<String, StreamError>> =
+        let collected: Vec<Result<Vec<u8>, StreamError>> =
             batch_stream.into_stream().collect().await;
 
         assert_eq!(
@@ -554,7 +583,8 @@ mod tests {
 
         let mut total_objects = 0usize;
         for result in &collected {
-            let batch_str = result.as_ref().expect("batch should not error");
+            let batch_bytes = result.as_ref().expect("batch should not error");
+            let batch_str = std::str::from_utf8(batch_bytes).expect("uncompressed batch is UTF-8");
             for line in batch_str.lines() {
                 if line.is_empty() {
                     continue;
@@ -582,7 +612,7 @@ mod tests {
         let frame_stream = stream::iter(frames);
 
         let priority_stream = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 8);
-        let collected: Vec<Result<String, StreamError>> =
+        let collected: Vec<Result<Vec<u8>, StreamError>> =
             priority_stream.into_stream().collect().await;
 
         assert_eq!(collected.len(), 4);
@@ -612,8 +642,8 @@ mod tests {
 
         let priorities: Vec<u64> = collected
             .iter()
-            .map(|s| {
-                let v: serde_json::Value = serde_json::from_str(s).unwrap();
+            .map(|bytes| {
+                let v: serde_json::Value = serde_json::from_slice(bytes).unwrap();
                 v["priority"].as_u64().unwrap()
             })
             .collect();
@@ -684,7 +714,8 @@ mod tests {
                 .collect()
                 .await;
         assert_eq!(result_json.len(), 1);
-        let json_str = result_json[0].as_ref().unwrap();
+        let json_bytes = result_json[0].as_ref().unwrap();
+        let json_str = std::str::from_utf8(json_bytes).unwrap();
         for line in json_str.lines() {
             if line.is_empty() {
                 continue;
@@ -700,7 +731,8 @@ mod tests {
                 .collect()
                 .await;
         assert_eq!(result_ndjson.len(), 1);
-        let ndjson_str = result_ndjson[0].as_ref().unwrap();
+        let ndjson_bytes = result_ndjson[0].as_ref().unwrap();
+        let ndjson_str = std::str::from_utf8(ndjson_bytes).unwrap();
         for line in ndjson_str.lines() {
             if line.is_empty() {
                 continue;
@@ -726,7 +758,8 @@ mod tests {
         .collect()
         .await;
         assert_eq!(result_sse.len(), 1);
-        let sse_str = result_sse[0].as_ref().unwrap();
+        let sse_bytes = result_sse[0].as_ref().unwrap();
+        let sse_str = std::str::from_utf8(sse_bytes).unwrap();
         let sse_frames: Vec<&str> = sse_str.split("\n\n").filter(|s| !s.is_empty()).collect();
         assert_eq!(sse_frames.len(), 3);
         for frame_str in sse_frames {
@@ -743,8 +776,8 @@ mod tests {
                 .collect()
                 .await;
         assert_eq!(result_binary.len(), 1);
-        let binary_str = result_binary[0].as_ref().unwrap();
-        let v: serde_json::Value = serde_json::from_str(binary_str).unwrap();
+        let binary_bytes = result_binary[0].as_ref().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(binary_bytes).unwrap();
         assert!(v.is_array());
         assert_eq!(v.as_array().unwrap().len(), 3);
     }
@@ -835,8 +868,8 @@ mod tests {
 
             let priorities: Vec<u64> = collected
                 .iter()
-                .map(|s| {
-                    let v: serde_json::Value = serde_json::from_str(s).unwrap();
+                .map(|bytes| {
+                    let v: serde_json::Value = serde_json::from_slice(bytes).unwrap();
                     v["priority"].as_u64().unwrap()
                 })
                 .collect();
@@ -844,5 +877,45 @@ mod tests {
             // All frames fit in the buffer (size=10) so they must arrive fully sorted.
             assert_eq!(priorities, vec![80, 50, 30, 10]);
         });
+    }
+
+    /// `with_compression(true)` must produce a payload that round-trips through
+    /// gzip — the previous `String`-based pipeline rejected gzip output as
+    /// invalid UTF-8 (#226). The fix threads `Vec<u8>` end-to-end so binary
+    /// gzip bytes flow unmolested.
+    #[cfg(feature = "compression")]
+    #[tokio::test]
+    async fn test_adaptive_stream_with_compression_round_trips() {
+        use std::io::Read as _;
+
+        let frames: Vec<Frame> = (0..5).map(|_| make_skeleton_frame()).collect();
+        let frame_stream = stream::iter(frames);
+        let adaptive =
+            AdaptiveFrameStream::new(frame_stream, StreamFormat::Json).with_compression(true);
+
+        let collected: Vec<Result<Vec<u8>, StreamError>> = adaptive.into_stream().collect().await;
+
+        assert_eq!(
+            collected.len(),
+            5,
+            "5 frames in → 5 compressed payloads out"
+        );
+
+        for result in collected {
+            let compressed = result.expect("compressed payload must be Ok");
+            assert_eq!(
+                &compressed[..2],
+                &[0x1f, 0x8b],
+                "every payload must carry the gzip magic header"
+            );
+            let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .expect("gzip payload must decode");
+            let v: serde_json::Value =
+                serde_json::from_slice(&decompressed).expect("decoded JSON must parse");
+            assert!(v.is_object(), "decoded payload must be a JSON frame object");
+        }
     }
 }

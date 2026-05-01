@@ -135,7 +135,7 @@ async fn test_adaptive_frame_stream_ndjson_format() {
 
     assert_eq!(collected.len(), 1);
     let formatted = collected[0].as_ref().unwrap();
-    assert!(formatted.ends_with('\n'));
+    assert_eq!(formatted.last().copied(), Some(b'\n'));
 }
 
 #[tokio::test]
@@ -149,12 +149,18 @@ async fn test_adaptive_frame_stream_sse_format() {
 
     assert_eq!(collected.len(), 1);
     let formatted = collected[0].as_ref().unwrap();
-    assert!(formatted.starts_with("data: "));
-    assert!(formatted.ends_with("\n\n"));
+    assert!(formatted.starts_with(b"data: "));
+    assert!(formatted.ends_with(b"\n\n"));
 }
 
+/// `with_compression(true)` must yield decompressible gzip payloads (#226).
+/// The previous `String`-typed pipeline returned `Err("not valid UTF-8")` for
+/// every chunk; threading `Vec<u8>` through fixes the architectural mismatch.
+#[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_adaptive_frame_stream_with_compression() {
+    use std::io::Read as _;
+
     let frames = vec![create_test_frame(200, 1, r#"{"data": "test"}"#)];
 
     let frame_stream = futures::stream::iter(frames);
@@ -164,12 +170,23 @@ async fn test_adaptive_frame_stream_with_compression() {
     let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
-    // Gzip output is binary; the pipeline correctly returns Err rather than
-    // silently corrupting bytes via from_utf8_lossy (fix for #214).
-    assert!(
-        collected[0].is_err(),
-        "compression produces binary gzip — pipeline must return Err, not corrupt via lossy UTF-8"
+    let compressed = collected[0]
+        .as_ref()
+        .expect("compressed payload must be Ok, not Err");
+    assert_eq!(
+        &compressed[..2],
+        &[0x1f, 0x8b],
+        "payload must start with the gzip magic header"
     );
+
+    let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .expect("gzip payload must round-trip");
+    let v: serde_json::Value =
+        serde_json::from_slice(&decompressed).expect("decompressed payload must be valid JSON");
+    assert!(v.is_object());
 }
 
 #[tokio::test]
@@ -254,7 +271,7 @@ async fn test_batch_frame_stream_ndjson_format() {
     assert_eq!(collected.len(), 1);
     let result = collected[0].as_ref().unwrap();
     // NdJson should have newlines
-    assert!(result.contains('\n'));
+    assert!(result.contains(&b'\n'));
 }
 
 #[tokio::test]
@@ -272,7 +289,8 @@ async fn test_batch_frame_stream_sse_format() {
     assert_eq!(collected.len(), 1);
     let result = collected[0].as_ref().unwrap();
     // SSE should have "data: " prefix
-    assert!(result.contains("data: "));
+    let result_str = std::str::from_utf8(result).unwrap();
+    assert!(result_str.contains("data: "));
 }
 
 #[tokio::test]
@@ -350,7 +368,7 @@ async fn test_priority_frame_stream_sse_format() {
 
     assert_eq!(collected.len(), 1);
     let result = collected[0].as_ref().unwrap();
-    assert!(result.starts_with("data: "));
+    assert!(result.starts_with(b"data: "));
 }
 
 // ============================================================================
@@ -396,8 +414,8 @@ fn test_stream_error_stream_closed() {
 #[tokio::test]
 async fn test_create_streaming_response_json() {
     let stream = futures::stream::iter(vec![
-        Ok::<String, StreamError>("test1".to_string()),
-        Ok("test2".to_string()),
+        Ok::<Vec<u8>, StreamError>(b"test1".to_vec()),
+        Ok(b"test2".to_vec()),
     ]);
 
     let response = create_streaming_response(stream, StreamFormat::Json).unwrap();
@@ -415,9 +433,8 @@ async fn test_create_streaming_response_json() {
 
 #[tokio::test]
 async fn test_create_streaming_response_sse() {
-    let stream = futures::stream::iter(vec![Ok::<String, StreamError>(
-        "data: test\n\n".to_string(),
-    )]);
+    let stream =
+        futures::stream::iter(vec![Ok::<Vec<u8>, StreamError>(b"data: test\n\n".to_vec())]);
 
     let response = create_streaming_response(stream, StreamFormat::ServerSentEvents).unwrap();
 
@@ -439,7 +456,7 @@ async fn test_create_streaming_response_sse() {
 
 #[tokio::test]
 async fn test_create_streaming_response_ndjson() {
-    let stream = futures::stream::iter(vec![Ok::<String, StreamError>("test\n".to_string())]);
+    let stream = futures::stream::iter(vec![Ok::<Vec<u8>, StreamError>(b"test\n".to_vec())]);
 
     let response = create_streaming_response(stream, StreamFormat::NdJson).unwrap();
 
@@ -456,7 +473,7 @@ async fn test_create_streaming_response_ndjson() {
 
 #[tokio::test]
 async fn test_create_streaming_response_binary() {
-    let stream = futures::stream::iter(vec![Ok::<String, StreamError>("binary_data".to_string())]);
+    let stream = futures::stream::iter(vec![Ok::<Vec<u8>, StreamError>(b"binary_data".to_vec())]);
 
     let response = create_streaming_response(stream, StreamFormat::Binary).unwrap();
 
@@ -491,12 +508,13 @@ async fn test_full_streaming_pipeline() {
     // All should be formatted as SSE
     for result in collected {
         assert!(result.is_ok());
-        let text = result.unwrap();
-        assert!(text.starts_with("data: "));
-        assert!(text.ends_with("\n\n"));
+        let bytes = result.unwrap();
+        assert!(bytes.starts_with(b"data: "));
+        assert!(bytes.ends_with(b"\n\n"));
     }
 }
 
+#[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_adaptive_stream_builder_pattern() {
     let frames = vec![create_test_frame(200, 1, r#"{"test": 1}"#)];
@@ -509,10 +527,10 @@ async fn test_adaptive_stream_builder_pattern() {
     let collected: Vec<_> = adaptive.into_stream().collect().await;
 
     assert_eq!(collected.len(), 1);
-    // Gzip output is binary; the pipeline correctly rejects it with Err rather
-    // than silently corrupting bytes via from_utf8_lossy (fix for #214).
-    assert!(
-        collected[0].is_err(),
-        "compression produces binary gzip — pipeline must return Err, not corrupt via lossy UTF-8"
-    );
+    // Gzip-compressed output now flows as Vec<u8> — the binary payload starts
+    // with the gzip magic header rather than failing UTF-8 validation (#226).
+    let bytes = collected[0]
+        .as_ref()
+        .expect("compressed payload must be Ok with the Vec<u8> pipeline");
+    assert_eq!(&bytes[..2], &[0x1f, 0x8b], "must carry gzip magic header");
 }
