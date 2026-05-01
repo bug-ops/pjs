@@ -68,7 +68,7 @@
 use wasm_bindgen::prelude::*;
 
 mod parser;
-mod priority_assignment;
+pub mod priority_assignment;
 mod priority_config;
 mod priority_constants;
 pub mod security;
