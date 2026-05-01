@@ -9,8 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING** `AdaptiveFrameStream::into_stream`, `BatchFrameStream::into_stream`, `PriorityFrameStream::into_stream`, `create_streaming_response`, and `create_streaming_response_with_content_type` now operate on `Vec<u8>` instead of `String`. Threading bytes end-to-end is what makes `AdaptiveFrameStream::with_compression(true)` actually usable — the previous `String` pipeline rejected gzip output (which is binary, not UTF-8) with `StreamError::Io("compressed output is not valid UTF-8")` for every chunk. Callers that need a textual view of an uncompressed frame can decode each payload with `std::str::from_utf8`. Pre-1.0 breaking change; no deprecation cycle (closes #226).
+
 ### Fixed
 
+- `AdaptiveFrameStream::with_compression(true)` now produces decompressible gzip payloads instead of failing for every non-trivial input. Added `test_adaptive_frame_stream_with_compression` and `test_adaptive_stream_with_compression_round_trips` that round-trip frames through `flate2::read::GzDecoder` and assert the gzip magic header (`1f 8b`).
 - `cargo doc --deny rustdoc::broken_intra_doc_links` now passes: replaced `[ApiKeyAuthLayer]` with `[super::ApiKeyAuthLayer]` in `JwtAuthLayer` doc, dropped the link to private `build_cors_layer` in `create_pjs_router_with_config` doc, and wrapped `Id<T>` and `Box<dyn Trait>` in code spans in `id_dto.rs` and `gat.rs` (closes #225)
 - `GET /pjs/sessions/{session_id}/dictionary` is now reachable end-to-end. `SessionCommandHandler` accepts an `Arc<dyn DictionaryStore>` and feeds each accepted frame's serialized payload into the per-session training corpus from `GenerateFramesCommand` and `BatchGenerateFramesCommand` handlers, so the endpoint flips from `404 Not Found` to `200 OK` once `N_TRAIN` (32) frames have been generated (closes #224).
 
