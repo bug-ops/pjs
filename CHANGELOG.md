@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `pjs-demo`: removed the unused `_dict_store` binding and the misleading "GET /pjs/sessions/{session_id}/dictionary" startup banner from `interactive-demo-server` — the demo never mounted the PJS router, so the binding was dead code and the printed endpoint was unreachable from this binary.
 
+### Removed
+
+- Orphaned `crates/pjs-core/src/domain/services/streaming_orchestrator.rs` (402 lines). The file was never declared as a module in `domain/services/mod.rs`, so cargo never compiled it; its functionality is fully covered by `GatStreamingOrchestrator::stream_session_with_priority` (closes #233).
+
 ## [0.5.2] - 2026-04-29
 
 ### Security
