@@ -5,10 +5,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use pjson_rs::parser::{
-    BufferSize, LazyJsonValue, LazyParser, SimdZeroCopyConfig, SimdZeroCopyParser, ZeroCopyParser,
-    global_buffer_pool,
-};
+use pjson_rs::parser::{BufferSize, LazyJsonValue, LazyParser, ZeroCopyParser, global_buffer_pool};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 PJS Zero-Copy JSON Parser Demo");
@@ -20,13 +17,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Demo 2: Memory efficiency comparison
     demo_memory_efficiency()?;
 
-    // Demo 3: SIMD accelerated parsing
-    demo_simd_parsing()?;
-
-    // Demo 4: Buffer pool usage
+    // Demo 3: Buffer pool usage
     demo_buffer_pool()?;
 
-    // Demo 5: Performance with large JSON
+    // Demo 4: Performance with large JSON
     demo_large_json_performance()?;
 
     println!("\n✅ All demos completed successfully!");
@@ -122,50 +116,8 @@ fn demo_memory_efficiency() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn demo_simd_parsing() -> Result<(), Box<dyn std::error::Error>> {
-    println!("⚡ Demo 3: SIMD Accelerated Parsing");
-    println!("----------------------------------");
-
-    let json_data = br#"{
-        "users": [
-            {"id": 1, "name": "Alice", "active": true},
-            {"id": 2, "name": "Bob", "active": false},
-            {"id": 3, "name": "Charlie", "active": true}
-        ],
-        "metadata": {
-            "count": 3,
-            "generated": "2025-01-01T00:00:00Z"
-        }
-    }"#;
-
-    // Test different SIMD configurations
-    let configs = vec![
-        ("Default", SimdZeroCopyConfig::default()),
-        ("High Performance", SimdZeroCopyConfig::high_performance()),
-        ("Low Memory", SimdZeroCopyConfig::low_memory()),
-    ];
-
-    for (name, config) in configs {
-        let mut parser = SimdZeroCopyParser::with_config(config);
-        let start = std::time::Instant::now();
-        let result = parser.parse_simd(json_data)?;
-        let _duration = start.elapsed();
-
-        println!(
-            "  {:<15}: {:>6.0}ns, {:.1}% efficient, SIMD: {}",
-            name,
-            result.processing_time_ns,
-            result.memory_usage.efficiency() * 100.0,
-            if result.simd_used { "✓" } else { "✗" }
-        );
-    }
-
-    println!();
-    Ok(())
-}
-
 fn demo_buffer_pool() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🏊 Demo 4: Buffer Pool Management");
+    println!("🏊 Demo 3: Buffer Pool Management");
     println!("---------------------------------");
 
     let pool = global_buffer_pool();
@@ -192,7 +144,7 @@ fn demo_buffer_pool() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demo_large_json_performance() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🏃 Demo 5: Large JSON Performance");
+    println!("🏃 Demo 4: Large JSON Performance");
     println!("---------------------------------");
 
     // Generate a moderately large JSON document
@@ -212,19 +164,6 @@ fn demo_large_json_performance() -> Result<(), Box<dyn std::error::Error>> {
         "  Zero-copy: {:>6.2}ms, {:.1}% efficient",
         zero_copy_time.as_secs_f64() * 1000.0,
         memory.efficiency() * 100.0
-    );
-
-    // Test SIMD parser
-    let mut simd_parser = SimdZeroCopyParser::with_config(SimdZeroCopyConfig::high_performance());
-    let start = std::time::Instant::now();
-    let simd_result = simd_parser.parse_simd(json_bytes)?;
-    let simd_time = start.elapsed();
-
-    println!(
-        "  SIMD:      {:>6.2}ms, {:.1}% efficient, SIMD used: {}",
-        simd_time.as_secs_f64() * 1000.0,
-        simd_result.memory_usage.efficiency() * 100.0,
-        if simd_result.simd_used { "✓" } else { "✗" }
     );
 
     // Calculate throughput

@@ -3,7 +3,7 @@
 //! Run with: cargo bench --bench zero_copy_bench
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use pjson_rs::parser::{LazyParser, SimdZeroCopyConfig, SimdZeroCopyParser, ZeroCopyParser};
+use pjson_rs::parser::{LazyParser, ZeroCopyParser};
 use std::hint::black_box;
 
 fn bench_simple_string(c: &mut Criterion) {
@@ -30,15 +30,6 @@ fn bench_simple_string(c: &mut Criterion) {
             b.iter(|| {
                 parser.reset();
                 let result = parser.parse_lazy(black_box(input)).unwrap();
-                black_box(result);
-            })
-        });
-
-        group.bench_with_input(BenchmarkId::new("simd", name), input, |b, input| {
-            let mut parser = SimdZeroCopyParser::new();
-            b.iter(|| {
-                parser.reset();
-                let result = parser.parse_simd(black_box(input)).unwrap();
                 black_box(result);
             })
         });
@@ -83,15 +74,6 @@ fn bench_json_objects(c: &mut Criterion) {
                 black_box(result);
             })
         });
-
-        group.bench_with_input(BenchmarkId::new("simd", name), input, |b, input| {
-            let mut parser = SimdZeroCopyParser::new();
-            b.iter(|| {
-                parser.reset();
-                let result = parser.parse_simd(black_box(input)).unwrap();
-                black_box(result);
-            })
-        });
     }
 
     group.finish();
@@ -133,20 +115,6 @@ fn bench_arrays(c: &mut Criterion) {
                 black_box(result);
             })
         });
-
-        group.bench_with_input(
-            BenchmarkId::new("simd_high_perf", name),
-            input,
-            |b, input| {
-                let mut parser =
-                    SimdZeroCopyParser::with_config(SimdZeroCopyConfig::high_performance());
-                b.iter(|| {
-                    parser.reset();
-                    let result = parser.parse_simd(black_box(input)).unwrap();
-                    black_box(result);
-                })
-            },
-        );
     }
 
     group.finish();
@@ -176,16 +144,6 @@ fn bench_memory_efficiency(c: &mut Criterion) {
             let memory_usage = result.memory_usage();
             assert!(memory_usage.efficiency() > 0.8); // Should be highly efficient
             black_box(memory_usage);
-        })
-    });
-
-    group.bench_function("simd_efficiency", |b| {
-        let mut parser = SimdZeroCopyParser::new();
-        b.iter(|| {
-            parser.reset();
-            let result = parser.parse_simd(black_box(test_json)).unwrap();
-            assert!(result.memory_usage.efficiency() > 0.8);
-            black_box(result.memory_usage);
         })
     });
 

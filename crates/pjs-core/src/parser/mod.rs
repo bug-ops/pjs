@@ -16,7 +16,6 @@ pub mod aligned_alloc;
 pub mod buffer_pool;
 pub mod scanner;
 pub mod simd;
-pub mod simd_zero_copy;
 pub mod simple;
 pub mod sonic;
 pub mod value;
@@ -27,9 +26,6 @@ pub use buffer_pool::{
     BufferPool, BufferSize, PoolConfig, PooledBuffer, SimdType, global_buffer_pool,
 };
 pub use scanner::{JsonScanner, ScanResult, StringLocation};
-pub use simd_zero_copy::{
-    SimdParseResult, SimdParsingStats, SimdZeroCopyConfig, SimdZeroCopyParser,
-};
 pub use simple::{ParseConfig, ParseStats, SimpleParser};
 pub use sonic::{SonicConfig, SonicParser};
 pub use value::{JsonValue, LazyArray, LazyObject};
