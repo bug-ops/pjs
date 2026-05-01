@@ -8,14 +8,18 @@ use crate::{
     domain::{
         aggregates::StreamSession,
         entities::Frame,
-        ports::{EventPublisherGat, StreamRepositoryGat},
+        ports::{DictionaryStore, EventPublisherGat, NoopDictionaryStore, StreamRepositoryGat},
         value_objects::{JsonData, SessionId, StreamId},
     },
 };
 use std::sync::Arc;
 
-/// Handler for session management commands
-#[derive(Debug)]
+/// Handler for session management commands.
+///
+/// Holds an optional [`DictionaryStore`] (defaulting to [`NoopDictionaryStore`])
+/// so that frame-generating commands can feed accepted frame payloads into the
+/// per-session training corpus. Without this wiring the
+/// `GET /pjs/sessions/{id}/dictionary` endpoint would be unreachable end-to-end.
 pub struct SessionCommandHandler<R, P>
 where
     R: StreamRepositoryGat + 'static,
@@ -23,6 +27,18 @@ where
 {
     repository: Arc<R>,
     event_publisher: Arc<P>,
+    dictionary_store: Arc<dyn DictionaryStore>,
+}
+
+impl<R, P> std::fmt::Debug for SessionCommandHandler<R, P>
+where
+    R: StreamRepositoryGat + 'static,
+    P: EventPublisherGat + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionCommandHandler")
+            .finish_non_exhaustive()
+    }
 }
 
 impl<R, P> SessionCommandHandler<R, P>
@@ -30,10 +46,45 @@ where
     R: StreamRepositoryGat + 'static,
     P: EventPublisherGat + 'static,
 {
+    /// Create a handler with the no-op [`DictionaryStore`].
+    ///
+    /// The dictionary endpoint will return `404 Not Found` until the handler is
+    /// constructed with [`SessionCommandHandler::with_dictionary_store`] and a
+    /// concrete implementation such as
+    /// [`crate::infrastructure::repositories::InMemoryDictionaryStore`].
     pub fn new(repository: Arc<R>, event_publisher: Arc<P>) -> Self {
+        Self::with_dictionary_store(repository, event_publisher, Arc::new(NoopDictionaryStore))
+    }
+
+    /// Create a handler that feeds accepted frames into `dictionary_store`.
+    pub fn with_dictionary_store(
+        repository: Arc<R>,
+        event_publisher: Arc<P>,
+        dictionary_store: Arc<dyn DictionaryStore>,
+    ) -> Self {
         Self {
             repository,
             event_publisher,
+            dictionary_store,
+        }
+    }
+
+    /// Feed each accepted frame's serialized payload into the per-session
+    /// training corpus.
+    ///
+    /// Errors are intentionally swallowed: training is best-effort and a
+    /// transient failure must not poison the frame-generation response. The
+    /// `OnceCell` inside `InMemoryDictionaryStore` is not poisoned on error
+    /// either, so the next sample will retry.
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    async fn train_from_frames(&self, session_id: SessionId, frames: &[Frame]) {
+        for frame in frames {
+            if let Ok(bytes) = serde_json::to_vec(frame.payload()) {
+                let _ = self
+                    .dictionary_store
+                    .train_if_ready(session_id, bytes)
+                    .await;
+            }
         }
     }
 }
@@ -281,6 +332,12 @@ where
             #[cfg(feature = "metrics")]
             metrics::counter!("pjs_frames_total").increment(frames.len() as u64);
 
+            // Feed accepted frame payloads into the per-session training corpus
+            // so the dictionary endpoint becomes reachable end-to-end.
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            self.train_from_frames(command.session_id.into(), &frames)
+                .await;
+
             // Save updated session
             self.repository
                 .save_session(session.clone())
@@ -332,6 +389,12 @@ where
             // command handlers — if so, pjs_frames_total underreports throughput.
             #[cfg(feature = "metrics")]
             metrics::counter!("pjs_frames_total").increment(frames.len() as u64);
+
+            // Feed accepted frame payloads into the per-session training corpus
+            // so the dictionary endpoint becomes reachable end-to-end.
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            self.train_from_frames(command.session_id.into(), &frames)
+                .await;
 
             // Save updated session
             self.repository
@@ -956,5 +1019,131 @@ mod tests {
             result.err().unwrap(),
             ApplicationError::NotFound(_)
         ));
+    }
+
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    mod dictionary_wiring {
+        //! Regression tests for issue #224 — frame-ingest must feed the per-session
+        //! training corpus so that `GET /pjs/sessions/{id}/dictionary` becomes
+        //! reachable end-to-end.
+        use super::*;
+        use crate::{
+            compression::zstd::N_TRAIN,
+            domain::{
+                entities::Frame,
+                ports::{DictionaryFuture, DictionaryStore},
+            },
+            infrastructure::repositories::InMemoryDictionaryStore,
+            security::CompressionBombDetector,
+        };
+        use pjson_rs_domain::value_objects::{JsonData, StreamId};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// Counts every `train_if_ready` invocation so a test can verify the
+        /// command handler reaches the dictionary store at all.
+        struct CountingDictionaryStore {
+            inner: InMemoryDictionaryStore,
+            calls: AtomicUsize,
+        }
+
+        impl CountingDictionaryStore {
+            fn new() -> Self {
+                Self {
+                    inner: InMemoryDictionaryStore::new(
+                        Arc::new(CompressionBombDetector::default()),
+                        64 * 1024,
+                    ),
+                    calls: AtomicUsize::new(0),
+                }
+            }
+
+            fn call_count(&self) -> usize {
+                self.calls.load(Ordering::SeqCst)
+            }
+        }
+
+        impl DictionaryStore for CountingDictionaryStore {
+            fn get_dictionary<'a>(
+                &'a self,
+                session_id: SessionId,
+            ) -> DictionaryFuture<'a, Option<Arc<crate::compression::zstd::ZstdDictionary>>>
+            {
+                self.inner.get_dictionary(session_id)
+            }
+
+            fn train_if_ready<'a>(
+                &'a self,
+                session_id: SessionId,
+                sample: Vec<u8>,
+            ) -> DictionaryFuture<'a, ()> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.inner.train_if_ready(session_id, sample)
+            }
+        }
+
+        fn make_patch_frame(stream_id: StreamId, sequence: u64, n: usize) -> Frame {
+            let patch = crate::domain::entities::frame::FramePatch::set(
+                pjson_rs_domain::value_objects::JsonPath::new(format!("$.items[{n}]")).unwrap(),
+                JsonData::Integer(n as i64),
+            );
+            Frame::patch(
+                stream_id,
+                sequence,
+                pjson_rs_domain::value_objects::Priority::HIGH,
+                vec![patch],
+            )
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn test_train_from_frames_records_each_payload() {
+            let store = Arc::new(CountingDictionaryStore::new());
+            let handler = SessionCommandHandler::with_dictionary_store(
+                Arc::new(MockRepository::new()),
+                Arc::new(MockEventPublisher),
+                store.clone(),
+            );
+
+            let session_id = SessionId::new();
+            let stream_id = StreamId::new();
+            let frames: Vec<Frame> = (0..5)
+                .map(|i| make_patch_frame(stream_id, i as u64, i))
+                .collect();
+
+            handler.train_from_frames(session_id, &frames).await;
+
+            assert_eq!(
+                store.call_count(),
+                5,
+                "every accepted frame must feed train_if_ready"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_train_from_frames_fires_dictionary_after_threshold() {
+            let store = Arc::new(InMemoryDictionaryStore::new(
+                Arc::new(CompressionBombDetector::default()),
+                64 * 1024,
+            ));
+            let handler = SessionCommandHandler::with_dictionary_store(
+                Arc::new(MockRepository::new()),
+                Arc::new(MockEventPublisher),
+                store.clone(),
+            );
+
+            let session_id = SessionId::new();
+            let stream_id = StreamId::new();
+            let frames: Vec<Frame> = (0..N_TRAIN)
+                .map(|i| make_patch_frame(stream_id, i as u64, i))
+                .collect();
+
+            handler.train_from_frames(session_id, &frames).await;
+
+            let dict = store.get_dictionary(session_id).await.unwrap();
+            assert!(
+                dict.is_some(),
+                "dictionary must be trained once N_TRAIN frame payloads have been ingested"
+            );
+        }
     }
 }
