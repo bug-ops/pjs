@@ -764,16 +764,6 @@ fn test_get_stream_nonexistent() {
     assert!(session.get_stream(fake_id).is_none());
 }
 
-#[test]
-fn test_get_stream_mut_nonexistent() {
-    let mut session = StreamSession::new(default_config());
-    session.activate().unwrap();
-
-    let fake_id = StreamId::new();
-
-    assert!(session.get_stream_mut(fake_id).is_none());
-}
-
 // ============================================================================
 // Priority Frame Creation (Complex Scenario)
 // ============================================================================

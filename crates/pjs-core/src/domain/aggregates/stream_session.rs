@@ -220,9 +220,66 @@ impl StreamSession {
         self.streams.get(&stream_id)
     }
 
-    /// Get mutable stream by ID
-    pub fn get_stream_mut(&mut self, stream_id: StreamId) -> Option<&mut Stream> {
-        self.streams.get_mut(&stream_id)
+    /// Update configuration of a child stream through the aggregate root.
+    ///
+    /// Child mutations must flow through the aggregate so the session-level
+    /// timestamp is bumped and a [`DomainEvent::StreamConfigUpdated`] event is
+    /// raised. Application code MUST NOT reach into `Stream` directly to
+    /// mutate config — the previous `get_stream_mut` accessor that allowed
+    /// this was a DDD violation (see issue #259).
+    pub fn update_stream_config(
+        &mut self,
+        stream_id: StreamId,
+        config: StreamConfig,
+    ) -> DomainResult<()> {
+        let stream = self
+            .streams
+            .get_mut(&stream_id)
+            .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
+
+        stream.update_config(config)?;
+        self.update_timestamp();
+
+        self.add_event(DomainEvent::StreamConfigUpdated {
+            session_id: self.id,
+            stream_id,
+            timestamp: Utc::now(),
+        });
+
+        Ok(())
+    }
+
+    /// Generate patch frames for a child stream through the aggregate root.
+    ///
+    /// Wraps [`Stream::create_patch_frames`] so that session-level statistics
+    /// (`stats.total_frames`) and the `updated_at` timestamp stay consistent
+    /// with the child mutation, and a [`DomainEvent::FramesBatched`] event is
+    /// raised when frames are produced.
+    pub fn create_stream_patch_frames(
+        &mut self,
+        stream_id: StreamId,
+        priority_threshold: Priority,
+        max_frames: usize,
+    ) -> DomainResult<Vec<Frame>> {
+        let stream = self
+            .streams
+            .get_mut(&stream_id)
+            .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
+
+        let frames = stream.create_patch_frames(priority_threshold, max_frames)?;
+
+        self.stats.total_frames += frames.len() as u64;
+        self.update_timestamp();
+
+        if !frames.is_empty() {
+            self.add_event(DomainEvent::FramesBatched {
+                session_id: self.id,
+                frame_count: frames.len(),
+                timestamp: Utc::now(),
+            });
+        }
+
+        Ok(frames)
     }
 
     /// Activate session
