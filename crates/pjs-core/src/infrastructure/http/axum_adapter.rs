@@ -199,9 +199,10 @@ where
     ) -> Self {
         let started_at = Instant::now();
         Self {
-            command_handler: Arc::new(SessionCommandHandler::new(
+            command_handler: Arc::new(SessionCommandHandler::with_dictionary_store(
                 repository.clone(),
                 event_publisher,
+                dictionary_store.clone(),
             )),
             session_query_handler: Arc::new(SessionQueryHandler::new(repository.clone())),
             stream_query_handler: Arc::new(StreamQueryHandler::new(

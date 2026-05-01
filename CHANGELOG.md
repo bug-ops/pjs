@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `cargo doc --deny rustdoc::broken_intra_doc_links` now passes: replaced `[ApiKeyAuthLayer]` with `[super::ApiKeyAuthLayer]` in `JwtAuthLayer` doc, dropped the link to private `build_cors_layer` in `create_pjs_router_with_config` doc, and wrapped `Id<T>` and `Box<dyn Trait>` in code spans in `id_dto.rs` and `gat.rs` (closes #225)
+- `GET /pjs/sessions/{session_id}/dictionary` is now reachable end-to-end. `SessionCommandHandler` accepts an `Arc<dyn DictionaryStore>` and feeds each accepted frame's serialized payload into the per-session training corpus from `GenerateFramesCommand` and `BatchGenerateFramesCommand` handlers, so the endpoint flips from `404 Not Found` to `200 OK` once `N_TRAIN` (32) frames have been generated (closes #224).
+
+### Added
+
+- `SessionCommandHandler::with_dictionary_store(repository, event_publisher, dictionary_store)` constructor; the existing `new` constructor defaults to `NoopDictionaryStore` (no behaviour change for callers that do not opt in to dictionary training).
+- Regression tests in `application::handlers::command_handlers::tests::dictionary_wiring` verifying that the handler invokes `train_if_ready` for every accepted frame and that `N_TRAIN` frames produce a usable trained dictionary.
+
+### Changed
+
+- `pjs-demo`: removed the unused `_dict_store` binding and the misleading "GET /pjs/sessions/{session_id}/dictionary" startup banner from `interactive-demo-server` — the demo never mounted the PJS router, so the binding was dead code and the printed endpoint was unreachable from this binary.
 
 ## [0.5.2] - 2026-04-29
 
