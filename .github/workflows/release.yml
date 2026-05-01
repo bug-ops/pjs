@@ -150,10 +150,109 @@ jobs:
           ignore-unpublished-changes: true
           publish-delay: 10000
 
+  # Publish WASM bindings to npm via Trusted Publishing (provenance)
+  # Setup: https://docs.npmjs.com/generating-provenance-statements
+  publish-wasm:
+    name: Publish WASM to npm
+    needs: [version-check, format-check, clippy-check, test-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@pjson/wasm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "publish-wasm"
+          save-if: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build WASM package
+        run: wasm-pack build crates/pjs-wasm --target web --release --scope pjson
+
+      - name: Rename package to @pjson/wasm
+        working-directory: crates/pjs-wasm/pkg
+        run: |
+          sed -i 's#"name": "@pjson/pjs-wasm"#"name": "@pjson/wasm"#' package.json
+          cat package.json
+
+      - name: Publish to npm
+        working-directory: crates/pjs-wasm/pkg
+        run: npm publish --access public --provenance
+
+  # Publish JS/TS client to npm via Trusted Publishing (provenance)
+  publish-node:
+    name: Publish Node client to npm
+    needs: [version-check, publish-wasm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@pjson/node
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Sync package metadata to release version
+        working-directory: crates/pjs-js-client
+        env:
+          VERSION: ${{ needs.version-check.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.name = "@pjson/node";
+            pkg.version = process.env.VERSION;
+            if (pkg.optionalDependencies && pkg.optionalDependencies["pjs-wasm"]) {
+              pkg.optionalDependencies["pjs-wasm"] = `npm:@pjson/wasm@^${process.env.VERSION}`;
+            }
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+          cat package.json
+
+      - name: Install dependencies
+        working-directory: crates/pjs-js-client
+        run: npm install --no-package-lock --ignore-scripts
+
+      - name: Build
+        working-directory: crates/pjs-js-client
+        run: npm run build
+
+      - name: Publish to npm
+        working-directory: crates/pjs-js-client
+        run: npm publish --access public --provenance --ignore-scripts
+
   # Create GitHub release with native release notes generation
   github-release:
     name: Create GitHub Release
-    needs: [version-check, publish]
+    needs: [version-check, publish, publish-wasm, publish-node]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -185,3 +284,5 @@ jobs:
           echo "Repository: https://github.com/${{ github.repository }}"
           echo "Release: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
           echo "crates.io: https://crates.io/crates/pjson-rs"
+          echo "npm (wasm): https://www.npmjs.com/package/@pjson/wasm"
+          echo "npm (node): https://www.npmjs.com/package/@pjson/node"
