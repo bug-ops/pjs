@@ -1535,11 +1535,10 @@ mod tests {
     /// End-to-end HTTP smoke test for the frame-generation route added in issue #230.
     ///
     /// Drives `create-session → create-stream → start-stream → generate-frames`
-    /// over the real Axum router and asserts each step succeeds. The frame count
-    /// is intentionally unconstrained: today `Stream::extract_patches` is a stub
-    /// that returns an empty `Vec` (separate gap), so this test only proves the
-    /// HTTP layer dispatches `GenerateFramesCommand` and surfaces its result —
-    /// which is the missing wiring identified by the issue.
+    /// over the real Axum router and asserts each step succeeds. After issue
+    /// #232 implemented `Stream::extract_patches` and `batch_patches_into_frames`,
+    /// the route now produces frames for non-empty source data — the assertion
+    /// `frame_count > 0` verifies the full chain end-to-end.
     #[tokio::test]
     async fn generate_frames_route_dispatches_command_end_to_end() {
         use axum::body::to_bytes;
@@ -1613,9 +1612,151 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(payload["frames"].is_array(), "response must carry frames[]");
+        let frame_count = payload["frame_count"]
+            .as_u64()
+            .expect("response must carry numeric frame_count");
         assert!(
-            payload["frame_count"].is_number(),
-            "response must carry frame_count"
+            frame_count > 0,
+            "extract_patches must yield at least one patch frame for `{{\"items\": [1,2,3]}}` \
+             — frame_count was {frame_count}"
+        );
+    }
+
+    /// End-to-end dictionary path: drive `generate-frames` enough times to
+    /// cross the `N_TRAIN` threshold, then assert the dictionary endpoint
+    /// transitions from `404 Not Found` to `200 OK`. This is the chain that
+    /// issues #224, #230, and #232 together claim to deliver.
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn dictionary_endpoint_becomes_reachable_after_training() {
+        use crate::compression::zstd::N_TRAIN;
+        use crate::infrastructure::repositories::InMemoryDictionaryStore;
+        use crate::security::CompressionBombDetector;
+        use axum::body::to_bytes;
+        use axum::http::{Method, Request};
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let dictionary_store = Arc::new(InMemoryDictionaryStore::new(
+            Arc::new(CompressionBombDetector::default()),
+            64 * 1024,
+        ));
+        let state = PjsAppState::with_dictionary_store(
+            repository,
+            event_publisher,
+            stream_store,
+            dictionary_store,
+        );
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let create_session = Request::builder()
+            .method(Method::POST)
+            .uri("/pjs/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        let resp = router.clone().oneshot(create_session).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let session: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = session["session_id"].as_str().unwrap().to_string();
+
+        // Source data with N_TRAIN+ leaf patches keeps the test self-contained:
+        // a single generate-frames call yields enough samples to cross the
+        // training threshold.
+        let mut payload = serde_json::Map::new();
+        for i in 0..(N_TRAIN + 4) {
+            payload.insert(
+                format!("field_{i}"),
+                serde_json::Value::String(format!("value_{i}")),
+            );
+        }
+        let create_stream = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/pjs/sessions/{session_id}/streams"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({ "data": serde_json::Value::Object(payload) }).to_string(),
+            ))
+            .unwrap();
+        let resp = router.clone().oneshot(create_stream).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let stream: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let stream_id = stream["stream_id"].as_str().unwrap().to_string();
+
+        let start = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/pjs/sessions/{session_id}/streams/{stream_id}/start"
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(start).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Before training: the dictionary endpoint must be 404.
+        let dict_before = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/pjs/sessions/{session_id}/dictionary"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(dict_before).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "dictionary endpoint must be 404 before N_TRAIN samples accumulate"
+        );
+
+        // Generate enough frames to cross N_TRAIN. With max_frames at least
+        // N_TRAIN+4, every leaf patch lands in its own frame.
+        let max_frames = N_TRAIN + 4;
+        let generate = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/pjs/sessions/{session_id}/streams/{stream_id}/generate-frames"
+            ))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({ "max_frames": max_frames }).to_string(),
+            ))
+            .unwrap();
+        let resp = router.clone().oneshot(generate).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let frame_count = payload["frame_count"].as_u64().unwrap();
+        assert!(
+            frame_count >= N_TRAIN as u64,
+            "single generate-frames call must yield at least N_TRAIN ({}) frames \
+             so train_if_ready triggers training; got {frame_count}",
+            N_TRAIN
+        );
+
+        // After training: the dictionary endpoint must be 200.
+        let dict_after = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/pjs/sessions/{session_id}/dictionary"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.oneshot(dict_after).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "dictionary endpoint must transition to 200 OK once N_TRAIN samples have been fed"
+        );
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert!(
+            !body.is_empty(),
+            "trained dictionary body must be non-empty"
         );
     }
 

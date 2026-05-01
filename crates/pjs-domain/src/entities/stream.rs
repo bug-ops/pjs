@@ -3,7 +3,7 @@
 use crate::{
     DomainError, DomainResult,
     entities::Frame,
-    value_objects::{JsonData, Priority, SessionId, StreamId},
+    value_objects::{JsonData, JsonPath, PathSegment, Priority, SessionId, StreamId},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -337,8 +337,8 @@ impl Stream {
             DomainError::InvalidStreamState("No source data available for patches".to_string())
         })?;
 
-        let patches = self.extract_patches(source_data, priority_threshold)?;
-        let frames = self.batch_patches_into_frames(patches, max_frames)?;
+        let prioritized = self.extract_patches(source_data, priority_threshold)?;
+        let frames = self.batch_patches_into_frames(prioritized, max_frames)?;
 
         for frame in &frames {
             self.record_frame_created(frame);
@@ -483,37 +483,141 @@ impl Stream {
         }
     }
 
-    /// Private helper: Extract patches with priority filtering
+    /// Private helper: Extract patches with priority filtering.
+    ///
+    /// Walks `data` recursively, emitting one `Set` patch per leaf-level
+    /// value (primitives and arrays — objects are traversed without emitting
+    /// a patch, since their structure is already conveyed by the skeleton
+    /// frame). Each patch is paired with a computed priority so that
+    /// `batch_patches_into_frames` can group chunks by maximum priority.
+    /// Patches whose priority falls below `threshold` are dropped.
     fn extract_patches(
         &self,
-        _data: &JsonData,
-        _threshold: Priority,
-    ) -> DomainResult<Vec<crate::entities::frame::FramePatch>> {
-        // Simplified patch extraction - would need more sophisticated logic
-        Ok(Vec::new())
+        data: &JsonData,
+        threshold: Priority,
+    ) -> DomainResult<Vec<(crate::entities::frame::FramePatch, Priority)>> {
+        let mut patches = Vec::new();
+        self.collect_patches(data, &JsonPath::root(), threshold, &mut patches)?;
+        // Sort by priority descending so high-priority patches land in earlier
+        // frames within the chunk-based batch layout.
+        patches.sort_by_key(|p| core::cmp::Reverse(p.1));
+        Ok(patches)
     }
 
-    /// Private helper: Batch patches into frames
+    /// Recursive walker that emits prioritized patches into `out`.
+    fn collect_patches(
+        &self,
+        data: &JsonData,
+        path: &JsonPath,
+        threshold: Priority,
+        out: &mut Vec<(crate::entities::frame::FramePatch, Priority)>,
+    ) -> DomainResult<()> {
+        if let JsonData::Object(map) = data {
+            for (key, value) in map.iter() {
+                // Keys with characters JsonPath cannot encode (`.`, `[`, `]`)
+                // are skipped: a domain-internal walker must not refuse the
+                // entire document because of one weird key.
+                let Ok(child_path) = path.append_key(key) else {
+                    continue;
+                };
+                self.collect_patches(value, &child_path, threshold, out)?;
+            }
+            return Ok(());
+        }
+
+        let priority = self.compute_priority(path, data);
+        if priority >= threshold {
+            let patch = crate::entities::frame::FramePatch::set(path.clone(), data.clone());
+            out.push((patch, priority));
+        }
+        Ok(())
+    }
+
+    /// Compute a priority for a patch using field-name heuristics, the
+    /// per-stream `priority_rules` override map, and value-shape penalties.
+    ///
+    /// This duplicates the spirit of `pjs-core::PriorityService` but lives
+    /// in the domain layer to keep `pjs-domain` free of `pjs-core` deps.
+    fn compute_priority(&self, path: &JsonPath, value: &JsonData) -> Priority {
+        let last_key = match path.last_segment() {
+            Some(PathSegment::Key(k)) => Some(k),
+            _ => None,
+        };
+
+        // 1. Per-stream override map wins over heuristics.
+        if let Some(key) = &last_key
+            && let Some(p) = self.config.priority_rules.get(key)
+        {
+            return *p;
+        }
+
+        // 2. Field-name heuristic.
+        if let Some(key) = &last_key {
+            match key.to_ascii_lowercase().as_str() {
+                "id" | "uuid" | "status" | "state" | "error" | "type" | "kind" => {
+                    return Priority::CRITICAL;
+                }
+                "name" | "title" | "label" | "email" | "username" | "description" | "message" => {
+                    return Priority::HIGH;
+                }
+                "content" | "body" | "value" | "data" => return Priority::MEDIUM,
+                "created_at" | "updated_at" | "version" | "metadata" => return Priority::LOW,
+                "analytics" | "debug" | "trace" | "logs" | "history" | "comments" | "reviews" => {
+                    return Priority::BACKGROUND;
+                }
+                _ => {}
+            }
+        }
+
+        // 3. Heuristic fallback: depth and value shape.
+        let mut priority = Priority::MEDIUM;
+        match path.depth() {
+            0 | 1 => priority = priority.increase_by(20),
+            2 => priority = priority.increase_by(10),
+            d if d > 5 => priority = priority.decrease_by(10),
+            _ => {}
+        }
+
+        match value {
+            JsonData::String(s) if s.len() > 1000 => priority = priority.decrease_by(20),
+            JsonData::String(s) if s.len() < 50 => priority = priority.increase_by(5),
+            JsonData::Array(arr) if arr.len() > 100 => priority = priority.decrease_by(40),
+            JsonData::Array(arr) if arr.len() > 10 => priority = priority.decrease_by(15),
+            JsonData::Object(obj) if obj.len() > 10 => priority = priority.decrease_by(10),
+            _ => {}
+        }
+
+        priority
+    }
+
+    /// Private helper: Batch patches into frames.
+    ///
+    /// Each frame's priority is the maximum priority of the patches in
+    /// its chunk, so per-frame ordering downstream reflects the most
+    /// important content the frame carries.
     fn batch_patches_into_frames(
         &mut self,
-        patches: Vec<crate::entities::frame::FramePatch>,
+        patches: Vec<(crate::entities::frame::FramePatch, Priority)>,
         max_frames: usize,
     ) -> DomainResult<Vec<Frame>> {
-        if patches.is_empty() {
+        if patches.is_empty() || max_frames == 0 {
             return Ok(Vec::new());
         }
 
         let mut frames = Vec::new();
-        let chunk_size = patches.len().div_ceil(max_frames);
+        let chunk_size = patches.len().div_ceil(max_frames).max(1);
 
-        for patch_chunk in patches.chunks(chunk_size) {
-            let priority = patch_chunk
+        for chunk in patches.chunks(chunk_size) {
+            let priority = chunk
                 .iter()
-                .map(|_| Priority::MEDIUM) // Simplified - would calculate from patch content
+                .map(|(_, p)| *p)
                 .max()
                 .unwrap_or(Priority::MEDIUM);
 
-            let frame = Frame::patch(self.id, self.next_sequence, priority, patch_chunk.to_vec())?;
+            let frame_patches: Vec<crate::entities::frame::FramePatch> =
+                chunk.iter().map(|(patch, _)| patch.clone()).collect();
+
+            let frame = Frame::patch(self.id, self.next_sequence, priority, frame_patches)?;
 
             frames.push(frame);
         }
@@ -620,5 +724,85 @@ mod tests {
 
         assert_eq!(stream.metadata().len(), 2);
         assert_eq!(stream.metadata().get("source"), Some(&"api".to_string()));
+    }
+
+    #[test]
+    fn test_create_patch_frames_emits_frames_for_typical_payload() {
+        let session_id = SessionId::new();
+        let source_data = serde_json::json!({
+            "id": "abc-123",
+            "name": "Alice",
+            "items": [1, 2, 3]
+        });
+        let mut stream = Stream::new(session_id, source_data.into(), StreamConfig::default());
+
+        stream
+            .start_streaming()
+            .expect("stream must enter streaming state");
+
+        let frames = stream
+            .create_patch_frames(Priority::BACKGROUND, 16)
+            .expect("frame generation must succeed");
+
+        assert!(
+            !frames.is_empty(),
+            "extract_patches must produce at least one patch for non-empty source data"
+        );
+
+        let id_frame_priority_max = frames
+            .iter()
+            .map(|f| f.priority())
+            .max()
+            .expect("non-empty frames must have a max priority");
+        assert!(
+            id_frame_priority_max >= Priority::CRITICAL,
+            "frames carrying the `id` field must surface at critical priority"
+        );
+    }
+
+    #[test]
+    fn test_create_patch_frames_filters_below_threshold() {
+        let session_id = SessionId::new();
+        // `analytics` is forced to BACKGROUND priority by the heuristic, so
+        // a CRITICAL threshold filters everything out.
+        let source_data = serde_json::json!({
+            "analytics": {"clicks": 1, "views": 2}
+        });
+        let mut stream = Stream::new(session_id, source_data.into(), StreamConfig::default());
+
+        stream.start_streaming().expect("stream starts");
+        let frames = stream
+            .create_patch_frames(Priority::CRITICAL, 8)
+            .expect("frame generation must succeed");
+
+        assert!(
+            frames.is_empty(),
+            "patches below the priority threshold must be dropped"
+        );
+    }
+
+    #[test]
+    fn test_create_patch_frames_uses_max_priority_per_chunk() {
+        let session_id = SessionId::new();
+        // Mix of CRITICAL (`id`), HIGH (`name`), and BACKGROUND (`logs`).
+        let source_data = serde_json::json!({
+            "id": "x",
+            "name": "y",
+            "logs": "z"
+        });
+        let mut stream = Stream::new(session_id, source_data.into(), StreamConfig::default());
+
+        stream.start_streaming().expect("stream starts");
+        // Force a single chunk so we can assert max-priority aggregation.
+        let frames = stream
+            .create_patch_frames(Priority::BACKGROUND, 1)
+            .expect("frame generation must succeed");
+
+        assert_eq!(frames.len(), 1, "max_frames=1 must yield a single frame");
+        assert_eq!(
+            frames[0].priority(),
+            Priority::CRITICAL,
+            "frame priority must reflect the highest-priority patch in the chunk"
+        );
     }
 }
