@@ -1,6 +1,6 @@
 //! Generic ID Data Transfer Object for serialization
 //!
-//! Handles serialization/deserialization of Id<T> domain objects
+//! Handles serialization/deserialization of `Id<T>` domain objects
 //! while keeping domain layer clean of serialization concerns.
 
 use crate::application::dto::priority_dto::{FromDto, ToDto};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use uuid::Uuid;
 
-/// Generic serializable representation of Id<T> domain object.
+/// Generic serializable representation of `Id<T>` domain object.
 ///
 /// The phantom marker is skipped during serialization, resulting in
 /// a transparent UUID representation in JSON.

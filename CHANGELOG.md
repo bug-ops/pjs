@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `cargo doc --deny rustdoc::broken_intra_doc_links` now passes: replaced `[ApiKeyAuthLayer]` with `[super::ApiKeyAuthLayer]` in `JwtAuthLayer` doc, dropped the link to private `build_cors_layer` in `create_pjs_router_with_config` doc, and wrapped `Id<T>` and `Box<dyn Trait>` in code spans in `id_dto.rs` and `gat.rs` (closes #225)
+
 ## [0.5.2] - 2026-04-29
 
 ### Security

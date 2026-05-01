@@ -380,7 +380,7 @@ mod inner {
         /// in a separate extractor layer.
         ///
         /// `OPTIONS` requests are passed through without authentication (same as
-        /// [`ApiKeyAuthLayer`]).
+        /// [`super::ApiKeyAuthLayer`]).
         pub struct JwtAuthLayer<C> {
             inner: Arc<JwtState>,
             _claims: PhantomData<fn() -> C>,

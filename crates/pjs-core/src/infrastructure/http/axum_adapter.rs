@@ -292,8 +292,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`PjsError::HttpError`] if `config` contains invalid CORS origins
-/// (see [`build_cors_layer`] for the full list of failure conditions).
+/// Returns [`PjsError::HttpError`] if `config` contains invalid CORS origins —
+/// specifically, when `allowed_origins` mixes `"*"` with explicit origins, or
+/// any origin string fails to parse as a valid `HeaderValue`.
 ///
 /// # Examples
 ///
