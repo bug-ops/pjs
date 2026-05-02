@@ -107,6 +107,57 @@ gat_port! {
 }
 
 gat_port! {
+    /// Zero-cost frame store with GAT futures.
+    ///
+    /// Persists frames produced by the priority extractor so that
+    /// `GET /pjs/sessions/{session_id}/streams/{stream_id}/frames` can return
+    /// them after a `GenerateFramesCommand` has emitted them. Implementations
+    /// must keep the frames append-ordered (i.e. by sequence) and bound their
+    /// per-stream memory footprint.
+    pub trait FrameStoreGat {
+        /// Append frames produced for `stream_id`. Frames are stored in append
+        /// order (which equals sequence order, since frames are emitted with
+        /// monotonically increasing sequence numbers).
+        async fn append_frames(&self, stream_id: StreamId, frames: Vec<Frame>) -> ();
+
+        /// Retrieve frames for `stream_id` honoring the optional filters.
+        ///
+        /// - `since_sequence`: only frames with `sequence > since_sequence` are returned.
+        /// - `priority_filter`: only frames whose priority is `>= priority_filter` are returned.
+        /// - `limit`: hard cap on returned frames (defense-in-depth against unbounded responses).
+        ///
+        /// Returns the filtered page plus the total number of matching frames
+        /// before `limit` was applied, so callers can drive pagination.
+        async fn get_frames(
+            &self,
+            stream_id: StreamId,
+            since_sequence: Option<u64>,
+            priority_filter: Option<Priority>,
+            limit: Option<usize>,
+        ) -> FrameStorePage;
+
+        /// Drop every frame stored for `stream_id`.
+        ///
+        /// Called when a stream is removed so the store does not retain frames
+        /// for streams that no longer exist.
+        async fn delete_frames_for_stream(&self, stream_id: StreamId) -> ();
+    }
+}
+
+/// Result of a [`FrameStoreGat::get_frames`] call.
+///
+/// `total_matching` reports the number of frames that satisfied the filters
+/// before `limit` was applied; `frames` holds at most `limit` of them in
+/// sequence order.
+#[derive(Debug, Clone)]
+pub struct FrameStorePage {
+    /// Frames returned to the caller, in ascending sequence order.
+    pub frames: Vec<Frame>,
+    /// Total number of frames that matched the filters before `limit` was applied.
+    pub total_matching: usize,
+}
+
+gat_port! {
     /// Zero-cost stream store with GAT futures
     ///
     /// Provides stream-level storage operations.

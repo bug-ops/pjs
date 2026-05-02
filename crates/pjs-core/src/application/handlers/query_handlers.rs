@@ -6,12 +6,17 @@ use crate::{
         aggregates::StreamSession,
         entities::Stream,
         ports::{
-            Pagination, SessionQueryCriteria, SortOrder as RepoSortOrder, StreamRepositoryGat,
-            StreamStoreGat,
+            FrameStoreGat, Pagination, SessionQueryCriteria, SortOrder as RepoSortOrder,
+            StreamRepositoryGat, StreamStoreGat,
         },
     },
 };
 use std::{marker::PhantomData, sync::Arc, time::Instant};
+
+/// Hard cap on frames returned by `GET /streams/{id}/frames`, matching the
+/// shared pagination ceiling. Defends the HTTP layer against a client that
+/// passes an oversized `limit`.
+const MAX_FRAMES_PAGE_SIZE: usize = crate::domain::config::MAX_PAGINATION_LIMIT;
 
 /// Handler for session-related queries
 #[derive(Debug)]
@@ -282,32 +287,37 @@ where
 
 /// Handler for stream-related queries
 #[derive(Debug)]
-pub struct StreamQueryHandler<R, S>
+pub struct StreamQueryHandler<R, S, F>
 where
     R: StreamRepositoryGat + 'static,
     S: StreamStoreGat + 'static,
+    F: FrameStoreGat + 'static,
 {
     session_repository: Arc<R>,
+    frame_store: Arc<F>,
     _phantom: PhantomData<S>,
 }
 
-impl<R, S> StreamQueryHandler<R, S>
+impl<R, S, F> StreamQueryHandler<R, S, F>
 where
     R: StreamRepositoryGat + 'static,
     S: StreamStoreGat + 'static,
+    F: FrameStoreGat + 'static,
 {
-    pub fn new(session_repository: Arc<R>, _stream_store: Arc<S>) -> Self {
+    pub fn new(session_repository: Arc<R>, _stream_store: Arc<S>, frame_store: Arc<F>) -> Self {
         Self {
             session_repository,
+            frame_store,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<R, S> QueryHandlerGat<GetStreamQuery> for StreamQueryHandler<R, S>
+impl<R, S, F> QueryHandlerGat<GetStreamQuery> for StreamQueryHandler<R, S, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     S: StreamStoreGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = StreamResponse;
 
@@ -339,10 +349,11 @@ where
     }
 }
 
-impl<R, S> QueryHandlerGat<GetStreamsForSessionQuery> for StreamQueryHandler<R, S>
+impl<R, S, F> QueryHandlerGat<GetStreamsForSessionQuery> for StreamQueryHandler<R, S, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     S: StreamStoreGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = StreamsResponse;
 
@@ -374,10 +385,11 @@ where
     }
 }
 
-impl<R, S> QueryHandlerGat<GetStreamFramesQuery> for StreamQueryHandler<R, S>
+impl<R, S, F> QueryHandlerGat<GetStreamFramesQuery> for StreamQueryHandler<R, S, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     S: StreamStoreGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = FramesResponse;
 
@@ -398,17 +410,39 @@ where
                 })?;
 
             // Validate stream exists within the session.
-            let _ = session.get_stream(query.stream_id.into()).ok_or_else(|| {
+            session.get_stream(query.stream_id.into()).ok_or_else(|| {
                 ApplicationError::NotFound(format!("Stream {} not found", query.stream_id))
             })?;
 
-            // The Stream entity does not persist generated frames — StreamStats only
-            // tracks counts. Return an empty validated page until a FrameStore exists.
-            // Filters are acknowledged but cannot be applied against an empty set.
-            let _ = (query.since_sequence, query.priority_filter, query.limit);
+            // Cap requested page size to MAX_FRAMES_PAGE_SIZE so a client cannot
+            // ask for an unbounded response. Honor None as "give me everything
+            // up to the cap".
+            let limit = Some(
+                query
+                    .limit
+                    .map(|l| l.min(MAX_FRAMES_PAGE_SIZE))
+                    .unwrap_or(MAX_FRAMES_PAGE_SIZE),
+            );
+            let priority_filter = query
+                .priority_filter
+                .map(crate::domain::value_objects::Priority::try_from)
+                .transpose()
+                .map_err(ApplicationError::Domain)?;
+
+            let page = self
+                .frame_store
+                .get_frames(
+                    query.stream_id.into(),
+                    query.since_sequence,
+                    priority_filter,
+                    limit,
+                )
+                .await
+                .map_err(ApplicationError::Domain)?;
+
             Ok(FramesResponse {
-                frames: vec![],
-                total_count: 0,
+                frames: page.frames,
+                total_count: page.total_matching,
             })
         }
     }
@@ -940,7 +974,9 @@ mod tests {
     async fn test_stream_handler_creation() {
         let session_repository = Arc::new(MockRepository::new());
         let stream_store = Arc::new(MockStreamStore);
-        let handler = StreamQueryHandler::new(session_repository.clone(), stream_store.clone());
+        let frame_store = Arc::new(crate::infrastructure::adapters::InMemoryFrameStore::new());
+        let handler =
+            StreamQueryHandler::new(session_repository.clone(), stream_store, frame_store);
 
         // Test that handlers can be created successfully
         assert!(std::ptr::eq(
@@ -988,7 +1024,8 @@ mod tests {
 
         let session_repository = Arc::new(MockRepository::new());
         let stream_store = Arc::new(MockStreamStore);
-        let handler = StreamQueryHandler::new(session_repository, stream_store);
+        let frame_store = Arc::new(crate::infrastructure::adapters::InMemoryFrameStore::new());
+        let handler = StreamQueryHandler::new(session_repository, stream_store, frame_store);
 
         let query = GetStreamFramesQuery {
             session_id: SessionId::new().into(),
@@ -1014,7 +1051,8 @@ mod tests {
         session_repository.add_session(session);
 
         let stream_store = Arc::new(MockStreamStore);
-        let handler = StreamQueryHandler::new(session_repository, stream_store);
+        let frame_store = Arc::new(crate::infrastructure::adapters::InMemoryFrameStore::new());
+        let handler = StreamQueryHandler::new(session_repository, stream_store, frame_store);
 
         let query = GetStreamFramesQuery {
             session_id: session_id.into(),
@@ -1043,7 +1081,8 @@ mod tests {
         session_repository.add_session(session);
 
         let stream_store = Arc::new(MockStreamStore);
-        let handler = StreamQueryHandler::new(session_repository, stream_store);
+        let frame_store = Arc::new(crate::infrastructure::adapters::InMemoryFrameStore::new());
+        let handler = StreamQueryHandler::new(session_repository, stream_store, frame_store);
 
         let query = GetStreamFramesQuery {
             session_id: session_id.into(),
@@ -1056,6 +1095,173 @@ mod tests {
         let result = QueryHandlerGat::handle(&handler, query).await.unwrap();
         assert_eq!(result.frames.len(), 0);
         assert_eq!(result.total_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_stream_frames_returns_persisted_frames() {
+        use crate::domain::{
+            entities::frame::FramePatch,
+            ports::FrameStoreGat,
+            value_objects::{JsonData, JsonPath, Priority},
+        };
+        use crate::infrastructure::adapters::InMemoryFrameStore;
+
+        let session_repository = Arc::new(MockRepository::new());
+        let mut session = StreamSession::new(SessionConfig::default());
+        let _ = session.activate();
+        let session_id = session.id();
+        let stream_id = session
+            .create_stream(JsonData::from(serde_json::json!({"k": "v"})))
+            .unwrap();
+        session_repository.add_session(session);
+
+        let stream_store = Arc::new(MockStreamStore);
+        let frame_store = Arc::new(InMemoryFrameStore::new());
+
+        // Simulate the command handler having appended frames.
+        let frames = (1..=3)
+            .map(|seq| {
+                let patch = FramePatch::set(
+                    JsonPath::new(format!("$.field_{seq}")).unwrap(),
+                    JsonData::Integer(seq as i64),
+                );
+                crate::domain::entities::Frame::patch(stream_id, seq, Priority::HIGH, vec![patch])
+                    .unwrap()
+            })
+            .collect();
+        frame_store.append_frames(stream_id, frames).await.unwrap();
+
+        let handler = StreamQueryHandler::new(session_repository, stream_store, frame_store);
+
+        let query = GetStreamFramesQuery {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+            since_sequence: None,
+            priority_filter: None,
+            limit: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await.unwrap();
+        assert_eq!(result.frames.len(), 3);
+        assert_eq!(result.total_count, 3);
+        assert_eq!(
+            result
+                .frames
+                .iter()
+                .map(crate::domain::entities::Frame::sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_stream_frames_applies_filters() {
+        use crate::domain::{
+            entities::frame::FramePatch,
+            ports::FrameStoreGat,
+            value_objects::{JsonData, JsonPath, Priority},
+        };
+        use crate::infrastructure::adapters::InMemoryFrameStore;
+
+        let session_repository = Arc::new(MockRepository::new());
+        let mut session = StreamSession::new(SessionConfig::default());
+        let _ = session.activate();
+        let session_id = session.id();
+        let stream_id = session
+            .create_stream(JsonData::from(serde_json::json!({"k": "v"})))
+            .unwrap();
+        session_repository.add_session(session);
+
+        let stream_store = Arc::new(MockStreamStore);
+        let frame_store = Arc::new(InMemoryFrameStore::new());
+
+        // Three frames with mixed priorities and sequences.
+        let frames: Vec<_> = [
+            (1u64, Priority::LOW),
+            (2, Priority::HIGH),
+            (3, Priority::CRITICAL),
+        ]
+        .into_iter()
+        .map(|(seq, prio)| {
+            let patch = FramePatch::set(
+                JsonPath::new(format!("$.field_{seq}")).unwrap(),
+                JsonData::Integer(seq as i64),
+            );
+            crate::domain::entities::Frame::patch(stream_id, seq, prio, vec![patch]).unwrap()
+        })
+        .collect();
+        frame_store.append_frames(stream_id, frames).await.unwrap();
+
+        let handler = StreamQueryHandler::new(session_repository, stream_store, frame_store);
+
+        // since_sequence=1 + priority>=HIGH should leave seq 2 and 3.
+        let query = GetStreamFramesQuery {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+            since_sequence: Some(1),
+            priority_filter: Some(Priority::HIGH.into()),
+            limit: Some(10),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await.unwrap();
+        assert_eq!(result.frames.len(), 2);
+        assert_eq!(result.total_count, 2);
+        assert_eq!(
+            result
+                .frames
+                .iter()
+                .map(crate::domain::entities::Frame::sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_stream_frames_caps_limit_to_max() {
+        use crate::domain::{
+            entities::frame::FramePatch,
+            ports::FrameStoreGat,
+            value_objects::{JsonData, JsonPath, Priority},
+        };
+        use crate::infrastructure::adapters::InMemoryFrameStore;
+
+        let session_repository = Arc::new(MockRepository::new());
+        let mut session = StreamSession::new(SessionConfig::default());
+        let _ = session.activate();
+        let session_id = session.id();
+        let stream_id = session
+            .create_stream(JsonData::from(serde_json::json!({"k": "v"})))
+            .unwrap();
+        session_repository.add_session(session);
+
+        let frame_store = Arc::new(InMemoryFrameStore::new());
+        let frames: Vec<_> = (1..=5)
+            .map(|seq| {
+                let patch = FramePatch::set(
+                    JsonPath::new(format!("$.field_{seq}")).unwrap(),
+                    JsonData::Integer(seq as i64),
+                );
+                crate::domain::entities::Frame::patch(stream_id, seq, Priority::HIGH, vec![patch])
+                    .unwrap()
+            })
+            .collect();
+        frame_store.append_frames(stream_id, frames).await.unwrap();
+
+        let handler =
+            StreamQueryHandler::new(session_repository, Arc::new(MockStreamStore), frame_store);
+
+        // limit=999_999 must be capped to MAX_FRAMES_PAGE_SIZE without erroring.
+        let query = GetStreamFramesQuery {
+            session_id: session_id.into(),
+            stream_id: stream_id.into(),
+            since_sequence: None,
+            priority_filter: None,
+            limit: Some(999_999),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await.unwrap();
+        assert_eq!(result.frames.len(), 5);
+        assert_eq!(result.total_count, 5);
     }
 
     #[tokio::test]
@@ -1168,7 +1374,8 @@ mod tests {
 
         let session_repository = Arc::new(MockRepository::new());
         let stream_store = Arc::new(MockStreamStore);
-        let handler = StreamQueryHandler::new(session_repository, stream_store);
+        let frame_store = Arc::new(crate::infrastructure::adapters::InMemoryFrameStore::new());
+        let handler = StreamQueryHandler::new(session_repository, stream_store, frame_store);
 
         let query = GetStreamQuery {
             session_id: SessionId::new().into(),

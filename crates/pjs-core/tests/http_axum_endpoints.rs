@@ -599,6 +599,74 @@ async fn test_get_stream_frames_success() {
     assert_eq!(json["total_count"], 0);
 }
 
+/// Regression test for #269: after `POST .../streams/{id}/generate-frames`
+/// produces frames, `GET .../streams/{id}/frames` must return them instead of
+/// always replying `{"frames":[],"total_count":0}`.
+#[tokio::test]
+async fn test_get_stream_frames_returns_persisted_frames() {
+    let mut session = common::SessionBuilder::new().build();
+    let session_id = session.id();
+    let stream_id = session
+        .create_stream(serde_json::json!({"items": [1, 2, 3, 4, 5, 6, 7, 8]}).into())
+        .unwrap();
+    session.start_stream(stream_id).unwrap();
+
+    let repository = Arc::new(common::MockRepository::with_session(session));
+    let event_publisher = Arc::new(common::MockEventPublisher::new());
+    let stream_store = Arc::new(common::MockStreamStore::new());
+
+    use pjson_rs::infrastructure::http::axum_adapter::PjsAppState;
+    let state = PjsAppState::new(repository, event_publisher, stream_store);
+    let app = create_pjs_router().with_state(state);
+
+    // Generate frames via the command endpoint.
+    let generate = Request::builder()
+        .uri(format!(
+            "/pjs/sessions/{}/streams/{}/generate-frames",
+            session_id, stream_id
+        ))
+        .method("POST")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"max_frames":4}"#))
+        .unwrap();
+    let response = app.clone().oneshot(generate).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let generated: JsonValue = serde_json::from_slice(&body).unwrap();
+    let generated_count = generated["frame_count"].as_u64().unwrap();
+    assert!(
+        generated_count > 0,
+        "command must produce at least one frame: {generated:?}",
+    );
+
+    // Now fetch them back through the query endpoint.
+    let fetch = Request::builder()
+        .uri(format!(
+            "/pjs/sessions/{}/streams/{}/frames",
+            session_id, stream_id
+        ))
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(fetch).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let fetched: JsonValue = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        fetched["total_count"].as_u64().unwrap(),
+        generated_count,
+        "frames endpoint must report every persisted frame: {fetched:?}",
+    );
+    assert_eq!(
+        fetched["frames"].as_array().unwrap().len() as u64,
+        generated_count,
+    );
+}
+
 #[tokio::test]
 async fn test_get_stream_frames_not_found() {
     let state = common::create_test_app_state();

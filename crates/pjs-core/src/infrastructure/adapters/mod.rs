@@ -4,6 +4,7 @@
 //! concrete infrastructure implementations, following the Ports & Adapters pattern.
 
 pub mod event_publisher;
+pub mod frame_store;
 pub mod gat_memory_repository;
 pub mod generic_store;
 pub mod json_adapter;
@@ -12,6 +13,7 @@ pub mod metrics_collector;
 
 // Re-export commonly used adapters
 pub use event_publisher::*;
+pub use frame_store::InMemoryFrameStore;
 pub use gat_memory_repository::*;
 pub use generic_store::{InMemoryStore, SessionStore, StreamStore};
 pub use json_adapter::*;
