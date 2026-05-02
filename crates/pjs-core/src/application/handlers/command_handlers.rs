@@ -36,6 +36,10 @@ where
 {
     repository: Arc<R>,
     event_publisher: Arc<P>,
+    #[cfg_attr(
+        not(all(feature = "compression", not(target_arch = "wasm32"))),
+        allow(dead_code)
+    )]
     dictionary_store: Arc<dyn DictionaryStore>,
     frame_store: Arc<F>,
 }
