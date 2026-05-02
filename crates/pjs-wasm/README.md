@@ -1,7 +1,8 @@
 # PJS WASM - WebAssembly Bindings for Priority JSON Streaming
 
-[![npm](https://img.shields.io/npm/v/pjs-wasm)](https://www.npmjs.com/package/pjs-wasm)
-[![Bundle Size](https://img.shields.io/bundlephobia/minzip/pjs-wasm)](https://bundlephobia.com/package/pjs-wasm)
+[![npm (browser)](https://img.shields.io/npm/v/@pjson/wasm?label=%40pjson%2Fwasm)](https://www.npmjs.com/package/@pjson/wasm)
+[![npm (node)](https://img.shields.io/npm/v/@pjson/node?label=%40pjson%2Fnode)](https://www.npmjs.com/package/@pjson/node)
+[![Bundle Size](https://img.shields.io/bundlephobia/minzip/@pjson/wasm)](https://bundlephobia.com/package/@pjson/wasm)
 [![License](https://img.shields.io/crates/l/pjson-rs)](../../LICENSE-MIT)
 
 WebAssembly bindings for the PJS (Priority JSON Streaming) protocol, enabling high-performance JSON parsing and streaming in web browsers and Node.js environments.
@@ -26,7 +27,11 @@ WebAssembly bindings for the PJS (Priority JSON Streaming) protocol, enabling hi
 ### Using npm
 
 ```bash
-npm install pjs-wasm
+# Browser / bundler builds
+npm install @pjson/wasm
+
+# Node.js
+npm install @pjson/node
 ```
 
 ### Using wasm-pack (for development)
@@ -47,7 +52,7 @@ wasm-pack build --target bundler
 ### Basic Parsing
 
 ```javascript
-import { PjsParser, version } from 'pjs-wasm';
+import { PjsParser, version } from '@pjson/wasm';
 
 // Check version
 console.log(`Using PJS WASM version: ${version()}`);
@@ -98,7 +103,7 @@ try {
 ### With TypeScript
 
 ```typescript
-import { PjsParser, version } from 'pjs-wasm';
+import { PjsParser, version } from '@pjson/wasm';
 
 const parser: PjsParser = new PjsParser();
 
@@ -218,7 +223,7 @@ Get the WASM module version.
 **Example:**
 
 ```javascript
-import { version } from 'pjs-wasm';
+import { version } from '@pjson/wasm';
 console.log(version()); // "0.1.0"
 ```
 
@@ -335,7 +340,7 @@ Contributions are welcome! Please read the [Contributing Guide](../../CONTRIBUTI
 Generate priority-ordered frames from JSON data:
 
 ```javascript
-import { PjsParser, PriorityConstants } from 'pjs-wasm';
+import { PjsParser, PriorityConstants } from '@pjson/wasm';
 
 const parser = new PjsParser();
 
@@ -356,7 +361,7 @@ const frames = parser.generateFrames(
 ### Priority Constants
 
 ```javascript
-import { PriorityConstants } from 'pjs-wasm';
+import { PriorityConstants } from '@pjson/wasm';
 
 PriorityConstants.CRITICAL    // 100 - Essential data (IDs, status)
 PriorityConstants.HIGH        // 80  - Important visible data (names, titles)
@@ -370,7 +375,7 @@ PriorityConstants.BACKGROUND  // 10  - Analytics, logs
 Customize which fields receive which priorities:
 
 ```javascript
-import { PjsParser, PriorityConfigBuilder } from 'pjs-wasm';
+import { PjsParser, PriorityConfigBuilder } from '@pjson/wasm';
 
 const config = new PriorityConfigBuilder()
     .addCriticalField('user_id')

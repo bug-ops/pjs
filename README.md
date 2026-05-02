@@ -42,7 +42,7 @@ Or add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-pjson-rs = "0.5"
+pjson-rs = "0.6"
 ```
 
 > [!NOTE]
@@ -76,7 +76,7 @@ cargo run --example compression_demo --features compression
 ### WebAssembly (Browser)
 
 ```bash
-npm install pjs-wasm
+npm install @pjson/wasm
 ```
 
 #### PriorityStream API (Recommended)
@@ -147,10 +147,10 @@ Try the [Browser Demo](crates/pjs-wasm/demo/) with transport switching, performa
 ### WebAssembly (Node.js)
 
 ```javascript
-import init, { PjsParser } from 'pjs-wasm';
+import init, { PjsParser } from '@pjson/node';
 import { readFile } from 'fs/promises';
 
-const wasmBuffer = await readFile('./node_modules/pjs-wasm/pkg/pjs_wasm_bg.wasm');
+const wasmBuffer = await readFile('./node_modules/@pjson/node/pjs_wasm_bg.wasm');
 await init(wasmBuffer);
 
 const parser = new PjsParser();
@@ -217,13 +217,17 @@ cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `simd-auto` | Auto-detect SIMD support | ✅ Yes |
-| `simd-avx2` | Force AVX2 SIMD | No |
-| `simd-neon` | Force ARM NEON | No |
+| `simd-auto` | Auto-detect SIMD support at runtime | ✅ Yes |
+| `simd-avx2` | Force AVX2 SIMD path | No |
+| `simd-avx512` | Force AVX-512 SIMD path (sonic-rs) | No |
+| `simd-sse42` | Force SSE4.2 SIMD path | No |
+| `simd-neon` | Force ARM NEON SIMD path | No |
 | `schema-validation` | Schema validation engine | ✅ Yes |
-| `compression` | zlib/gzip/brotli decompression | ✅ Yes |
+| `compression` | zlib/gzip/brotli/zstd decompression with per-session dictionaries | ✅ Yes |
+| `partial-parse` | Streaming partial JSON parsing (`jiter` backend) | No |
 | `http-server` | Axum HTTP server and CQRS endpoints | ✅ Yes |
 | `http-client` | reqwest-based HTTP client | ✅ Yes |
+| `http-auth-jwt` | JWT authentication middleware | No |
 | `websocket-server` | WebSocket transport (server) | ✅ Yes |
 | `websocket-client` | WebSocket transport (client) | ✅ Yes |
 | `mimalloc` | Use mimalloc as global allocator | No |
@@ -236,7 +240,7 @@ cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 PJS includes built-in security features to prevent DoS attacks:
 
 ```javascript
-import { PriorityStream, SecurityConfig } from 'pjs-wasm';
+import { PriorityStream, SecurityConfig } from '@pjson/wasm';
 
 const security = new SecurityConfig()
     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB limit
