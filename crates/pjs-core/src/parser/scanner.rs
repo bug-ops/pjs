@@ -44,7 +44,9 @@ pub struct ScanResult {
 /// Range representing start and end positions
 #[derive(Debug, Clone, Copy)]
 pub struct Range {
+    /// Inclusive byte offset of the first byte in the range.
     pub start: usize,
+    /// Exclusive byte offset one past the last byte in the range.
     pub end: usize,
 }
 

@@ -39,53 +39,80 @@ pub struct SchemaMetadataDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SchemaDefinitionDto {
+    /// JSON string with optional length, pattern, and enumeration constraints.
     String {
+        /// Minimum allowed length in UTF-8 bytes.
         #[serde(skip_serializing_if = "Option::is_none")]
         min_length: Option<usize>,
+        /// Maximum allowed length in UTF-8 bytes.
         #[serde(skip_serializing_if = "Option::is_none")]
         max_length: Option<usize>,
+        /// Regular expression the string must match.
         #[serde(skip_serializing_if = "Option::is_none")]
         pattern: Option<String>,
+        /// Closed set of values the string is permitted to take.
         #[serde(skip_serializing_if = "Option::is_none")]
         enum_values: Option<Vec<String>>,
     },
+    /// JSON integer with optional inclusive bounds.
     Integer {
+        /// Minimum allowed value (inclusive).
         #[serde(skip_serializing_if = "Option::is_none")]
         minimum: Option<i64>,
+        /// Maximum allowed value (inclusive).
         #[serde(skip_serializing_if = "Option::is_none")]
         maximum: Option<i64>,
     },
+    /// JSON number (floating-point) with optional inclusive bounds.
     Number {
+        /// Minimum allowed value (inclusive).
         #[serde(skip_serializing_if = "Option::is_none")]
         minimum: Option<f64>,
+        /// Maximum allowed value (inclusive).
         #[serde(skip_serializing_if = "Option::is_none")]
         maximum: Option<f64>,
     },
+    /// JSON boolean.
     Boolean,
+    /// JSON null.
     Null,
+    /// JSON array with optional element schema and size constraints.
     Array {
+        /// Schema each element must satisfy, or `None` to allow any.
         #[serde(skip_serializing_if = "Option::is_none")]
         items: Option<Box<SchemaDefinitionDto>>,
+        /// Minimum number of elements (inclusive).
         #[serde(skip_serializing_if = "Option::is_none")]
         min_items: Option<usize>,
+        /// Maximum number of elements (inclusive).
         #[serde(skip_serializing_if = "Option::is_none")]
         max_items: Option<usize>,
+        /// When `true`, all elements must be distinct.
         #[serde(default)]
         unique_items: bool,
     },
+    /// JSON object with named properties and required-field constraints.
     Object {
+        /// Schema of each named property.
         properties: HashMap<String, SchemaDefinitionDto>,
+        /// Names of properties that must be present.
         #[serde(default)]
         required: Vec<String>,
+        /// When `true`, properties not listed in `properties` are accepted.
         #[serde(default = "default_true")]
         additional_properties: bool,
     },
+    /// Logical OR — value must validate against exactly one branch.
     OneOf {
+        /// Candidate schemas; the value must match exactly one.
         schemas: Vec<SchemaDefinitionDto>,
     },
+    /// Logical AND — value must validate against every branch.
     AllOf {
+        /// Schemas all of which the value must satisfy.
         schemas: Vec<SchemaDefinitionDto>,
     },
+    /// Accepts any JSON value without further validation.
     Any,
 }
 

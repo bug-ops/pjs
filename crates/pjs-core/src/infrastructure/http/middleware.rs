@@ -23,6 +23,7 @@ pub struct PjsMiddleware {
 }
 
 impl PjsMiddleware {
+    /// Construct middleware with default settings (compression and metrics enabled, 10 MiB cap).
     pub fn new() -> Self {
         Self {
             enable_compression: true,
@@ -31,16 +32,19 @@ impl PjsMiddleware {
         }
     }
 
+    /// Toggle the `X-PJS-Compression` advertisement header.
     pub fn with_compression(mut self, enabled: bool) -> Self {
         self.enable_compression = enabled;
         self
     }
 
+    /// Toggle the `X-PJS-Duration-Ms` and `X-PJS-Version` response headers.
     pub fn with_metrics(mut self, enabled: bool) -> Self {
         self.enable_metrics = enabled;
         self
     }
 
+    /// Set the maximum allowed `Content-Length` for incoming requests, in bytes.
     pub fn with_max_request_size(mut self, size: usize) -> Self {
         self.max_request_size = size;
         self
@@ -64,6 +68,7 @@ impl<S> Layer<S> for PjsMiddleware {
     }
 }
 
+/// Tower service produced by [`PjsMiddleware`].
 #[derive(Clone)]
 pub struct PjsMiddlewareService<S> {
     inner: S,
@@ -153,6 +158,7 @@ impl Default for RateLimitConfig {
 }
 
 impl RateLimitConfig {
+    /// Build a per-minute rate limit (`requests_per_minute` requests per 60-second window).
     pub fn new(requests_per_minute: u32) -> Self {
         Self {
             max_requests_per_window: requests_per_minute,
@@ -160,6 +166,7 @@ impl RateLimitConfig {
         }
     }
 
+    /// Override the window duration that `max_requests_per_window` applies to.
     pub fn with_window(mut self, duration: std::time::Duration) -> Self {
         self.window_duration = duration;
         self
@@ -177,6 +184,7 @@ pub struct RateLimitMiddleware {
 }
 
 impl RateLimitMiddleware {
+    /// Build a fresh middleware with its own internal `WebSocketRateLimiter`.
     pub fn new(config: RateLimitConfig) -> Self {
         let rate_limit_config = crate::security::rate_limit::RateLimitConfig {
             max_requests_per_window: config.max_requests_per_window,
@@ -191,6 +199,7 @@ impl RateLimitMiddleware {
         }
     }
 
+    /// Wrap an externally constructed `WebSocketRateLimiter` (lets several middlewares share state).
     pub fn from_limiter(
         limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
     ) -> Self {
@@ -209,6 +218,7 @@ impl<S> Layer<S> for RateLimitMiddleware {
     }
 }
 
+/// Tower service produced by [`RateLimitMiddleware`].
 #[derive(Clone)]
 pub struct RateLimitService<S> {
     inner: S,
@@ -453,6 +463,7 @@ pub struct CircuitBreakerMiddleware {
 }
 
 impl CircuitBreakerMiddleware {
+    /// Build with default thresholds (5 failures, 30-second recovery).
     pub fn new() -> Self {
         Self {
             failure_threshold: 5,
@@ -460,11 +471,13 @@ impl CircuitBreakerMiddleware {
         }
     }
 
+    /// Override the consecutive-failure threshold that opens the circuit.
     pub fn with_failure_threshold(mut self, threshold: usize) -> Self {
         self.failure_threshold = threshold;
         self
     }
 
+    /// Override the recovery (cool-down) duration in seconds.
     pub fn with_recovery_timeout(mut self, seconds: u64) -> Self {
         self.recovery_timeout_seconds = seconds;
         self

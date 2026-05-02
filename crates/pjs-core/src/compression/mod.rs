@@ -60,14 +60,22 @@ pub enum CompressionStrategy {
     /// No compression applied
     None,
     /// Dictionary-based compression for repeating string patterns
-    Dictionary { dictionary: HashMap<String, u16> },
+    Dictionary {
+        /// Mapping from frequent string to assigned dictionary index.
+        dictionary: HashMap<String, u16>,
+    },
     /// Delta encoding for numeric sequences
-    Delta { base_values: HashMap<String, f64> },
+    Delta {
+        /// Per-field base value subtracted before delta encoding.
+        base_values: HashMap<String, f64>,
+    },
     /// Run-length encoding for repeated values
     RunLength,
     /// Hybrid approach combining multiple strategies
     Hybrid {
+        /// Dictionary used for the string-replacement pass.
         string_dict: HashMap<String, u16>,
+        /// Per-field base values used for the delta-encoding pass.
         numeric_deltas: HashMap<String, f64>,
     },
 }
@@ -774,9 +782,13 @@ impl SchemaCompressor {
 /// Compressed data with metadata
 #[derive(Debug, Clone)]
 pub struct CompressedData {
+    /// Strategy that produced the compressed payload.
     pub strategy: CompressionStrategy,
+    /// Size of `data` after JSON serialization, in bytes.
     pub compressed_size: usize,
+    /// JSON payload after compression has been applied.
     pub data: JsonValue,
+    /// Side-channel metadata required for decompression (dictionaries, base values, etc.).
     pub compression_metadata: HashMap<String, JsonValue>,
 }
 

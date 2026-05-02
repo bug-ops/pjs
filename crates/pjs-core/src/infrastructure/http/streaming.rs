@@ -22,6 +22,7 @@ pub enum StreamFormat {
 }
 
 impl StreamFormat {
+    /// Pick a streaming format based on the request's `Accept` header.
     pub fn from_accept_header(headers: &HeaderMap) -> Self {
         if let Some(accept) = headers.get(header::ACCEPT)
             && let Ok(accept_str) = accept.to_str()
@@ -37,6 +38,7 @@ impl StreamFormat {
         Self::Json
     }
 
+    /// MIME type that corresponds to this streaming format.
     pub fn content_type(&self) -> &'static str {
         match self {
             Self::Json => "application/json",
@@ -152,6 +154,7 @@ impl<S> AdaptiveFrameStream<S>
 where
     S: Stream<Item = Frame> + Unpin + Send + 'static,
 {
+    /// Wrap a frame stream and produce frame bytes in `format`.
     pub fn new(stream: S, format: StreamFormat) -> Self {
         Self {
             inner: stream,
@@ -161,11 +164,13 @@ where
         }
     }
 
+    /// Toggle gzip compression of each frame payload (requires the `compression` feature).
     pub fn with_compression(mut self, enabled: bool) -> Self {
         self.compression = enabled;
         self
     }
 
+    /// Override how many frames are prefetched per executor wake-up.
     pub fn with_buffer_size(mut self, size: usize) -> Self {
         self.buffer_size = size;
         self
@@ -218,6 +223,7 @@ impl<S> BatchFrameStream<S>
 where
     S: Stream<Item = Frame> + Unpin + Send + 'static,
 {
+    /// Wrap a frame stream and emit batches of up to `batch_size` frames.
     pub fn new(stream: S, format: StreamFormat, batch_size: usize) -> Self {
         Self {
             inner: stream,
@@ -313,6 +319,7 @@ impl<S> PriorityFrameStream<S>
 where
     S: Stream<Item = Frame> + Unpin + Send + 'static,
 {
+    /// Wrap a frame stream that reorders frames by priority before emitting them.
     pub fn new(stream: S, format: StreamFormat, buffer_size: usize) -> Self {
         Self {
             inner: stream,
@@ -372,15 +379,19 @@ where
 /// Stream error types
 #[derive(Debug, thiserror::Error)]
 pub enum StreamError {
+    /// Frame failed to serialize to JSON.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    /// Underlying I/O or transport failure.
     #[error("IO error: {0}")]
     Io(String),
 
+    /// Internal buffer overflowed before consumers could drain it.
     #[error("Buffer overflow")]
     BufferOverflow,
 
+    /// The stream was closed before completing the operation.
     #[error("Stream closed")]
     StreamClosed,
 }

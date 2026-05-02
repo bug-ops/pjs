@@ -695,7 +695,9 @@ impl Drop for PooledBuffer {
 /// Result of cleanup operation
 #[derive(Debug, Clone)]
 pub struct CleanupStats {
+    /// Number of buffers reclaimed and returned to the system.
     pub freed_buffers: usize,
+    /// Total memory freed by the cleanup, in bytes.
     pub freed_memory: usize,
 }
 

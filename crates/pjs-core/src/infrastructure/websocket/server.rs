@@ -260,6 +260,7 @@ impl AxumWebSocketTransport {
         info!("WebSocket connection closed for {}", client_ip);
     }
 
+    /// Returns a shared handle to the underlying [`AdaptiveStreamController`].
     pub fn controller(&self) -> Arc<AdaptiveStreamController> {
         self.controller.clone()
     }

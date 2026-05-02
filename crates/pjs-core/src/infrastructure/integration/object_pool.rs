@@ -32,10 +32,15 @@ pub struct ObjectPool<T> {
 /// for monitoring and diagnostics only.
 #[derive(Debug, Clone, Default)]
 pub struct PoolStats {
+    /// Total number of objects ever produced by the factory.
     pub objects_created: usize,
+    /// Total number of times an object was reused from the pool.
     pub objects_reused: usize,
+    /// Total number of objects returned to the pool on drop.
     pub objects_returned: usize,
+    /// Highest concurrent in-use count observed.
     pub peak_usage: usize,
+    /// Number of objects currently parked in the pool.
     pub current_pool_size: usize,
 }
 
@@ -162,6 +167,7 @@ impl<T: 'static> CleaningPooledObject<T> {
         Self { inner }
     }
 
+    /// Take ownership of the inner object, preventing return to the pool on drop.
     pub fn take(self) -> T {
         self.inner.take()
     }
@@ -190,25 +196,28 @@ static CLEANING_BYTE_VEC: Lazy<ObjectPool<Vec<u8>>> =
 static CLEANING_STRING_VEC: Lazy<ObjectPool<Vec<String>>> =
     Lazy::new(|| ObjectPool::new(50, || Vec::with_capacity(16)));
 
-/// Convenience functions for global cleaning pools
+/// Borrow a cleared `HashMap<Cow<'static, str>, Cow<'static, str>>` from the global pool.
 pub fn get_cow_hashmap() -> CleaningPooledObject<HashMap<Cow<'static, str>, Cow<'static, str>>> {
     let mut obj = CLEANING_COW_HASHMAP.get();
     obj.clear(); // Clean before use
     CleaningPooledObject::new(obj)
 }
 
+/// Borrow a cleared `HashMap<String, String>` from the global pool.
 pub fn get_string_hashmap() -> CleaningPooledObject<HashMap<String, String>> {
     let mut obj = CLEANING_STRING_HASHMAP.get();
     obj.clear(); // Clean before use
     CleaningPooledObject::new(obj)
 }
 
+/// Borrow a cleared `Vec<u8>` buffer from the global pool.
 pub fn get_byte_vec() -> CleaningPooledObject<Vec<u8>> {
     let mut obj = CLEANING_BYTE_VEC.get();
     obj.clear(); // Clean before use
     CleaningPooledObject::new(obj)
 }
 
+/// Borrow a cleared `Vec<String>` from the global pool.
 pub fn get_string_vec() -> CleaningPooledObject<Vec<String>> {
     let mut obj = CLEANING_STRING_VEC.get();
     obj.clear(); // Clean before use
@@ -218,12 +227,19 @@ pub fn get_string_vec() -> CleaningPooledObject<Vec<String>> {
 /// Pool statistics aggregator
 #[derive(Debug, Clone)]
 pub struct GlobalPoolStats {
+    /// Stats for the global `Cow` HashMap pool.
     pub cow_hashmap: PoolStats,
+    /// Stats for the global `String` HashMap pool.
     pub string_hashmap: PoolStats,
+    /// Stats for the global byte buffer pool.
     pub byte_vec: PoolStats,
+    /// Stats for the global `Vec<String>` pool.
     pub string_vec: PoolStats,
+    /// Sum of objects produced across all pools.
     pub total_objects_created: usize,
+    /// Sum of object reuses across all pools.
     pub total_objects_reused: usize,
+    /// Overall reuse ratio in `[0.0, 1.0]`.
     pub total_reuse_ratio: f64,
 }
 

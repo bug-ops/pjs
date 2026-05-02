@@ -37,39 +37,61 @@ pub use server::*;
 pub enum WsMessage {
     /// Stream initialization request
     StreamInit {
+        /// Identifier of the WebSocket session.
         session_id: String,
+        /// Source JSON payload to be streamed.
         data: Value,
+        /// Per-stream options controlling framing and compression.
         options: StreamOptions,
     },
     /// Stream frame with priority data
     StreamFrame {
+        /// Identifier of the WebSocket session.
         session_id: String,
+        /// Monotonic frame index within the session.
         frame_id: u32,
+        /// Priority assigned to this frame.
         priority: u8,
+        /// Payload carried by the frame.
         payload: Value,
+        /// Whether this frame completes the stream.
         is_complete: bool,
     },
     /// Client acknowledgment of frame
     FrameAck {
+        /// Identifier of the WebSocket session.
         session_id: String,
+        /// Index of the frame being acknowledged.
         frame_id: u32,
+        /// Time the client took to process the frame, in milliseconds.
         processing_time_ms: u64,
     },
     /// Stream completion signal
     StreamComplete {
+        /// Identifier of the WebSocket session.
         session_id: String,
+        /// SHA-256 checksum of the concatenated frame payloads.
         checksum: String,
     },
     /// Error message
     Error {
+        /// Identifier of the WebSocket session, if known.
         session_id: Option<String>,
+        /// Human-readable error description.
         error: String,
+        /// Numeric error code.
         code: u16,
     },
     /// Heartbeat/ping message
-    Ping { timestamp: u64 },
+    Ping {
+        /// Wall-clock timestamp at which the ping was sent.
+        timestamp: u64,
+    },
     /// Heartbeat/pong response
-    Pong { timestamp: u64 },
+    Pong {
+        /// Wall-clock timestamp at which the pong was sent.
+        timestamp: u64,
+    },
 }
 
 /// Stream configuration options
@@ -112,27 +134,41 @@ impl Default for StreamOptions {
 /// the two session models.
 #[derive(Debug)]
 pub struct WebSocketStreamSession {
+    /// Transport-local session identifier.
     pub id: String,
+    /// Instant the session was created.
     pub created_at: Instant,
+    /// Streaming options negotiated for this session.
     pub options: StreamOptions,
-    pub plan: Vec<StreamFrame>, // Simplified for now
+    /// Pre-computed delivery plan as an ordered list of frames.
+    pub plan: Vec<StreamFrame>,
+    /// Index of the next frame to send.
     pub current_frame: u32,
+    /// Frame indices acknowledged by the client so far.
     pub acknowledged_frames: Vec<u32>,
+    /// Adaptive streaming metrics derived from client acks.
     pub client_metrics: ClientMetrics,
+    /// Rate-limit guard scoped to this session, if installed.
     pub rate_limit_guard: Option<RateLimitGuard>,
 }
 
 /// Client performance metrics for adaptive streaming
 #[derive(Debug, Default)]
 pub struct ClientMetrics {
+    /// Exponential moving average of client frame-processing time, in milliseconds.
     pub average_processing_time_ms: f64,
+    /// Number of frames the client has acknowledged.
     pub frames_acknowledged: u32,
+    /// Instant of the most recent acknowledgement, if any.
     pub last_ack_time: Option<Instant>,
+    /// Estimated downlink bandwidth, in kilobits per second, if measured.
     pub estimated_bandwidth_kbps: Option<f64>,
+    /// Round-trip time of the WebSocket connection, in milliseconds, if measured.
     pub connection_rtt_ms: Option<u64>,
 }
 
 impl ClientMetrics {
+    /// Fold a new processing-time observation into the moving average.
     pub fn update_processing_time(&mut self, processing_time_ms: u64) {
         let new_time = processing_time_ms as f64;
         if self.frames_acknowledged == 0 {
@@ -147,10 +183,12 @@ impl ClientMetrics {
         self.last_ack_time = Some(Instant::now());
     }
 
+    /// Returns `true` when average client processing time exceeds the slow-client threshold.
     pub fn is_client_slow(&self) -> bool {
         self.average_processing_time_ms > 100.0 // > 100ms per frame
     }
 
+    /// Recommended delay between frames given the current processing-time average.
     pub fn recommended_frame_delay(&self) -> Duration {
         if self.is_client_slow() {
             Duration::from_millis((self.average_processing_time_ms * 0.5) as u64)
@@ -162,6 +200,7 @@ impl ClientMetrics {
 
 /// WebSocket transport trait for different implementations (GAT-based)
 pub trait WebSocketTransport: Send + Sync {
+    /// Concrete connection type the implementor uses for I/O.
     type Connection: Send + Sync;
 
     /// Future type for starting stream
@@ -217,6 +256,7 @@ pub struct AdaptiveStreamController {
 }
 
 impl AdaptiveStreamController {
+    /// Create an empty controller with no active sessions.
     pub fn new() -> Self {
         let (frame_tx, _) = broadcast::channel(1000);
 

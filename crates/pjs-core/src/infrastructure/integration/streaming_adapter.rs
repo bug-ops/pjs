@@ -59,19 +59,28 @@ impl StreamingFormat {
 /// Response body variants supported by the universal adapter
 #[derive(Debug, Clone)]
 pub enum ResponseBody {
+    /// Single JSON value.
     Json(JsonData),
+    /// Stream of priority frames (typically NDJSON-encoded).
     Stream(Vec<StreamFrame>),
+    /// Server-Sent Events payload as preformatted strings.
     ServerSentEvents(Vec<String>),
+    /// Opaque binary payload.
     Binary(Vec<u8>),
+    /// Empty body.
     Empty,
 }
 
 /// Universal response type for framework integration
 #[derive(Debug, Clone)]
 pub struct UniversalResponse {
+    /// HTTP status code.
     pub status_code: u16,
+    /// Response headers.
     pub headers: HashMap<Cow<'static, str>, Cow<'static, str>>,
+    /// Response body.
     pub body: ResponseBody,
+    /// Value for the `Content-Type` header.
     pub content_type: Cow<'static, str>,
 }
 
@@ -158,10 +167,15 @@ impl UniversalResponse {
 /// Universal request type for framework integration
 #[derive(Debug, Clone)]
 pub struct UniversalRequest {
+    /// HTTP method (`GET`, `POST`, etc.).
     pub method: Cow<'static, str>,
+    /// Request path (without query string).
     pub path: String,
+    /// Request headers.
     pub headers: HashMap<Cow<'static, str>, Cow<'static, str>>,
+    /// Decoded query-string parameters.
     pub query_params: HashMap<String, String>,
+    /// Raw request body, if any.
     pub body: Option<Vec<u8>>,
 }
 
@@ -234,25 +248,32 @@ impl UniversalRequest {
 /// Framework integration errors
 #[derive(Debug, thiserror::Error)]
 pub enum IntegrationError {
+    /// Adapter does not support the requested framework.
     #[error("Unsupported framework: {0}")]
     UnsupportedFramework(String),
 
+    /// Failure converting the framework-native request to [`UniversalRequest`].
     #[error("Request conversion failed: {0}")]
     RequestConversion(String),
 
+    /// Failure converting [`UniversalResponse`] to the framework-native response.
     #[error("Response conversion failed: {0}")]
     ResponseConversion(String),
 
+    /// The framework being integrated does not support streaming responses.
     #[error("Streaming not supported by framework")]
     StreamingNotSupported,
 
+    /// Adapter configuration is invalid.
     #[error("Configuration error: {0}")]
     Configuration(String),
 
+    /// SIMD-accelerated processing failed.
     #[error("SIMD processing error: {0}")]
     SimdProcessing(String),
 }
 
+/// Result alias for fallible adapter operations.
 pub type IntegrationResult<T> = Result<T, IntegrationError>;
 
 /// High-performance streaming adapter using GAT zero-cost abstractions
@@ -274,18 +295,23 @@ pub trait StreamingAdapter: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
     // Zero-cost GAT futures with impl Trait - true zero-cost abstractions
+
+    /// Future returned by [`create_streaming_response`](Self::create_streaming_response).
     type StreamingResponseFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`create_sse_response`](Self::create_sse_response).
     type SseResponseFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`create_json_response`](Self::create_json_response).
     type JsonResponseFuture<'a>: Future<Output = IntegrationResult<Self::Response>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`apply_middleware`](Self::apply_middleware).
     type MiddlewareFuture<'a>: Future<Output = IntegrationResult<UniversalResponse>> + Send + 'a
     where
         Self: 'a;

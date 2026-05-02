@@ -69,12 +69,19 @@ impl<T: super::gat::CacheGat> CacheExtensions for T {}
 /// Criteria for session queries
 #[derive(Debug, Clone, Default)]
 pub struct SessionQueryCriteria {
+    /// Match sessions whose state is one of these values.
     pub states: Option<Vec<String>>,
+    /// Match sessions created at or after this timestamp.
     pub created_after: Option<DateTime<Utc>>,
+    /// Match sessions created at or before this timestamp.
     pub created_before: Option<DateTime<Utc>>,
+    /// Match sessions whose client info matches this pattern (substring or glob).
     pub client_info_pattern: Option<String>,
+    /// When `Some`, match sessions that currently do (or do not) have active streams.
     pub has_active_streams: Option<bool>,
+    /// Minimum number of streams the session must contain.
     pub min_stream_count: Option<usize>,
+    /// Maximum number of streams the session may contain.
     pub max_stream_count: Option<usize>,
 }
 
@@ -125,9 +132,13 @@ impl SessionQueryCriteria {
 /// Pagination parameters
 #[derive(Debug, Clone)]
 pub struct Pagination {
+    /// Number of items to skip before returning results.
     pub offset: usize,
+    /// Maximum number of items to return.
     pub limit: usize,
+    /// Optional field name to sort by; must be in the allowed sort field list.
     pub sort_by: Option<String>,
+    /// Sort direction applied to `sort_by`.
     pub sort_order: SortOrder,
 }
 
@@ -216,18 +227,25 @@ impl Pagination {
     }
 }
 
+/// Direction in which results are ordered.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SortOrder {
+    /// Ascending order (smallest first).
     Ascending,
+    /// Descending order (largest first).
     Descending,
 }
 
 /// Result of session query with metadata
 #[derive(Debug, Clone)]
 pub struct SessionQueryResult {
+    /// Sessions returned in this page.
     pub sessions: Vec<StreamSession>,
+    /// Total number of sessions matching the query, ignoring pagination.
     pub total_count: usize,
+    /// Whether more sessions exist beyond this page.
     pub has_more: bool,
+    /// Wall-clock duration of the query in milliseconds.
     pub query_duration_ms: u64,
     /// Indicates if MAX_SCAN_LIMIT was reached during query execution.
     ///
@@ -240,12 +258,19 @@ pub struct SessionQueryResult {
 /// Snapshot of session health
 #[derive(Debug, Clone)]
 pub struct SessionHealthSnapshot {
+    /// Identifier of the session this snapshot describes.
     pub session_id: SessionId,
+    /// Aggregate health flag derived from rates and recent activity.
     pub is_healthy: bool,
+    /// Number of streams currently in an active state.
     pub active_streams: usize,
+    /// Total number of frames emitted by the session.
     pub total_frames: u64,
+    /// Timestamp of the most recent activity within the session.
     pub last_activity: DateTime<Utc>,
+    /// Fraction of recent operations that returned errors, in `[0.0, 1.0]`.
     pub error_rate: f64,
+    /// Free-form named metrics captured at snapshot time.
     pub metrics: HashMap<String, f64>,
 }
 
@@ -317,42 +342,64 @@ impl StreamFilter {
 /// Stream status enumeration
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamStatus {
+    /// Stream has been created but not yet started.
     Created,
+    /// Stream is actively emitting frames.
     Active,
+    /// Stream has been paused; can resume.
     Paused,
+    /// Stream finished successfully.
     Completed,
+    /// Stream terminated with an error.
     Failed,
+    /// Stream was cancelled by request before completion.
     Cancelled,
 }
 
 /// Stream metadata for indexing
 #[derive(Debug, Clone, Default)]
 pub struct StreamMetadata {
+    /// Free-form name/value tags attached to the stream.
     pub tags: HashMap<String, String>,
+    /// MIME type of the payload, when known.
     pub content_type: Option<String>,
+    /// Estimated total payload size in bytes, when known.
     pub estimated_size: Option<u64>,
+    /// Hints for likely priorities of frames within the stream.
     pub priority_hints: Vec<Priority>,
 }
 
 /// Stream statistics
 #[derive(Debug, Clone)]
 pub struct StreamStatistics {
+    /// Total number of frames emitted by the stream.
     pub total_frames: u64,
+    /// Total number of payload bytes emitted by the stream.
     pub total_bytes: u64,
+    /// Distribution of frames across priority buckets.
     pub priority_distribution: PriorityDistribution,
+    /// Average payload size per frame, in bytes.
     pub avg_frame_size: f64,
+    /// Timestamp when the stream was created.
     pub creation_time: DateTime<Utc>,
+    /// Timestamp when the stream completed, if it has.
     pub completion_time: Option<DateTime<Utc>>,
+    /// Total processing duration from start to completion, if completed.
     pub processing_duration: Option<std::time::Duration>,
 }
 
 /// Result of frame queries
 #[derive(Debug, Clone)]
 pub struct FrameQueryResult {
+    /// Frames returned in this page.
     pub frames: Vec<Frame>,
+    /// Total number of frames matching the query, ignoring pagination.
     pub total_count: usize,
+    /// Whether more frames exist beyond this page.
     pub has_more: bool,
+    /// Highest priority observed across the returned frames, if any.
     pub highest_priority: Option<Priority>,
+    /// Lowest priority observed across the returned frames, if any.
     pub lowest_priority: Option<Priority>,
 }
 
@@ -362,10 +409,15 @@ pub use crate::domain::events::PriorityDistribution;
 /// Cache performance statistics
 #[derive(Debug, Clone)]
 pub struct CacheStatistics {
+    /// Fraction of lookups served from cache, in `[0.0, 1.0]`.
     pub hit_rate: f64,
+    /// Fraction of lookups that missed the cache, in `[0.0, 1.0]`.
     pub miss_rate: f64,
+    /// Total number of keys currently held in the cache.
     pub total_keys: u64,
+    /// Approximate memory occupied by the cache, in bytes.
     pub memory_usage_bytes: u64,
+    /// Number of entries evicted since the cache was created.
     pub eviction_count: u64,
 }
 

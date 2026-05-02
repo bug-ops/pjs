@@ -282,31 +282,42 @@ where
 /// Request to create a new streaming session
 #[derive(Debug, Deserialize)]
 pub struct CreateSessionRequest {
+    /// Maximum number of streams the session is allowed to host concurrently.
     pub max_concurrent_streams: Option<usize>,
+    /// Idle timeout for the session, in seconds.
     pub timeout_seconds: Option<u64>,
+    /// Optional human-readable client identifier.
     pub client_info: Option<String>,
 }
 
 /// Response for session creation
 #[derive(Debug, Serialize)]
 pub struct CreateSessionResponse {
+    /// Newly assigned session identifier.
     pub session_id: String,
+    /// Wall-clock instant after which the session expires.
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Request to start streaming data
 #[derive(Debug, Deserialize)]
 pub struct StartStreamRequest {
+    /// JSON payload to be decomposed into priority frames.
     pub data: JsonValue,
+    /// Minimum frame priority to emit; lower-priority frames are dropped.
     pub priority_threshold: Option<u8>,
+    /// Maximum number of frames to emit before the stream is closed.
     pub max_frames: Option<usize>,
 }
 
 /// Stream response parameters
 #[derive(Debug, Deserialize)]
 pub struct StreamParams {
+    /// Identifier of the streaming session.
     pub session_id: String,
+    /// Optional minimum priority filter applied to emitted frames.
     pub priority: Option<u8>,
+    /// Optional response format selector (for example, `"json"` or `"sse"`).
     pub format: Option<String>,
 }
 
@@ -319,7 +330,9 @@ pub struct StreamParams {
 ///   unbounded number of frames.
 #[derive(Debug, Default, Deserialize)]
 pub struct GenerateFramesRequest {
+    /// Minimum frame priority to emit; lower-priority frames are dropped.
     pub priority_threshold: Option<u8>,
+    /// Maximum number of frames to emit in this request.
     pub max_frames: Option<usize>,
 }
 
@@ -331,17 +344,24 @@ pub struct GenerateFramesRequest {
 /// is enabled).
 #[derive(Debug, Serialize)]
 pub struct GenerateFramesResponse {
+    /// Frames produced by the priority extractor in this request.
     pub frames: Vec<Frame>,
+    /// Number of frames returned (always equal to `frames.len()`).
     pub frame_count: usize,
 }
 
 /// Session health response
 #[derive(Debug, Serialize)]
 pub struct SessionHealthResponse {
+    /// Aggregate health flag derived from rates and recent activity.
     pub is_healthy: bool,
+    /// Number of streams currently in an active state.
     pub active_streams: usize,
+    /// Number of streams that have terminated with an error.
     pub failed_streams: usize,
+    /// Whether the session has passed its expiry instant.
     pub is_expired: bool,
+    /// Number of seconds since the session was created.
     pub uptime_seconds: i64,
 }
 
@@ -948,17 +968,24 @@ where
 /// Pagination parameters
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
+    /// Maximum number of items to return.
     pub limit: Option<usize>,
+    /// Number of items to skip before returning results.
     pub offset: Option<usize>,
 }
 
 /// Query parameters for session search endpoint.
 #[derive(Debug, Deserialize)]
 pub struct SearchSessionsParams {
+    /// Match sessions whose state equals this value.
     pub state: Option<String>,
+    /// Field name to sort by; ignored if not in the allowed sort field list.
     pub sort_by: Option<String>,
+    /// Sort direction (`"asc"`/`"ascending"` or `"desc"`/`"descending"`).
     pub sort_order: Option<String>,
+    /// Maximum number of sessions to return.
     pub limit: Option<usize>,
+    /// Number of sessions to skip before returning results.
     pub offset: Option<usize>,
 }
 
@@ -997,8 +1024,11 @@ where
 /// Query parameters for frame listing
 #[derive(Debug, Deserialize)]
 pub struct FrameQueryParams {
+    /// Return only frames whose sequence number is greater than this value.
     pub since_sequence: Option<u64>,
+    /// Return only frames whose priority satisfies this filter.
     pub priority: Option<u8>,
+    /// Maximum number of frames to return.
     pub limit: Option<usize>,
 }
 
@@ -1092,18 +1122,23 @@ where
 /// PJS-specific errors for HTTP endpoints
 #[derive(Debug, thiserror::Error)]
 pub enum PjsError {
+    /// Wraps an application-layer error returned by a CQRS handler.
     #[error("Application error: {0}")]
     Application(#[from] crate::application::ApplicationError),
 
+    /// Provided session identifier is malformed or not a valid UUID.
     #[error("Invalid session ID: {0}")]
     InvalidSessionId(String),
 
+    /// Provided stream identifier is malformed or not a valid UUID.
     #[error("Invalid stream ID: {0}")]
     InvalidStreamId(String),
 
+    /// Priority value is out of range or otherwise invalid.
     #[error("Invalid priority: {0}")]
     InvalidPriority(String),
 
+    /// Generic HTTP-layer error not covered by other variants.
     #[error("HTTP error: {0}")]
     HttpError(String),
 }

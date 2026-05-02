@@ -49,10 +49,15 @@ pub struct SonicParser {
 /// Performance statistics for sonic parser
 #[derive(Debug, Default, Clone)]
 pub struct SonicStats {
+    /// Total parses attempted.
     pub total_parses: u64,
+    /// Number of parses successfully handled by the sonic-rs backend.
     pub sonic_successes: u64,
+    /// Number of parses that fell back to the serde backend.
     pub serde_fallbacks: u64,
+    /// Average parse duration, in nanoseconds.
     pub avg_parse_time_ns: u64,
+    /// Total input bytes processed.
     pub bytes_processed: u64,
 }
 

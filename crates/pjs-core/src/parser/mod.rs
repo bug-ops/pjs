@@ -175,11 +175,17 @@ impl Default for Parser {
 /// JSON value types for initial classification
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
+    /// JSON object.
     Object,
+    /// JSON array.
     Array,
+    /// JSON string.
     String,
+    /// JSON number (integer or float).
     Number,
+    /// JSON boolean.
     Boolean,
+    /// JSON null.
     Null,
 }
 

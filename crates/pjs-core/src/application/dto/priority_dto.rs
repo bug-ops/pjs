@@ -46,6 +46,7 @@ impl TryFrom<PriorityDto> for Priority {
 
 /// Utility trait for converting domain objects to DTOs
 pub trait ToDto<T> {
+    /// Convert this domain object into its DTO representation.
     fn to_dto(self) -> T;
 }
 
@@ -55,9 +56,12 @@ impl ToDto<PriorityDto> for Priority {
     }
 }
 
-/// Utility trait for converting DTOs to domain objects  
+/// Utility trait for converting DTOs to domain objects
 pub trait FromDto<T> {
+    /// Error returned when the DTO cannot be reconstructed into a valid domain object.
     type Error;
+
+    /// Convert a DTO into its domain representation, validating invariants.
     fn from_dto(dto: T) -> Result<Self, Self::Error>
     where
         Self: Sized;

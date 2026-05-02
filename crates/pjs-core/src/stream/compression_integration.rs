@@ -27,6 +27,7 @@ pub struct StreamingCompressor {
     stats: CompressionStats,
 }
 
+/// Compression statistics gathered by [`StreamingCompressor`].
 #[derive(Debug, Clone, Default)]
 pub struct CompressionStats {
     /// Total bytes processed
@@ -50,6 +51,7 @@ pub struct CompressedFrame {
     pub decompression_metadata: DecompressionMetadata,
 }
 
+/// Side-channel data needed by clients to undo a [`CompressedFrame`].
 #[derive(Debug, Clone)]
 pub struct DecompressionMetadata {
     /// Compression strategy used
@@ -240,6 +242,7 @@ pub struct StreamingDecompressor {
     stats: DecompressionStats,
 }
 
+/// Counters tracking decompression activity in [`StreamingDecompressor`].
 #[derive(Debug, Clone, Default)]
 pub struct DecompressionStats {
     /// Total frames decompressed

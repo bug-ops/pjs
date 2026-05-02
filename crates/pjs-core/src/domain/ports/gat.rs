@@ -282,30 +282,40 @@ gat_port! {
 ///
 /// Provides transactional operations for session management.
 pub trait SessionTransactionGat: Send + Sync {
+    /// Future returned by [`save_session`](Self::save_session).
     type SaveSessionFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`remove_session`](Self::remove_session).
     type RemoveSessionFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`add_stream`](Self::add_stream).
     type AddStreamFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`commit`](Self::commit).
     type CommitFuture: Future<Output = DomainResult<()>> + Send;
 
+    /// Future returned by [`rollback`](Self::rollback).
     type RollbackFuture: Future<Output = DomainResult<()>> + Send;
 
+    /// Persist `session` within the transaction.
     fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_>;
 
+    /// Remove the session identified by `session_id` within the transaction.
     fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_>;
 
+    /// Attach `stream` to the given session within the transaction.
     fn add_stream(&self, session_id: SessionId, stream: Stream) -> Self::AddStreamFuture<'_>;
 
+    /// Commit the transaction, persisting all staged changes.
     fn commit(self: Box<Self>) -> Self::CommitFuture;
 
+    /// Roll back the transaction, discarding all staged changes.
     fn rollback(self: Box<Self>) -> Self::RollbackFuture;
 }
 
@@ -385,22 +395,27 @@ gat_port! {
 ///
 /// Provides caching operations with borrowed string keys for performance.
 pub trait CacheGat: Send + Sync {
+    /// Future returned by [`get_bytes`](Self::get_bytes).
     type GetBytesFuture<'a>: Future<Output = DomainResult<Option<Vec<u8>>>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`set_bytes`](Self::set_bytes).
     type SetBytesFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`remove`](Self::remove).
     type RemoveFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`clear_prefix`](Self::clear_prefix).
     type ClearPrefixFuture<'a>: Future<Output = DomainResult<()>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`get_stats`](Self::get_stats).
     type GetStatsFuture<'a>: Future<Output = DomainResult<CacheStatistics>> + Send + 'a
     where
         Self: 'a;
@@ -460,10 +475,12 @@ pub trait WriterFactoryGat: Send + Sync {
     /// Associated type for frame writer implementation
     type FrameWriter: FrameWriterGat + Send;
 
+    /// Future returned by [`create_stream_writer`](Self::create_stream_writer).
     type CreateStreamWriterFuture<'a>: Future<Output = DomainResult<Self::StreamWriter>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`create_frame_writer`](Self::create_frame_writer).
     type CreateFrameWriterFuture<'a>: Future<Output = DomainResult<Self::FrameWriter>> + Send + 'a
     where
         Self: 'a;
@@ -487,14 +504,17 @@ pub trait WriterFactoryGat: Send + Sync {
 ///
 /// Monitors connection health and state.
 pub trait ConnectionMonitorGat: Send + Sync {
+    /// Future returned by [`get_connection_state`](Self::get_connection_state).
     type GetConnectionStateFuture<'a>: Future<Output = DomainResult<ConnectionState>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`is_connection_healthy`](Self::is_connection_healthy).
     type IsConnectionHealthyFuture<'a>: Future<Output = DomainResult<bool>> + Send + 'a
     where
         Self: 'a;
 
+    /// Future returned by [`get_connection_metrics`](Self::get_connection_metrics).
     type GetConnectionMetricsFuture<'a>: Future<Output = DomainResult<ConnectionMetrics>>
         + Send
         + 'a

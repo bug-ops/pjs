@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! PJS WebAssembly Bindings
 //!
 //! Provides WASM-compatible interface for PJS domain logic.

@@ -129,6 +129,7 @@ impl Default for GatInMemoryStreamRepository {
 }
 
 impl GatInMemoryStreamRepository {
+    /// Create an empty in-memory session repository.
     pub fn new() -> Self {
         Self {
             store: SessionStore::new(),
@@ -463,6 +464,7 @@ pub struct GatInMemoryStreamStore {
 }
 
 impl GatInMemoryStreamStore {
+    /// Create an empty in-memory stream store.
     pub fn new() -> Self {
         Self {
             store: StreamStore::new(),

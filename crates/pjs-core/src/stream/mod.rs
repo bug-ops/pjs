@@ -119,6 +119,7 @@ impl StreamProcessor {
 /// Stream processing statistics
 #[derive(Debug, Clone)]
 pub struct StreamStats {
+    /// Number of frames processed by the stream.
     pub processed_frames: usize,
 }
 

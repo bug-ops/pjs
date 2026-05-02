@@ -94,12 +94,19 @@ impl Default for SessionConfig {
 /// Session statistics and monitoring
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionStats {
+    /// Total number of streams the session has hosted.
     pub total_streams: u64,
+    /// Number of streams currently in an active state.
     pub active_streams: u64,
+    /// Number of streams that completed successfully.
     pub completed_streams: u64,
+    /// Number of streams that terminated with an error.
     pub failed_streams: u64,
+    /// Total number of frames emitted by the session.
     pub total_frames: u64,
+    /// Total payload bytes emitted by the session.
     pub total_bytes: u64,
+    /// Average per-stream duration, in milliseconds.
     pub average_stream_duration_ms: f64,
 }
 
@@ -619,10 +626,15 @@ impl StreamSession {
 /// Session health information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionHealth {
+    /// Aggregate health flag derived from rates and recent activity.
     pub is_healthy: bool,
+    /// Number of streams currently in an active state.
     pub active_streams: usize,
+    /// Number of streams that have terminated with an error.
     pub failed_streams: usize,
+    /// Whether the session has passed its expiry instant.
     pub is_expired: bool,
+    /// Seconds elapsed since the session was created.
     pub uptime_seconds: i64,
 }
 

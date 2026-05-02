@@ -16,7 +16,9 @@ use std::{marker::PhantomData, str::from_utf8};
 /// This trait enables parsers that work directly on input buffers without
 /// copying data, using Rust's lifetime system to ensure memory safety.
 pub trait LazyParser<'a> {
+    /// Parsed value returned by [`parse_lazy`](Self::parse_lazy).
     type Output;
+    /// Error returned by lazy parsing operations.
     type Error;
 
     /// Parse input lazily, returning references into the original buffer
@@ -591,6 +593,7 @@ impl<'a> Default for IncrementalParser<'a> {
 }
 
 impl<'a> IncrementalParser<'a> {
+    /// Create an empty incremental parser with an 8 KiB initial buffer.
     pub fn new() -> Self {
         Self {
             buffer: Vec::with_capacity(8192), // 8KB initial capacity
