@@ -43,16 +43,23 @@ impl Clone for InMemoryEventPublisher {
     }
 }
 
+/// Event recorded by [`InMemoryEventPublisher`] for inspection and replay.
 #[derive(Debug, Clone)]
 pub struct StoredEvent {
+    /// Identifier of the originating domain event.
     pub id: EventId,
+    /// Stringified event-type discriminant.
     pub event_type: String,
+    /// Identifier of the session the event belongs to, when applicable.
     pub session_id: Option<SessionId>,
+    /// Wall-clock instant the event occurred.
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Free-form metadata captured from the event.
     pub metadata: std::collections::HashMap<String, String>,
 }
 
 impl InMemoryEventPublisher {
+    /// Create an empty publisher with no subscribers and no streaming channel.
     pub fn new() -> Self {
         Self {
             notification_callbacks: Arc::new(DashMap::new()),
@@ -268,6 +275,7 @@ pub struct HttpEventPublisher {
 
 #[cfg(feature = "http-client")]
 impl HttpEventPublisher {
+    /// Build a publisher that POSTs serialized events to `endpoint` with three retries.
     pub fn new(endpoint: String) -> Self {
         Self {
             endpoint,
@@ -276,6 +284,7 @@ impl HttpEventPublisher {
         }
     }
 
+    /// Override the maximum number of retry attempts before giving up.
     pub fn with_retry_attempts(mut self, attempts: usize) -> Self {
         self.retry_attempts = attempts;
         self
@@ -390,6 +399,7 @@ impl EventPublisherGat for HttpEventPublisher {
 /// Event publisher variants for composite pattern
 #[derive(Clone)]
 pub enum EventPublisherVariant {
+    /// Variant backed by [`InMemoryEventPublisher`].
     InMemory(InMemoryEventPublisher),
     // Add more variants as needed
     // Http(HttpEventPublisher),
@@ -431,6 +441,7 @@ pub struct CompositeEventPublisher {
 }
 
 impl CompositeEventPublisher {
+    /// Build an empty composite publisher with no destinations.
     pub fn new() -> Self {
         Self {
             publishers: Vec::new(),
@@ -438,11 +449,13 @@ impl CompositeEventPublisher {
         }
     }
 
+    /// Append `publisher` to the list of destinations.
     pub fn add_publisher(mut self, publisher: EventPublisherVariant) -> Self {
         self.publishers.push(publisher);
         self
     }
 
+    /// When `enabled`, the first failing destination short-circuits the publish.
     pub fn with_fail_fast(mut self, enabled: bool) -> Self {
         self.fail_fast = enabled;
         self

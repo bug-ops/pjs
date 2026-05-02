@@ -7,14 +7,32 @@ use thiserror::Error;
 /// Errors related to compression bomb detection
 #[derive(Error, Debug, Clone)]
 pub enum CompressionBombError {
+    /// Decompressed/compressed ratio exceeded the configured maximum.
     #[error("Compression ratio exceeded: {ratio:.2}x > {max_ratio:.2}x")]
-    RatioExceeded { ratio: f64, max_ratio: f64 },
+    RatioExceeded {
+        /// Observed compression ratio.
+        ratio: f64,
+        /// Configured maximum ratio.
+        max_ratio: f64,
+    },
 
+    /// Decompressed payload exceeded the configured maximum size.
     #[error("Decompressed size exceeded: {size} bytes > {max_size} bytes")]
-    SizeExceeded { size: usize, max_size: usize },
+    SizeExceeded {
+        /// Observed decompressed size in bytes.
+        size: usize,
+        /// Configured maximum size in bytes.
+        max_size: usize,
+    },
 
+    /// Nested compression depth exceeded the configured maximum.
     #[error("Compression depth exceeded: {depth} > {max_depth}")]
-    DepthExceeded { depth: usize, max_depth: usize },
+    DepthExceeded {
+        /// Observed compression depth.
+        depth: usize,
+        /// Configured maximum depth.
+        max_depth: usize,
+    },
 }
 
 /// Configuration for compression bomb protection.
@@ -217,9 +235,13 @@ impl<R: Read> Read for CompressionBombProtector<R> {
 /// Compression statistics for monitoring
 #[derive(Debug, Clone)]
 pub struct CompressionStats {
+    /// Observed size of compressed input, in bytes.
     pub compressed_size: usize,
+    /// Total bytes produced by decompression so far.
     pub decompressed_size: usize,
+    /// Current `decompressed_size / compressed_size` ratio.
     pub ratio: f64,
+    /// Nested compression depth applied to the protected reader.
     pub compression_depth: usize,
 }
 

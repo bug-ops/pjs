@@ -31,6 +31,7 @@ impl<R> SessionQueryHandler<R>
 where
     R: StreamRepositoryGat + 'static,
 {
+    /// Construct a handler that reads sessions from `repository`.
     pub fn new(repository: Arc<R>) -> Self {
         Self { repository }
     }
@@ -304,6 +305,7 @@ where
     S: StreamStoreGat + 'static,
     F: FrameStoreGat + 'static,
 {
+    /// Construct a system-level query handler from the supplied dependencies.
     pub fn new(session_repository: Arc<R>, _stream_store: Arc<S>, frame_store: Arc<F>) -> Self {
         Self {
             session_repository,

@@ -6,9 +6,13 @@
 /// Urgency level for priority adjustments across all application services
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdjustmentUrgency {
+    /// Low urgency — adjustment can be deferred without user-visible impact.
     Low,
+    /// Medium urgency — adjustment should be applied during the next cycle.
     Medium,
+    /// High urgency — adjustment requires prompt action.
     High,
+    /// Critical urgency — adjustment must be applied immediately.
     Critical,
 }
 

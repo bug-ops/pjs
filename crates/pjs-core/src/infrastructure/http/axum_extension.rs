@@ -51,6 +51,7 @@ pub struct PjsExtension {
 }
 
 impl PjsExtension {
+    /// Build a new extension with the given configuration.
     pub fn new(config: HttpExtensionConfig) -> Self {
         Self {
             config,
@@ -123,6 +124,7 @@ where
 /// Marker for PJS streaming requests
 #[derive(Debug, Clone)]
 pub struct PjsStreamingRequest {
+    /// `true` when the middleware detected an opt-in to PJS streaming.
     pub enabled: bool,
 }
 
@@ -142,8 +144,11 @@ pub struct StreamRequest {
 /// Stream response
 #[derive(Debug, Serialize)]
 pub struct StreamResponse {
+    /// Identifier assigned to the new stream.
     pub stream_id: String,
+    /// Selected wire format (`"json"`, `"ndjson"`, or `"sse"`).
     pub format: String,
+    /// Estimated number of frames the stream will emit.
     pub estimated_frames: usize,
 }
 
@@ -261,12 +266,15 @@ async fn handle_pjs_health() -> Json<serde_json::Value> {
 /// Extension-specific errors
 #[derive(Debug, thiserror::Error)]
 pub enum StreamError {
+    /// Failed to analyze the requested payload.
     #[error("Analysis error: {0}")]
     AnalysisError(String),
 
+    /// Failed to build the HTTP response object.
     #[error("Response error: {0}")]
     ResponseError(String),
 
+    /// Requested stream identifier is unknown to the extension.
     #[error("Stream not found: {0}")]
     StreamNotFound(String),
 }

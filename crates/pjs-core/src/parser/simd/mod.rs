@@ -144,22 +144,34 @@ impl SimdClassifier {
 /// JSON value classification for fast type determination
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueClass {
+    /// JSON object.
     Object,
+    /// JSON array.
     Array,
+    /// JSON string.
     String,
+    /// Signed integer that fits into `i64`.
     Integer,
+    /// Unsigned integer that fits into `u64`.
     UnsignedInteger,
+    /// Floating-point number.
     Float,
+    /// JSON boolean.
     Boolean,
+    /// JSON null.
     Null,
 }
 
 /// Result of SIMD object key scanning
 #[derive(Debug, Default)]
 pub struct KeyScanResult {
+    /// Object contained a `timestamp`/`time` key.
     pub has_timestamp: bool,
+    /// Object contained a `coordinates`/`coord` key.
     pub has_coordinates: bool,
+    /// Object contained a `type` key.
     pub has_type_field: bool,
+    /// Total number of keys observed in the object.
     pub key_count: usize,
 }
 
@@ -253,13 +265,18 @@ impl SimdNumericOps {
 /// Statistics calculated for numeric arrays
 #[derive(Debug, Clone)]
 pub struct ArrayStats {
+    /// Smallest value observed.
     pub min: f64,
+    /// Largest value observed.
     pub max: f64,
+    /// Sum of all observed values.
     pub sum: f64,
+    /// Number of numeric values observed.
     pub count: usize,
 }
 
 impl ArrayStats {
+    /// Arithmetic mean of the observed values, or `0.0` when `count` is zero.
     pub fn mean(&self) -> f64 {
         if self.count > 0 {
             self.sum / self.count as f64

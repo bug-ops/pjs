@@ -21,10 +21,15 @@ use tracing::{debug, info, warn};
 /// Statistics for streaming operations
 #[derive(Debug, Clone)]
 pub struct StreamingStats {
+    /// Number of frames processed during the operation.
     pub frames_processed: usize,
+    /// Number of payload bytes written during the operation.
     pub bytes_written: usize,
+    /// Total wall-clock time spent processing.
     pub processing_time: Duration,
+    /// Number of cache hits encountered during processing.
     pub cache_hits: usize,
+    /// Number of cache misses encountered during processing.
     pub cache_misses: usize,
 }
 
@@ -42,9 +47,13 @@ where
 /// Configuration for the orchestrator
 #[derive(Debug, Clone)]
 pub struct OrchestratorConfig {
+    /// Number of frames processed per batch.
     pub batch_size: usize,
+    /// Lifetime for cached values used during processing.
     pub cache_ttl: Duration,
+    /// Maximum number of streams allowed to run concurrently.
     pub max_concurrent_streams: usize,
+    /// Frames at or above this priority are escalated to [`Priority::CRITICAL`].
     pub priority_boost_threshold: Priority,
 }
 
@@ -64,6 +73,7 @@ where
     R: StreamRepositoryGat + 'static,
     P: EventPublisherGat + 'static,
 {
+    /// Construct an orchestrator with explicit dependencies and configuration.
     pub fn new(
         session_repository: Arc<R>,
         event_publisher: Arc<P>,
@@ -304,10 +314,15 @@ where
 /// Health status information
 #[derive(Debug, Clone)]
 pub struct HealthStatus {
+    /// Number of sessions currently active.
     pub active_sessions: usize,
+    /// Latency observed when contacting the session repository.
     pub repository_latency: Duration,
+    /// Latency observed when publishing a probe event.
     pub event_publisher_latency: Duration,
+    /// Total wall-clock duration of the health check.
     pub total_latency: Duration,
+    /// Aggregate status string (`"healthy"` or `"degraded"`).
     pub status: String,
 }
 

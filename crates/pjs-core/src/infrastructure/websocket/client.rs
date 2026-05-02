@@ -357,11 +357,17 @@ impl PjsWebSocketClient {
 /// Stream statistics
 #[derive(Debug, Clone)]
 pub struct StreamStats {
+    /// Identifier of the streaming session.
     pub session_id: String,
+    /// Total number of frames received from the server.
     pub total_frames: usize,
+    /// Number of frames the client has finished processing.
     pub processed_frames: usize,
+    /// Whether the stream has been marked complete.
     pub is_complete: bool,
+    /// Wall-clock duration since the session was created.
     pub duration: Duration,
+    /// Average per-frame processing duration, if any frames have been processed.
     pub average_processing_time: Option<Duration>,
 }
 

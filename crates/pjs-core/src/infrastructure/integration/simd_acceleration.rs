@@ -15,10 +15,14 @@ pub struct SimdFrameSerializer {
     stats: SerializationStats,
 }
 
+/// Counters tracking SIMD-accelerated frame serialization activity.
 #[derive(Debug, Clone, Default)]
 pub struct SerializationStats {
+    /// Number of frames serialized.
     pub frames_processed: usize,
+    /// Total bytes written to the output buffer.
     pub bytes_written: usize,
+    /// Number of SIMD operations performed.
     pub simd_operations: usize,
 }
 

@@ -169,13 +169,33 @@ impl SecurityConfig {
 #[derive(Debug, Clone)]
 pub enum SecurityError {
     /// Input exceeds maximum size limit
-    InputTooLarge { size: usize, max: usize },
+    InputTooLarge {
+        /// Actual input size in bytes.
+        size: usize,
+        /// Configured maximum input size in bytes.
+        max: usize,
+    },
     /// Nesting depth exceeds maximum
-    MaxDepthExceeded { depth: usize, max: usize },
+    MaxDepthExceeded {
+        /// Actual nesting depth observed.
+        depth: usize,
+        /// Configured maximum nesting depth.
+        max: usize,
+    },
     /// Array has too many elements
-    ArrayTooLarge { count: usize, max: usize },
+    ArrayTooLarge {
+        /// Actual element count observed.
+        count: usize,
+        /// Configured maximum element count.
+        max: usize,
+    },
     /// Object has too many keys
-    ObjectTooLarge { count: usize, max: usize },
+    ObjectTooLarge {
+        /// Actual key count observed.
+        count: usize,
+        /// Configured maximum key count.
+        max: usize,
+    },
 }
 
 impl std::fmt::Display for SecurityError {

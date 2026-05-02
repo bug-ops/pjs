@@ -117,8 +117,11 @@ impl<T> Default for ValueArena<T> {
 /// Memory usage statistics for arena
 #[derive(Debug, Clone)]
 pub struct ArenaStats {
+    /// Number of internal chunks the arena holds (always 1 for `typed_arena`).
     pub chunks_allocated: usize,
+    /// Total bytes consumed by allocated strings.
     pub total_bytes: usize,
+    /// Number of distinct strings allocated.
     pub strings_allocated: usize,
 }
 
@@ -171,9 +174,13 @@ impl Default for JsonArena {
 /// Combined arena statistics
 #[derive(Debug, Clone)]
 pub struct CombinedArenaStats {
+    /// Stats from the [`StringArena`] component.
     pub string_stats: ArenaStats,
+    /// Number of objects allocated in the object arena.
     pub objects_allocated: usize,
+    /// Number of arrays allocated in the array arena.
     pub arrays_allocated: usize,
+    /// Number of generic values allocated in the value arena.
     pub values_allocated: usize,
 }
 

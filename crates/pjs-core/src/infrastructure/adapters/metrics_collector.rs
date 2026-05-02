@@ -16,13 +16,21 @@ use crate::domain::{
 /// Performance metrics for PJS operations
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {
+    /// Number of sessions currently active.
     pub active_sessions: usize,
+    /// Total number of sessions ever created.
     pub total_sessions_created: u64,
+    /// Number of streams currently active.
     pub active_streams: usize,
+    /// Total number of streams ever created.
     pub total_streams_created: u64,
+    /// Moving average of per-frame processing time.
     pub average_frame_processing_time: Duration,
+    /// Total payload bytes streamed since startup.
     pub bytes_streamed: u64,
+    /// Total frames processed since startup.
     pub frames_processed: u64,
+    /// Total errors counted since startup.
     pub error_count: u64,
 }
 
@@ -51,37 +59,59 @@ pub struct InMemoryMetricsCollector {
     max_time_series_entries: usize,
 }
 
+/// Per-session metrics tracked by [`InMemoryMetricsCollector`].
 #[derive(Debug, Clone)]
 pub struct SessionMetrics {
+    /// Identifier of the session.
     pub session_id: SessionId,
+    /// Instant the session was created.
     pub created_at: Instant,
+    /// Instant of the most recent observed activity.
     pub last_activity: Instant,
+    /// Number of streams created within the session.
     pub streams_created: usize,
+    /// Total payload bytes processed for the session.
     pub bytes_processed: u64,
+    /// Total frames sent for the session.
     pub frames_sent: u64,
+    /// Total errors counted for the session.
     pub errors: u64,
+    /// Free-form name/value metadata captured at creation time.
     pub metadata: HashMap<String, String>,
 }
 
+/// Per-stream metrics tracked by [`InMemoryMetricsCollector`].
 #[derive(Debug, Clone)]
 pub struct StreamMetrics {
+    /// Identifier of the stream.
     pub stream_id: StreamId,
+    /// Identifier of the parent session.
     pub session_id: SessionId,
+    /// Instant the stream was created.
     pub created_at: Instant,
+    /// Instant the stream completed, if it has.
     pub completed_at: Option<Instant>,
+    /// Total frames generated for the stream.
     pub frames_generated: u64,
+    /// Total payload bytes sent for the stream.
     pub bytes_sent: u64,
+    /// Mean priority value across emitted frames.
     pub average_priority: f64,
+    /// Per-frame processing durations recorded for the stream.
     pub processing_times: Vec<Duration>,
 }
 
+/// Snapshot of [`PerformanceMetrics`] tagged with a wall-clock instant.
 #[derive(Debug, Clone)]
 pub struct TimestampedMetrics {
+    /// Instant the snapshot was taken.
     pub timestamp: Instant,
+    /// Snapshot of the global metrics at `timestamp`.
     pub metrics: PerformanceMetrics,
 }
 
 impl InMemoryMetricsCollector {
+    /// Create a fresh in-memory collector with default capacity.
     pub fn new() -> Self {
         Self {
             metrics: Arc::new(RwLock::new(PerformanceMetrics::default())),

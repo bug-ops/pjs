@@ -449,8 +449,11 @@ impl SecureDecompressionContext {
 /// Statistics for a [`SecureDecompressionContext`].
 #[derive(Debug, Clone)]
 pub struct DecompressionContextStats {
+    /// Current nested decompression depth.
     pub current_depth: usize,
+    /// Number of decompression streams currently in flight.
     pub active_streams: usize,
+    /// Configured maximum number of concurrent streams.
     pub max_concurrent_streams: usize,
 }
 

@@ -12,14 +12,32 @@ use thiserror::Error;
 /// Rate limiting errors
 #[derive(Error, Debug, Clone)]
 pub enum RateLimitError {
+    /// Request count exceeded the per-window limit.
     #[error("Rate limit exceeded: {limit} requests per {window:?}")]
-    LimitExceeded { limit: u32, window: Duration },
+    LimitExceeded {
+        /// Configured per-window request limit.
+        limit: u32,
+        /// Configured window duration.
+        window: Duration,
+    },
 
+    /// Per-IP concurrent connection cap was reached.
     #[error("Connection limit exceeded: {current}/{max} connections")]
-    ConnectionLimitExceeded { current: usize, max: usize },
+    ConnectionLimitExceeded {
+        /// Current connection count for the IP.
+        current: usize,
+        /// Configured maximum number of connections per IP.
+        max: usize,
+    },
 
+    /// Frame larger than the configured maximum was rejected.
     #[error("Frame size limit exceeded: {size} bytes > {max} bytes")]
-    FrameSizeExceeded { size: usize, max: usize },
+    FrameSizeExceeded {
+        /// Observed frame size in bytes.
+        size: usize,
+        /// Configured maximum frame size in bytes.
+        max: usize,
+    },
 }
 
 /// Rate limiting configuration
@@ -254,8 +272,11 @@ impl WebSocketRateLimiter {
 /// Rate limiting statistics
 #[derive(Debug, Default, Clone)]
 pub struct RateLimitStats {
+    /// Total distinct clients tracked.
     pub total_clients: usize,
+    /// Clients that have shown activity within the recent window.
     pub active_clients: usize,
+    /// Sum of currently held connections across all clients.
     pub total_connections: usize,
 }
 

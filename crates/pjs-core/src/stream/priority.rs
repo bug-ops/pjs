@@ -30,46 +30,77 @@ pub struct JsonPath {
     segments: Vec<PathSegment>,
 }
 
+/// Single segment of a [`JsonPath`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum PathSegment {
+    /// Root marker (`$`).
     Root,
+    /// Object property key.
     Key(String),
+    /// Array index.
     Index(usize),
+    /// Wildcard matching any segment.
     Wildcard,
 }
 
 /// Patch operation for updating JSON structure
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct JsonPatch {
+    /// Path within the target JSON document.
     pub path: JsonPath,
+    /// Operation to apply at `path`.
     pub operation: PatchOperation,
+    /// Priority assigned to this patch.
     #[serde(with = "serde_priority")]
     pub priority: Priority,
 }
 
+/// Operation a [`JsonPatch`] performs at its target path.
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum PatchOperation {
-    Set { value: JsonValue },
-    Append { values: Vec<JsonValue> },
-    Replace { value: JsonValue },
+    /// Replace the value at the path with `value`.
+    Set {
+        /// New value to set at the path.
+        value: JsonValue,
+    },
+    /// Append values to the array at the path.
+    Append {
+        /// Values appended to the target array.
+        values: Vec<JsonValue>,
+    },
+    /// Replace the value at the path with `value` (semantically distinct from `Set`).
+    Replace {
+        /// Replacement value.
+        value: JsonValue,
+    },
+    /// Remove the value at the path.
     Remove,
 }
 
 /// Streaming frame containing skeleton or patch data
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum PriorityStreamFrame {
+    /// Initial skeleton frame with placeholder values.
     Skeleton {
+        /// Skeleton JSON value (nulls/empties for fields filled later).
         data: JsonValue,
+        /// Priority of the skeleton frame.
         #[serde(with = "serde_priority")]
         priority: Priority,
+        /// Whether the skeleton is final or further skeletons may follow.
         complete: bool,
     },
+    /// Batch of patches sharing the same priority.
     Patch {
+        /// Patches in this batch.
         patches: Vec<JsonPatch>,
+        /// Priority shared by all patches in the batch.
         #[serde(with = "serde_priority")]
         priority: Priority,
     },
+    /// Terminal frame indicating the stream is complete.
     Complete {
+        /// Optional checksum of the reconstructed payload.
         checksum: Option<u64>,
     },
 }
@@ -79,10 +110,14 @@ pub struct PriorityStreamer {
     config: StreamerConfig,
 }
 
+/// Configuration for [`PriorityStreamer`].
 #[derive(Debug, Clone)]
 pub struct StreamerConfig {
+    /// Enable name-based heuristics that infer priorities from common field names.
     pub detect_semantics: bool,
+    /// Maximum number of patches per [`PriorityStreamFrame::Patch`] batch.
     pub max_patch_size: usize,
+    /// Patches with priority below this threshold are dropped.
     pub priority_threshold: Priority,
 }
 
@@ -300,6 +335,7 @@ impl PriorityStreamer {
 /// Plan for streaming JSON with priority ordering
 #[derive(Debug)]
 pub struct StreamingPlan {
+    /// Ordered queue of frames produced by analysis.
     pub frames: VecDeque<PriorityStreamFrame>,
 }
 
@@ -310,6 +346,7 @@ impl Default for StreamingPlan {
 }
 
 impl StreamingPlan {
+    /// Create an empty plan with no frames.
     pub fn new() -> Self {
         Self {
             frames: VecDeque::new(),
