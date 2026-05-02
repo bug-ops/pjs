@@ -72,7 +72,16 @@ mod serde_json_path {
 }
 
 /// Frame types for different stages of streaming
+///
+/// # Wire format
+///
+/// `FrameType` is serialized as a bare JSON string (Serde's default for fieldless
+/// variants). Adding a new variant changes the wire format — older deserializers
+/// will fail on unknown frame-type strings. The `#[non_exhaustive]` marker prevents
+/// downstream Rust crates from breaking on `match` exhaustiveness, but it does not
+/// address the wire-format compatibility concern.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FrameType {
     /// Initial skeleton with structure
     Skeleton,
@@ -363,6 +372,7 @@ pub struct FramePatch {
 /// Patch operation types
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum PatchOperation {
     /// Set a value at the path
     Set,

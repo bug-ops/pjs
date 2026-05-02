@@ -103,6 +103,7 @@ fn convert_domain_to_serde(data: &JsonData) -> SerdeValue {
                 .collect();
             SerdeValue::Object(obj)
         }
+        _ => SerdeValue::Null,
     }
 }
 

@@ -32,6 +32,7 @@ impl JsonAdapter {
                 }
                 SerdeValue::Object(map)
             }
+            _ => SerdeValue::Null,
         }
     }
 

@@ -244,6 +244,7 @@ impl JsonPath {
 
 /// Path segment types for traversing JSON structures
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PathSegment {
     /// Root of the JSON document
     Root,

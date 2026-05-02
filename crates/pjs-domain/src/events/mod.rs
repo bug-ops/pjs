@@ -69,6 +69,7 @@ mod serde_option_stream_id {
 
 /// Session state in its lifecycle
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SessionState {
     /// Session is being initialized
     Initializing,
@@ -96,8 +97,18 @@ impl SessionState {
 }
 
 /// Domain events that represent business-relevant state changes
+///
+/// # Wire format
+///
+/// `DomainEvent` is serialized as a JSON object with an `event_type` discriminator
+/// (`#[serde(tag = "event_type")]`). Adding a new variant changes the wire format —
+/// older deserializers will fail on unknown `event_type` values. The `#[non_exhaustive]`
+/// marker prevents downstream Rust crates from breaking on `match` exhaustiveness, but
+/// it does not address the wire-format compatibility concern; consumers should be
+/// prepared to handle unknown events at the deserialization boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum DomainEvent {
     /// Session was activated and is ready to accept streams
     SessionActivated {

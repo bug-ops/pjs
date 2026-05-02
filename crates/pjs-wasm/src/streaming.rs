@@ -86,6 +86,7 @@ impl From<&Frame> for FrameData {
             FrameType::Patch => "patch".to_string(),
             FrameType::Complete => "complete".to_string(),
             FrameType::Error => "error".to_string(),
+            _ => "unknown".to_string(),
         };
 
         let payload = serde_json::to_string(frame.payload()).unwrap_or_else(|_| "null".to_string());
@@ -454,6 +455,7 @@ impl PriorityStream {
                         JsonData::Float(_) => JsonData::Float(0.0),
                         JsonData::Bool(_) => JsonData::Bool(false),
                         JsonData::Null => JsonData::Null,
+                        _ => JsonData::Null,
                     };
                     skeleton_map.insert(k.clone(), skeleton_value);
                 }

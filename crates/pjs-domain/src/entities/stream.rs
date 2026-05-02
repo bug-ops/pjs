@@ -83,6 +83,7 @@ mod serde_priority_map {
 
 /// Stream state in its lifecycle
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum StreamState {
     /// Stream is being prepared
     Preparing,

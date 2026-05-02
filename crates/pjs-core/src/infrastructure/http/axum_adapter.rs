@@ -55,9 +55,16 @@ use crate::{
 /// allowed origins, or pass `vec![]` to deny all cross-origin requests.
 ///
 /// Use [`create_pjs_router_with_config`] to apply a non-default configuration.
-// TODO(critic): Mark with #[non_exhaustive] or migrate to builder before 1.0
-// to avoid breaking changes when adding fields like allow_credentials/max_age.
+///
+/// # Adding fields
+///
+/// This struct is marked `#[non_exhaustive]` so future additive fields
+/// (e.g. `allow_credentials`, `max_age`) do not become breaking changes.
+/// External callers cannot use the struct-init pattern; construct an instance
+/// via [`HttpServerConfig::new`] or [`HttpServerConfig::default`] and mutate
+/// the public fields you need.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct HttpServerConfig {
     /// List of origins allowed by the CORS layer.
     ///
@@ -76,6 +83,26 @@ pub struct HttpServerConfig {
     /// - `["*"]` — allow any origin (passes through to `tower_http::cors::Any`)
     /// - Mixing `"*"` with explicit origins is rejected at construction time
     pub allowed_origins: Vec<String>,
+}
+
+impl HttpServerConfig {
+    /// Construct a configuration with an explicit list of allowed CORS origins.
+    ///
+    /// Pass `vec![]` to deny all cross-origin requests, or `vec!["*".into()]`
+    /// to allow any origin. Mixing `"*"` with explicit origins is rejected
+    /// later when the CORS layer is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::infrastructure::http::HttpServerConfig;
+    ///
+    /// let config = HttpServerConfig::new(vec!["https://app.example.com".into()]);
+    /// assert_eq!(config.allowed_origins.len(), 1);
+    /// ```
+    pub fn new(allowed_origins: Vec<String>) -> Self {
+        Self { allowed_origins }
+    }
 }
 
 impl Default for HttpServerConfig {
@@ -364,9 +391,7 @@ where
 /// ```rust,ignore
 /// use pjson_rs::infrastructure::http::{HttpServerConfig, create_pjs_router_with_config};
 ///
-/// let config = HttpServerConfig {
-///     allowed_origins: vec!["https://app.example.com".to_string()],
-/// };
+/// let config = HttpServerConfig::new(vec!["https://app.example.com".to_string()]);
 /// let router = create_pjs_router_with_config::<R, P, S>(&config)?;
 /// ```
 pub fn create_pjs_router_with_config<R, P, S>(

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Clients send backpressure signals to inform the server about their processing
 /// capacity. The server uses these signals to throttle or pause frame transmission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum BackpressureSignal {
     /// Client is ready for more data, no throttling needed
     #[default]
