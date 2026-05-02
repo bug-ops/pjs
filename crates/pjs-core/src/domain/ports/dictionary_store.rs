@@ -8,8 +8,10 @@
 
 use std::future::Future;
 use std::pin::Pin;
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 use std::sync::Arc;
 
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 use pjson_rs_domain::value_objects::SessionId;
 
 #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
