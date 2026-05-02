@@ -217,13 +217,17 @@ cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `simd-auto` | Auto-detect SIMD support | ✅ Yes |
-| `simd-avx2` | Force AVX2 SIMD | No |
-| `simd-neon` | Force ARM NEON | No |
+| `simd-auto` | Auto-detect SIMD support at runtime | ✅ Yes |
+| `simd-avx2` | Force AVX2 SIMD path | No |
+| `simd-avx512` | Force AVX-512 SIMD path (sonic-rs) | No |
+| `simd-sse42` | Force SSE4.2 SIMD path | No |
+| `simd-neon` | Force ARM NEON SIMD path | No |
 | `schema-validation` | Schema validation engine | ✅ Yes |
-| `compression` | zlib/gzip/brotli decompression | ✅ Yes |
+| `compression` | zlib/gzip/brotli/zstd decompression with per-session dictionaries | ✅ Yes |
+| `partial-parse` | Streaming partial JSON parsing (`jiter` backend) | No |
 | `http-server` | Axum HTTP server and CQRS endpoints | ✅ Yes |
 | `http-client` | reqwest-based HTTP client | ✅ Yes |
+| `http-auth-jwt` | JWT authentication middleware | No |
 | `websocket-server` | WebSocket transport (server) | ✅ Yes |
 | `websocket-client` | WebSocket transport (client) | ✅ Yes |
 | `mimalloc` | Use mimalloc as global allocator | No |
