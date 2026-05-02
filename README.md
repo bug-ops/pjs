@@ -76,7 +76,7 @@ cargo run --example compression_demo --features compression
 ### WebAssembly (Browser)
 
 ```bash
-npm install pjs-wasm
+npm install @pjson/wasm
 ```
 
 #### PriorityStream API (Recommended)
@@ -147,10 +147,10 @@ Try the [Browser Demo](crates/pjs-wasm/demo/) with transport switching, performa
 ### WebAssembly (Node.js)
 
 ```javascript
-import init, { PjsParser } from 'pjs-wasm';
+import init, { PjsParser } from '@pjson/node';
 import { readFile } from 'fs/promises';
 
-const wasmBuffer = await readFile('./node_modules/pjs-wasm/pkg/pjs_wasm_bg.wasm');
+const wasmBuffer = await readFile('./node_modules/@pjson/node/pjs_wasm_bg.wasm');
 await init(wasmBuffer);
 
 const parser = new PjsParser();
@@ -240,7 +240,7 @@ cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
 PJS includes built-in security features to prevent DoS attacks:
 
 ```javascript
-import { PriorityStream, SecurityConfig } from 'pjs-wasm';
+import { PriorityStream, SecurityConfig } from '@pjson/wasm';
 
 const security = new SecurityConfig()
     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB limit

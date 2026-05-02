@@ -149,7 +149,7 @@ frames.forEach((frame, index) => {
 ### PjsParser
 
 ```javascript
-import { PjsParser, PriorityConstants, PriorityConfigBuilder } from 'pjs-wasm';
+import { PjsParser, PriorityConstants, PriorityConfigBuilder } from '@pjson/wasm';
 
 // Basic usage
 const parser = new PjsParser();

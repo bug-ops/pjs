@@ -180,7 +180,7 @@ let app = create_pjs_router()
 **WASM Security Limits:**
 
 ```javascript
-import { PriorityStream, SecurityConfig } from 'pjs-wasm';
+import { PriorityStream, SecurityConfig } from '@pjson/wasm';
 
 const security = new SecurityConfig()
     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB max
