@@ -41,6 +41,14 @@ pub const MAX_PAGINATION_OFFSET: usize = 1_000_000;
 /// Only add fields that have corresponding indexes in storage.
 pub const ALLOWED_SORT_FIELDS: &[&str] = &["created_at", "updated_at", "stream_count"];
 
+/// Default maximum number of frames retained per stream by the in-memory
+/// `FrameStore`.
+///
+/// Once a stream accumulates more than this many frames, the oldest are
+/// evicted FIFO. Bounds the worst-case memory footprint of frame history
+/// (10_000 frames × ~few-KB each ≈ tens of MB per very-long-lived stream).
+pub const DEFAULT_FRAME_HISTORY_PER_STREAM: usize = 10_000;
+
 #[cfg(test)]
 mod tests {
     use super::*;

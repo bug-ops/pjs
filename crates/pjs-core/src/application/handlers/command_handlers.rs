@@ -8,9 +8,13 @@ use crate::{
     domain::{
         aggregates::StreamSession,
         entities::Frame,
-        ports::{DictionaryStore, EventPublisherGat, NoopDictionaryStore, StreamRepositoryGat},
+        ports::{
+            DictionaryStore, EventPublisherGat, FrameStoreGat, NoopDictionaryStore,
+            StreamRepositoryGat,
+        },
         value_objects::{JsonData, SessionId, StreamId},
     },
+    infrastructure::adapters::InMemoryFrameStore,
 };
 use std::sync::Arc;
 
@@ -20,20 +24,27 @@ use std::sync::Arc;
 /// so that frame-generating commands can feed accepted frame payloads into the
 /// per-session training corpus. Without this wiring the
 /// `GET /pjs/sessions/{id}/dictionary` endpoint would be unreachable end-to-end.
-pub struct SessionCommandHandler<R, P>
+///
+/// Also holds a [`FrameStoreGat`] (defaulting to [`InMemoryFrameStore`]) so
+/// frames produced by `GenerateFramesCommand` / `BatchGenerateFramesCommand`
+/// remain queryable through `GET /pjs/sessions/{id}/streams/{id}/frames`.
+pub struct SessionCommandHandler<R, P, F = InMemoryFrameStore>
 where
     R: StreamRepositoryGat + 'static,
     P: EventPublisherGat + 'static,
+    F: FrameStoreGat + 'static,
 {
     repository: Arc<R>,
     event_publisher: Arc<P>,
     dictionary_store: Arc<dyn DictionaryStore>,
+    frame_store: Arc<F>,
 }
 
-impl<R, P> std::fmt::Debug for SessionCommandHandler<R, P>
+impl<R, P, F> std::fmt::Debug for SessionCommandHandler<R, P, F>
 where
     R: StreamRepositoryGat + 'static,
     P: EventPublisherGat + 'static,
+    F: FrameStoreGat + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionCommandHandler")
@@ -41,31 +52,58 @@ where
     }
 }
 
-impl<R, P> SessionCommandHandler<R, P>
+impl<R, P> SessionCommandHandler<R, P, InMemoryFrameStore>
 where
     R: StreamRepositoryGat + 'static,
     P: EventPublisherGat + 'static,
 {
-    /// Create a handler with the no-op [`DictionaryStore`].
+    /// Create a handler with the no-op [`DictionaryStore`] and a fresh
+    /// [`InMemoryFrameStore`].
     ///
     /// The dictionary endpoint will return `404 Not Found` until the handler is
-    /// constructed with [`SessionCommandHandler::with_dictionary_store`] and a
-    /// concrete implementation such as
+    /// constructed with [`SessionCommandHandler::with_stores`] and a concrete
+    /// [`DictionaryStore`] such as
     /// [`crate::infrastructure::repositories::InMemoryDictionaryStore`].
     pub fn new(repository: Arc<R>, event_publisher: Arc<P>) -> Self {
         Self::with_dictionary_store(repository, event_publisher, Arc::new(NoopDictionaryStore))
     }
 
-    /// Create a handler that feeds accepted frames into `dictionary_store`.
+    /// Create a handler with a custom [`DictionaryStore`] and a fresh
+    /// [`InMemoryFrameStore`].
     pub fn with_dictionary_store(
         repository: Arc<R>,
         event_publisher: Arc<P>,
         dictionary_store: Arc<dyn DictionaryStore>,
     ) -> Self {
+        Self::with_stores(
+            repository,
+            event_publisher,
+            dictionary_store,
+            Arc::new(InMemoryFrameStore::new()),
+        )
+    }
+}
+
+impl<R, P, F> SessionCommandHandler<R, P, F>
+where
+    R: StreamRepositoryGat + 'static,
+    P: EventPublisherGat + 'static,
+    F: FrameStoreGat + 'static,
+{
+    /// Create a handler that feeds accepted frames into both the dictionary
+    /// training corpus and the [`FrameStoreGat`] used by the frames query
+    /// endpoint.
+    pub fn with_stores(
+        repository: Arc<R>,
+        event_publisher: Arc<P>,
+        dictionary_store: Arc<dyn DictionaryStore>,
+        frame_store: Arc<F>,
+    ) -> Self {
         Self {
             repository,
             event_publisher,
             dictionary_store,
+            frame_store,
         }
     }
 
@@ -87,12 +125,39 @@ where
             }
         }
     }
+
+    /// Persist generated frames into the [`FrameStoreGat`], grouping by
+    /// `stream_id` so a single batch may span multiple streams.
+    async fn persist_frames_grouped_by_stream(&self, frames: &[Frame]) -> ApplicationResult<()>
+    where
+        F: FrameStoreGat + Send + Sync,
+    {
+        if frames.is_empty() {
+            return Ok(());
+        }
+        let mut buckets: std::collections::HashMap<StreamId, Vec<Frame>> =
+            std::collections::HashMap::new();
+        for frame in frames {
+            buckets
+                .entry(frame.stream_id())
+                .or_default()
+                .push(frame.clone());
+        }
+        for (stream_id, group) in buckets {
+            self.frame_store
+                .append_frames(stream_id, group)
+                .await
+                .map_err(ApplicationError::Domain)?;
+        }
+        Ok(())
+    }
 }
 
-impl<R, P> CommandHandlerGat<CreateSessionCommand> for SessionCommandHandler<R, P>
+impl<R, P, F> CommandHandlerGat<CreateSessionCommand> for SessionCommandHandler<R, P, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     P: EventPublisherGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = SessionId;
 
@@ -136,10 +201,11 @@ where
     }
 }
 
-impl<R, P> CommandHandlerGat<CreateStreamCommand> for SessionCommandHandler<R, P>
+impl<R, P, F> CommandHandlerGat<CreateStreamCommand> for SessionCommandHandler<R, P, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     P: EventPublisherGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = StreamId;
 
@@ -191,10 +257,11 @@ where
     }
 }
 
-impl<R, P> CommandHandlerGat<StartStreamCommand> for SessionCommandHandler<R, P>
+impl<R, P, F> CommandHandlerGat<StartStreamCommand> for SessionCommandHandler<R, P, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     P: EventPublisherGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = ();
 
@@ -238,10 +305,11 @@ where
     }
 }
 
-impl<R, P> CommandHandlerGat<CompleteStreamCommand> for SessionCommandHandler<R, P>
+impl<R, P, F> CommandHandlerGat<CompleteStreamCommand> for SessionCommandHandler<R, P, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     P: EventPublisherGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = ();
 
@@ -285,10 +353,11 @@ where
     }
 }
 
-impl<R, P> CommandHandlerGat<GenerateFramesCommand> for SessionCommandHandler<R, P>
+impl<R, P, F> CommandHandlerGat<GenerateFramesCommand> for SessionCommandHandler<R, P, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     P: EventPublisherGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = Vec<Frame>;
 
@@ -336,6 +405,12 @@ where
             self.train_from_frames(command.session_id.into(), &frames)
                 .await;
 
+            // Persist generated frames so GET /streams/{id}/frames can return them.
+            self.frame_store
+                .append_frames(command.stream_id.into(), frames.clone())
+                .await
+                .map_err(ApplicationError::Domain)?;
+
             // Save updated session
             self.repository
                 .save_session(session.clone())
@@ -354,10 +429,11 @@ where
     }
 }
 
-impl<R, P> CommandHandlerGat<BatchGenerateFramesCommand> for SessionCommandHandler<R, P>
+impl<R, P, F> CommandHandlerGat<BatchGenerateFramesCommand> for SessionCommandHandler<R, P, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     P: EventPublisherGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = Vec<Frame>;
 
@@ -395,6 +471,10 @@ where
             self.train_from_frames(command.session_id.into(), &frames)
                 .await;
 
+            // Persist generated frames so GET /streams/{id}/frames can return them.
+            // Frames may span multiple streams in a batch; group by stream_id.
+            self.persist_frames_grouped_by_stream(&frames).await?;
+
             // Save updated session
             self.repository
                 .save_session(session.clone())
@@ -413,10 +493,11 @@ where
     }
 }
 
-impl<R, P> CommandHandlerGat<CloseSessionCommand> for SessionCommandHandler<R, P>
+impl<R, P, F> CommandHandlerGat<CloseSessionCommand> for SessionCommandHandler<R, P, F>
 where
     R: StreamRepositoryGat + Send + Sync,
     P: EventPublisherGat + Send + Sync,
+    F: FrameStoreGat + Send + Sync,
 {
     type Response = ();
 
@@ -1144,5 +1225,79 @@ mod tests {
                 "dictionary must be trained once N_TRAIN frame payloads have been ingested"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_generate_frames_persists_into_frame_store() {
+        use crate::domain::ports::FrameStoreGat;
+        use crate::infrastructure::adapters::InMemoryFrameStore;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let frame_store = Arc::new(InMemoryFrameStore::new());
+
+        let handler = SessionCommandHandler::with_stores(
+            repository.clone(),
+            event_publisher,
+            Arc::new(crate::domain::ports::NoopDictionaryStore),
+            frame_store.clone(),
+        );
+
+        // Bring up an active session with one stream.
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"items": [1, 2, 3, 4]}),
+                config: None,
+            })
+            .await
+            .unwrap();
+
+        // Frames can only be produced from a streaming stream.
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
+
+        // GenerateFrames must (a) return the frames and (b) leave them in the
+        // frame store so the GET endpoint can find them.
+        let frames = handler
+            .handle(GenerateFramesCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: 8,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            !frames.is_empty(),
+            "command must produce at least one frame"
+        );
+
+        let page = frame_store
+            .get_frames(stream_id, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            page.frames.len(),
+            frames.len(),
+            "every frame returned by the command must be persisted",
+        );
+        assert_eq!(page.total_matching, frames.len());
     }
 }

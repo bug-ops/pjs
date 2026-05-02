@@ -34,12 +34,15 @@ use crate::{
         aggregates::stream_session::{SessionConfig, SessionHealth},
         entities::Frame,
         ports::{
-            DictionaryStore, EventPublisherGat, NoopDictionaryStore, StreamRepositoryGat,
-            StreamStoreGat,
+            DictionaryStore, EventPublisherGat, FrameStoreGat, NoopDictionaryStore,
+            StreamRepositoryGat, StreamStoreGat,
         },
         value_objects::{Priority, SessionId, StreamId},
     },
-    infrastructure::http::middleware::{RateLimitMiddleware, security_middleware},
+    infrastructure::{
+        adapters::InMemoryFrameStore,
+        http::middleware::{RateLimitMiddleware, security_middleware},
+    },
 };
 
 /// HTTP server configuration.
@@ -137,24 +140,26 @@ fn build_cors_layer(config: &HttpServerConfig) -> Result<CorsLayer, PjsError> {
 ///
 /// The `dictionary_store` field is `pub(crate)` so the dictionary handler can
 /// access it without exposing it as a public API.
-pub struct PjsAppState<R, P, S>
+pub struct PjsAppState<R, P, S, F = InMemoryFrameStore>
 where
     R: StreamRepositoryGat + Send + Sync + 'static,
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
+    F: FrameStoreGat + Send + Sync + 'static,
 {
-    command_handler: Arc<SessionCommandHandler<R, P>>,
+    command_handler: Arc<SessionCommandHandler<R, P, F>>,
     session_query_handler: Arc<SessionQueryHandler<R>>,
-    stream_query_handler: Arc<StreamQueryHandler<R, S>>,
+    stream_query_handler: Arc<StreamQueryHandler<R, S, F>>,
     system_handler: Arc<SystemQueryHandler<R>>,
     pub(crate) dictionary_store: Arc<dyn DictionaryStore>,
 }
 
-impl<R, P, S> Clone for PjsAppState<R, P, S>
+impl<R, P, S, F> Clone for PjsAppState<R, P, S, F>
 where
     R: StreamRepositoryGat + Send + Sync + 'static,
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
+    F: FrameStoreGat + Send + Sync + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -167,13 +172,14 @@ where
     }
 }
 
-impl<R, P, S> PjsAppState<R, P, S>
+impl<R, P, S> PjsAppState<R, P, S, InMemoryFrameStore>
 where
     R: StreamRepositoryGat + Send + Sync + 'static,
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    /// Create a new application state with default [`NoopDictionaryStore`].
+    /// Create a new application state with default [`NoopDictionaryStore`] and
+    /// an in-memory frame store.
     ///
     /// The `/pjs/sessions/{id}/dictionary` endpoint will return 404 until
     /// you upgrade to [`PjsAppState::with_dictionary_store`] with a concrete
@@ -189,7 +195,8 @@ where
         )
     }
 
-    /// Create a new application state with a custom [`DictionaryStore`].
+    /// Create a new application state with a custom [`DictionaryStore`] and an
+    /// in-memory frame store.
     ///
     /// Pass `Arc::new(InMemoryDictionaryStore::new(...))` to enable end-to-end
     /// dictionary training and serving.
@@ -199,17 +206,45 @@ where
         stream_store: Arc<S>,
         dictionary_store: Arc<dyn DictionaryStore>,
     ) -> Self {
+        Self::with_stores(
+            repository,
+            event_publisher,
+            stream_store,
+            dictionary_store,
+            Arc::new(InMemoryFrameStore::new()),
+        )
+    }
+}
+
+impl<R, P, S, F> PjsAppState<R, P, S, F>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+    F: FrameStoreGat + Send + Sync + 'static,
+{
+    /// Create a new application state with custom [`DictionaryStore`] and
+    /// [`FrameStoreGat`] implementations.
+    pub fn with_stores(
+        repository: Arc<R>,
+        event_publisher: Arc<P>,
+        stream_store: Arc<S>,
+        dictionary_store: Arc<dyn DictionaryStore>,
+        frame_store: Arc<F>,
+    ) -> Self {
         let started_at = Instant::now();
         Self {
-            command_handler: Arc::new(SessionCommandHandler::with_dictionary_store(
+            command_handler: Arc::new(SessionCommandHandler::with_stores(
                 repository.clone(),
                 event_publisher,
                 dictionary_store.clone(),
+                frame_store.clone(),
             )),
             session_query_handler: Arc::new(SessionQueryHandler::new(repository.clone())),
             stream_query_handler: Arc::new(StreamQueryHandler::new(
                 repository.clone(),
                 stream_store,
+                frame_store,
             )),
             system_handler: Arc::new(SystemQueryHandler::with_start_time(repository, started_at)),
             dictionary_store,
@@ -807,10 +842,9 @@ where
         stream_id: stream_id.into(),
     };
 
-    let response = <StreamQueryHandler<R, S> as QueryHandlerGat<GetStreamQuery>>::handle(
-        &*state.stream_query_handler,
-        query,
-    )
+    let response = <StreamQueryHandler<R, S, InMemoryFrameStore> as QueryHandlerGat<
+        GetStreamQuery,
+    >>::handle(&*state.stream_query_handler, query)
     .await
     .map_err(PjsError::Application)?;
 
@@ -973,10 +1007,9 @@ where
         limit: params.limit,
     };
 
-    let response = <StreamQueryHandler<R, S> as QueryHandlerGat<GetStreamFramesQuery>>::handle(
-        &*state.stream_query_handler,
-        query,
-    )
+    let response = <StreamQueryHandler<R, S, InMemoryFrameStore> as QueryHandlerGat<
+        GetStreamFramesQuery,
+    >>::handle(&*state.stream_query_handler, query)
     .await
     .map_err(PjsError::Application)?;
 
