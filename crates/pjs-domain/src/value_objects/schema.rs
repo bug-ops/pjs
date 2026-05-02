@@ -72,6 +72,7 @@ impl std::fmt::Display for SchemaId {
 /// };
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Schema {
     /// String type with optional constraints
     String {
@@ -158,6 +159,7 @@ pub type SchemaValidationResult<T> = Result<T, SchemaValidationError>;
 /// - Provides actionable error messages for debugging
 /// - Zero-allocation for common error cases using `String`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, thiserror::Error)]
+#[non_exhaustive]
 pub enum SchemaValidationError {
     /// Type mismatch error
     #[error("Type mismatch at '{path}': expected {expected}, got {actual}")]
@@ -392,6 +394,7 @@ impl Schema {
 
 /// Simplified schema type for quick type checking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SchemaType {
     /// String type
     String,

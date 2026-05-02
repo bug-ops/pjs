@@ -154,6 +154,11 @@ impl ValidationService {
             ),
             Schema::OneOf { schemas } => self.validate_one_of(data, path, schemas, depth),
             Schema::AllOf { schemas } => self.validate_all_of(data, path, schemas, depth),
+            _ => Err(SchemaValidationError::TypeMismatch {
+                path: path.to_string(),
+                expected: "known schema variant".to_string(),
+                actual: "unknown".to_string(),
+            }),
         }
     }
 
@@ -188,6 +193,7 @@ impl ValidationService {
             JsonData::String(_) => "string",
             JsonData::Array(_) => "array",
             JsonData::Object(_) => "object",
+            _ => "unknown",
         }
     }
 

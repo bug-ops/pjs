@@ -338,6 +338,7 @@ impl PjsParser {
                         JsonData::Float(_) => JsonData::Float(0.0),
                         JsonData::Bool(_) => JsonData::Bool(false),
                         JsonData::Null => JsonData::Null,
+                        _ => JsonData::Null,
                     };
                     skeleton_map.insert(k.clone(), skeleton_value);
                 }

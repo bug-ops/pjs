@@ -11,6 +11,7 @@ use std::fmt;
 /// Domain-specific representation of JSON-like data
 /// This replaces serde_json::Value to maintain Clean Architecture principles
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum JsonData {
     #[default]
     /// Null value

@@ -205,6 +205,7 @@ impl From<&Schema> for SchemaDefinitionDto {
                 schemas: schemas.iter().map(|s| s.as_ref().into()).collect(),
             },
             Schema::Any => Self::Any,
+            _ => Self::Any,
         }
     }
 }
@@ -331,6 +332,7 @@ impl From<&crate::domain::value_objects::SchemaValidationError> for ValidationEr
                 path.clone(),
                 format!("Pattern '{pattern}' is not valid regex: {reason}"),
             ),
+            _ => ("unknown".to_string(), String::new(), error.to_string()),
         };
 
         Self {
