@@ -42,7 +42,7 @@ Or add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-pjson-rs = "0.5"
+pjson-rs = "0.6"
 ```
 
 > [!NOTE]

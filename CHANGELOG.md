@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-02
+
 ### Fixed
 
 - `GET /pjs/sessions/{session_id}/streams/{stream_id}/frames` is now reachable end-to-end. The handler previously validated session/stream existence and then unconditionally returned `{"frames": [], "total_count": 0}` regardless of whether `GenerateFramesCommand` / `BatchGenerateFramesCommand` had produced any frames — a documented gap with the comment "until a `FrameStore` exists". Same shape as the resolved #224 chain (HTTP route 200 OK with no real data). Introduced a new domain port `FrameStoreGat` (with companion `FrameStorePage`) and an in-memory implementation `pjson_rs::infrastructure::adapters::InMemoryFrameStore`, bounded per stream by `pjson_rs::domain::config::DEFAULT_FRAME_HISTORY_PER_STREAM` (10 000 frames, oldest-evicted FIFO). `SessionCommandHandler` now persists frames produced by `GenerateFramesCommand` and `BatchGenerateFramesCommand` into the store; `StreamQueryHandler` reads from it and applies the `since_sequence`, `priority` (minimum threshold), and `limit` filters. Wire-level regression test `test_get_stream_frames_returns_persisted_frames` drives `create-session → create-stream → start-stream → generate-frames` over the real Axum router and asserts the GET endpoint reports the freshly produced frames (closes #269).
@@ -1115,7 +1117,8 @@ Licensed under either of
 
 at your option.
 
-[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/bug-ops/pjs/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/bug-ops/pjs/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/bug-ops/pjs/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/bug-ops/pjs/compare/v0.4.7...v0.5.0
