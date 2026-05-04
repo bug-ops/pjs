@@ -494,7 +494,7 @@ jobs:
           name: wasm-build-web
           path: crates/pjs-js-client/examples/browser-wasm/pkg
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '18'
 
@@ -522,7 +522,7 @@ jobs:
           name: wasm-build-web
           path: wasm-pkg
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '18'
 
@@ -583,7 +583,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
