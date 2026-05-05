@@ -207,7 +207,7 @@ jobs:
         with:
           tool: nextest
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: nextest-archive-${{ matrix.os }}-${{ matrix.allocator }}
 
@@ -426,7 +426,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -489,7 +489,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wasm-build-web
           path: crates/pjs-js-client/examples/browser-wasm/pkg
@@ -517,7 +517,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wasm-build-web
           path: wasm-pkg
