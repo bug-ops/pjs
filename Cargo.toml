@@ -34,7 +34,7 @@ clap = "4.6"
 console_error_panic_hook = "0.1"
 criterion = "0.8"
 crossbeam = "0.8"
-dashmap = "6.1"
+dashmap = "6.2"
 dhat = "0.3"
 fake = "5.1"
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
