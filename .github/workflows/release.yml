@@ -200,21 +200,29 @@ jobs:
               .repository.url = ("git+" + .repository.url + ".git")
             else . end
           ' package.json > package.json.tmp && mv package.json.tmp package.json
-          cat package.json
 
-      - name: Verify npm auth
+      - name: Check if already published
+        id: wasm-check
+        env:
+          VERSION: ${{ needs.version-check.outputs.version }}
         run: |
-          npm whoami || echo "npm whoami failed (expected for OIDC if package not yet trusted)"
-          npm access list packages @pjson 2>&1 || echo "no packages in @pjson scope yet"
+          if npm view "@pjson/wasm@${VERSION}" version 2>/dev/null | grep -qF "${VERSION}"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "@pjson/wasm@${VERSION} already published, skipping"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Publish to npm
+        if: steps.wasm-check.outputs.exists != 'true'
         working-directory: crates/pjs-wasm/pkg
-        run: npm publish --access public --provenance --verbose
+        run: npm publish --access public --provenance
 
   # Publish JS/TS client to npm via Trusted Publishing (provenance)
+  # Runs in parallel with publish-wasm — wasm is an optional runtime dependency
   publish-node:
     name: Publish Node client to npm
-    needs: [version-check, publish-wasm]
+    needs: [version-check, format-check, clippy-check, test-check]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -228,7 +236,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Sync package metadata to release version
@@ -246,17 +254,31 @@ jobs:
             }
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
-          cat package.json
+
+      - name: Check if already published
+        id: node-check
+        env:
+          VERSION: ${{ needs.version-check.outputs.version }}
+        run: |
+          if npm view "@pjson/node@${VERSION}" version 2>/dev/null | grep -qF "${VERSION}"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "@pjson/node@${VERSION} already published, skipping"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Install dependencies
+        if: steps.node-check.outputs.exists != 'true'
         working-directory: crates/pjs-js-client
         run: npm install --no-package-lock --ignore-scripts
 
       - name: Build
+        if: steps.node-check.outputs.exists != 'true'
         working-directory: crates/pjs-js-client
         run: npm run build
 
       - name: Publish to npm
+        if: steps.node-check.outputs.exists != 'true'
         working-directory: crates/pjs-js-client
         run: npm publish --access public --provenance --ignore-scripts
 
