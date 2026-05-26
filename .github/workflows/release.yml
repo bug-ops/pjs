@@ -190,10 +190,16 @@ jobs:
       - name: Build WASM package
         run: wasm-pack build crates/pjs-wasm --target web --release --scope pjson
 
-      - name: Rename package to @pjson/wasm
+      - name: Prepare npm package metadata
         working-directory: crates/pjs-wasm/pkg
         run: |
-          sed -i 's#"name": "@pjson/pjs-wasm"#"name": "@pjson/wasm"#' package.json
+          jq '
+            .name = "@pjson/wasm" |
+            if .collaborators then .contributors = .collaborators | del(.collaborators) else . end |
+            if (.repository.url | startswith("git+") | not) then
+              .repository.url = ("git+" + .repository.url + ".git")
+            else . end
+          ' package.json > package.json.tmp && mv package.json.tmp package.json
           cat package.json
 
       - name: Publish to npm
