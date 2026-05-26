@@ -209,7 +209,7 @@ jobs:
 
       - name: Publish to npm
         working-directory: crates/pjs-wasm/pkg
-        run: npm publish --access public --provenance
+        run: npm publish --access public --provenance --verbose
 
   # Publish JS/TS client to npm via Trusted Publishing (provenance)
   publish-node:
