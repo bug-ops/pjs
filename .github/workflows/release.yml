@@ -202,6 +202,11 @@ jobs:
           ' package.json > package.json.tmp && mv package.json.tmp package.json
           cat package.json
 
+      - name: Verify npm auth
+        run: |
+          npm whoami || echo "npm whoami failed (expected for OIDC if package not yet trusted)"
+          npm access list packages @pjson 2>&1 || echo "no packages in @pjson scope yet"
+
       - name: Publish to npm
         working-directory: crates/pjs-wasm/pkg
         run: npm publish --access public --provenance
