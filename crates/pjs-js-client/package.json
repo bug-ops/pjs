@@ -32,13 +32,13 @@
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pjs-rs/pjs",
+    "url": "https://github.com/bug-ops/pjs",
     "directory": "crates/pjs-js-client"
   },
   "bugs": {
-    "url": "https://github.com/pjs-rs/pjs/issues"
+    "url": "https://github.com/bug-ops/pjs/issues"
   },
-  "homepage": "https://github.com/pjs-rs/pjs#readme",
+  "homepage": "https://github.com/bug-ops/pjs#readme",
   "files": [
     "dist",
     "README.md",
