@@ -41,7 +41,7 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 futures = "0.3"
 getrandom = "0.3"
 hmac = "0.12"
-hyper = "1.9"
+hyper = "1.10"
 jsonwebtoken = { version = "10.4", default-features = false, features = ["use_pem"] }
 jiter = "0.14"
 js-sys = "0.3"
