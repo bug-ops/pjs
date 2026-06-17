@@ -6,21 +6,9 @@ id = "RUSTSEC-2024-0436"
 reason = "paste 1.0.x is unmaintained; migration to pastey tracked separately"
 
 [[IgnoredVulns]]
-id = "RUSTSEC-2026-0176"
-reason = "pyo3 is an optional dep of jiter (python feature) never activated in this project; vulnerable code is never compiled"
-
-[[IgnoredVulns]]
 id = "GHSA-36hh-v3qg-5jq4"
-reason = "pyo3 is an optional dep of jiter (python feature) never activated in this project; vulnerable code is never compiled"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0177"
 reason = "pyo3 is an optional dep of jiter (python feature) never activated in this project; vulnerable code is never compiled"
 
 [[IgnoredVulns]]
 id = "GHSA-chgr-c6px-7xpp"
 reason = "pyo3 is an optional dep of jiter (python feature) never activated in this project; vulnerable code is never compiled"
-
-[[IgnoredVulns]]
-id = "GHSA-h67p-54hq-rp68"
-reason = "js-yaml 3.x is a transitive dev dep via @istanbuljs/load-nyc-config@1.1.0 which pins ^3.13.1; upgrading to 4.x requires breaking API changes in an upstream package with no 4.x-compatible release"
