@@ -416,14 +416,8 @@ for (const frame of frames) {
 }
 ```
 
-## Future Enhancements
+## Roadmap
 
-Planned features for future versions:
-
-- [x] Progressive streaming support
-- [x] Priority-based partial parsing
-- [ ] Schema validation API
-- [x] Custom priority configuration
-- [ ] WebSocket streaming integration
-- [ ] Compression support
+- [ ] WebSocket streaming transport in WASM bindings
+- [ ] Compression support in WASM bindings
 - [ ] Worker thread support for heavy parsing
