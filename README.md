@@ -206,8 +206,8 @@ cargo nextest run --workspace
 cargo bench -p pjs-bench
 
 # Run demo servers
-cargo run --bin websocket_streaming --manifest-path crates/pjs-demo/Cargo.toml
-cargo run --bin interactive_demo --manifest-path crates/pjs-demo/Cargo.toml
+cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin interactive-demo-server --features "simd-auto,schema-validation,compression,http-server,websocket-server"
+cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin simple-demo-server --features "simd-auto,http-server"
 ```
 
 ### Feature Flags

@@ -375,7 +375,7 @@ We welcome contributions! Please see our [Contributing Guide](../CONTRIBUTING.md
 ### Development Setup
 
 ```bash
-git clone https://github.com/pjs-rs/pjs
+git clone https://github.com/bug-ops/pjs
 cd pjs/crates/pjs-js-client
 npm install
 npm run dev
@@ -397,7 +397,7 @@ at your option.
 
 ## 🔗 Related Projects
 
-- **[pjs-rs](../pjs-core)** - Rust implementation and core protocol
+- **[pjson-rs](../pjs-core)** - Rust implementation and core protocol
 - **[PJS Server Examples](../../examples)** - Server implementations
 - **[PJS Benchmarks](../pjs-bench)** - Performance comparisons
 
