@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-29
+
+### Security
+
+- Upgrade `anyhow` to 1.0.103 (resolves RUSTSEC-2026-0190)
+- Upgrade `quinn-proto` to 0.11.15 via `Cargo.lock` (resolves RUSTSEC-2026-0185, High — transitive via `reqwest`)
+- Upgrade `js-yaml` to ^4.2.0 via npm override in `pjs-js-client` (GHSA-h67p-54hq-rp68)
+- Upgrade `shell-quote` to 1.8.4 via npm override in `pjs-js-client` (GHSA — newline escape bypass, Dependabot alert #42)
+- Upgrade `ws` to 8.21.0, `markdown-it` to 14.2.0, `@babel/core` to 7.29.7 in `pjs-js-client` lockfile
+- Suppress pyo3 advisories (RUSTSEC-2026-0176/0177, GHSA-36hh-v3qg-5jq4/chgr-c6px-7xpp) in `osv-scanner.toml`; the `python` feature of `jiter` is never activated in this project so the vulnerable code is never compiled
+
+### Changed
+
+- Dependency updates: `uuid`, `bytes`, and 13 other crates in the minor-and-patch group bumped to latest compatible versions
+
+### CI
+
+- Bump `actions/checkout` from v6 to v7 (#297)
+- Bump `lewagon/wait-on-check-action` from 1.7.0 to 1.8.0 (#295)
+- Bump `codecov/codecov-action` from v6 to v7 (#292)
+
 ## [0.6.0] - 2026-05-02
 
 ### Fixed
@@ -1117,7 +1138,8 @@ Licensed under either of
 
 at your option.
 
-[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/bug-ops/pjs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/bug-ops/pjs/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/bug-ops/pjs/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/bug-ops/pjs/compare/v0.5.0...v0.5.1
