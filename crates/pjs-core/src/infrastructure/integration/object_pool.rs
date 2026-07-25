@@ -73,6 +73,8 @@ impl<T> ObjectPool<T> {
             let pool_size = self.stat_pool_size.load(Ordering::Relaxed);
             // Best-effort peak tracking: imprecision under concurrency is acceptable.
             let in_use = created.saturating_sub(pool_size);
+            // `try_update` (the replacement) is stable since 1.95.0, above this crate's 1.89.0 MSRV.
+            #[allow(deprecated)]
             let _ = self
                 .stat_peak
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
