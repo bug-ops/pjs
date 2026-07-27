@@ -491,7 +491,8 @@ fn calculate_stream_checksum(frames_data: &[Vec<u8>]) -> String {
     hasher.update((frames_data.len() as u64).to_le_bytes());
 
     let result = hasher.finalize();
-    format!("sha256:{result:x}")
+    let hex: String = result.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{hex}")
 }
 
 #[cfg(test)]
