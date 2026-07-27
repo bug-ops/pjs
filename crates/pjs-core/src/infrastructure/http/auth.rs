@@ -40,7 +40,7 @@ mod inner {
         body::Body,
         http::{Method, Request, Response, StatusCode, header},
     };
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     use std::{
         fmt,

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-07-27
+
+### Security
+
+- Upgrade `crossbeam-epoch` to 0.9.20 (resolves RUSTSEC-2026-0204, which flagged 0.9.18 and was blocking the OSV Security Scan gate in CI)
+
+### Changed
+
+- Dependency updates: `bitflags`, `bytes`, `clap`, `hyper`, `memchr`, `regex`, `serde`, `serde_json`, `socket2`, `thiserror`, `tokio`, and `uuid` bumped to latest compatible versions (minor-and-patch group)
+
+### CI
+
+- Bump `actions/cache` from v5 to v6 (#299)
+- Bump `lewagon/wait-on-check-action` from 1.8.0 to 1.8.1 (#301), then to 1.9.0 (#308)
+- Bump `actions/setup-node` from v6 to v7 (#303)
+- Bump `actions/labeler` from v6 to v7 (#307)
+
 ## [0.6.1] - 2026-06-29
 
 ### Security
@@ -1138,7 +1155,8 @@ Licensed under either of
 
 at your option.
 
-[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/bug-ops/pjs/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/bug-ops/pjs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/bug-ops/pjs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/bug-ops/pjs/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/bug-ops/pjs/compare/v0.5.1...v0.5.2
