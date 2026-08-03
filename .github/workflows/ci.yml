@@ -154,7 +154,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         with:
           tool: nextest
 
@@ -203,7 +203,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@nightly
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         with:
           tool: nextest
 
@@ -322,7 +322,7 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@v0.0.11
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-llvm-cov,nextest
 
@@ -392,7 +392,7 @@ jobs:
           restore-keys: |
             wasm-pack-${{ runner.os }}-
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         with:
           tool: wasm-pack@latest
 
