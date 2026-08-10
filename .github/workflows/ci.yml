@@ -161,6 +161,12 @@ jobs:
       # Compile tests and produce a self-contained archive.  The archive
       # bundles test binaries + metadata so the test job can run without
       # recompiling.
+      # pjs-wasm is excluded: every one of its tests is gated to the wasm32
+      # target and its rustdoc examples are JS/ignored, so compiling it here
+      # adds no coverage. Worse, its transitive web-sys dependency declares
+      # ~1800 features, and Cargo's auto-generated --check-cfg argument for
+      # it (~40k chars) exceeds Windows' CreateProcess command-line limit,
+      # crashing sccache with os error 206. See #344.
       - name: Build test archive
         env:
           RUSTC_WRAPPER: sccache
@@ -168,6 +174,7 @@ jobs:
         run: >-
           cargo nextest archive
           --workspace
+          --exclude pjs-wasm
           --features "default${{ matrix.extra_features }}"
           --lib --bins
           --archive-file nextest-archive.tar.zst
@@ -255,6 +262,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
 
+      # pjs-wasm excluded for the same reason as the build job above: no
+      # runnable doctests (all examples are JS/ignored) and its web-sys
+      # dependency crashes sccache on Windows. See #344.
       - name: Run doctests
         env:
           RUSTC_WRAPPER: sccache
@@ -262,6 +272,7 @@ jobs:
         run: >-
           cargo test
           --workspace
+          --exclude pjs-wasm
           --doc
 
       - name: Print sccache stats

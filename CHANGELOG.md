@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI
+
+- Exclude `pjs-wasm` from the `--workspace` build/doctest steps on `build` and `doctest` jobs. Its transitive `web-sys` dependency declares ~1800 features; Cargo's auto-generated `--check-cfg` argument for it exceeds Windows' command-line length limit and crashed `sccache` on `windows-latest` (`os error 206`), intermittently blocking merges. `pjs-wasm`'s tests are all gated to `target_arch = "wasm32"` and its rustdoc examples are JS-only, so nothing was actually being exercised natively (#344)
+
 ## [0.6.2] - 2026-07-27
 
 ### Security
