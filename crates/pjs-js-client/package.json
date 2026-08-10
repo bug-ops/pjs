@@ -82,6 +82,6 @@
   "overrides": {
     "minimatch": "^10.2.1",
     "shell-quote": "^1.8.4",
-    "js-yaml": "^4.2.0"
+    "js-yaml": "^4.3.1"
   }
 }
