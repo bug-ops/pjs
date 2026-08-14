@@ -8,9 +8,19 @@ pub mod secure;
 #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 pub mod zstd;
 
+use crate::config::ConfigError;
 use crate::domain::{DomainError, DomainResult};
 use serde_json::{Value as JsonValue, json};
 use std::collections::HashMap;
+
+/// Sentinel byte (ASCII DEL, `\u{7F}`) marking a dictionary-substituted string.
+///
+/// Serializes as exactly one raw byte in JSON text (no escaping required per
+/// RFC 8259) and effectively never leads real-world text data, which is why
+/// it was chosen over a structural wrapper: it keeps a substitution
+/// self-describing in the string itself, with no positional metadata needed
+/// to reverse it (see issue #333).
+pub(crate) const DICT_SENTINEL: char = '\u{7F}';
 
 /// Configuration constants for compression algorithms
 #[derive(Debug, Clone)]
@@ -23,8 +33,43 @@ pub struct CompressionConfig {
     pub min_frequency_count: u32,
     /// Minimum compression potential for UUID patterns
     pub uuid_compression_potential: f32,
-    /// Threshold score for string dictionary compression
-    pub string_dict_threshold: f32,
+    /// Minimum net wire-byte saving required to select
+    /// [`CompressionStrategy::Dictionary`] (or the dictionary half of
+    /// [`CompressionStrategy::Hybrid`]). The net saving is computed per
+    /// candidate string as `gain - cost`, summed across all kept entries and
+    /// reduced by a fixed metadata envelope, using the same size accounting
+    /// the reported `compressed_size` uses. This makes dictionary selection a
+    /// *modelled* net-positive decision, not a guarantee: see the known
+    /// imprecisions below, which can make an accepted payload net-negative on
+    /// adversarial input. The wire-byte *report* (`compressed_size` and
+    /// everything derived from it) is unaffected and always measured, never
+    /// modelled (see issue #333).
+    ///
+    /// For a string of length `L` repeated `c` times with per-occurrence
+    /// marker overhead `m = 1 + decimal_digits(index)` and per-entry
+    /// dictionary-array cost `L + 3` (the string, its quotes, one
+    /// separator), an entry only pays off once `c*(L-m) > L+3`, i.e.
+    /// `L > (c*m + 3) / (c - 1)`. The smallest achievable `m` is `2`
+    /// (index `0` is one decimal digit), so for `c = 2` that means
+    /// `L > 7`. `"active"` (`L = 6, c = 2`) fails this per-entry gate
+    /// (gain `8` < cost `9`) and is pruned before `min_net_savings` is
+    /// consulted; a payload whose only repeated string is `"active"`
+    /// yields an empty dictionary and [`CompressionStrategy::None`]. Even
+    /// one kept entry rarely clears the floor alone: at `c = 2` it needs
+    /// `L >= 27` to reach the default `min_net_savings` of `10` after the
+    /// envelope.
+    ///
+    /// Known imprecisions, both of which shift the modelled net toward being
+    /// optimistic (a real payload can save fewer bytes than modelled, never
+    /// more): this accounting does not model JSON string escaping inside
+    /// dictionary strings (e.g. embedded quotes or backslashes), and it does
+    /// not model the 1-byte-per-instance cost of escaping a payload string
+    /// that legitimately starts with the sentinel byte (see
+    /// `substitute_dictionary_strings`). Both are symmetric across ordinary
+    /// payloads and shift the byte count only slightly, but a payload
+    /// engineered to maximize sentinel-led strings can make a selected
+    /// `Dictionary` strategy net-negative in the real, measured report.
+    pub min_net_savings: usize,
     /// Threshold score for delta compression
     pub delta_threshold: f32,
     /// Minimum delta potential for numeric compression
@@ -44,13 +89,76 @@ impl Default for CompressionConfig {
             min_string_length: 3,
             min_frequency_count: 1,
             uuid_compression_potential: 0.3,
-            string_dict_threshold: 50.0,
+            min_net_savings: 10,
             delta_threshold: 30.0,
             min_delta_potential: 0.3,
             run_length_threshold: 20.0,
             min_compression_potential: 0.4,
             min_numeric_sequence_size: 3,
         }
+    }
+}
+
+impl CompressionConfig {
+    /// Validate compression configuration invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InconsistentBounds`] when a potential/ratio
+    /// field (`uuid_compression_potential`, `min_delta_potential`,
+    /// `min_compression_potential`) is outside `0.0..=1.0`, or when a
+    /// threshold field (`delta_threshold`, `run_length_threshold`) is
+    /// negative or non-finite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::compression::CompressionConfig;
+    ///
+    /// CompressionConfig::default().validate().expect("defaults are valid");
+    /// ```
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        for (value, message) in [
+            (
+                self.uuid_compression_potential,
+                "uuid_compression_potential must be in 0.0..=1.0",
+            ),
+            (
+                self.min_delta_potential,
+                "min_delta_potential must be in 0.0..=1.0",
+            ),
+            (
+                self.min_compression_potential,
+                "min_compression_potential must be in 0.0..=1.0",
+            ),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(ConfigError::InconsistentBounds {
+                    section: "compression",
+                    message,
+                });
+            }
+        }
+
+        for (value, message) in [
+            (
+                self.delta_threshold,
+                "delta_threshold must be finite and non-negative",
+            ),
+            (
+                self.run_length_threshold,
+                "run_length_threshold must be finite and non-negative",
+            ),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(ConfigError::InconsistentBounds {
+                    section: "compression",
+                    message,
+                });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -283,23 +391,14 @@ impl SchemaAnalyzer {
 
     /// Determine optimal compression strategy based on analysis
     fn determine_strategy(&mut self) -> DomainResult<CompressionStrategy> {
-        // Calculate compression potentials
-        let mut string_dict_score = 0.0;
         let mut delta_score = 0.0;
 
-        // Analyze string repetition potential
-        let mut string_dict = HashMap::new();
-        let mut dict_index = 0u16;
-
-        for (string, count) in &self.string_repetitions {
-            if *count > self.config.min_frequency_count
-                && string.len() > self.config.min_string_length
-            {
-                string_dict_score += (*count as f32 - 1.0) * string.len() as f32;
-                string_dict.insert(string.clone(), dict_index);
-                dict_index += 1;
-            }
-        }
+        // Build the dictionary against a real net wire-byte savings model instead of a
+        // proxy ratio/floor pair (see issue #333).
+        let (string_dict, dict_net_savings) =
+            build_dictionary(&self.string_repetitions, &self.config);
+        let string_dict_selected =
+            !string_dict.is_empty() && dict_net_savings >= self.config.min_net_savings as i64;
 
         // Analyze numeric delta potential
         let mut numeric_deltas = HashMap::new();
@@ -336,8 +435,8 @@ impl SchemaAnalyzer {
 
         // Choose strategy based on scores
         match (
-            string_dict_score > self.config.string_dict_threshold,
-            delta_score > self.config.delta_threshold,
+            string_dict_selected,
+            delta_score >= self.config.delta_threshold,
         ) {
             (true, true) => Ok(CompressionStrategy::Hybrid {
                 string_dict,
@@ -358,13 +457,153 @@ impl SchemaAnalyzer {
                     .map(|p| p.frequency as f32 * p.compression_potential)
                     .sum::<f32>();
 
-                if run_length_score > self.config.run_length_threshold {
+                if run_length_score >= self.config.run_length_threshold {
                     Ok(CompressionStrategy::RunLength)
                 } else {
                     Ok(CompressionStrategy::None)
                 }
             }
         }
+    }
+}
+
+/// Number of base-10 digits in `n`'s decimal representation (`0` has 1 digit).
+fn decimal_digits(n: u16) -> usize {
+    n.to_string().len()
+}
+
+/// Build the pruned dictionary and its modelled net wire-byte saving for a set of candidate
+/// string repetitions, using the same cost model [`wire_size`] measures on the wire.
+///
+/// Candidates are sorted descending by `count * len` (the strings with the largest raw payoff
+/// get the smallest indices, which minimizes marker overhead where it matters most) with a
+/// lexicographic tie-break on the string itself, so dictionary construction is fully
+/// deterministic across runs on identical input (see issue #333 M6).
+///
+/// An entry is kept only when its modelled `gain` (bytes saved by replacing every occurrence
+/// with a sentinel marker) exceeds its modelled `cost` (the string's own transmission cost in
+/// the `"dict"` metadata array). The returned net saving sums `gain - cost` across all kept
+/// entries and subtracts the fixed `"dict":[]` envelope once, if any entry was kept.
+fn build_dictionary(
+    repetitions: &HashMap<String, u32>,
+    config: &CompressionConfig,
+) -> (HashMap<String, u16>, i64) {
+    let mut candidates: Vec<(&String, u32)> = repetitions
+        .iter()
+        .filter_map(|(s, &count)| {
+            (count > config.min_frequency_count && s.len() > config.min_string_length)
+                .then_some((s, count))
+        })
+        .collect();
+    candidates.sort_by(|(s1, c1), (s2, c2)| {
+        let payoff1 = *c1 as usize * s1.len();
+        let payoff2 = *c2 as usize * s2.len();
+        payoff2.cmp(&payoff1).then_with(|| s1.cmp(s2))
+    });
+
+    let mut dictionary = HashMap::new();
+    let mut net: i64 = 0;
+    let mut index: u16 = 0;
+    for (s, count) in candidates {
+        // The dictionary index is a u16: once the index space (0..u16::MAX) is exhausted,
+        // stop dictionarying further candidates instead of overflowing on the increment
+        // below (issue #333 C3 — a debug panic, or on release a silent index wraparound
+        // that collapses two entries into the same "dict" array slot and corrupts decode).
+        if index == u16::MAX {
+            break;
+        }
+        let marker_len = 1 + decimal_digits(index);
+        let gain = count as i64 * (s.len() as i64 - marker_len as i64);
+        let cost = s.len() as i64 + 3;
+        if gain > cost {
+            net += gain - cost;
+            dictionary.insert(s.clone(), index);
+            index += 1;
+        }
+    }
+    if !dictionary.is_empty() {
+        net -= 10; // `{"dict":[]}` envelope
+    }
+    (dictionary, net)
+}
+
+/// Compute the total wire-transmitted size of a compressed payload: the serialized `data` plus
+/// its side-channel `metadata`, when present.
+///
+/// `CompressedData::compressed_size` and everything derived from it
+/// (`compression_ratio`, `compression_savings`,
+/// [`crate::stream::compression_integration::CompressionStats::bytes_saved`]) are always
+/// measured this way — the report is never a model estimate, so it can never claim a false
+/// saving even when the *selection* model used elsewhere (see [`build_dictionary`]) is wrong.
+fn wire_size(data: &JsonValue, metadata: &HashMap<String, JsonValue>) -> DomainResult<usize> {
+    let mut size = serde_json::to_string(data)
+        .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
+        .len();
+    if !metadata.is_empty() {
+        size += serde_json::to_string(metadata)
+            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
+            .len();
+    }
+    Ok(size)
+}
+
+/// Build the wire-format dictionary metadata: an index-ordered JSON array of strings, where
+/// array position `i` holds the string assigned dictionary index `i`.
+///
+/// Any index not present in `dictionary` (a caller contract violation — indices are expected to
+/// be exactly `0..dictionary.len()`) is degraded to an empty string slot rather than panicking.
+fn dictionary_metadata(dictionary: &HashMap<String, u16>) -> JsonValue {
+    let mut ordered: Vec<Option<&str>> = vec![None; dictionary.len()];
+    for (s, &i) in dictionary {
+        if let Some(slot) = ordered.get_mut(i as usize) {
+            *slot = Some(s.as_str());
+        }
+    }
+    JsonValue::Array(
+        ordered
+            .into_iter()
+            .map(|s| JsonValue::String(s.unwrap_or_default().to_string()))
+            .collect(),
+    )
+}
+
+/// Encode dictionary substitutions as sentinel-escaped string markers.
+///
+/// Per string value `s`:
+/// - if `s` is a dictionary key, emit `\u{7F}<index>` (a marker)
+/// - else if `s` already starts with `\u{7F}`, emit `\u{7F}` + `s` (escape)
+/// - else emit `s` unchanged
+///
+/// This makes a substitution self-describing in the string itself, so decoding needs no
+/// positional metadata — closing both the number/index collision (issue #333 C1) and the
+/// path-string collision (issue #333 C2) by construction rather than by narrowing.
+fn substitute_dictionary_strings(data: &JsonValue, dictionary: &HashMap<String, u16>) -> JsonValue {
+    match data {
+        JsonValue::Object(obj) => {
+            let mut out = serde_json::Map::with_capacity(obj.len());
+            for (key, value) in obj {
+                out.insert(
+                    key.clone(),
+                    substitute_dictionary_strings(value, dictionary),
+                );
+            }
+            JsonValue::Object(out)
+        }
+        JsonValue::Array(arr) => JsonValue::Array(
+            arr.iter()
+                .map(|v| substitute_dictionary_strings(v, dictionary))
+                .collect(),
+        ),
+        JsonValue::String(s) => {
+            if let Some(&index) = dictionary.get(s) {
+                JsonValue::String(format!("{DICT_SENTINEL}{index}"))
+            } else if s.starts_with(DICT_SENTINEL) {
+                JsonValue::String(format!("{DICT_SENTINEL}{s}"))
+            } else {
+                data.clone()
+            }
+        }
+        _ => data.clone(),
     }
 }
 
@@ -415,16 +654,15 @@ impl SchemaCompressor {
     /// Compress JSON data according to current strategy
     pub fn compress(&self, data: &JsonValue) -> DomainResult<CompressedData> {
         match &self.strategy {
-            CompressionStrategy::None => Ok(CompressedData {
-                strategy: self.strategy.clone(),
-                compressed_size: serde_json::to_string(data)
-                    .map_err(|e| {
-                        DomainError::CompressionError(format!("JSON serialization failed: {e}"))
-                    })?
-                    .len(),
-                data: data.clone(),
-                compression_metadata: HashMap::new(),
-            }),
+            CompressionStrategy::None => {
+                let metadata = HashMap::new();
+                Ok(CompressedData {
+                    strategy: self.strategy.clone(),
+                    compressed_size: wire_size(data, &metadata)?,
+                    data: data.clone(),
+                    compression_metadata: metadata,
+                })
+            }
 
             CompressionStrategy::Dictionary { dictionary } => {
                 self.compress_with_dictionary(data, dictionary)
@@ -450,17 +688,10 @@ impl SchemaCompressor {
         dictionary: &HashMap<String, u16>,
     ) -> DomainResult<CompressedData> {
         let mut metadata = HashMap::new();
+        metadata.insert("dict".to_string(), dictionary_metadata(dictionary));
 
-        // Store dictionary for decompression
-        for (string, index) in dictionary {
-            metadata.insert(format!("dict_{index}"), JsonValue::String(string.clone()));
-        }
-
-        // Replace strings with dictionary indices
-        let compressed = self.replace_strings_with_indices(data, dictionary)?;
-        let compressed_size = serde_json::to_string(&compressed)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
-            .len();
+        let compressed = substitute_dictionary_strings(data, dictionary);
+        let compressed_size = wire_size(&compressed, &metadata)?;
 
         Ok(CompressedData {
             strategy: self.strategy.clone(),
@@ -490,9 +721,7 @@ impl SchemaCompressor {
 
         // Apply delta compression
         let compressed = self.apply_delta_compression(data, base_values)?;
-        let compressed_size = serde_json::to_string(&compressed)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
-            .len();
+        let compressed_size = wire_size(&compressed, &metadata)?;
 
         Ok(CompressedData {
             strategy: self.strategy.clone(),
@@ -504,16 +733,15 @@ impl SchemaCompressor {
 
     /// Run-length encoding compression
     fn compress_with_run_length(&self, data: &JsonValue) -> DomainResult<CompressedData> {
+        let metadata = HashMap::new();
         let compressed = self.apply_run_length_encoding(data)?;
-        let compressed_size = serde_json::to_string(&compressed)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
-            .len();
+        let compressed_size = wire_size(&compressed, &metadata)?;
 
         Ok(CompressedData {
             strategy: self.strategy.clone(),
             compressed_size,
             data: compressed,
-            compression_metadata: HashMap::new(),
+            compression_metadata: metadata,
         })
     }
 
@@ -591,11 +819,7 @@ impl SchemaCompressor {
         numeric_deltas: &HashMap<String, f64>,
     ) -> DomainResult<CompressedData> {
         let mut metadata = HashMap::new();
-
-        // Add dictionary metadata
-        for (string, index) in string_dict {
-            metadata.insert(format!("dict_{index}"), JsonValue::String(string.clone()));
-        }
+        metadata.insert("dict".to_string(), dictionary_metadata(string_dict));
 
         // Add delta base values
         for (path, base) in numeric_deltas {
@@ -607,13 +831,11 @@ impl SchemaCompressor {
             metadata.insert(format!("base_{path}"), JsonValue::Number(number));
         }
 
-        // Apply both compression strategies
-        let dict_compressed = self.replace_strings_with_indices(data, string_dict)?;
+        // Apply both compression strategies: dictionary substitution first, then delta.
+        let dict_compressed = substitute_dictionary_strings(data, string_dict);
         let final_compressed = self.apply_delta_compression(&dict_compressed, numeric_deltas)?;
 
-        let compressed_size = serde_json::to_string(&final_compressed)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
-            .len();
+        let compressed_size = wire_size(&final_compressed, &metadata)?;
 
         Ok(CompressedData {
             strategy: self.strategy.clone(),
@@ -621,42 +843,6 @@ impl SchemaCompressor {
             data: final_compressed,
             compression_metadata: metadata,
         })
-    }
-
-    /// Replace strings with dictionary indices
-    #[allow(clippy::only_used_in_recursion)]
-    fn replace_strings_with_indices(
-        &self,
-        data: &JsonValue,
-        dictionary: &HashMap<String, u16>,
-    ) -> DomainResult<JsonValue> {
-        match data {
-            JsonValue::Object(obj) => {
-                let mut compressed_obj = serde_json::Map::new();
-                for (key, value) in obj {
-                    compressed_obj.insert(
-                        key.clone(),
-                        self.replace_strings_with_indices(value, dictionary)?,
-                    );
-                }
-                Ok(JsonValue::Object(compressed_obj))
-            }
-            JsonValue::Array(arr) => {
-                let compressed_arr: Result<Vec<_>, _> = arr
-                    .iter()
-                    .map(|item| self.replace_strings_with_indices(item, dictionary))
-                    .collect();
-                Ok(JsonValue::Array(compressed_arr?))
-            }
-            JsonValue::String(s) => {
-                if let Some(&index) = dictionary.get(s) {
-                    Ok(JsonValue::Number(serde_json::Number::from(index)))
-                } else {
-                    Ok(data.clone())
-                }
-            }
-            _ => Ok(data.clone()),
-        }
     }
 
     /// Apply delta compression to numeric sequences in arrays
@@ -784,7 +970,9 @@ impl SchemaCompressor {
 pub struct CompressedData {
     /// Strategy that produced the compressed payload.
     pub strategy: CompressionStrategy,
-    /// Size of `data` after JSON serialization, in bytes.
+    /// Total wire-transmitted size, in bytes: `data` after JSON serialization plus
+    /// `compression_metadata` when non-empty. This is always a measured value, never a model
+    /// estimate — see the `wire_size` helper in this module.
     pub compressed_size: usize,
     /// JSON payload after compression has been applied.
     pub data: JsonValue,
@@ -853,6 +1041,145 @@ mod tests {
     }
 
     #[test]
+    fn test_schema_analyzer_realistic_ecommerce_payload() {
+        // Regression test for issue #333: a realistic ~423-byte payload with moderate
+        // repetition ("Electronics"/"Apple"/"available" x3 each) that nets a genuine positive
+        // wire-byte saving under honest `wire_size` accounting, not just a favorable ratio.
+        let mut analyzer = SchemaAnalyzer::new();
+
+        let data = json!({
+            "products": [
+                {"id": 1001, "name": "MacBook Pro", "category": "Electronics", "status": "available", "brand": "Apple", "price": 2399.99},
+                {"id": 1002, "name": "iPhone 15", "category": "Electronics", "status": "available", "brand": "Apple", "price": 999.99},
+                {"id": 1003, "name": "AirPods Pro", "category": "Electronics", "status": "available", "brand": "Apple", "price": 249.99}
+            ],
+            "store": {"name": "Tech Store", "status": "operational", "location": "San Francisco"}
+        });
+
+        let strategy = analyzer.analyze(&data).unwrap();
+
+        match &strategy {
+            CompressionStrategy::Dictionary { .. } | CompressionStrategy::Hybrid { .. } => {}
+            other => panic!("Expected dictionary-based compression strategy, got {other:?}"),
+        }
+
+        let original_size = serde_json::to_string(&data).unwrap().len();
+        let compressed = SchemaCompressor::with_strategy(strategy)
+            .compress(&data)
+            .unwrap();
+        assert!(
+            compressed.compression_savings(original_size) > 0,
+            "expected genuine positive wire-byte savings, got {}",
+            compressed.compression_savings(original_size)
+        );
+    }
+
+    #[test]
+    fn test_schema_analyzer_realistic_api_response_payload() {
+        // Regression test for issue #333: a realistic API response with genuine field-level
+        // repetition (5 users, "status" x4 and "role" x4) large enough to net a real
+        // wire-byte saving once dictionary overhead is honestly accounted for — a smaller,
+        // 3-user version of this payload with short enum strings ("active"/"user" x2 each)
+        // cannot clear even a 2-byte-per-instance marker overhead and correctly stays `None`.
+        let mut analyzer = SchemaAnalyzer::new();
+
+        let data = json!({
+            "status": "success",
+            "data": {
+                "users": [
+                    {"id": "user_001", "email": "alice@example.com", "status": "subscription_active", "role": "standard_user", "created_at": "2024-01-01T00:00:00Z", "last_login": "2024-01-15T10:30:00Z"},
+                    {"id": "user_002", "email": "bob@example.com", "status": "subscription_active", "role": "standard_user", "created_at": "2024-01-02T00:00:00Z", "last_login": "2024-01-15T09:15:00Z"},
+                    {"id": "user_003", "email": "charlie@example.com", "status": "subscription_active", "role": "standard_user", "created_at": "2024-01-03T00:00:00Z", "last_login": "2024-01-10T14:22:00Z"},
+                    {"id": "user_004", "email": "dave@example.com", "status": "subscription_active", "role": "administrator", "created_at": "2024-01-04T00:00:00Z", "last_login": "2024-01-14T11:05:00Z"},
+                    {"id": "user_005", "email": "erin@example.com", "status": "subscription_inactive", "role": "standard_user", "created_at": "2024-01-05T00:00:00Z", "last_login": "2024-01-09T08:40:00Z"}
+                ]
+            },
+            "pagination": {"page": 1, "per_page": 25, "total_pages": 4, "total_items": 89},
+            "meta": {"request_id": "req_12345", "timestamp": "2024-01-15T10:30:15Z", "version": "v1.2.3"}
+        });
+
+        let strategy = analyzer.analyze(&data).unwrap();
+
+        match &strategy {
+            CompressionStrategy::Dictionary { .. } | CompressionStrategy::Hybrid { .. } => {}
+            other => panic!("Expected dictionary-based compression strategy, got {other:?}"),
+        }
+
+        let original_size = serde_json::to_string(&data).unwrap().len();
+        let compressed = SchemaCompressor::with_strategy(strategy)
+            .compress(&data)
+            .unwrap();
+        assert!(
+            compressed.compression_savings(original_size) > 0,
+            "expected genuine positive wire-byte savings, got {}",
+            compressed.compression_savings(original_size)
+        );
+    }
+
+    #[test]
+    fn test_schema_analyzer_no_repetition_stays_none() {
+        // Payloads with no meaningful string repetition must still resolve to
+        // `CompressionStrategy::None` after normalizing the threshold — the
+        // fix must not zero out the threshold and trigger unconditionally.
+        let mut analyzer = SchemaAnalyzer::new();
+
+        let data = json!({
+            "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "name": "Unique Product Name Alpha",
+            "description": "A completely unique description of this particular item with no repeats",
+            "vendor": "Acme Corporation International",
+            "location": "Building 12, Warehouse Section D",
+            "notes": "Handled with care during transit process"
+        });
+
+        let strategy = analyzer.analyze(&data).unwrap();
+        assert_eq!(strategy, CompressionStrategy::None);
+    }
+
+    #[test]
+    fn test_schema_analyzer_tiny_duplicate_stays_none_below_savings_floor() {
+        // Regression test for issue #333's S3/net-benefit-gate finding: a tiny payload with
+        // one duplicated short string ("hello" x2) models a net wire-byte loss once dictionary
+        // overhead is accounted for (gain 6 < cost 8), so `build_dictionary` prunes it and
+        // `min_net_savings` correctly rejects `Dictionary` for this payload.
+        let mut analyzer = SchemaAnalyzer::new();
+
+        let data = json!({"a": "hello", "b": "hello", "c": "world"});
+
+        let strategy = analyzer.analyze(&data).unwrap();
+        assert_eq!(strategy, CompressionStrategy::None);
+    }
+
+    #[test]
+    fn test_schema_analyzer_long_repeated_string_selects_dictionary_and_shrinks() {
+        // Net-benefit gate, positive case: a >=12-char string repeated 3 times models a
+        // comfortably positive net wire-byte saving (gain 54 - cost 23 - envelope 10 = 21
+        // here), clearing the default `min_net_savings` floor of 10.
+        let mut analyzer = SchemaAnalyzer::new();
+
+        let data = json!({
+            "a": "premium_subscription",
+            "b": "premium_subscription",
+            "c": "premium_subscription",
+            "d": "unique"
+        });
+
+        let strategy = analyzer.analyze(&data).unwrap();
+        let dictionary = match &strategy {
+            CompressionStrategy::Dictionary { dictionary } => dictionary,
+            other => panic!("Expected Dictionary strategy, got {other:?}"),
+        };
+
+        let original_size = serde_json::to_string(&data).unwrap().len();
+        let compressed = SchemaCompressor::with_strategy(CompressionStrategy::Dictionary {
+            dictionary: dictionary.clone(),
+        })
+        .compress(&data)
+        .unwrap();
+        assert!(compressed.compression_savings(original_size) > 0);
+    }
+
+    #[test]
     fn test_schema_compressor_basic() {
         let compressor = SchemaCompressor::new();
 
@@ -885,9 +1212,148 @@ mod tests {
 
         let result = compressor.compress(&data).unwrap();
 
-        // Verify compression metadata contains dictionary
-        assert!(result.compression_metadata.contains_key("dict_0"));
-        assert!(result.compression_metadata.contains_key("dict_1"));
+        // Verify compression metadata contains the index-ordered dictionary array.
+        assert_eq!(
+            result.compression_metadata.get("dict"),
+            Some(&json!(["active", "admin"]))
+        );
+    }
+
+    #[test]
+    fn test_dictionary_compression_never_produces_numbers_from_substitution() {
+        // Regression test for issue #333's C1 finding: a bare dictionary index used to be
+        // encoded as a JsonValue::Number, indistinguishable from a genuine payload integer.
+        // Sentinel-escaped string markers make this structurally impossible: "count" holds the
+        // same raw value (0) that "active"'s dictionary index encodes as, but it's untouched
+        // because only JSON strings are ever substitution candidates.
+        let mut dictionary = HashMap::new();
+        dictionary.insert("active".to_string(), 0);
+
+        let compressor =
+            SchemaCompressor::with_strategy(CompressionStrategy::Dictionary { dictionary });
+
+        let data = json!({
+            "status": "active",
+            "count": 0
+        });
+
+        let result = compressor.compress(&data).unwrap();
+
+        assert_eq!(result.data, json!({"status": "\u{7F}0", "count": 0}));
+    }
+
+    #[test]
+    fn test_dictionary_sentinel_escaping_encode_shape() {
+        // Encode-side half of the sentinel-marker injectivity proof: a payload containing
+        // strings that legitimately start with the sentinel byte — including one that mimics
+        // a real marker's exact shape ("\u{7F}0") — must be escaped with exactly one extra
+        // leading sentinel, distinct from a genuine dictionary marker's single sentinel.
+        // The full round trip (encode + decode via the public streaming API) is covered by
+        // `test_dictionary_sentinel_escaping_round_trips_losslessly` in the integration tests.
+        let mut dictionary = HashMap::new();
+        dictionary.insert("greeting".to_string(), 0);
+
+        let data = json!({
+            "a": "\u{7F}foo",
+            "b": "\u{7F}\u{7F}bar",
+            "c": "\u{7F}0",
+            "d": "greeting"
+        });
+
+        let substituted = substitute_dictionary_strings(&data, &dictionary);
+        assert_eq!(
+            substituted,
+            json!({
+                "a": "\u{7F}\u{7F}foo",
+                "b": "\u{7F}\u{7F}\u{7F}bar",
+                "c": "\u{7F}\u{7F}0",
+                "d": "\u{7F}0"
+            })
+        );
+    }
+
+    #[test]
+    fn test_compressed_size_matches_wire_bytes_for_every_strategy() {
+        // Size-honesty regression test for issue #333 S5: `compressed_size` must equal the
+        // actual serialized data plus metadata bytes for every strategy, never a model
+        // estimate.
+        fn expected_wire_size(data: &JsonValue, metadata: &HashMap<String, JsonValue>) -> usize {
+            let mut size = serde_json::to_string(data).unwrap().len();
+            if !metadata.is_empty() {
+                size += serde_json::to_string(metadata).unwrap().len();
+            }
+            size
+        }
+
+        let data = json!({
+            "status": "active",
+            "count": 3,
+            "sequence": [1.0, 2.0, 3.0],
+            "repeated": [1, 1, 1, 2, 2]
+        });
+
+        let mut dictionary = HashMap::new();
+        dictionary.insert("active".to_string(), 0);
+        let mut base_values = HashMap::new();
+        base_values.insert("sequence".to_string(), 1.0);
+
+        for strategy in [
+            CompressionStrategy::None,
+            CompressionStrategy::Dictionary {
+                dictionary: dictionary.clone(),
+            },
+            CompressionStrategy::Delta {
+                base_values: base_values.clone(),
+            },
+            CompressionStrategy::RunLength,
+            CompressionStrategy::Hybrid {
+                string_dict: dictionary.clone(),
+                numeric_deltas: base_values.clone(),
+            },
+        ] {
+            let compressor = SchemaCompressor::with_strategy(strategy);
+            let result = compressor.compress(&data).unwrap();
+            assert_eq!(
+                result.compressed_size,
+                expected_wire_size(&result.data, &result.compression_metadata),
+                "strategy {:?} mismatched wire size",
+                result.strategy
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_dictionary_caps_index_at_u16_max_without_overflow() {
+        // Regression test for issue #333 C3: the dictionary index is a `u16`. Before the fix,
+        // more than `u16::MAX` kept entries panicked on the index increment in debug builds
+        // and silently wrapped to duplicate indices in release builds, collapsing distinct
+        // dictionary entries into the same "dict" array slot and corrupting decode with no
+        // error raised. Every candidate below is deliberately long enough (`L = 20`) and
+        // repeated enough (`c = 2`) to individually clear the per-entry `gain > cost` gate
+        // regardless of the marker length at any index up to `u16::MAX`, so all of them are
+        // kept candidates — the count of *kept* entries is what the index bounds, not the
+        // count of candidates offered.
+        let mut repetitions = HashMap::new();
+        for i in 0..(u16::MAX as u32 + 2) {
+            repetitions.insert(format!("padding_string_{i:05}"), 2);
+        }
+
+        let (dictionary, _net) = build_dictionary(&repetitions, &CompressionConfig::default());
+
+        assert!(
+            dictionary.len() <= u16::MAX as usize,
+            "dictionary must never exceed the u16 index space, got {} entries",
+            dictionary.len()
+        );
+
+        let distinct_indices: std::collections::HashSet<u16> =
+            dictionary.values().copied().collect();
+        assert_eq!(
+            distinct_indices.len(),
+            dictionary.len(),
+            "every dictionary entry must have a unique index — a mismatch here means indices \
+             wrapped and collided"
+        );
     }
 
     #[test]

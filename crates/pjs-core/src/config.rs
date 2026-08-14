@@ -225,7 +225,7 @@ impl PjsConfig {
     /// Validate the entire configuration, including all sub-configs.
     ///
     /// Validation is fail-fast: the first error encountered is returned.
-    /// The chain order is: `streaming`, `parser`, `simd`, `security`.
+    /// The chain order is: `streaming`, `parser`, `simd`, `security`, `compression`.
     ///
     /// # Errors
     ///
@@ -243,6 +243,7 @@ impl PjsConfig {
         self.parser.validate()?;
         self.simd.validate()?;
         self.security.validate()?;
+        self.compression.validate()?;
         Ok(())
     }
 
@@ -309,8 +310,8 @@ impl PjsConfig {
                 min_string_length: 2,
                 min_frequency_count: 1,
                 uuid_compression_potential: 0.5,
-                string_dict_threshold: 25.0, // Lower threshold
-                delta_threshold: 15.0,       // Lower threshold
+                min_net_savings: 4, // Lower floor than the default, for smaller mobile payloads
+                delta_threshold: 15.0, // Lower threshold
                 min_delta_potential: 0.2,
                 run_length_threshold: 10.0, // Lower threshold
                 min_compression_potential: 0.3,
@@ -447,7 +448,7 @@ mod tests {
     fn test_mobile_profile() {
         let config = PjsConfig::mobile();
         assert_eq!(config.streaming.max_frame_size, 8 * 1024);
-        assert_eq!(config.compression.string_dict_threshold, 25.0);
+        assert_eq!(config.compression.min_net_savings, 4);
         assert_eq!(config.simd.vectorized_chunk_size, 8);
     }
 
@@ -456,16 +457,16 @@ mod tests {
         use crate::compression::{CompressionConfig, SchemaAnalyzer};
         use serde_json::json;
 
-        // Create custom compression config with lower thresholds
+        // Create custom compression config with a zeroed net-savings floor
         let compression_config = CompressionConfig {
-            string_dict_threshold: 10.0, // Lower threshold for testing
+            min_net_savings: 0,
             min_frequency_count: 1,
             ..Default::default()
         };
 
         let mut analyzer = SchemaAnalyzer::with_config(compression_config);
 
-        // Test data that should trigger dictionary compression with low threshold
+        // Test data that should trigger dictionary compression with a zeroed floor
         let data = json!({
             "users": [
                 {"status": "active", "role": "user"},
@@ -475,11 +476,11 @@ mod tests {
 
         let strategy = analyzer.analyze(&data).unwrap();
 
-        // With lower threshold, should detect dictionary compression opportunity
+        // With a zeroed floor, should detect dictionary compression opportunity
         match strategy {
             crate::compression::CompressionStrategy::Dictionary { .. }
             | crate::compression::CompressionStrategy::Hybrid { .. } => {
-                // Expected with low threshold
+                // Expected with a zeroed floor
             }
             _ => {
                 // Also acceptable, depends on specific data characteristics

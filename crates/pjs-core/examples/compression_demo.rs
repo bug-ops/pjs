@@ -268,7 +268,9 @@ fn demo_realworld_patterns() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut analyzer = SchemaAnalyzer::new();
 
-    // Simulate API response with common patterns
+    // Simulate a realistic API response: 5 users with genuine field-level repetition
+    // ("subscription_active" x4, "standard_user" x4) large enough to net a real wire-byte
+    // saving once dictionary overhead is honestly accounted for.
     let api_response = json!({
         "status": "success",
         "data": {
@@ -276,26 +278,42 @@ fn demo_realworld_patterns() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     "id": "user_001",
                     "email": "alice@example.com",
-                    "status": "active",
-                    "role": "admin",
+                    "status": "subscription_active",
+                    "role": "standard_user",
                     "created_at": "2024-01-01T00:00:00Z",
                     "last_login": "2024-01-15T10:30:00Z"
                 },
                 {
                     "id": "user_002",
                     "email": "bob@example.com",
-                    "status": "active",
-                    "role": "user",
+                    "status": "subscription_active",
+                    "role": "standard_user",
                     "created_at": "2024-01-02T00:00:00Z",
                     "last_login": "2024-01-15T09:15:00Z"
                 },
                 {
                     "id": "user_003",
                     "email": "charlie@example.com",
-                    "status": "inactive",
-                    "role": "user",
+                    "status": "subscription_active",
+                    "role": "standard_user",
                     "created_at": "2024-01-03T00:00:00Z",
                     "last_login": "2024-01-10T14:22:00Z"
+                },
+                {
+                    "id": "user_004",
+                    "email": "dave@example.com",
+                    "status": "subscription_active",
+                    "role": "administrator",
+                    "created_at": "2024-01-04T00:00:00Z",
+                    "last_login": "2024-01-14T11:05:00Z"
+                },
+                {
+                    "id": "user_005",
+                    "email": "erin@example.com",
+                    "status": "subscription_inactive",
+                    "role": "standard_user",
+                    "created_at": "2024-01-05T00:00:00Z",
+                    "last_login": "2024-01-09T08:40:00Z"
                 }
             ]
         },
