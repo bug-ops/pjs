@@ -20,6 +20,16 @@ use crate::domain::{
 type NotificationId = u64;
 type NotificationCallback = Arc<dyn Fn(&DomainEvent) + Send + Sync>;
 
+/// Capacity of the streaming channel returned by [`InMemoryEventPublisher::with_channel`].
+///
+/// Gives `publish`/`publish_batch` room to absorb bursts before a full
+/// channel starts dropping events (logged via [`mpsc::error::TrySendError`]
+/// rather than blocking the publish hot path — see [`EventPublisherGat`]'s
+/// doc). 1000 is a conservative default chosen without a specific
+/// throughput target; sizing it from an expected consumer lag or event
+/// rate is tracked as a follow-up.
+const EVENT_CHANNEL_CAPACITY: usize = 1000;
+
 /// In-memory event publisher with subscription support
 pub struct InMemoryEventPublisher {
     /// Lock-free notification callbacks using DashMap
@@ -29,7 +39,7 @@ pub struct InMemoryEventPublisher {
     /// Next notification ID generator
     next_notification_id: Arc<AtomicU64>,
     /// Optional channel for streaming events
-    channel_tx: Arc<tokio::sync::RwLock<Option<mpsc::UnboundedSender<StoredEvent>>>>,
+    channel_tx: Arc<tokio::sync::RwLock<Option<mpsc::Sender<StoredEvent>>>>,
 }
 
 impl Clone for InMemoryEventPublisher {
@@ -46,7 +56,11 @@ impl Clone for InMemoryEventPublisher {
 /// Event recorded by [`InMemoryEventPublisher`] for inspection and replay.
 #[derive(Debug, Clone)]
 pub struct StoredEvent {
-    /// Identifier of the originating domain event.
+    /// Surrogate key minted with [`EventId::new`] when this record is
+    /// stored/published. `DomainEvent` itself carries no identity, so this
+    /// id does not correlate across independently-stored copies of "the
+    /// same" event (e.g. each destination in [`CompositeEventPublisher`]
+    /// mints its own).
     pub id: EventId,
     /// Stringified event-type discriminant.
     pub event_type: String,
@@ -70,8 +84,8 @@ impl InMemoryEventPublisher {
     }
 
     /// Initialize event streaming channel (lock-free)
-    pub fn with_channel() -> (Self, mpsc::UnboundedReceiver<StoredEvent>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+    pub fn with_channel() -> (Self, mpsc::Receiver<StoredEvent>) {
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
         let publisher = Self {
             notification_callbacks: Arc::new(DashMap::new()),
             event_log: Arc::new(DashMap::new()),
@@ -168,7 +182,7 @@ impl EventPublisherGat for InMemoryEventPublisher {
     fn publish(&self, event: DomainEvent) -> Self::PublishFuture<'_> {
         async move {
             let stored_event = StoredEvent {
-                id: event.event_id(),
+                id: EventId::new(),
                 event_type: event.event_type().to_string(),
                 session_id: Some(event.session_id()),
                 timestamp: event.occurred_at(),
@@ -195,9 +209,14 @@ impl EventPublisherGat for InMemoryEventPublisher {
                 }
             }
 
-            // Send to channel if configured (lock-free check)
-            if let Some(tx) = self.channel_tx.read().await.as_ref() {
-                let _ = tx.send(stored_event);
+            // Send to channel if configured. `try_send` keeps this hot path
+            // non-blocking: a stalled consumer must not stall unrelated
+            // event publishing, so a full channel drops the event and logs
+            // rather than awaiting capacity.
+            if let Some(tx) = self.channel_tx.read().await.as_ref()
+                && let Err(e) = tx.try_send(stored_event)
+            {
+                tracing::warn!("Dropping event from streaming channel: {e}");
             }
 
             // Notify callbacks (lock-free iteration)
@@ -217,7 +236,7 @@ impl EventPublisherGat for InMemoryEventPublisher {
                 .into_par_iter()
                 .map(|event| {
                     let stored_event = StoredEvent {
-                        id: event.event_id(),
+                        id: EventId::new(),
                         event_type: event.event_type().to_string(),
                         session_id: Some(event.session_id()),
                         timestamp: event.occurred_at(),
@@ -238,10 +257,14 @@ impl EventPublisherGat for InMemoryEventPublisher {
                 })
                 .collect();
 
-            // Send to channel if configured (sequential for channel ordering)
+            // Send to channel if configured (sequential for channel ordering).
+            // Same non-blocking `try_send` policy as `publish`: drop and log
+            // on a full channel instead of stalling the batch.
             if let Some(tx) = self.channel_tx.read().await.as_ref() {
                 for stored_event in stored_events {
-                    let _ = tx.send(stored_event);
+                    if let Err(e) = tx.try_send(stored_event) {
+                        tracing::warn!("Dropping event from streaming channel: {e}");
+                    }
                 }
             }
 
@@ -306,7 +329,7 @@ impl EventPublisherGat for HttpEventPublisher {
     fn publish(&self, event: DomainEvent) -> Self::PublishFuture<'_> {
         async move {
             let payload = serde_json::json!({
-                "event_id": event.event_id().to_string(),
+                "event_id": EventId::new().to_string(),
                 "event_type": event.event_type(),
                 "session_id": event.session_id().to_string(),
                 "occurred_at": event.occurred_at(),
@@ -349,7 +372,7 @@ impl EventPublisherGat for HttpEventPublisher {
                 .iter()
                 .map(|event| {
                     serde_json::json!({
-                        "event_id": event.event_id().to_string(),
+                        "event_id": EventId::new().to_string(),
                         "event_type": event.event_type(),
                         "session_id": event.session_id().to_string(),
                         "occurred_at": event.occurred_at(),
@@ -601,6 +624,119 @@ mod tests {
         publisher.publish_batch(events).await.unwrap();
 
         assert_eq!(publisher.event_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_structurally_identical_events_do_not_collide() {
+        // Regression test for #328: EventId used to be derived from the
+        // event's `Debug` content hash, so two structurally-identical
+        // events (same variant, session_id, and timestamp) produced the
+        // same EventId and silently overwrote each other in `event_log`.
+        let publisher = InMemoryEventPublisher::new();
+        let session_id = SessionId::new();
+        let timestamp = chrono::Utc::now();
+
+        let event1 = DomainEvent::SessionActivated {
+            session_id,
+            timestamp,
+        };
+        let event2 = DomainEvent::SessionActivated {
+            session_id,
+            timestamp,
+        };
+        assert_eq!(
+            format!("{event1:?}"),
+            format!("{event2:?}"),
+            "events must be structurally identical for this regression test to be meaningful"
+        );
+
+        publisher.publish(event1).await.unwrap();
+        publisher.publish(event2).await.unwrap();
+
+        assert_eq!(
+            publisher.event_count(),
+            2,
+            "both events must be stored under distinct EventIds, not overwrite each other"
+        );
+
+        let stored = publisher.events_for_session(session_id);
+        assert_eq!(stored.len(), 2);
+        assert_ne!(
+            stored[0].id, stored[1].id,
+            "structurally identical events must still get distinct EventIds"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_streaming_channel_is_bounded() {
+        // Regression test for #314: `with_channel` used to return an
+        // unbounded channel. It must now be capped at `EVENT_CHANNEL_CAPACITY`.
+        let (publisher, _rx) = InMemoryEventPublisher::with_channel();
+        let tx = publisher
+            .channel_tx
+            .read()
+            .await
+            .clone()
+            .expect("with_channel must configure a sender");
+        assert_eq!(tx.max_capacity(), EVENT_CHANNEL_CAPACITY);
+    }
+
+    #[tokio::test]
+    async fn test_publish_does_not_block_when_streaming_channel_is_full() {
+        // Regression test for #314: once the streaming channel is full,
+        // `publish` must drop-and-log via `try_send` rather than blocking
+        // on a stalled consumer. This asserts the drop actually happens
+        // (not just that `publish` returns quickly): `event_log` holds
+        // every event regardless, so the channel itself must be checked
+        // directly to prove the overflow event was dropped rather than
+        // queued.
+        let (publisher, mut rx) = InMemoryEventPublisher::with_channel();
+        let session_id = SessionId::new();
+
+        for _ in 0..EVENT_CHANNEL_CAPACITY {
+            let event = DomainEvent::SessionActivated {
+                session_id,
+                timestamp: chrono::Utc::now(),
+            };
+            publisher.publish(event).await.unwrap();
+        }
+
+        // The channel must now be completely full.
+        assert_eq!(
+            publisher
+                .channel_tx
+                .read()
+                .await
+                .as_ref()
+                .expect("with_channel must configure a sender")
+                .capacity(),
+            0,
+            "channel should be at capacity after publishing EVENT_CHANNEL_CAPACITY events"
+        );
+
+        let event = DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(2), publisher.publish(event))
+            .await
+            .expect("publish must not block when the streaming channel is full")
+            .unwrap();
+
+        // event_log stores every event regardless of channel state.
+        assert_eq!(publisher.event_count(), EVENT_CHANNEL_CAPACITY + 1);
+
+        // But the channel itself must hold only the events that fit before
+        // it filled up: the overflow event was dropped, not queued.
+        rx.close();
+        let mut drained = 0;
+        while rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        assert_eq!(
+            drained, EVENT_CHANNEL_CAPACITY,
+            "the overflow event must have been dropped from the channel, not queued"
+        );
     }
 
     #[tokio::test]

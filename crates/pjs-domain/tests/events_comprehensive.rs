@@ -302,36 +302,6 @@ mod event_metadata_tests {
     use super::*;
 
     #[test]
-    fn test_event_id_generation() {
-        let session_id = SessionId::new();
-        let timestamp = Utc::now();
-
-        let event = DomainEvent::SessionActivated {
-            session_id,
-            timestamp,
-        };
-
-        let event_id = event.event_id();
-        let event_id_str = event_id.to_string();
-        assert!(!event_id_str.is_empty());
-    }
-
-    #[test]
-    fn test_event_id_consistency() {
-        let session_id = SessionId::new();
-        let timestamp = Utc::now();
-
-        let event = DomainEvent::SessionActivated {
-            session_id,
-            timestamp,
-        };
-
-        let id1 = event.event_id();
-        let id2 = event.event_id();
-        assert_eq!(id1, id2); // Should be deterministic
-    }
-
-    #[test]
     fn test_occurred_at() {
         let session_id = SessionId::new();
         let timestamp = Utc::now();
