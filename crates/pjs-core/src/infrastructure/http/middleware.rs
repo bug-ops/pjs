@@ -1,11 +1,12 @@
 //! HTTP middleware for PJS optimization and monitoring
 
 use axum::{
-    extract::Request,
+    extract::{ConnectInfo, Request},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::Next,
     response::Response,
 };
+use std::net::SocketAddr;
 use std::time::Instant;
 use std::{
     future::Future,
@@ -139,6 +140,51 @@ where
     }
 }
 
+/// Opt-in trusted-proxy allowlist for the HTTP rate limiter.
+///
+/// By default, [`RateLimitMiddleware`] keys rate limiting on the real TCP peer
+/// address and never trusts `X-Forwarded-For`/`X-Real-IP` — an unauthenticated
+/// client could otherwise send a fresh spoofed value on every request to get a
+/// fresh rate-limit bucket, fully bypassing the limiter. Set this only for
+/// deployments that sit behind a known reverse proxy or load balancer whose
+/// peer address(es) are listed here; requests from any other peer always use
+/// the real peer address regardless of these headers.
+///
+/// # Proxy contract
+///
+/// `X-Forwarded-For` is read right-to-left and takes precedence over
+/// `X-Real-IP` when both are present. The trusted proxy must *append* the
+/// address it saw the connection from to `X-Forwarded-For` rather than
+/// overwrite it (e.g. nginx's `$proxy_add_x_forwarded_for`, or any proxy that
+/// merges into a single header line rather than emitting a new one). Proxies
+/// that instead emit `<ip>:<port>` or bracketed IPv6 entries are not
+/// supported by this simple allowlist — the walk fails closed on the first
+/// unparseable entry (falls back to `X-Real-IP`, then the peer address)
+/// rather than skipping it and guessing from what remains. Repeated
+/// `X-Forwarded-For` header lines are read and treated as one comma-joined
+/// list in line order, per RFC 9110.
+#[derive(Debug, Clone, Default)]
+pub struct TrustedProxyConfig {
+    /// Peer addresses (the proxy's own TCP source address) allowed to supply
+    /// `X-Forwarded-For`/`X-Real-IP`.
+    pub trusted_proxies: Vec<std::net::IpAddr>,
+}
+
+impl TrustedProxyConfig {
+    /// Build a trusted-proxy config from an explicit allowlist of proxy addresses.
+    pub fn new(trusted_proxies: Vec<std::net::IpAddr>) -> Self {
+        Self { trusted_proxies }
+    }
+
+    /// Whether `ip` (already canonicalized via [`IpAddr::to_canonical`]) is in
+    /// the allowlist. Allowlist entries are canonicalized before comparison so
+    /// an IPv4 proxy configured as `10.0.0.1` still matches when it arrives as
+    /// the IPv4-mapped IPv6 address `::ffff:10.0.0.1` on a dual-stack listener.
+    fn contains(&self, ip: std::net::IpAddr) -> bool {
+        self.trusted_proxies.iter().any(|p| p.to_canonical() == ip)
+    }
+}
+
 /// Rate limiting configuration for HTTP endpoints
 #[derive(Debug, Clone)]
 pub struct RateLimitConfig {
@@ -146,6 +192,9 @@ pub struct RateLimitConfig {
     pub max_requests_per_window: u32,
     /// Time window duration (default: 60 seconds)
     pub window_duration: std::time::Duration,
+    /// Opt-in trusted-proxy allowlist. `None` (the default) always keys the
+    /// rate limiter on the real TCP peer address. See [`TrustedProxyConfig`].
+    pub trusted_proxies: Option<TrustedProxyConfig>,
 }
 
 impl Default for RateLimitConfig {
@@ -153,6 +202,7 @@ impl Default for RateLimitConfig {
         Self {
             max_requests_per_window: 100,
             window_duration: std::time::Duration::from_secs(60),
+            trusted_proxies: None,
         }
     }
 }
@@ -163,12 +213,19 @@ impl RateLimitConfig {
         Self {
             max_requests_per_window: requests_per_minute,
             window_duration: std::time::Duration::from_secs(60),
+            trusted_proxies: None,
         }
     }
 
     /// Override the window duration that `max_requests_per_window` applies to.
     pub fn with_window(mut self, duration: std::time::Duration) -> Self {
         self.window_duration = duration;
+        self
+    }
+
+    /// Opt in to trusting `X-Forwarded-For`/`X-Real-IP` from the given proxy allowlist.
+    pub fn with_trusted_proxies(mut self, config: TrustedProxyConfig) -> Self {
+        self.trusted_proxies = Some(config);
         self
     }
 }
@@ -181,11 +238,13 @@ impl RateLimitConfig {
 #[derive(Clone)]
 pub struct RateLimitMiddleware {
     limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
+    trusted_proxies: Option<TrustedProxyConfig>,
 }
 
 impl RateLimitMiddleware {
     /// Build a fresh middleware with its own internal `WebSocketRateLimiter`.
     pub fn new(config: RateLimitConfig) -> Self {
+        let trusted_proxies = config.trusted_proxies.clone();
         let rate_limit_config = crate::security::rate_limit::RateLimitConfig {
             max_requests_per_window: config.max_requests_per_window,
             window_duration: config.window_duration,
@@ -196,6 +255,7 @@ impl RateLimitMiddleware {
             limiter: std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
                 rate_limit_config,
             )),
+            trusted_proxies,
         }
     }
 
@@ -203,7 +263,16 @@ impl RateLimitMiddleware {
     pub fn from_limiter(
         limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
     ) -> Self {
-        Self { limiter }
+        Self {
+            limiter,
+            trusted_proxies: None,
+        }
+    }
+
+    /// Opt in to trusting `X-Forwarded-For`/`X-Real-IP` from the given proxy allowlist.
+    pub fn with_trusted_proxies(mut self, config: TrustedProxyConfig) -> Self {
+        self.trusted_proxies = Some(config);
+        self
     }
 }
 
@@ -214,6 +283,7 @@ impl<S> Layer<S> for RateLimitMiddleware {
         RateLimitService {
             inner,
             limiter: self.limiter.clone(),
+            trusted_proxies: self.trusted_proxies.clone(),
         }
     }
 }
@@ -223,6 +293,7 @@ impl<S> Layer<S> for RateLimitMiddleware {
 pub struct RateLimitService<S> {
     inner: S,
     limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
+    trusted_proxies: Option<TrustedProxyConfig>,
 }
 
 impl<S> Service<Request> for RateLimitService<S>
@@ -240,11 +311,11 @@ where
 
     fn call(&mut self, request: Request) -> Self::Future {
         let limiter = self.limiter.clone();
+        let trusted_proxies = self.trusted_proxies.clone();
         let mut inner = self.inner.clone();
 
         Box::pin(async move {
-            // Extract client IP from connection info or X-Forwarded-For header
-            let client_ip = extract_client_ip(&request);
+            let client_ip = extract_client_ip(&request, trusted_proxies.as_ref());
 
             // Check rate limit
             match limiter.check_request(client_ip) {
@@ -283,38 +354,108 @@ where
     }
 }
 
-/// Extract client IP address from request
+/// Extract the client IP address used as the rate-limit key.
 ///
-/// Priority:
-/// 1. X-Forwarded-For header (behind proxy)
-/// 2. X-Real-IP header
-/// 3. Default to localhost (fallback)
-fn extract_client_ip(request: &Request) -> std::net::IpAddr {
+/// Always trusts the real TCP peer address first, populated via axum's
+/// [`ConnectInfo`] extension — the router must be served with
+/// `into_make_service_with_connect_info::<SocketAddr>()`, otherwise no
+/// `ConnectInfo` extension is present, every client collapses onto a single
+/// shared bucket keyed on `127.0.0.1`, and a one-time warning is logged (see
+/// [`warn_missing_connect_info`]).
+///
+/// `X-Forwarded-For`/`X-Real-IP` are only consulted when `trusted_proxies` is
+/// set and the real peer address is in its allowlist. Trusting these headers
+/// unconditionally would let any client forge a fresh rate-limit bucket on
+/// every request, fully bypassing the limiter. Both the peer address and
+/// allowlist entries are compared via [`IpAddr::to_canonical`] so an IPv4
+/// proxy is still recognized when it arrives IPv4-mapped on a dual-stack
+/// listener.
+fn extract_client_ip(
+    request: &Request,
+    trusted_proxies: Option<&TrustedProxyConfig>,
+) -> std::net::IpAddr {
     use std::net::{IpAddr, Ipv4Addr};
 
-    // Try X-Forwarded-For header
-    if let Some(ip) = request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|first| first.trim().parse::<IpAddr>().ok())
+    let Some(peer) = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(addr)| addr.ip().to_canonical())
+    else {
+        warn_missing_connect_info();
+        return IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    };
+
+    if let Some(proxies) = trusted_proxies
+        && proxies.contains(peer)
+        && let Some(forwarded_ip) = extract_forwarded_ip(request.headers(), proxies)
     {
-        return ip;
+        return forwarded_ip;
     }
 
-    // Try X-Real-IP header
-    if let Some(ip) = request
-        .headers()
+    peer
+}
+
+/// Log once (per process) that a request arrived with no `ConnectInfo`
+/// extension, so misconfiguration is loud rather than silently collapsing
+/// every client onto one rate-limit bucket.
+fn warn_missing_connect_info() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!(
+            "RateLimitMiddleware: request has no ConnectInfo<SocketAddr> extension; \
+             serve the router with `.into_make_service_with_connect_info::<SocketAddr>()` \
+             or every client will share a single rate-limit bucket keyed on 127.0.0.1 \
+             (logged once)"
+        );
+    });
+}
+
+/// Parse the client IP from `X-Forwarded-For` or `X-Real-IP`.
+///
+/// Only called for peers already verified against [`TrustedProxyConfig`] —
+/// these headers must never be trusted from an unverified peer.
+///
+/// `X-Forwarded-For` is walked right-to-left — across all header lines with
+/// that name, since `HeaderMap` allows repeats and they are semantically one
+/// comma-joined list in line order — skipping any entry that is itself a
+/// trusted proxy, and returns the first entry that is not. A well-behaved
+/// proxy *appends* the address it saw the connection from, so the rightmost
+/// non-trusted entry is the one appended by the closest trusted hop and
+/// cannot be forged by the client — taking the leftmost (client-supplied)
+/// entry instead would let a client behind a trusted proxy forge a fresh
+/// value on every request and reopen the exact bypass this module exists to
+/// close.
+///
+/// The walk **fails closed** on the first unparseable entry: it stops and
+/// falls through to `X-Real-IP` rather than skipping past the malformed
+/// entry into entries further left, which are progressively more
+/// attacker-controlled the further left they sit in the chain.
+fn extract_forwarded_ip(
+    headers: &HeaderMap,
+    trusted_proxies: &TrustedProxyConfig,
+) -> Option<std::net::IpAddr> {
+    let entries: Vec<&str> = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .flat_map(|s| s.split(','))
+        .collect();
+
+    for entry in entries.into_iter().rev() {
+        let Ok(ip) = entry.trim().parse::<std::net::IpAddr>() else {
+            break;
+        };
+        let canonical = ip.to_canonical();
+        if !trusted_proxies.contains(canonical) {
+            return Some(canonical);
+        }
+    }
+
+    headers
         .get("x-real-ip")
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<IpAddr>().ok())
-    {
-        return ip;
-    }
-
-    // Fallback to localhost
-    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+        .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+        .map(|ip| ip.to_canonical())
 }
 
 /// Add X-RateLimit-* headers to response per RFC 6585

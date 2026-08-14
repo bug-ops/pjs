@@ -384,10 +384,11 @@ impl From<SessionHealth> for SessionHealthResponse {
 /// # Security Note
 ///
 /// This is suitable for local development only. For production, use
-/// [`create_pjs_router_with_config`] with an explicit [`HttpServerConfig`].
-///
-/// TODO: Implement authentication strategy before production deployment.
-/// Options: API keys, JWT tokens, OAuth2/OIDC
+/// [`create_pjs_router_with_config`] with an explicit [`HttpServerConfig`], and
+/// apply authentication via [`create_pjs_router_with_auth`] or
+/// [`create_pjs_router_with_rate_limit_and_auth`] — API key and JWT layers are
+/// available in [`crate::infrastructure::http::auth`]
+/// (`ApiKeyAuthLayer`, `JwtAuthLayer`).
 pub fn create_pjs_router<R, P, S>() -> Router<PjsAppState<R, P, S>>
 where
     R: StreamRepositoryGat + Send + Sync + 'static,
@@ -436,7 +437,13 @@ where
 ///
 /// # Security Note
 ///
-/// Rate limiting is applied globally to all endpoints.
+/// Rate limiting is applied globally to all endpoints, keyed on the real TCP
+/// peer address by default — the router must be served with
+/// `into_make_service_with_connect_info::<std::net::SocketAddr>()` (as done for
+/// the WebSocket upgrade handler) so that peer address is populated; otherwise
+/// every request falls back to the same key (`127.0.0.1`). To trust
+/// `X-Forwarded-For`/`X-Real-IP` behind a reverse proxy, opt in via
+/// [`RateLimitConfig::with_trusted_proxies`](crate::infrastructure::http::middleware::RateLimitConfig::with_trusted_proxies).
 /// Returns 429 Too Many Requests with Retry-After header when limit exceeded.
 /// Adds X-RateLimit-* headers per RFC 6585.
 pub fn create_pjs_router_with_rate_limit<R, P, S>(
@@ -1098,27 +1105,14 @@ where
     Ok(Json(response))
 }
 
-// TODO(CQ-004): Implement HTTP rate limiting middleware
-//
-// Recommended implementation:
-// - Add Arc<WebSocketRateLimiter> to PjsAppState
-// - Use 100 requests/minute per IP with burst allowance
-// - Extract IP from ConnectInfo<SocketAddr>
-// - Return 429 Too Many Requests on limit exceeded
-//
-// Example:
-// ```ignore
-// async fn rate_limit_middleware(
-//     State(limiter): State<Arc<WebSocketRateLimiter>>,
-//     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-//     req: Request,
-//     next: Next,
-// ) -> Result<Response, StatusCode> {
-//     limiter.check_request(addr.ip())
-//         .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
-//     Ok(next.run(req).await)
-// }
-// ```
+// HTTP rate limiting is implemented by `RateLimitMiddleware`
+// (crate::infrastructure::http::middleware), wired in via
+// `create_pjs_router_with_rate_limit[_and_config]` and
+// `create_pjs_router_with_rate_limit_and_auth` above. It keys on the real
+// ConnectInfo<SocketAddr> peer address by default; see
+// `RateLimitConfig::with_trusted_proxies` to opt in to trusting
+// X-Forwarded-For/X-Real-IP behind a known reverse proxy.
+
 /// PJS-specific errors for HTTP endpoints
 #[derive(Debug, thiserror::Error)]
 pub enum PjsError {
