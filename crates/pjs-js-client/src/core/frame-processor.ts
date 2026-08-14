@@ -6,7 +6,6 @@
  */
 
 import {
-  Frame,
   FrameType,
   Priority,
   PatchOperation,

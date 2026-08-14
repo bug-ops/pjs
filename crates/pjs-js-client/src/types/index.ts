@@ -239,7 +239,7 @@ export interface StreamStats {
   startTime: number;
   endTime?: number;
   totalFrames: number;
-  priorityDistribution: Record<Priority, number>;
+  priorityDistribution: Partial<Record<Priority, number>>;
   performance: PerformanceMetrics;
 }
 

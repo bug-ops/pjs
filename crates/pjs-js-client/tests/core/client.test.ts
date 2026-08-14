@@ -6,13 +6,14 @@
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { PJSClient } from '../../src/core/client.js';
-import { 
-  Priority, 
-  TransportType, 
-  FrameType, 
-  PJSEvent, 
-  PJSError, 
-  PJSErrorType 
+import type { Transport } from '../../src/transport/base.js';
+import {
+  Priority,
+  TransportType,
+  FrameType,
+  PJSEvent,
+  PJSError,
+  Frame
 } from '../../src/types/index.js';
 
 describe('PJSClient', () => {
@@ -101,8 +102,8 @@ describe('PJSClient', () => {
 
   describe('Event System', () => {
     test('should emit connection events', async () => {
-      const connectListener = jest.fn();
-      const disconnectListener = jest.fn();
+      const connectListener = jest.fn<(data: { sessionId: string }) => void>();
+      const disconnectListener = jest.fn<(data: { reason?: string }) => void>();
 
       client.on(PJSEvent.Connected, connectListener);
       client.on(PJSEvent.Disconnected, disconnectListener);
@@ -133,16 +134,16 @@ describe('PJSClient', () => {
   describe('Streaming', () => {
     beforeEach(async () => {
       // Mock successful frames for streaming tests
-      const mockFrames = [
+      const mockFrames: Frame[] = [
         {
-          type: FrameType.Skeleton as FrameType.Skeleton,
+          type: FrameType.Skeleton,
           priority: Priority.Critical,
           data: { id: null, name: null },
           complete: false,
           timestamp: Date.now()
         },
         {
-          type: FrameType.Patch as FrameType.Patch,
+          type: FrameType.Patch,
           priority: Priority.High,
           patches: [
             { path: '$.id', value: 123, operation: 'set' as const },
@@ -151,14 +152,14 @@ describe('PJSClient', () => {
           timestamp: Date.now()
         },
         {
-          type: FrameType.Complete as FrameType.Complete,
+          type: FrameType.Complete,
           priority: Priority.Background,
           timestamp: Date.now()
         }
       ];
 
       // Mock transport to emit these frames
-      jest.spyOn(client as any, 'transport', 'get').mockReturnValue({
+      jest.spyOn(client as unknown as { transport: Transport }, 'transport', 'get').mockReturnValue({
         connect: () => Promise.resolve({ sessionId: 'test-session' }),
         startStream: () => {
           // Emit frames after a short delay
@@ -172,7 +173,7 @@ describe('PJSClient', () => {
         on: jest.fn(),
         removeListener: jest.fn(),
         disconnect: () => Promise.resolve()
-      });
+      } as unknown as Transport);
     });
 
     test('should stream data successfully', async () => {
@@ -185,8 +186,8 @@ describe('PJSClient', () => {
     });
 
     test('should call render callback during streaming', async () => {
-      const renderCallback = jest.fn();
-      const progressCallback = jest.fn();
+      const renderCallback = jest.fn<() => void>();
+      const progressCallback = jest.fn<() => void>();
 
       await client.stream('/api/test', {
         onRender: renderCallback,
@@ -219,16 +220,16 @@ describe('PJSClient', () => {
 
   describe('Statistics', () => {
     beforeEach(() => {
-      const mockFrames = [
+      const mockFrames: Frame[] = [
         {
-          type: FrameType.Skeleton as FrameType.Skeleton,
+          type: FrameType.Skeleton,
           priority: Priority.Critical,
           data: { id: null, name: null },
           complete: false,
           timestamp: Date.now()
         },
         {
-          type: FrameType.Patch as FrameType.Patch,
+          type: FrameType.Patch,
           priority: Priority.High,
           patches: [
             { path: '$.id', value: 1, operation: 'set' as const },
@@ -237,12 +238,12 @@ describe('PJSClient', () => {
           timestamp: Date.now()
         },
         {
-          type: FrameType.Complete as FrameType.Complete,
+          type: FrameType.Complete,
           priority: Priority.Background,
           timestamp: Date.now()
         }
       ];
-      jest.spyOn(client as any, 'transport', 'get').mockReturnValue({
+      jest.spyOn(client as unknown as { transport: Transport }, 'transport', 'get').mockReturnValue({
         connect: () => Promise.resolve({ sessionId: 'stats-session' }),
         startStream: () => {
           setTimeout(() => {
@@ -253,7 +254,7 @@ describe('PJSClient', () => {
         on: jest.fn(),
         removeListener: jest.fn(),
         disconnect: () => Promise.resolve()
-      });
+      } as unknown as Transport);
     });
 
     test('should track stream statistics', async () => {
@@ -298,7 +299,7 @@ describe('PJSClient', () => {
     });
 
     test('should validate frame structure', async () => {
-      const errorListener = jest.fn();
+      const errorListener = jest.fn<() => void>();
       client.on(PJSEvent.Error, errorListener);
 
       // Simulate invalid frame
@@ -310,7 +311,7 @@ describe('PJSClient', () => {
     });
 
     test('should handle protocol violations', async () => {
-      const errorListener = jest.fn();
+      const errorListener = jest.fn<() => void>();
       client.on(PJSEvent.Error, errorListener);
 
       // Simulate patch before skeleton

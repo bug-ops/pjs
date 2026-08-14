@@ -28,7 +28,8 @@
  */
 
 import { Transport, ConnectResult, StreamOptions } from './base.js';
-import { Frame, FrameType, PJSClientConfig, PJSError, PJSErrorType } from '../types/index.js';
+import { Frame, FrameType, PJSClientConfig, Priority, PJSError, PJSErrorType } from '../types/index.js';
+import { loadWasmModule } from '../utils/wasm-loader.js';
 import type { PriorityStream, FrameData, StreamStats } from 'pjs-wasm';
 
 /**
@@ -53,7 +54,7 @@ export interface WasmStreamOptions extends StreamOptions {
  * Provides client-side JSON streaming using WebAssembly, with no server communication.
  */
 export class WasmBackend extends Transport {
-  private wasmModule: any = null;
+  private wasmModule: typeof import('pjs-wasm') | null = null;
   private currentStream: PriorityStream | null = null;
   private wasmAvailable = false;
 
@@ -76,12 +77,7 @@ export class WasmBackend extends Transport {
     }
 
     try {
-      // Dynamic import of pjs-wasm
-      this.wasmModule = await import('pjs-wasm');
-
-      // Initialize WASM (automatically called via wasm_bindgen(start))
-      await this.wasmModule.default();
-
+      this.wasmModule = await loadWasmModule();
       this.wasmAvailable = true;
       this.isConnected = true;
 
@@ -98,8 +94,9 @@ export class WasmBackend extends Transport {
     } catch (error) {
       throw new PJSError(
         PJSErrorType.InitializationError,
-        'Failed to initialize WASM backend. Ensure pjs-wasm is installed.',
-        { error: (error as Error).message }
+        `Failed to initialize WASM backend: ${(error as Error).message}`,
+        { error: (error as Error).message },
+        error as Error
       );
     }
   }
@@ -152,21 +149,29 @@ export class WasmBackend extends Transport {
       );
     }
 
+    if (!this.wasmModule) {
+      throw new PJSError(
+        PJSErrorType.ConnectionError,
+        'WASM backend not initialized. Call connect() first.'
+      );
+    }
+
     try {
       // Create priority stream
       const { PriorityStream } = this.wasmModule;
-      this.currentStream = new PriorityStream();
+      const stream = new PriorityStream();
+      this.currentStream = stream;
 
       const minPriority = options.minPriority ?? 1;
-      this.currentStream.setMinPriority(minPriority);
+      stream.setMinPriority(minPriority);
 
       // Set up callbacks
-      this.currentStream.onFrame((frameData: FrameData) => {
+      stream.onFrame((frameData: FrameData) => {
         const frame = this.convertWasmFrame(frameData);
         this.emitFrame(frame);
       });
 
-      this.currentStream.onComplete((stats: StreamStats) => {
+      stream.onComplete((stats: StreamStats) => {
         if (this.config.debug) {
           console.log('[PJS WASM Backend] Stream complete:', {
             totalFrames: stats.totalFrames,
@@ -179,12 +184,12 @@ export class WasmBackend extends Transport {
         // Emit complete frame
         this.emitFrame({
           type: FrameType.Complete,
-          priority: 1,
+          priority: Priority.Background,
           total_frames: stats.totalFrames
         });
       });
 
-      this.currentStream.onError((error: string) => {
+      stream.onError((error: string) => {
         const pjsError = new PJSError(
           PJSErrorType.StreamError,
           `WASM streaming error: ${error}`,
@@ -202,7 +207,7 @@ export class WasmBackend extends Transport {
         });
       }
 
-      this.currentStream.start(options.jsonData);
+      stream.start(options.jsonData);
 
     } catch (error) {
       const pjsError = error instanceof PJSError
@@ -244,10 +249,7 @@ export class WasmBackend extends Transport {
     // Parse payload
     let payload: any;
     try {
-      // Use getPayloadObject() if available (zero-copy)
-      payload = typeof frameData.getPayloadObject === 'function'
-        ? frameData.getPayloadObject()
-        : JSON.parse(frameData.payload);
+      payload = JSON.parse(frameData.payload);
     } catch (error) {
       throw new PJSError(
         PJSErrorType.ParseError,

@@ -27,7 +27,7 @@ global.WebSocket = class MockWebSocket extends EventTarget {
     }, 10);
   }
 
-  send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+  send(_data: string | ArrayBufferLike | Blob | ArrayBufferView) {
     if (this.readyState !== MockWebSocket.OPEN) {
       throw new Error('WebSocket is not open');
     }
@@ -73,7 +73,7 @@ global.EventSource = class MockEventSource extends EventTarget {
 } as any;
 
 // Mock fetch with basic functionality
-global.fetch = jest.fn().mockImplementation((url: string, options?: RequestInit) => {
+global.fetch = jest.fn().mockImplementation((url: string, _options?: RequestInit) => {
   // Reject requests to invalid/unreachable hosts
   try {
     const parsed = new URL(url);
@@ -108,24 +108,6 @@ global.console = {
   warn: jest.fn(),
   error: jest.fn(),
   debug: jest.fn()
-};
-
-// Test utilities
-global.createMockFrame = (type: string, priority: number, data?: any) => ({
-  type,
-  priority,
-  timestamp: Date.now(),
-  ...(data && { data }),
-  ...(type === 'patch' && { patches: data?.patches || [] })
-});
-
-global.createMockClient = (config: any = {}) => {
-  const { PJSClient } = require('../src/core/client');
-  return new PJSClient({
-    baseUrl: 'http://localhost:3000',
-    debug: false,
-    ...config
-  });
 };
 
 // Cleanup after tests

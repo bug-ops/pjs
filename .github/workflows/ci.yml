@@ -515,6 +515,47 @@ jobs:
           node example.js | grep -q "Example 1: Basic Usage" || (echo "Example failed" && exit 1)
           node example.js | grep -q "Generated" || (echo "No frame generation detected" && exit 1)
 
+  # pjs-js-client ships a fallback ambient `declare module 'pjs-wasm'` (see
+  # src/types/pjs-wasm.d.ts) so `js-client-test`'s typecheck stays green when
+  # pjs-wasm/pkg hasn't been built. TypeScript resolves ambient module
+  # declarations before node_modules, so that shim always wins there and the
+  # real generated pjs_wasm.d.ts is never consulted by that job — this job
+  # excludes the shim and runs with the real, built package so a rename or
+  # signature change in crates/pjs-wasm's public API (semver-governed, see
+  # CLAUDE.md) still fails CI instead of passing silently.
+  wasm-types-drift:
+    name: WASM Types Drift Check
+    needs: [changes, wasm-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      needs.changes.outputs.wasm == 'true' ||
+      needs.changes.outputs.js == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: wasm-build-web
+          path: crates/pjs-wasm/pkg
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: crates/pjs-js-client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: crates/pjs-js-client
+        run: npm ci
+
+      - name: Type check against the real pjs-wasm bindings
+        working-directory: crates/pjs-js-client
+        run: npm run typecheck:wasm-drift
+
   wasm-package-validation:
     name: NPM Package Validation
     needs: [changes, wasm-build]
@@ -603,6 +644,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Type check
+        run: npm run typecheck
+
       - name: Run tests
         run: npm test
 
@@ -622,6 +666,7 @@ jobs:
       - wasm-build
       - wasm-bundle-size
       - wasm-node-example
+      - wasm-types-drift
       - wasm-package-validation
       - security-osv
       - js-client-test
@@ -646,6 +691,7 @@ jobs:
           check wasm-build                "${{ needs.wasm-build.result }}"
           check wasm-bundle-size          "${{ needs.wasm-bundle-size.result }}"
           check wasm-node-example         "${{ needs.wasm-node-example.result }}"
+          check wasm-types-drift          "${{ needs.wasm-types-drift.result }}"
           check wasm-package-validation   "${{ needs.wasm-package-validation.result }}"
           check security-osv              "${{ needs.security-osv.result }}"
           check js-client-test            "${{ needs.js-client-test.result }}"

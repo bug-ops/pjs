@@ -10,6 +10,7 @@
  */
 
 import { PJSError, PJSErrorType, Frame, FrameType } from '../types/index.js';
+import { loadWasmModule } from '../utils/wasm-loader.js';
 import type { PriorityStream, FrameData, StreamStats } from 'pjs-wasm';
 
 export interface WasmParserOptions {
@@ -30,7 +31,9 @@ export interface StreamingCallbacks {
  */
 export class WasmParser {
   private parser: any = null;
+  private wasmModule: typeof import('pjs-wasm') | null = null;
   private wasmAvailable = false;
+  private initError: Error | null = null;
   private options: Required<WasmParserOptions>;
 
   constructor(options: WasmParserOptions = {}) {
@@ -56,10 +59,8 @@ export class WasmParser {
 
     try {
       // Dynamic import - won't fail if pjs-wasm is not installed
-      const wasmModule = await import('pjs-wasm');
-
-      // Initialize WASM (calls wasm_bindgen start function)
-      await wasmModule.default();
+      const wasmModule = await loadWasmModule();
+      this.wasmModule = wasmModule;
 
       // Create parser instance
       this.parser = new wasmModule.PjsParser();
@@ -77,6 +78,7 @@ export class WasmParser {
         console.warn('[PJS WASM] Not available, falling back to native JSON.parse:', error);
       }
       this.wasmAvailable = false;
+      this.initError = error as Error;
       return false;
     }
   }
@@ -153,16 +155,22 @@ export class WasmParser {
     callbacks: StreamingCallbacks,
     minPriority: number = 1
   ): Promise<void> {
-    if (!this.wasmAvailable) {
+    if (!this.wasmAvailable || !this.wasmModule) {
       throw new PJSError(
         PJSErrorType.InitializationError,
-        'WASM not available. Cannot use streaming API without WASM.'
+        this.initError
+          ? `WASM not available. Cannot use streaming API without WASM: ${this.initError.message}`
+          : 'WASM not available. Cannot use streaming API without WASM.',
+        undefined,
+        this.initError ?? undefined
       );
     }
 
+    const wasmModule = this.wasmModule;
+
     return new Promise<void>((resolve, reject) => {
       try {
-        const { PriorityStream } = this.wasmModule;
+        const { PriorityStream } = wasmModule;
         const stream: PriorityStream = new PriorityStream();
 
         // Set minimum priority
@@ -242,9 +250,7 @@ export class WasmParser {
     // Parse payload
     let payload: any;
     try {
-      payload = typeof frameData.getPayloadObject === 'function'
-        ? frameData.getPayloadObject()
-        : JSON.parse(frameData.payload);
+      payload = JSON.parse(frameData.payload);
     } catch (error) {
       throw new PJSError(
         PJSErrorType.ParseError,

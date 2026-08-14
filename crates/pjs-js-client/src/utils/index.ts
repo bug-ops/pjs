@@ -5,16 +5,14 @@
  */
 
 import {
-  PJSClient,
   PJSClientConfig,
   Frame,
   FrameType,
   Priority,
   JsonPath,
-  PJSError,
-  PJSErrorType,
   TransportType
 } from '../types/index.js';
+import type { PJSClient } from '../core/client.js';
 
 /**
  * Create a PJS client with smart defaults based on environment

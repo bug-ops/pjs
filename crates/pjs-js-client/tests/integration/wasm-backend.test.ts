@@ -13,7 +13,7 @@ import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { WasmBackend, WasmStreamOptions } from '../../src/transport/wasm-backend.js';
-import { PJSClientConfig, FrameType, Frame, PJSError } from '../../src/types/index.js';
+import { PJSClientConfig, FrameType, Frame, PJSError, Priority } from '../../src/types/index.js';
 
 // Skip the entire suite when pjs-wasm/pkg is not built
 const wasmPkgAvailable = existsSync(resolve(process.cwd(), 'crates/pjs-wasm/pkg/package.json'))
@@ -28,9 +28,12 @@ describeWasm('WasmBackend Integration Tests', () => {
     config = {
       baseUrl: 'wasm://local',
       transport: 'wasm' as any,
+      sessionId: '',
+      headers: {},
       timeout: 30000,
-      retry: { maxRetries: 0, baseDelay: 0, maxDelay: 0 },
       bufferSize: 1024 * 64,
+      priorityThreshold: Priority.Background,
+      maxConcurrentStreams: 10,
       debug: false
     };
 
