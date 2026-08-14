@@ -309,8 +309,8 @@ fn test_decompress_with_dictionary_metadata() {
     dictionary_map.insert(1, "world".to_string());
 
     let compressed_data = json!({
-        "greeting": 0,
-        "target": 1
+        "greeting": "\u{7F}0",
+        "target": "\u{7F}1"
     });
 
     let compressed_frame = CompressedFrame {
@@ -358,10 +358,13 @@ fn test_decompress_nested_dictionary_values() {
     dictionary_map.insert(0, "status".to_string());
     dictionary_map.insert(1, "active".to_string());
 
+    // "value" happens to hold the same raw number (1) that "active"'s dictionary index
+    // encodes as, but it stays a number: only JSON strings are ever candidates for
+    // dictionary substitution, so there is no value-based ambiguity to guard against.
     let compressed_data = json!({
         "items": [
-            {"field": 0, "value": 1},
-            {"field": 0, "value": 1}
+            {"field": "\u{7F}0", "value": 1},
+            {"field": "\u{7F}0", "value": 1}
         ]
     });
 
@@ -393,9 +396,15 @@ fn test_decompress_nested_dictionary_values() {
     assert!(result.is_ok());
 
     let decompressed = result.unwrap();
-    // Verify nested structure was decompressed
-    assert!(decompressed.data.is_object());
-    assert!(decompressed.data["items"].is_array());
+    assert_eq!(
+        decompressed.data,
+        json!({
+            "items": [
+                {"field": "status", "value": 1},
+                {"field": "status", "value": 1}
+            ]
+        })
+    );
 }
 
 #[test]
@@ -495,7 +504,7 @@ fn test_decompress_hybrid_strategy() {
     let mut dictionary_map = HashMap::new();
     dictionary_map.insert(0, "test".to_string());
 
-    let compressed_data = json!({"field": 0});
+    let compressed_data = json!({"field": "\u{7F}0"});
 
     let compressed_frame = CompressedFrame {
         frame: StreamFrame {
@@ -595,6 +604,263 @@ fn test_end_to_end_compression_decompression() {
     // Verify data integrity
     assert_eq!(decompressed_frame.data, original_data);
     assert_eq!(decompressed_frame.priority, Priority::HIGH);
+}
+
+#[test]
+fn test_end_to_end_dictionary_round_trip_preserves_numeric_fields() {
+    // Regression test for issue #333's C1 finding: before the sentinel-marker redesign, the
+    // dictionary decoder converted ANY number matching a dictionary index back into a string,
+    // with no way to distinguish an encoded index from a genuine payload integer (e.g. `"page":
+    // 1` could become `"page": "active"` whenever "active" happened to be assigned dictionary
+    // index 1). Sentinel-escaped string markers close this structurally: a substituted value is
+    // always a JSON string, so no number is ever a candidate. This exercises the full analyze ->
+    // compress -> decompress pipeline on a realistic payload with genuine repetition (5 users,
+    // 4/5 sharing "status" and "role" values) that nets a real wire-byte saving.
+    let mut compressor = StreamingCompressor::new();
+    let mut decompressor = StreamingDecompressor::new();
+
+    let original_data = json!({
+        "status": "success",
+        "data": {
+            "users": [
+                {"id": "user_001", "email": "alice@example.com", "status": "subscription_active", "role": "standard_user", "created_at": "2024-01-01T00:00:00Z", "last_login": "2024-01-15T10:30:00Z"},
+                {"id": "user_002", "email": "bob@example.com", "status": "subscription_active", "role": "standard_user", "created_at": "2024-01-02T00:00:00Z", "last_login": "2024-01-15T09:15:00Z"},
+                {"id": "user_003", "email": "charlie@example.com", "status": "subscription_active", "role": "standard_user", "created_at": "2024-01-03T00:00:00Z", "last_login": "2024-01-10T14:22:00Z"},
+                {"id": "user_004", "email": "dave@example.com", "status": "subscription_active", "role": "administrator", "created_at": "2024-01-04T00:00:00Z", "last_login": "2024-01-14T11:05:00Z"},
+                {"id": "user_005", "email": "erin@example.com", "status": "subscription_inactive", "role": "standard_user", "created_at": "2024-01-05T00:00:00Z", "last_login": "2024-01-09T08:40:00Z"}
+            ]
+        },
+        "pagination": {"page": 1, "per_page": 25, "total_pages": 4, "total_items": 89},
+        "meta": {"request_id": "req_12345", "timestamp": "2024-01-15T10:30:15Z", "version": "v1.2.3"}
+    });
+
+    compressor.optimize_for_data(&original_data, &[]).unwrap();
+
+    let frame = StreamFrame {
+        data: original_data.clone(),
+        priority: Priority::CRITICAL,
+        metadata: HashMap::new(),
+    };
+
+    let compressed_frame = compressor.compress_frame(frame).unwrap();
+    assert!(
+        matches!(
+            compressed_frame.compressed_data.strategy,
+            CompressionStrategy::Dictionary { .. }
+        ),
+        "expected Dictionary strategy for this payload, got {:?}",
+        compressed_frame.compressed_data.strategy
+    );
+
+    let decompressed_frame = decompressor.decompress_frame(compressed_frame).unwrap();
+
+    assert_eq!(decompressed_frame.data, original_data);
+    // Explicitly pin the numbers that collide with dictionary indices (0/1) in the
+    // encoded output, since those are exactly what a value-based decoder would corrupt.
+    assert_eq!(decompressed_frame.data["pagination"]["page"], json!(1));
+    assert_eq!(
+        decompressed_frame.data["pagination"]["total_pages"],
+        json!(4)
+    );
+}
+
+#[test]
+fn test_dictionary_forced_key_value_collision_c2_object_round_trips() {
+    // Regression test for issue #333's C2 finding (round 2): a payload containing both a
+    // nested `{"a": {"b": 0}}` and a sibling `"a.b"` key whose value is dictionary-substituted
+    // used to collide under path-string metadata, since both stringify to the same "a.b" path.
+    // Sentinel markers are self-describing per value, so no path metadata exists to collide.
+    let mut dictionary = HashMap::new();
+    dictionary.insert("active".to_string(), 0);
+
+    let mut compressor = StreamingCompressor::with_strategies(
+        CompressionStrategy::None,
+        CompressionStrategy::Dictionary { dictionary },
+    );
+
+    let original_data = json!({"a": {"b": 0}, "a.b": "active"});
+
+    let frame = StreamFrame {
+        data: original_data.clone(),
+        priority: Priority::LOW,
+        metadata: HashMap::new(),
+    };
+    let compressed_frame = compressor.compress_frame(frame).unwrap();
+
+    let mut decompressor = StreamingDecompressor::new();
+    let decompressed_frame = decompressor.decompress_frame(compressed_frame).unwrap();
+
+    assert_eq!(decompressed_frame.data, original_data);
+}
+
+#[test]
+fn test_dictionary_forced_key_value_collision_c2_array_round_trips() {
+    // Array-indexing counterpart of the object collision above: `{"a":[0]}` and a sibling
+    // `"a[0]"` key both stringify to the same "a[0]" path under the old path-metadata scheme.
+    let mut dictionary = HashMap::new();
+    dictionary.insert("active".to_string(), 0);
+
+    let mut compressor = StreamingCompressor::with_strategies(
+        CompressionStrategy::None,
+        CompressionStrategy::Dictionary { dictionary },
+    );
+
+    let original_data = json!({"a": [0], "a[0]": "active"});
+
+    let frame = StreamFrame {
+        data: original_data.clone(),
+        priority: Priority::LOW,
+        metadata: HashMap::new(),
+    };
+    let compressed_frame = compressor.compress_frame(frame).unwrap();
+
+    let mut decompressor = StreamingDecompressor::new();
+    let decompressed_frame = decompressor.decompress_frame(compressed_frame).unwrap();
+
+    assert_eq!(decompressed_frame.data, original_data);
+}
+
+#[test]
+fn test_dictionary_sentinel_escaping_round_trips_losslessly() {
+    // Injectivity proof for the sentinel-marker encoding: payload strings that legitimately
+    // start with the sentinel byte, including one that mimics a real marker's exact shape
+    // ("\u{7F}0"), must survive a non-empty dictionary unchanged.
+    let mut dictionary = HashMap::new();
+    dictionary.insert("greeting".to_string(), 0);
+
+    let mut compressor = StreamingCompressor::with_strategies(
+        CompressionStrategy::None,
+        CompressionStrategy::Dictionary { dictionary },
+    );
+
+    let original_data = json!({
+        "a": "\u{7F}foo",
+        "b": "\u{7F}\u{7F}bar",
+        "c": "\u{7F}0",
+        "d": "greeting"
+    });
+
+    let frame = StreamFrame {
+        data: original_data.clone(),
+        priority: Priority::LOW,
+        metadata: HashMap::new(),
+    };
+    let compressed_frame = compressor.compress_frame(frame).unwrap();
+
+    let mut decompressor = StreamingDecompressor::new();
+    let decompressed_frame = decompressor.decompress_frame(compressed_frame).unwrap();
+
+    assert_eq!(decompressed_frame.data, original_data);
+}
+
+#[test]
+fn test_dictionary_decode_rejects_out_of_range_marker_index() {
+    // A malformed/forged marker referencing a dictionary index that was never assigned must
+    // error out rather than silently pass through as a string (issue #333 M7).
+    let mut compressor = StreamingCompressor::with_strategies(
+        CompressionStrategy::None,
+        CompressionStrategy::Dictionary {
+            dictionary: [("alpha".to_string(), 0), ("beta".to_string(), 1)]
+                .into_iter()
+                .collect(),
+        },
+    );
+    let mut decompressor = StreamingDecompressor::new();
+
+    // Seed the decompressor's active dictionary with indices 0 and 1 via a real frame.
+    let seed_frame = StreamFrame {
+        data: json!({"a": "alpha", "b": "beta"}),
+        priority: Priority::LOW,
+        metadata: HashMap::new(),
+    };
+    let compressed_seed = compressor.compress_frame(seed_frame).unwrap();
+    decompressor.decompress_frame(compressed_seed).unwrap();
+
+    let malformed_frame = CompressedFrame {
+        frame: StreamFrame {
+            data: json!({"value": "\u{7F}9"}),
+            priority: Priority::LOW,
+            metadata: HashMap::new(),
+        },
+        compressed_data: pjson_rs::compression::CompressedData {
+            strategy: CompressionStrategy::Dictionary {
+                dictionary: HashMap::new(),
+            },
+            compressed_size: 20,
+            data: json!({"value": "\u{7F}9"}),
+            compression_metadata: HashMap::new(),
+        },
+        decompression_metadata: DecompressionMetadata {
+            strategy: CompressionStrategy::Dictionary {
+                dictionary: HashMap::new(),
+            },
+            dictionary_map: HashMap::new(),
+            delta_bases: HashMap::new(),
+            priority_hints: HashMap::new(),
+        },
+    };
+
+    let result = decompressor.decompress_frame(malformed_frame);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_hybrid_dictionary_and_delta_do_not_corrupt_each_other() {
+    // Regression test for issue #333's M9 finding: dictionary decode is now
+    // position-independent (self-describing sentinel markers), so a delta pass that prepends
+    // `delta_base` metadata elsewhere in the payload can no longer shift positions a
+    // position-based dictionary decode would have depended on.
+    let mut string_dict = HashMap::new();
+    string_dict.insert("active".to_string(), 0);
+    string_dict.insert("inactive".to_string(), 1);
+
+    let mut compressor = StreamingCompressor::with_strategies(
+        CompressionStrategy::None,
+        CompressionStrategy::Hybrid {
+            string_dict,
+            numeric_deltas: HashMap::new(),
+        },
+    );
+
+    let original_data = json!({"states": ["active", "inactive", "active", "inactive"]});
+
+    let frame = StreamFrame {
+        data: original_data.clone(),
+        priority: Priority::MEDIUM,
+        metadata: HashMap::new(),
+    };
+    let compressed_frame = compressor.compress_frame(frame).unwrap();
+
+    let mut decompressor = StreamingDecompressor::new();
+    let decompressed_frame = decompressor.decompress_frame(compressed_frame).unwrap();
+
+    assert_eq!(decompressed_frame.data, original_data);
+}
+
+#[test]
+fn test_analyze_and_compress_is_deterministic_across_runs() {
+    // Regression test for issue #333's M6 finding: dictionary index assignment used to iterate
+    // a HashMap, so wire bytes were not reproducible across runs on the same payload.
+    let data = json!({
+        "products": [
+            {"id": 1001, "name": "MacBook Pro", "category": "Electronics", "status": "available", "brand": "Apple", "price": 2399.99},
+            {"id": 1002, "name": "iPhone 15", "category": "Electronics", "status": "available", "brand": "Apple", "price": 999.99},
+            {"id": 1003, "name": "AirPods Pro", "category": "Electronics", "status": "available", "brand": "Apple", "price": 249.99}
+        ],
+        "store": {"name": "Tech Store", "status": "operational", "location": "San Francisco"}
+    });
+
+    let run = || {
+        use pjson_rs::compression::SchemaCompressor;
+        let mut compressor = SchemaCompressor::new();
+        let strategy = compressor.analyze_and_optimize(&data).unwrap().clone();
+        let compressed = SchemaCompressor::with_strategy(strategy)
+            .compress(&data)
+            .unwrap();
+        serde_json::to_string(&compressed.data).unwrap()
+    };
+
+    assert_eq!(run(), run());
 }
 
 #[test]
