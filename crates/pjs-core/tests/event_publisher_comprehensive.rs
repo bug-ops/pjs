@@ -233,6 +233,31 @@ async fn test_recent_events_all_when_under_limit() {
     assert_eq!(recent.len(), 3);
 }
 
+#[tokio::test]
+async fn test_recent_events_returns_true_newest_first_order() {
+    let publisher = InMemoryEventPublisher::new();
+    let session_id = SessionId::new();
+
+    for _ in 0..20 {
+        let event = DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        };
+        publisher.publish(event).await.unwrap();
+    }
+
+    // Sequential publish assigns sequence 0..20 in order, so recent_events
+    // must return them in strictly descending sequence order (19, 18, ..., 0),
+    // not merely the right count/limit.
+    let sequences: Vec<u64> = publisher
+        .recent_events(20)
+        .iter()
+        .map(|e| e.sequence)
+        .collect();
+    let expected: Vec<u64> = (0..20).rev().collect();
+    assert_eq!(sequences, expected);
+}
+
 // ============================================================================
 // Clear Operations
 // ============================================================================
@@ -596,6 +621,153 @@ async fn test_memory_management_evicts_old_events() {
     assert!(publisher.event_count() <= 10000);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_concurrent_eviction_stays_bounded_near_target() {
+    let publisher = Arc::new(InMemoryEventPublisher::new());
+    let session_id = SessionId::new();
+
+    // `evict_oldest_if_over_capacity` has no internal `.await`, so on the
+    // default single-threaded test runtime two calls could never truly
+    // overlap — this needs a real multi-thread runtime for multiple tasks'
+    // eviction passes to race on separate OS threads (the exact condition
+    // S4 required: a stale `len()` read racing a concurrent evictor's
+    // already-reduced snapshot). Many tasks each publishing large batches
+    // maximizes the race window, per the critic's finding that it widens
+    // under load and with big batches.
+    let task_count = 16;
+    let batches_per_task = 5;
+    let batch_size = 3000usize;
+
+    let mut handles = Vec::new();
+    for _ in 0..task_count {
+        let publisher = Arc::clone(&publisher);
+        handles.push(tokio::spawn(async move {
+            for _ in 0..batches_per_task {
+                let events: Vec<DomainEvent> = (0..batch_size)
+                    .map(|_| DomainEvent::SessionActivated {
+                        session_id,
+                        timestamp: chrono::Utc::now(),
+                    })
+                    .collect();
+                publisher.publish_batch(events).await.unwrap();
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.await.unwrap();
+    }
+
+    // Under the pre-S4-fix bug, concurrent eviction passes could apply a
+    // stale (too-large) removal count to an already-shrunk snapshot,
+    // repeatedly over-evicting until event_log was wiped to 0 (critic
+    // reproduced exactly 0 remaining at 20,000 and 109,000 inserts under
+    // forced interleaving, versus the correct ~9,000). A generous lower
+    // bound (well above 0, comfortably below the ~9,000 correct-code
+    // should converge to) distinguishes a real regression from ordinary
+    // race noise between near-identical concurrent snapshots.
+    let count = publisher.event_count();
+    assert!(
+        count > 0,
+        "event_log collapsed to empty under concurrent eviction (S4 regression)"
+    );
+    assert!(
+        count >= 5_000,
+        "event_log dropped far below EVENT_LOG_EVICT_TARGET (9000) under concurrent eviction, got {count} (S4 regression)"
+    );
+    assert!(
+        count <= 10_000,
+        "event_log exceeded EVENT_LOG_CAPACITY (10000), got {count}"
+    );
+}
+
+#[tokio::test]
+async fn test_eviction_removes_oldest_by_sequence_not_arbitrary_entries() {
+    let publisher = InMemoryEventPublisher::new();
+    let session_id = SessionId::new();
+    let total: u64 = 11_000;
+
+    for _ in 0..total {
+        let event = DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        };
+        publisher.publish(event).await.unwrap();
+    }
+
+    let count = publisher.event_count() as u64;
+    assert!(count <= 10000);
+
+    // Sequential single-event publish assigns sequence i to the i-th
+    // publish, so the retained set after any number of evictions must be
+    // exactly the newest `count` sequences: [total - count, total - 1].
+    // Any gap or out-of-range sequence would mean eviction dropped
+    // something other than the true oldest entries.
+    let mut sequences: Vec<u64> = publisher
+        .recent_events(count as usize)
+        .iter()
+        .map(|e| e.sequence)
+        .collect();
+    sequences.sort_unstable();
+
+    let expected = (total - count)..total;
+    assert!(sequences.iter().copied().eq(expected));
+}
+
+#[tokio::test]
+async fn test_eviction_boundary_at_capacity_does_not_evict() {
+    let publisher = InMemoryEventPublisher::new();
+    let session_id = SessionId::new();
+
+    for _ in 0..10_000 {
+        let event = DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        };
+        publisher.publish(event).await.unwrap();
+    }
+
+    // Exactly at capacity: no eviction should have run, so the very first
+    // published event (sequence 0) must still be present.
+    assert_eq!(publisher.event_count(), 10_000);
+    let has_oldest = publisher
+        .recent_events(10_000)
+        .iter()
+        .any(|e| e.sequence == 0);
+    assert!(
+        has_oldest,
+        "sequence 0 should not have been evicted at exactly capacity"
+    );
+}
+
+#[tokio::test]
+async fn test_eviction_boundary_one_over_capacity_evicts_down_to_target() {
+    let publisher = InMemoryEventPublisher::new();
+    let session_id = SessionId::new();
+
+    for _ in 0..10_001 {
+        let event = DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        };
+        publisher.publish(event).await.unwrap();
+    }
+
+    // One over capacity (10_001 > EVENT_LOG_CAPACITY) triggers a single
+    // eviction of the 1001 lowest sequences (0..=1000) — not a fixed 1000 —
+    // to reach exactly EVENT_LOG_EVICT_TARGET (9000) entries, starting at
+    // sequence 1001.
+    assert_eq!(publisher.event_count(), 9_000);
+    let mut sequences: Vec<u64> = publisher
+        .recent_events(9_000)
+        .iter()
+        .map(|e| e.sequence)
+        .collect();
+    sequences.sort_unstable();
+    let expected = 1001..10_001;
+    assert!(sequences.iter().copied().eq(expected));
+}
+
 // ============================================================================
 // Clone Implementation
 // ============================================================================
@@ -669,6 +841,93 @@ async fn test_publish_batch_future_exists() {
     // Test that publish_batch is available
     let result = publisher.publish_batch(events).await;
     assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_publish_batch_stamps_sequence_in_input_order() {
+    let publisher = InMemoryEventPublisher::new();
+    let session_id = SessionId::new();
+    let batch_size = 1000usize;
+
+    // `publish_batch` stamps `sequence` from inside a rayon `into_par_iter`,
+    // so thread-scheduling order could scramble it relative to input order.
+    // Split the batch into a first-half/second-half type boundary so any
+    // scrambling shows up as `session_closed` entries with a lower sequence
+    // than some `session_activated` entry, instead of relying on identical
+    // events where mis-ordering would be invisible.
+    let events: Vec<DomainEvent> = (0..batch_size)
+        .map(|i| {
+            if i < batch_size / 2 {
+                DomainEvent::SessionActivated {
+                    session_id,
+                    timestamp: chrono::Utc::now(),
+                }
+            } else {
+                DomainEvent::SessionClosed {
+                    session_id,
+                    timestamp: chrono::Utc::now(),
+                }
+            }
+        })
+        .collect();
+
+    publisher.publish_batch(events).await.unwrap();
+
+    let mut stored = publisher.recent_events(batch_size);
+    assert_eq!(stored.len(), batch_size);
+    stored.sort_unstable_by_key(|e| e.sequence);
+
+    // The reserved sequence block must be contiguous and gap-free.
+    let sequences: Vec<u64> = stored.iter().map(|e| e.sequence).collect();
+    assert!(sequences.iter().copied().eq(0..batch_size as u64));
+
+    // Sequence order must match input order: all `session_activated`
+    // entries (input indices 0..500) sort before all `session_closed`
+    // entries (input indices 500..1000), with no interleaving.
+    assert!(
+        stored[..batch_size / 2]
+            .iter()
+            .all(|e| e.event_type == "session_activated")
+    );
+    assert!(
+        stored[batch_size / 2..]
+            .iter()
+            .all(|e| e.event_type == "session_closed")
+    );
+}
+
+#[tokio::test]
+async fn test_publish_batch_over_capacity_evicts_down_to_target_in_one_pass() {
+    let publisher = InMemoryEventPublisher::new();
+    let session_id = SessionId::new();
+    let batch_size = 12_000usize;
+
+    // A single `publish_batch` call inserting more than EVENT_LOG_CAPACITY
+    // over the cap in one go must still bring `event_log` down to exactly
+    // EVENT_LOG_EVICT_TARGET (9000), not just under EVENT_LOG_CAPACITY —
+    // `evict_oldest_if_over_capacity` has to remove more than the old
+    // hardcoded 1000-per-call amount to do so.
+    let events: Vec<DomainEvent> = (0..batch_size)
+        .map(|_| DomainEvent::SessionActivated {
+            session_id,
+            timestamp: chrono::Utc::now(),
+        })
+        .collect();
+
+    publisher.publish_batch(events).await.unwrap();
+
+    assert_eq!(publisher.event_count(), 9_000);
+
+    // The retained entries must be the newest 9000 sequences, i.e. the
+    // oldest 3000 (0..=2999) were evicted, not an arbitrary subset.
+    let mut sequences: Vec<u64> = publisher
+        .recent_events(9_000)
+        .iter()
+        .map(|e| e.sequence)
+        .collect();
+    sequences.sort_unstable();
+    let expected = (batch_size as u64 - 9_000)..batch_size as u64;
+    assert!(sequences.iter().copied().eq(expected));
 }
 
 #[tokio::test]

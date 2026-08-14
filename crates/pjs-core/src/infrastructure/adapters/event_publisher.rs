@@ -30,6 +30,15 @@ type NotificationCallback = Arc<dyn Fn(&DomainEvent) + Send + Sync>;
 /// rate is tracked as a follow-up.
 const EVENT_CHANNEL_CAPACITY: usize = 1000;
 
+/// Maximum number of entries `event_log` is allowed to hold before
+/// [`InMemoryEventPublisher::evict_oldest_if_over_capacity`] trims it back
+/// down to [`EVENT_LOG_EVICT_TARGET`].
+const EVENT_LOG_CAPACITY: usize = 10_000;
+
+/// Entry count `event_log` is trimmed back down to once it exceeds
+/// [`EVENT_LOG_CAPACITY`].
+const EVENT_LOG_EVICT_TARGET: usize = 9_000;
+
 /// In-memory event publisher with subscription support
 pub struct InMemoryEventPublisher {
     /// Lock-free notification callbacks using DashMap
@@ -38,6 +47,12 @@ pub struct InMemoryEventPublisher {
     event_log: Arc<DashMap<EventId, StoredEvent>>,
     /// Next notification ID generator
     next_notification_id: Arc<AtomicU64>,
+    /// Monotonic counter stamped onto [`StoredEvent::sequence`] at store time.
+    ///
+    /// `EventId` is a random UUIDv4 and `event_log`'s `DashMap` has no
+    /// insertion order of its own, so this is the only reliable way to
+    /// recover chronological order for eviction and [`Self::recent_events`].
+    next_sequence: Arc<AtomicU64>,
     /// Optional channel for streaming events
     channel_tx: Arc<tokio::sync::RwLock<Option<mpsc::Sender<StoredEvent>>>>,
 }
@@ -48,6 +63,7 @@ impl Clone for InMemoryEventPublisher {
             notification_callbacks: Arc::clone(&self.notification_callbacks),
             event_log: Arc::clone(&self.event_log),
             next_notification_id: Arc::clone(&self.next_notification_id),
+            next_sequence: Arc::clone(&self.next_sequence),
             channel_tx: Arc::clone(&self.channel_tx),
         }
     }
@@ -70,6 +86,17 @@ pub struct StoredEvent {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     /// Free-form metadata captured from the event.
     pub metadata: std::collections::HashMap<String, String>,
+    /// Monotonic sequence number stamped by [`InMemoryEventPublisher`] when
+    /// this event is stored, used to recover chronological order for
+    /// eviction and `recent_events()` since `event_log`'s `DashMap` and the
+    /// random `EventId` key both lack one. Not `event_log`-insertion order
+    /// under concurrency (the stamp is assigned before the entry is
+    /// inserted), per-publisher-instance (restarts at 0 on every `new()`/
+    /// `with_channel()`), not comparable across independent
+    /// `InMemoryEventPublisher` instances (e.g. different
+    /// [`CompositeEventPublisher`] destinations), and not an external
+    /// correlation key.
+    pub sequence: u64,
 }
 
 impl InMemoryEventPublisher {
@@ -79,6 +106,7 @@ impl InMemoryEventPublisher {
             notification_callbacks: Arc::new(DashMap::new()),
             event_log: Arc::new(DashMap::new()),
             next_notification_id: Arc::new(AtomicU64::new(1)),
+            next_sequence: Arc::new(AtomicU64::new(0)),
             channel_tx: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
@@ -90,6 +118,7 @@ impl InMemoryEventPublisher {
             notification_callbacks: Arc::new(DashMap::new()),
             event_log: Arc::new(DashMap::new()),
             next_notification_id: Arc::new(AtomicU64::new(1)),
+            next_sequence: Arc::new(AtomicU64::new(0)),
             channel_tx: Arc::new(tokio::sync::RwLock::new(Some(tx))),
         };
         (publisher, rx)
@@ -140,7 +169,39 @@ impl InMemoryEventPublisher {
         self.event_log.clear();
     }
 
-    /// Get recent events (lock-free, returns up to limit events)  
+    /// Evict the oldest entries once `event_log` exceeds
+    /// [`EVENT_LOG_CAPACITY`], dropping back to [`EVENT_LOG_EVICT_TARGET`]
+    /// by removing the lowest-`sequence` entries in a single pass — this
+    /// must handle removing more than [`EVENT_LOG_CAPACITY`] -
+    /// [`EVENT_LOG_EVICT_TARGET`] entries at once, since `publish_batch`
+    /// can insert an arbitrarily large batch before calling this.
+    fn evict_oldest_if_over_capacity(&self) {
+        // `len()` here is just a cheap gate to skip collecting on the
+        // common under-capacity path; it may be stale by the time
+        // `by_sequence` is collected below under concurrent publishers.
+        // `excess` MUST be derived from `by_sequence.len()` (the actual
+        // snapshot being evicted), not this `len` — otherwise a
+        // concurrent evictor shrinking the map between the two reads
+        // makes `excess` overstate what's left, over-evicting (up to
+        // wiping `event_log` entirely under enough concurrent pressure).
+        if self.event_log.len() > EVENT_LOG_CAPACITY {
+            let mut by_sequence: Vec<(EventId, u64)> = self
+                .event_log
+                .iter()
+                .map(|entry| (*entry.key(), entry.value().sequence))
+                .collect();
+            by_sequence.sort_unstable_by_key(|(_, sequence)| *sequence);
+
+            let excess = by_sequence.len().saturating_sub(EVENT_LOG_EVICT_TARGET);
+            for (key, _) in by_sequence.into_iter().take(excess) {
+                self.event_log.remove(&key);
+            }
+        }
+    }
+
+    /// Get the `limit` most recently published events, newest first.
+    ///
+    /// Ordered by [`StoredEvent::sequence`], not `DashMap` iteration order.
     pub fn recent_events(&self, limit: usize) -> Vec<StoredEvent> {
         let mut events: Vec<StoredEvent> = self
             .event_log
@@ -148,9 +209,9 @@ impl InMemoryEventPublisher {
             .map(|entry| entry.value().clone())
             .collect();
 
-        // Reverse to get most recent first, then take limit
-        events.reverse();
-        events.into_iter().take(limit).collect()
+        events.sort_unstable_by_key(|event| std::cmp::Reverse(event.sequence));
+        events.truncate(limit);
+        events
     }
 }
 
@@ -187,27 +248,14 @@ impl EventPublisherGat for InMemoryEventPublisher {
                 session_id: Some(event.session_id()),
                 timestamp: event.occurred_at(),
                 metadata: event.metadata(),
+                sequence: self.next_sequence.fetch_add(1, Ordering::Relaxed),
             };
 
             // Store event in lock-free map (EventId is Copy)
             let event_id = stored_event.id;
             self.event_log.insert(event_id, stored_event.clone());
 
-            // Memory management: keep only recent events (lock-free check)
-            if self.event_log.len() > 10000 {
-                // Remove oldest events by clearing some entries
-                // Note: DashMap doesn't maintain insertion order, so we approximate
-                let to_remove: Vec<_> = self
-                    .event_log
-                    .iter()
-                    .take(1000) // Remove first 1000 found entries
-                    .map(|entry| *entry.key())
-                    .collect();
-
-                for key in to_remove {
-                    self.event_log.remove(&key);
-                }
-            }
+            self.evict_oldest_if_over_capacity();
 
             // Send to channel if configured. `try_send` keeps this hot path
             // non-blocking: a stalled consumer must not stall unrelated
@@ -231,16 +279,27 @@ impl EventPublisherGat for InMemoryEventPublisher {
 
     fn publish_batch(&self, events: Vec<DomainEvent>) -> Self::PublishBatchFuture<'_> {
         async move {
+            // Reserve a contiguous sequence block up front: stamping via a
+            // per-event `fetch_add` inside `into_par_iter` would assign
+            // sequences in rayon's thread-scheduling order rather than
+            // batch order, scrambling the ordering `sequence` exists to
+            // provide.
+            let base_sequence = self
+                .next_sequence
+                .fetch_add(events.len() as u64, Ordering::Relaxed);
+
             // Process events in parallel for maximum performance
             let stored_events: Vec<_> = events
                 .into_par_iter()
-                .map(|event| {
+                .enumerate()
+                .map(|(i, event)| {
                     let stored_event = StoredEvent {
                         id: EventId::new(),
                         event_type: event.event_type().to_string(),
                         session_id: Some(event.session_id()),
                         timestamp: event.occurred_at(),
                         metadata: event.metadata(),
+                        sequence: base_sequence + i as u64,
                     };
 
                     // Store event in lock-free map (EventId is Copy)
@@ -268,19 +327,7 @@ impl EventPublisherGat for InMemoryEventPublisher {
                 }
             }
 
-            // Memory management after batch
-            if self.event_log.len() > 10000 {
-                let to_remove: Vec<_> = self
-                    .event_log
-                    .iter()
-                    .take(1000)
-                    .map(|entry| *entry.key())
-                    .collect();
-
-                for key in to_remove {
-                    self.event_log.remove(&key);
-                }
-            }
+            self.evict_oldest_if_over_capacity();
 
             Ok(())
         }
