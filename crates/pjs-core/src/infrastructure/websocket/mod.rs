@@ -232,6 +232,14 @@ pub trait WebSocketTransport: Send + Sync {
     ) -> Self::StartStreamFuture<'_>;
 
     /// Send frame to client
+    ///
+    /// Implementors typically queue `message` onto a per-connection channel
+    /// consumed by that same connection's I/O loop. Do not call this method
+    /// from within that connection's own message-handling path (e.g. from
+    /// [`WebSocketTransport::handle_message`]): if the implementor applies
+    /// backpressure by awaiting channel capacity rather than dropping,
+    /// calling from the same loop that drains the channel can deadlock the
+    /// connection.
     fn send_frame(
         &self,
         connection: Arc<Self::Connection>,

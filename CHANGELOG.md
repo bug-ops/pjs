@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Removed stale TODO comments in `axum_adapter.rs` describing authentication and HTTP rate limiting as unimplemented; both already exist (`ApiKeyAuthLayer`/`JwtAuthLayer` in `infrastructure::http::auth`, `RateLimitMiddleware` in `infrastructure::http::middleware`) and are now documented and cross-referenced in place (#319)
+- `DomainEvent::event_id()` derived a content-hash-based UUID, so two structurally-identical events (same variant, session/stream ID, and timestamp) produced the same `EventId`. `InMemoryEventPublisher.event_log` keys solely on `EventId`, so colliding events silently overwrote each other with no error. `InMemoryEventPublisher` and `HttpEventPublisher` now mint a fresh `EventId::new()` per stored/published event at publish time, guaranteeing distinct identity even for structurally-identical events. `EventPublisherGat`'s doc now states this as the identity contract implementors must follow (#328)
+- Replace unbounded `mpsc` channels in the WebSocket server/client outgoing-message paths and `InMemoryEventPublisher::with_channel` with bounded channels (capacity 1000; a conservative default bounding message count, not queued bytes — see follow-up for a byte-size-aware bound), so a slow consumer can no longer cause unbounded memory growth. Call sites with a dedicated consumer task and no risk of stalling unrelated work (`PjsWebSocketClient::request_stream`) apply backpressure via `.send().await`; best-effort control-path sends that must not stall their own read loop (WebSocket server `send_frame`, client frame-ack/pong replies, event-publisher streaming channel) use `try_send` and drop-and-log on a full channel instead (#314)
+
+### Removed
+
+- **BREAKING** `DomainEvent::event_id()` (public on `pjson-rs`/`pjson-rs-domain`). It derived identity from a content hash, which is exactly the bug behind #328's silent event-log collisions; there is no drop-in replacement because identity is no longer a property of `DomainEvent` itself — see the `Fixed` entry above for where identity is now assigned. Pre-1.0 breaking change; no deprecation cycle (#328)
 
 ### CI
 

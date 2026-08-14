@@ -15,12 +15,20 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 use url::Url;
 
+/// Capacity of the client's outgoing message channel.
+///
+/// Bounds how many outgoing messages (stream requests, acks, pongs) can
+/// queue while `send_task` catches up. 1000 is a conservative default, not
+/// a byte-size bound (see the equivalent constant in `websocket::server`
+/// for the same caveat and the tracked follow-up).
+const MESSAGE_QUEUE_CAPACITY: usize = 1000;
+
 /// WebSocket client for receiving PJS streams
 pub struct PjsWebSocketClient {
     url: Url,
     sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
-    message_tx: mpsc::UnboundedSender<WsMessage>,
-    message_rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<WsMessage>>>>,
+    message_tx: mpsc::Sender<WsMessage>,
+    message_rx: Arc<RwLock<Option<mpsc::Receiver<WsMessage>>>>,
 }
 
 /// Client-side stream session
@@ -45,7 +53,7 @@ impl PjsWebSocketClient {
     pub fn new(url: impl AsRef<str>) -> PjsResult<Self> {
         let url = Url::parse(url.as_ref()).map_err(|e| PjsError::InvalidUrl(e.to_string()))?;
 
-        let (message_tx, message_rx) = mpsc::unbounded_channel();
+        let (message_tx, message_rx) = mpsc::channel(MESSAGE_QUEUE_CAPACITY);
 
         Ok(Self {
             url,
@@ -171,6 +179,7 @@ impl PjsWebSocketClient {
 
         self.message_tx
             .send(message)
+            .await
             .map_err(|e| PjsError::ClientError(format!("Failed to send stream request: {e}")))?;
 
         // Initialize session tracking
@@ -247,7 +256,7 @@ impl PjsWebSocketClient {
 
     async fn handle_incoming_message(
         sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
-        message_tx: mpsc::UnboundedSender<WsMessage>,
+        message_tx: mpsc::Sender<WsMessage>,
         message: WsMessage,
     ) -> PjsResult<()> {
         match message {
@@ -296,8 +305,16 @@ impl PjsWebSocketClient {
                     processing_time_ms: processing_time.as_millis() as u64,
                 };
 
-                if let Err(e) = message_tx.send(ack_message) {
-                    warn!("Failed to send frame acknowledgment: {}", e);
+                // Best-effort: `handle_incoming_message` runs inline inside
+                // `receive_task`'s read loop, so awaiting a full channel here
+                // would stop draining the socket and stall the connection.
+                // Dropping an ack is recoverable (the server can re-send or
+                // time out the frame); stalling the whole read loop is not.
+                if let Err(e) = message_tx.try_send(ack_message) {
+                    warn!(
+                        "Dropping frame acknowledgment (channel full or closed): {}",
+                        e
+                    );
                 }
             }
             WsMessage::StreamComplete {
@@ -324,8 +341,10 @@ impl PjsWebSocketClient {
             WsMessage::Ping { timestamp } => {
                 debug!("Received ping with timestamp: {}", timestamp);
                 let pong = WsMessage::Pong { timestamp };
-                if let Err(e) = message_tx.send(pong) {
-                    warn!("Failed to send pong: {}", e);
+                // Same rationale as the ack above: best-effort, must not
+                // stall the read loop by awaiting a full channel.
+                if let Err(e) = message_tx.try_send(pong) {
+                    warn!("Dropping pong (channel full or closed): {}", e);
                 }
             }
             WsMessage::Pong { timestamp } => {
@@ -392,6 +411,27 @@ mod tests {
 
         let sessions = client.sessions.read().await;
         assert!(sessions.contains_key(&session_id));
+    }
+
+    #[tokio::test]
+    async fn test_message_channel_is_bounded() {
+        // Regression test for #314: the client's outgoing message channel
+        // used to be unbounded, so a stalled `send_task` let it grow
+        // without limit. It must now reject sends once
+        // `MESSAGE_QUEUE_CAPACITY` is reached.
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+        let tx = client.message_tx.clone();
+
+        for _ in 0..MESSAGE_QUEUE_CAPACITY {
+            tx.try_send(WsMessage::Pong { timestamp: 0 })
+                .expect("channel should accept sends up to its capacity");
+        }
+
+        let result = tx.try_send(WsMessage::Pong { timestamp: 0 });
+        assert!(
+            matches!(result, Err(mpsc::error::TrySendError::Full(_))),
+            "channel must reject sends past capacity instead of growing unbounded"
+        );
     }
 
     #[test]

@@ -814,37 +814,6 @@ pub trait EventSubscriber {
 
 /// Extension methods for DomainEvent
 impl DomainEvent {
-    /// Get event ID for tracking (generated if not exists)
-    pub fn event_id(&self) -> EventId {
-        // For now, generate deterministic ID based on event content
-        // In future versions, this should be stored with the event
-        let content = format!("{self:?}");
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hash = DefaultHasher::new();
-        content.hash(&mut hash);
-        let hash_val = hash.finish();
-        let uuid = uuid::Uuid::from_bytes([
-            (hash_val >> 56) as u8,
-            (hash_val >> 48) as u8,
-            (hash_val >> 40) as u8,
-            (hash_val >> 32) as u8,
-            (hash_val >> 24) as u8,
-            (hash_val >> 16) as u8,
-            (hash_val >> 8) as u8,
-            hash_val as u8,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ]);
-        EventId::from_uuid(uuid)
-    }
-
     /// Get event timestamp
     pub fn occurred_at(&self) -> DateTime<Utc> {
         match self {

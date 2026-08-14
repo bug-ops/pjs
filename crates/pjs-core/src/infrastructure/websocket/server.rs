@@ -3,7 +3,7 @@
 #[cfg(feature = "http-server")]
 use super::{AdaptiveStreamController, StreamOptions, WebSocketTransport, WsMessage};
 use crate::{
-    Error as PjsError, Result as PjsResult,
+    Result as PjsResult,
     security::{RateLimitConfig, RateLimitGuard, WebSocketRateLimiter},
 };
 #[cfg(feature = "http-server")]
@@ -23,9 +23,21 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 use uuid;
+
+/// Capacity of each per-connection outgoing message channel.
+///
+/// Bounds how many frames can queue for a slow client before `send_frame`
+/// drops further frames rather than growing memory without limit (see
+/// `send_frame`'s doc for why it drops instead of awaiting capacity).
+/// 1000 is a conservative default, not a byte-size bound: at the maximum
+/// configured WebSocket frame size, a fully-queued connection can still
+/// hold a large amount of memory. Sizing this from configured frame-size
+/// limits, or tracking queued bytes instead of message count, is tracked
+/// as a follow-up.
+const OUTGOING_QUEUE_CAPACITY: usize = 1000;
 
 /// Axum WebSocket transport implementation
 pub struct AxumWebSocketTransport {
@@ -33,7 +45,7 @@ pub struct AxumWebSocketTransport {
     /// Active connection IDs for tracking open sockets
     active_connections: Arc<RwLock<Vec<String>>>,
     /// Per-connection outgoing senders; keyed by connection ID
-    outgoing_channels: Arc<RwLock<HashMap<String, UnboundedSender<WsMessage>>>>,
+    outgoing_channels: Arc<RwLock<HashMap<String, Sender<WsMessage>>>>,
     /// Per-IP rate limiter applied to upgrade requests, connection establishment,
     /// and inbound application-level messages.
     rate_limiter: Arc<WebSocketRateLimiter>,
@@ -115,7 +127,8 @@ impl AxumWebSocketTransport {
         let frame_rx = self.controller.subscribe_frames();
 
         // Create channel for sending outgoing messages to this connection
-        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<WsMessage>();
+        let (outgoing_tx, mut outgoing_rx) =
+            tokio::sync::mpsc::channel::<WsMessage>(OUTGOING_QUEUE_CAPACITY);
         self.outgoing_channels
             .write()
             .await
@@ -360,16 +373,38 @@ impl WebSocketTransport for AxumWebSocketTransport {
         }
     }
 
+    /// The channel this queues onto is drained by the same `tokio::select!`
+    /// loop in [`Self::handle_socket`] that also awaits
+    /// `handle_websocket_message` inline. Calling `send_frame` from
+    /// within that inline handling path (directly or transitively) would
+    /// deadlock the connection: the loop can't reach `outgoing_rx.recv()`
+    /// again until the in-flight branch finishes, so a blocking send would
+    /// wait forever on a receiver that can't run. Using `try_send` here
+    /// keeps that latent hazard from becoming a real deadlock — see
+    /// `WebSocketTransport::send_frame`'s doc for the general contract.
     fn send_frame(
         &self,
         connection: Arc<Self::Connection>,
         message: WsMessage,
     ) -> Self::SendFrameFuture<'_> {
         async move {
-            let channels = self.outgoing_channels.read().await;
-            if let Some(tx) = channels.get(connection.as_ref()) {
-                tx.send(message)
-                    .map_err(|e| PjsError::Other(format!("Failed to queue frame: {}", e)))?;
+            // Clone the sender and release the read lock before sending:
+            // a stalled consumer must not hold up other connections
+            // waiting on `outgoing_channels` (e.g. cleanup taking the write lock).
+            let tx = self
+                .outgoing_channels
+                .read()
+                .await
+                .get(connection.as_ref())
+                .cloned();
+            if let Some(tx) = tx {
+                if let Err(e) = tx.try_send(message) {
+                    warn!(
+                        "send_frame: dropping frame for connection {} (channel full or closed): {}",
+                        connection.as_ref(),
+                        e
+                    );
+                }
             } else {
                 warn!(
                     "send_frame: no outgoing channel for connection {}",
@@ -476,5 +511,77 @@ mod tests {
             .start_streaming(&session_id)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_channel_is_bounded() {
+        // Regression test for #314: the per-connection outgoing channel
+        // used to be unbounded, so a stalled consumer let it grow without
+        // limit. It must now reject sends once `OUTGOING_QUEUE_CAPACITY`
+        // is reached instead of growing memory indefinitely.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<WsMessage>(OUTGOING_QUEUE_CAPACITY);
+
+        for _ in 0..OUTGOING_QUEUE_CAPACITY {
+            tx.try_send(WsMessage::Ping { timestamp: 0 })
+                .expect("channel should accept sends up to its capacity");
+        }
+
+        let result = tx.try_send(WsMessage::Ping { timestamp: 0 });
+        assert!(
+            matches!(result, Err(tokio::sync::mpsc::error::TrySendError::Full(_))),
+            "channel must reject sends past capacity instead of growing unbounded"
+        );
+
+        // Draining a slot frees capacity again — this is the flow-control
+        // behavior an unbounded channel could never provide.
+        rx.recv().await.expect("receiver should still be open");
+        tx.try_send(WsMessage::Ping { timestamp: 0 })
+            .expect("channel should accept a send after capacity is freed");
+    }
+
+    #[tokio::test]
+    async fn test_send_frame_drops_on_full_channel_without_blocking() {
+        // Regression test for S3: exercises the real `send_frame` code
+        // path (registered channel + read-lock clone) rather than an
+        // isolated mpsc channel, proving that a full outgoing channel
+        // makes `send_frame` drop-and-log via `try_send` instead of
+        // blocking. `try_send` never awaits, so it also makes the earlier
+        // deadlock hazard (this connection's own loop being both the
+        // sender and the only consumer) moot; the sender is still cloned
+        // out of the lock before sending for lock hygiene.
+        let transport = AxumWebSocketTransport::new();
+        let connection_id = "test-connection".to_string();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<WsMessage>(OUTGOING_QUEUE_CAPACITY);
+        transport
+            .outgoing_channels
+            .write()
+            .await
+            .insert(connection_id.clone(), tx);
+
+        let connection = Arc::new(connection_id);
+        for _ in 0..OUTGOING_QUEUE_CAPACITY {
+            transport
+                .send_frame(connection.clone(), WsMessage::Ping { timestamp: 0 })
+                .await
+                .expect("send_frame should accept sends up to channel capacity");
+        }
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            transport.send_frame(connection.clone(), WsMessage::Ping { timestamp: 0 }),
+        )
+        .await
+        .expect("send_frame must not block when the outgoing channel is full")
+        .expect("send_frame must return Ok even when dropping the overflow frame");
+
+        rx.close();
+        let mut drained = 0;
+        while rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        assert_eq!(
+            drained, OUTGOING_QUEUE_CAPACITY,
+            "the overflow frame must have been dropped, not queued"
+        );
     }
 }

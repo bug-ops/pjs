@@ -193,6 +193,17 @@ gat_port! {
     /// Zero-cost event publisher with GAT futures
     ///
     /// Publishes domain events for system integration.
+    ///
+    /// # Identity contract
+    ///
+    /// [`DomainEvent`] carries no identity of its own. An implementor that
+    /// stores or forwards events under a unique key (e.g. as
+    /// [`InMemoryEventPublisher`](crate::infrastructure::adapters::event_publisher::InMemoryEventPublisher)
+    /// does with `StoredEvent`) is responsible for minting a fresh
+    /// [`EventId::new`](crate::domain::events::EventId::new) at publish
+    /// time. Do not derive identity from event content (e.g. hashing a
+    /// `Debug` representation): structurally-identical events are
+    /// indistinguishable by content and will collide.
     pub trait EventPublisherGat {
         /// Publish a single domain event
         async fn publish(&self, event: DomainEvent) -> ();
