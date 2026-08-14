@@ -23,7 +23,7 @@ pub use axum_adapter::{
 #[cfg(feature = "http-server")]
 pub use axum_adapter::{create_pjs_router_with_auth, create_pjs_router_with_rate_limit_and_auth};
 pub use axum_extension::{HttpExtensionConfig, PjsExtension};
-pub use middleware::{RateLimitConfig, RateLimitMiddleware};
+pub use middleware::{RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig};
 pub use streaming::{
     AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamError, StreamFormat,
     create_streaming_response, create_streaming_response_with_content_type,

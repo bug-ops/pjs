@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- HTTP rate limiter (`RateLimitMiddleware`) no longer trusts `X-Forwarded-For`/`X-Real-IP` from arbitrary clients — it keys on the real TCP peer address via axum's `ConnectInfo<SocketAddr>` by default, closing a bypass where a client could send a fresh spoofed header on every request to obtain a fresh rate-limit bucket. Proxy-header support is now opt-in via `RateLimitConfig::with_trusted_proxies`, which only honors the forwarded headers when the real peer address is in an explicit allowlist. `X-Forwarded-For` is read across all header lines with that name and parsed right-to-left, skipping entries that are themselves trusted proxies, so a client sitting behind a trusted proxy cannot forge a fresh bucket by varying the client-supplied (leftmost) entry or by adding its own header line; the walk fails closed (falls back to `X-Real-IP`, then the peer address) on the first unparseable entry rather than skipping past it. Allowlist and peer comparisons canonicalize IPv4-mapped IPv6 addresses so a dual-stack listener still matches a plain-IPv4 allowlist entry. A one-time warning is logged if a request has no `ConnectInfo` extension, since that otherwise silently collapses every client onto a single shared bucket (#336)
+
+### Fixed
+
+- Removed stale TODO comments in `axum_adapter.rs` describing authentication and HTTP rate limiting as unimplemented; both already exist (`ApiKeyAuthLayer`/`JwtAuthLayer` in `infrastructure::http::auth`, `RateLimitMiddleware` in `infrastructure::http::middleware`) and are now documented and cross-referenced in place (#319)
+
 ### CI
 
 - Exclude `pjs-wasm` from the `--workspace` build/doctest steps on `build` and `doctest` jobs. Its transitive `web-sys` dependency declares ~1800 features; Cargo's auto-generated `--check-cfg` argument for it exceeds Windows' command-line length limit and crashed `sccache` on `windows-latest` (`os error 206`), intermittently blocking merges. `pjs-wasm`'s tests are all gated to `target_arch = "wasm32"` and its rustdoc examples are JS-only, so nothing was actually being exercised natively (#344)

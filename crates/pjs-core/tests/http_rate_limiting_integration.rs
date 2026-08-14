@@ -4,7 +4,9 @@
 // - RateLimitMiddleware with token bucket implementation
 // - 429 Too Many Requests response when limit exceeded
 // - X-RateLimit-* headers per RFC 6585
-// - Per-IP rate limiting
+// - Per-IP rate limiting keyed on the real TCP peer address (ConnectInfo)
+// - X-Forwarded-For/X-Real-IP are untrusted by default (#336); only consulted
+//   when TrustedProxyConfig explicitly allowlists the peer
 // - Concurrent request handling
 //
 // Coverage target: 100% for rate limiting integration
@@ -14,14 +16,19 @@
 use axum::{
     Router,
     body::Body,
-    extract::Request,
+    extract::{ConnectInfo, Request},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::get,
 };
-use pjson_rs::infrastructure::http::{RateLimitConfig, RateLimitMiddleware};
+use pjson_rs::infrastructure::http::{RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tower::ServiceExt;
+
+fn peer(addr: [u8; 4], port: u16) -> ConnectInfo<SocketAddr> {
+    ConnectInfo(SocketAddr::from((IpAddr::V4(Ipv4Addr::from(addr)), port)))
+}
 
 // ============================================================================
 // RateLimitConfig Tests
@@ -167,12 +174,16 @@ async fn test_rate_limit_headers_format() {
     assert!(reset.unwrap() > now);
 }
 
+/// Without a `ConnectInfo<SocketAddr>` extension (i.e. the router not served
+/// via `into_make_service_with_connect_info`), the real peer is unknown and
+/// every request falls back to the same key. `X-Forwarded-For` is never
+/// trusted by default (#336), so a *different* header value must not grant a
+/// fresh bucket.
 #[tokio::test]
-async fn test_rate_limit_extracts_ip_from_x_forwarded_for() {
+async fn test_rate_limit_ignores_x_forwarded_for_by_default() {
     let config = RateLimitConfig::new(2).with_window(Duration::from_millis(100));
     let app = create_test_router(config);
 
-    // Requests with same X-Forwarded-For should share rate limit
     for _ in 0..2 {
         let request = Request::builder()
             .uri("/test")
@@ -184,10 +195,10 @@ async fn test_rate_limit_extracts_ip_from_x_forwarded_for() {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    // Third request from same IP should be rate limited
+    // Different X-Forwarded-For value must NOT grant a fresh bucket.
     let request = Request::builder()
         .uri("/test")
-        .header("X-Forwarded-For", "192.168.1.100")
+        .header("X-Forwarded-For", "10.0.0.1")
         .body(Body::empty())
         .unwrap();
 
@@ -195,12 +206,12 @@ async fn test_rate_limit_extracts_ip_from_x_forwarded_for() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
+/// Same as above for `X-Real-IP` — never trusted by default.
 #[tokio::test]
-async fn test_rate_limit_extracts_ip_from_x_real_ip() {
+async fn test_rate_limit_ignores_x_real_ip_by_default() {
     let config = RateLimitConfig::new(2).with_window(Duration::from_millis(100));
     let app = create_test_router(config);
 
-    // Requests with same X-Real-IP should share rate limit
     for _ in 0..2 {
         let request = Request::builder()
             .uri("/test")
@@ -212,10 +223,10 @@ async fn test_rate_limit_extracts_ip_from_x_real_ip() {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    // Third request from same IP should be rate limited
+    // Different X-Real-IP value must NOT grant a fresh bucket.
     let request = Request::builder()
         .uri("/test")
-        .header("X-Real-IP", "10.0.0.50")
+        .header("X-Real-IP", "10.0.0.99")
         .body(Body::empty())
         .unwrap();
 
@@ -223,37 +234,29 @@ async fn test_rate_limit_extracts_ip_from_x_real_ip() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
+/// Isolation must be keyed on the real TCP peer (`ConnectInfo`), not on any
+/// client-supplied header.
 #[tokio::test]
 async fn test_rate_limit_different_ips_isolated() {
     let config = RateLimitConfig::new(1).with_window(Duration::from_millis(100));
     let app = create_test_router(config);
 
-    // First IP uses its limit
-    let request1 = Request::builder()
-        .uri("/test")
-        .header("X-Forwarded-For", "192.168.1.1")
-        .body(Body::empty())
-        .unwrap();
+    let mut request1 = Request::builder().uri("/test").body(Body::empty()).unwrap();
+    request1.extensions_mut().insert(peer([192, 168, 1, 1], 1));
 
     let response1 = app.clone().oneshot(request1).await.unwrap();
     assert_eq!(response1.status(), StatusCode::OK);
 
-    // Second request from first IP should be rate limited
-    let request2 = Request::builder()
-        .uri("/test")
-        .header("X-Forwarded-For", "192.168.1.1")
-        .body(Body::empty())
-        .unwrap();
+    // Second request from the same peer should be rate limited
+    let mut request2 = Request::builder().uri("/test").body(Body::empty()).unwrap();
+    request2.extensions_mut().insert(peer([192, 168, 1, 1], 2));
 
     let response2 = app.clone().oneshot(request2).await.unwrap();
     assert_eq!(response2.status(), StatusCode::TOO_MANY_REQUESTS);
 
-    // Different IP should still work
-    let request3 = Request::builder()
-        .uri("/test")
-        .header("X-Forwarded-For", "192.168.1.2")
-        .body(Body::empty())
-        .unwrap();
+    // A different real peer should still work
+    let mut request3 = Request::builder().uri("/test").body(Body::empty()).unwrap();
+    request3.extensions_mut().insert(peer([192, 168, 1, 2], 1));
 
     let response3 = app.clone().oneshot(request3).await.unwrap();
     assert_eq!(response3.status(), StatusCode::OK);
@@ -316,33 +319,76 @@ async fn test_rate_limit_429_response_body() {
     assert!(body_str.contains("retry_after"));
 }
 
+/// `X-Forwarded-For` proxy-chain parsing walks right-to-left and keys on the
+/// rightmost entry that is not itself a trusted proxy — the entry appended
+/// by the closest trusted hop, which the client cannot forge. A client behind
+/// the trusted proxy varying the leftmost (client-supplied) entry on every
+/// request must NOT get a fresh bucket; that would be the exact #336 bypass
+/// reopened inside the opt-in trusted-proxy path.
 #[tokio::test]
-async fn test_rate_limit_x_forwarded_for_multiple_ips() {
-    let config = RateLimitConfig::new(2).with_window(Duration::from_millis(100));
+async fn test_rate_limit_x_forwarded_for_uses_rightmost_untrusted_entry() {
+    let trusted_proxy = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 200));
+    let config = RateLimitConfig::new(2)
+        .with_window(Duration::from_millis(100))
+        .with_trusted_proxies(TrustedProxyConfig::new(vec![trusted_proxy]));
     let app = create_test_router(config);
 
-    // X-Forwarded-For with multiple IPs (proxy chain)
-    // Should use the first IP in the chain
-    for _ in 0..2 {
-        let request = Request::builder()
-            .uri("/test")
-            .header("X-Forwarded-For", "203.0.113.1, 198.51.100.1, 192.0.2.1")
-            .body(Body::empty())
-            .unwrap();
+    // Same real client (rightmost entry, appended by the trusted proxy) but a
+    // different attacker-controlled leftmost entry each time — must still
+    // share the same bucket.
+    for spoofed in ["203.0.113.1", "10.10.10.10"] {
+        let mut request = Request::builder().uri("/test").body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(peer([198, 51, 100, 200], 443));
+        request.headers_mut().insert(
+            "X-Forwarded-For",
+            format!("{spoofed}, 192.0.2.1").parse().unwrap(),
+        );
 
         let response = app.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "requests sharing the real (rightmost) client IP must share budget"
+        );
     }
 
-    // Third request should be rate limited (same first IP)
-    let request = Request::builder()
-        .uri("/test")
-        .header("X-Forwarded-For", "203.0.113.1, 198.51.100.99")
-        .body(Body::empty())
-        .unwrap();
+    // Budget of 2 is now exhausted by the real client 192.0.2.1. A third
+    // request with yet another spoofed leftmost entry but the same rightmost
+    // (real) client must still be rejected.
+    let mut request = Request::builder().uri("/test").body(Body::empty()).unwrap();
+    request
+        .extensions_mut()
+        .insert(peer([198, 51, 100, 200], 443));
+    request
+        .headers_mut()
+        .insert("X-Forwarded-For", "1.2.3.4, 192.0.2.1".parse().unwrap());
 
     let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "leftmost spoofed entry must not grant a fresh rate-limit bucket"
+    );
+
+    // A genuinely different real client (different rightmost entry) must get
+    // an independent bucket.
+    let mut request2 = Request::builder().uri("/test").body(Body::empty()).unwrap();
+    request2
+        .extensions_mut()
+        .insert(peer([198, 51, 100, 200], 443));
+    request2.headers_mut().insert(
+        "X-Forwarded-For",
+        "203.0.113.1, 192.0.2.99".parse().unwrap(),
+    );
+
+    let response2 = app.clone().oneshot(request2).await.unwrap();
+    assert_eq!(
+        response2.status(),
+        StatusCode::OK,
+        "a different real (rightmost) client IP must not be throttled by another client's budget"
+    );
 }
 
 #[tokio::test]
@@ -376,15 +422,14 @@ async fn test_rate_limit_concurrent_requests_same_ip() {
 
     let mut handles = vec![];
 
-    // Send 10 concurrent requests from same IP
-    for _ in 0..10 {
+    // Send 10 concurrent requests from same real peer
+    for i in 0..10 {
         let app_clone = app.clone();
         let handle = tokio::spawn(async move {
-            let request = Request::builder()
-                .uri("/test")
-                .header("X-Forwarded-For", "192.168.1.100")
-                .body(Body::empty())
-                .unwrap();
+            let mut request = Request::builder().uri("/test").body(Body::empty()).unwrap();
+            request
+                .extensions_mut()
+                .insert(peer([192, 168, 1, 100], 1000 + i as u16));
 
             app_clone.oneshot(request).await.unwrap().status()
         });
@@ -416,18 +461,16 @@ async fn test_rate_limit_concurrent_requests_different_ips() {
 
     let mut handles = vec![];
 
-    // Send requests from 3 different IPs, 3 requests each
-    for ip_suffix in 1..=3 {
-        for _ in 0..3 {
+    // Send requests from 3 different real peers, 3 requests each
+    for ip_suffix in 1..=3u8 {
+        for req_num in 0..3u16 {
             let app_clone = app.clone();
-            let ip = format!("192.168.1.{}", ip_suffix);
 
             let handle = tokio::spawn(async move {
-                let request = Request::builder()
-                    .uri("/test")
-                    .header("X-Forwarded-For", ip)
-                    .body(Body::empty())
-                    .unwrap();
+                let mut request = Request::builder().uri("/test").body(Body::empty()).unwrap();
+                request
+                    .extensions_mut()
+                    .insert(peer([192, 168, 1, ip_suffix], 2000 + req_num));
 
                 (
                     ip_suffix,
