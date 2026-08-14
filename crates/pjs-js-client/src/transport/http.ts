@@ -13,7 +13,6 @@ import { Frame, PJSError, PJSErrorType } from '../types/index.js';
  */
 export class HttpTransport extends Transport {
   private abortController?: AbortController;
-  private currentStreamEndpoint?: string;
 
   async connect(): Promise<ConnectResult> {
     try {
@@ -67,7 +66,6 @@ export class HttpTransport extends Transport {
     }
     
     this.isConnected = false;
-    this.currentStreamEndpoint = undefined;
   }
 
   async startStream(endpoint: string, options: StreamOptions): Promise<void> {
@@ -84,7 +82,6 @@ export class HttpTransport extends Transport {
     }
 
     this.abortController = new AbortController();
-    this.currentStreamEndpoint = endpoint;
 
     try {
       const url = new URL(`${this.config.baseUrl}/pjs/stream${endpoint}`);
@@ -148,8 +145,6 @@ export class HttpTransport extends Transport {
       this.abortController.abort();
       this.abortController = undefined;
     }
-    
-    this.currentStreamEndpoint = undefined;
   }
 
   // Private methods

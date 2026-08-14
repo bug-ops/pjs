@@ -6,7 +6,7 @@
 
 import { describe, test, expect, beforeEach } from '@jest/globals';
 import { JsonReconstructor } from '../../src/core/json-reconstructor.js';
-import { FrameType, Priority } from '../../src/types/index.js';
+import { FrameType, Priority, SkeletonFrame } from '../../src/types/index.js';
 
 describe('JsonReconstructor', () => {
   let reconstructor: JsonReconstructor;
@@ -17,8 +17,8 @@ describe('JsonReconstructor', () => {
 
   describe('Skeleton Processing', () => {
     test('should process skeleton frame', () => {
-      const skeletonFrame = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+      const skeletonFrame: SkeletonFrame = {
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: {
           user: {
@@ -58,8 +58,8 @@ describe('JsonReconstructor', () => {
     });
 
     test('should reject skeleton when already initialized', () => {
-      const skeletonFrame = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+      const skeletonFrame: SkeletonFrame = {
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: { test: true },
         complete: false,
@@ -80,8 +80,8 @@ describe('JsonReconstructor', () => {
   describe('Patch Processing', () => {
     beforeEach(() => {
       // Initialize with skeleton
-      const skeleton = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+      const skeleton: SkeletonFrame = {
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: {
           user: {
@@ -297,8 +297,8 @@ describe('JsonReconstructor', () => {
       expect(reconstructor.isComplete()).toBe(false);
 
       // Add skeleton
-      const skeleton = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+      const skeleton: SkeletonFrame = {
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: { test: null },
         complete: false,
@@ -314,8 +314,8 @@ describe('JsonReconstructor', () => {
     });
 
     test('should provide metadata', () => {
-      const skeleton = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+      const skeleton: SkeletonFrame = {
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: { test: null },
         complete: false,
@@ -335,8 +335,8 @@ describe('JsonReconstructor', () => {
 
     test('should reset state correctly', () => {
       // Initialize with data
-      const skeleton = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+      const skeleton: SkeletonFrame = {
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: { test: 'value' },
         complete: false,
@@ -360,8 +360,8 @@ describe('JsonReconstructor', () => {
 
   describe('Memory Management', () => {
     test('should track memory usage', () => {
-      const skeleton = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+      const skeleton: SkeletonFrame = {
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: {
           largeArray: new Array(1000).fill('data'),
@@ -382,8 +382,8 @@ describe('JsonReconstructor', () => {
     });
 
     test('should handle large object reconstruction', () => {
-      const skeleton = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+      const skeleton: SkeletonFrame = {
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: {
           items: []

@@ -18,14 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed stale TODO comments in `axum_adapter.rs` describing authentication and HTTP rate limiting as unimplemented; both already exist (`ApiKeyAuthLayer`/`JwtAuthLayer` in `infrastructure::http::auth`, `RateLimitMiddleware` in `infrastructure::http::middleware`) and are now documented and cross-referenced in place (#319)
 - `DomainEvent::event_id()` derived a content-hash-based UUID, so two structurally-identical events (same variant, session/stream ID, and timestamp) produced the same `EventId`. `InMemoryEventPublisher.event_log` keys solely on `EventId`, so colliding events silently overwrote each other with no error. `InMemoryEventPublisher` and `HttpEventPublisher` now mint a fresh `EventId::new()` per stored/published event at publish time, guaranteeing distinct identity even for structurally-identical events. `EventPublisherGat`'s doc now states this as the identity contract implementors must follow (#328)
 - Replace unbounded `mpsc` channels in the WebSocket server/client outgoing-message paths and `InMemoryEventPublisher::with_channel` with bounded channels (capacity 1000; a conservative default bounding message count, not queued bytes — see follow-up for a byte-size-aware bound), so a slow consumer can no longer cause unbounded memory growth. Call sites with a dedicated consumer task and no risk of stalling unrelated work (`PjsWebSocketClient::request_stream`) apply backpressure via `.send().await`; best-effort control-path sends that must not stall their own read loop (WebSocket server `send_frame`, client frame-ack/pong replies, event-publisher streaming channel) use `try_send` and drop-and-log on a full channel instead (#314)
+- `pjs-js-client`: `WasmParser.stream()` threw immediately with `TypeError: Cannot destructure property 'PriorityStream' of 'this.wasmModule' as it is undefined` because `initialize()` never assigned the imported `pjs-wasm` module to the instance (#338)
+- `pjs-js-client`: `WasmBackend.connect()` always failed in Node.js with a misleading `Failed to initialize WASM backend` error, because the generated `pjs-wasm` init function defaults to `fetch()`-ing the `.wasm` binary, and Node's `fetch` cannot load `file:` URLs. The WASM loader now detects Node.js and reads the `.wasm` binary from disk instead (#317)
 
 ### Removed
 
 - **BREAKING** `DomainEvent::event_id()` (public on `pjson-rs`/`pjson-rs-domain`). It derived identity from a content hash, which is exactly the bug behind #328's silent event-log collisions; there is no drop-in replacement because identity is no longer a property of `DomainEvent` itself — see the `Fixed` entry above for where identity is now assigned. Pre-1.0 breaking change; no deprecation cycle (#328)
 
+### Changed
+
+- `pjs-js-client`: `WasmBackend`'s synthetic `Complete` frame now reports `priority: Priority.Background` (10) instead of the previously hardcoded `1`, which was not a valid `Priority` enum member. This is a disclosed value change on that frame's `priority` field for consumers reading it directly; nothing in `pjs-js-client` itself gates behavior on it
+- `pjs-js-client`: `StreamStats.priorityDistribution` is now typed `Partial<Record<Priority, number>>` instead of `Record<Priority, number>` — the previous type was unsound (only priorities actually seen are ever populated) and could not be satisfied by an empty initial value. TypeScript consumers indexing this field now get `number | undefined`
+
 ### CI
 
 - Exclude `pjs-wasm` from the `--workspace` build/doctest steps on `build` and `doctest` jobs. Its transitive `web-sys` dependency declares ~1800 features; Cargo's auto-generated `--check-cfg` argument for it exceeds Windows' command-line length limit and crashed `sccache` on `windows-latest` (`os error 206`), intermittently blocking merges. `pjs-wasm`'s tests are all gated to `target_arch = "wasm32"` and its rustdoc examples are JS-only, so nothing was actually being exercised natively (#344)
+- Run `npm run typecheck` in the `js-client-test` job before `npm test`, so `pjs-js-client` type errors fail CI instead of going unnoticed (#339)
+- Add a `wasm-types-drift` CI job that type-checks `pjs-js-client` against the real, built `pjs-wasm` bindings (excluding the fallback ambient `pjs-wasm` type shim `js-client-test` relies on when the package isn't built), so a breaking rename or signature change in `crates/pjs-wasm`'s public API is caught instead of silently passing behind the shim
 
 ## [0.6.2] - 2026-07-27
 

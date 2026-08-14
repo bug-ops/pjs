@@ -19,7 +19,6 @@ import {
   PJSError,
   PJSErrorType,
   StreamStats,
-  PerformanceMetrics,
   ProgressInfo
 } from '../types/index.js';
 import { FrameProcessor } from './frame-processor.js';
@@ -37,26 +36,24 @@ export class PJSClient extends EventEmitter {
   private _transport: Transport;
   private get transport(): Transport { return this._transport; }
   private frameProcessor: FrameProcessor;
-  private jsonReconstructor: JsonReconstructor;
   private sessionId?: string;
   private isConnected = false;
   private streams = new Map<string, StreamStats>();
 
   constructor(config: PJSClientConfig) {
     super();
-    
+
     // Validate and set default configuration
     this.config = this.validateAndNormalizeConfig(config);
-    
+
     // Initialize components
     this.frameProcessor = new FrameProcessor();
-    this.jsonReconstructor = new JsonReconstructor();
-    
+
     // Initialize transport based on configuration
     this._transport = this.createTransport();
 
     // Prevent unhandled 'error' event crashes when no user listener is registered
-    this.on('error', () => {});
+    this.on(PJSEvent.Error, () => {});
 
     // Set up event handlers
     this.setupEventHandlers();
@@ -117,7 +114,6 @@ export class PJSClient extends EventEmitter {
       this.isConnected = false;
       this.sessionId = undefined;
       this.streams.clear();
-      this.currentStreamId = undefined;
 
       this.emit(PJSEvent.Disconnected, {});
       
@@ -242,7 +238,7 @@ export class PJSClient extends EventEmitter {
     return {
       baseUrl: config.baseUrl.replace(/\/$/, ''), // Remove trailing slash
       transport: config.transport ?? TransportType.HTTP,
-      sessionId: config.sessionId,
+      sessionId: config.sessionId ?? '',
       headers: config.headers ?? {},
       timeout: config.timeout ?? 30000,
       debug: config.debug ?? false,
@@ -359,10 +355,8 @@ export class PJSClient extends EventEmitter {
           progressInfo.framesReceived++;
           progressInfo.elapsedTime = Date.now() - stats.startTime;
 
-          if (!stats.priorityDistribution[frame.priority]) {
-            stats.priorityDistribution[frame.priority] = 0;
-          }
-          stats.priorityDistribution[frame.priority]++;
+          stats.priorityDistribution[frame.priority] =
+            (stats.priorityDistribution[frame.priority] ?? 0) + 1;
 
           if (!progressInfo.prioritiesReceived.includes(frame.priority)) {
             progressInfo.prioritiesReceived.push(frame.priority);

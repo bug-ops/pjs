@@ -6,11 +6,13 @@
 
 import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 import { PJSClient } from '../../src/core/client.js';
-import { 
-  Priority, 
-  TransportType, 
-  FrameType, 
-  PJSEvent 
+import type { Transport } from '../../src/transport/base.js';
+import {
+  Priority,
+  FrameType,
+  PJSEvent,
+  Frame,
+  SkeletonFrame
 } from '../../src/types/index.js';
 
 describe('Full Stream Integration', () => {
@@ -29,15 +31,15 @@ describe('Full Stream Integration', () => {
     const progressUpdates: number[] = [];
 
     // Set up event listeners
-    client.on(PJSEvent.Connected, () => events.push('connected'));
-    client.on(PJSEvent.SkeletonReady, () => events.push('skeleton_ready'));
-    client.on(PJSEvent.PatchApplied, () => events.push('patch_applied'));
-    client.on(PJSEvent.StreamComplete, () => events.push('stream_complete'));
+    client.on(PJSEvent.Connected, () => { events.push('connected'); });
+    client.on(PJSEvent.SkeletonReady, () => { events.push('skeleton_ready'); });
+    client.on(PJSEvent.PatchApplied, () => { events.push('patch_applied'); });
+    client.on(PJSEvent.StreamComplete, () => { events.push('stream_complete'); });
 
     // Mock transport for full workflow
-    const mockFrames = [
+    const mockFrames: Frame[] = [
       {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: {
           user: {
@@ -137,7 +139,7 @@ describe('Full Stream Integration', () => {
     ];
 
     // Mock transport implementation
-    jest.spyOn(client as any, 'transport', 'get').mockReturnValue({
+    jest.spyOn(client as unknown as { transport: Transport }, 'transport', 'get').mockReturnValue({
       connect: () => Promise.resolve({ sessionId: 'test-session-123' }),
       startStream: () => {
         // Simulate frames arriving over time
@@ -160,7 +162,7 @@ describe('Full Stream Integration', () => {
       on: jest.fn(),
       removeListener: jest.fn(),
       disconnect: () => Promise.resolve()
-    });
+    } as unknown as Transport);
 
     // Start streaming with callbacks
     const result = await client.stream('/api/user/profile', {
@@ -171,7 +173,7 @@ describe('Full Stream Integration', () => {
         });
       },
       onProgress: (progress) => {
-        progressUpdates.push(progress.completionPercentage);
+        progressUpdates.push(progress.completionPercentage ?? 0);
       }
     });
 
@@ -244,9 +246,9 @@ describe('Full Stream Integration', () => {
     const lowData: any[] = [];
 
     // Mock progressive frames
-    const mockFrames = [
+    const mockFrames: Frame[] = [
       {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+        type: FrameType.Skeleton,
         priority: Priority.Critical,
         data: { status: null, user: { id: null }, content: null },
         complete: false,
@@ -293,7 +295,7 @@ describe('Full Stream Integration', () => {
     ];
 
     // Mock transport
-    jest.spyOn(client as any, 'transport', 'get').mockReturnValue({
+    jest.spyOn(client as unknown as { transport: Transport }, 'transport', 'get').mockReturnValue({
       connect: () => Promise.resolve({ sessionId: 'test-session-456' }),
       startStream: () => {
         mockFrames.forEach((frame, index) => {
@@ -306,7 +308,7 @@ describe('Full Stream Integration', () => {
       on: jest.fn(),
       removeListener: jest.fn(),
       disconnect: () => Promise.resolve()
-    });
+    } as unknown as Transport);
 
     await client.stream('/api/data', {
       onRender: (data, metadata) => {
@@ -357,17 +359,17 @@ describe('Full Stream Integration', () => {
     const errors: any[] = [];
 
     client.on(PJSEvent.Error, ({ error, context }) => {
-      errors.push({ error: error.message, context: context.operation });
+      errors.push({ error: error.message, context });
     });
 
     // Mock transport with error
-    jest.spyOn(client as any, 'transport', 'get').mockReturnValue({
+    jest.spyOn(client as unknown as { transport: Transport }, 'transport', 'get').mockReturnValue({
       connect: () => Promise.resolve({ sessionId: 'test-session-error' }),
       startStream: () => {
         // Send invalid frame after skeleton
         setTimeout(() => {
-          const skeleton = {
-            type: FrameType.Skeleton as FrameType.Skeleton,
+          const skeleton: SkeletonFrame = {
+            type: FrameType.Skeleton,
             priority: Priority.Critical,
             data: { test: null },
             complete: false,
@@ -390,7 +392,7 @@ describe('Full Stream Integration', () => {
       on: jest.fn(),
       removeListener: jest.fn(),
       disconnect: () => Promise.resolve()
-    });
+    } as unknown as Transport);
 
     try {
       await client.stream('/api/error-test');
@@ -409,13 +411,13 @@ describe('Full Stream Integration', () => {
     const stream2Results: any[] = [];
 
     // Mock different responses for different endpoints
-    jest.spyOn(client as any, 'transport', 'get').mockReturnValue({
+    jest.spyOn(client as unknown as { transport: Transport }, 'transport', 'get').mockReturnValue({
       connect: () => Promise.resolve({ sessionId: 'concurrent-test' }),
       startStream: (endpoint: string) => {
         if (endpoint === '/api/user1') {
           setTimeout(() => {
-            const skeleton = {
-              type: FrameType.Skeleton as FrameType.Skeleton,
+            const skeleton: SkeletonFrame = {
+              type: FrameType.Skeleton,
               priority: Priority.Critical,
               data: { user: { id: null, name: null } },
               complete: false,
@@ -452,15 +454,15 @@ describe('Full Stream Integration', () => {
       on: jest.fn(),
       removeListener: jest.fn(),
       disconnect: () => Promise.resolve()
-    });
+    } as unknown as Transport);
 
     // Start concurrent streams
     const promises = [
       client.stream('/api/user1', {
-        onRender: (data) => stream1Results.push(JSON.parse(JSON.stringify(data)))
+        onRender: (data) => { stream1Results.push(JSON.parse(JSON.stringify(data))); }
       }),
       client.stream('/api/user2', {
-        onRender: (data) => stream2Results.push(JSON.parse(JSON.stringify(data)))
+        onRender: (data) => { stream2Results.push(JSON.parse(JSON.stringify(data))); }
       })
     ];
 
