@@ -13,13 +13,38 @@ pub mod schema_repository;
 #[cfg(feature = "http-server")]
 pub mod websocket;
 
-pub use adapters::*;
+pub use adapters::{
+    ALLOWED_SORT_FIELDS, CompositeEventPublisher, EventPublisherVariant,
+    GatInMemoryStreamRepository, GatInMemoryStreamStore, HttpEventPublisher,
+    InMemoryEventPublisher, InMemoryFrameStore, InMemoryMetricsCollector, InMemoryStore,
+    JsonAdapter, MAX_HEALTH_METRICS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
+    MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT, PerformanceMetrics, SessionMetrics, SessionStore,
+    StoredEvent, StreamMetrics, StreamStore, TimestampedMetrics,
+};
 pub use bounded_channel::{
     ByteBoundedSender, Envelope, SendError, TrySendError, byte_bounded_channel,
 };
 #[cfg(feature = "http-server")]
-pub use http::*;
-pub use integration::*;
+pub use http::{
+    AdaptiveFrameStream, BatchFrameStream, CreateSessionRequest, CreateSessionResponse,
+    HttpExtensionConfig, HttpServerConfig, PjsAppState, PjsError, PjsExtension,
+    PriorityFrameStream, RateLimitConfig, RateLimitMiddleware, StartStreamRequest, StreamFormat,
+    StreamParams, StreamTransportError, TrustedProxyConfig, create_pjs_router,
+    create_pjs_router_with_auth,
+    create_pjs_router_with_config, create_pjs_router_with_rate_limit,
+    create_pjs_router_with_rate_limit_and_auth, create_pjs_router_with_rate_limit_and_config,
+    create_streaming_response, create_streaming_response_with_content_type,
+};
+pub use integration::{
+    AdapterConfig, IntegrationError, IntegrationResult, ResponseBody, StreamingAdapter,
+    StreamingAdapterExt, StreamingFormat, UniversalAdapter, UniversalRequest, UniversalResponse,
+    streaming_helpers,
+};
 pub use schema_repository::SchemaRepository;
 #[cfg(feature = "http-server")]
-pub use websocket::*;
+pub use websocket::{
+    AdaptiveStreamController, AxumWebSocketTransport, ClientMetrics, SecureWebSocketHandler,
+    StreamOptions, WebSocketStreamSession, WebSocketTransport, WsMessage, create_websocket_router,
+};
+#[cfg(all(feature = "http-server", feature = "websocket-client"))]
+pub use websocket::{PjsWebSocketClient, StreamStats};
