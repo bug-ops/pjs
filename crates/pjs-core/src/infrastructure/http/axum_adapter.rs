@@ -129,6 +129,35 @@ impl Default for HttpServerConfig {
 /// - `allowed_origins` is a mix of `"*"` and explicit origins
 /// - any origin string fails to parse as a valid `HeaderValue`
 fn build_cors_layer(config: &HttpServerConfig) -> Result<CorsLayer, PjsError> {
+    build_cors_layer_from_origins(&config.allowed_origins)
+}
+
+/// Build a [`CorsLayer`] from a raw allowed-origins list.
+///
+/// Shared validated-allowlist logic behind both [`build_cors_layer`] (used by
+/// [`create_pjs_router_with_config`]) and `axum_extension::PjsExtension`'s
+/// own opt-in `allowed_origins` config — see that module for why it needs
+/// its own CORS layer rather than always relying on [`build_cors_layer`]'s
+/// caller.
+///
+/// # Matching semantics
+///
+/// - `[]` (empty) — deny all cross-origin requests (fail-closed)
+/// - `["*"]` — allow any origin (passes through to `tower_http::cors::Any`)
+/// - Mixing `"*"` with explicit origins is rejected at construction time
+/// - Explicit origins are matched against the request's `Origin` header by
+///   **case-sensitive byte equality** (`tower_http::cors::AllowOrigin::list`
+///   behavior, not RFC 6454 §6's case-insensitive scheme/host comparison —
+///   write origins in lowercase, which matches all real browser traffic)
+///
+/// # Errors
+///
+/// Returns [`PjsError::HttpError`] if:
+/// - `allowed_origins` is a mix of `"*"` and explicit origins
+/// - any origin string fails to parse as a valid `HeaderValue`
+pub(crate) fn build_cors_layer_from_origins(
+    allowed_origins: &[String],
+) -> Result<CorsLayer, PjsError> {
     // We intentionally do NOT call .allow_credentials(true).
     // PJS does not use cookie-based auth; the Authorization header works without
     // credentials mode. allow_credentials(true) is incompatible with allow_origin(Any),
@@ -138,14 +167,10 @@ fn build_cors_layer(config: &HttpServerConfig) -> Result<CorsLayer, PjsError> {
         .allow_headers([CONTENT_TYPE, AUTHORIZATION])
         .max_age(std::time::Duration::from_secs(3600));
 
-    let has_wildcard = config.allowed_origins.iter().any(|o| o == "*");
-    let has_explicit = config.allowed_origins.iter().any(|o| o != "*");
+    let has_wildcard = allowed_origins.iter().any(|o| o == "*");
+    let has_explicit = allowed_origins.iter().any(|o| o != "*");
 
-    let layer = match (
-        config.allowed_origins.is_empty(),
-        has_wildcard,
-        has_explicit,
-    ) {
+    let layer = match (allowed_origins.is_empty(), has_wildcard, has_explicit) {
         (true, _, _) => base.allow_origin(AllowOrigin::list(std::iter::empty::<HeaderValue>())),
         (_, true, true) => {
             return Err(PjsError::HttpError(
@@ -154,8 +179,7 @@ fn build_cors_layer(config: &HttpServerConfig) -> Result<CorsLayer, PjsError> {
         }
         (_, true, false) => base.allow_origin(tower_http::cors::Any),
         (_, false, _) => {
-            let origins: Vec<HeaderValue> = config
-                .allowed_origins
+            let origins: Vec<HeaderValue> = allowed_origins
                 .iter()
                 .map(|o| {
                     o.parse::<HeaderValue>()
