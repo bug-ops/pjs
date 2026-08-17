@@ -26,17 +26,35 @@ static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
 /// # Errors
 ///
 /// Returns [`PjsError::HttpError`] if `PrometheusBuilder::install_recorder()`
-/// fails. When multiple callers race through the first install, only one
-/// performs the actual install; on error all racing callers observe the error
-/// and the cell stays empty.
+/// fails. The underlying error's `Display` text is logged server-side only,
+/// once per process — callers that surface this error in an HTTP response
+/// (e.g. [`metrics_handler`]) must not leak internal details to the client.
+/// The once-per-process log guard matters because, on failure, the
+/// `OnceLock` stays empty and this closure re-runs on every call; without
+/// the guard, a sustained failure would log at ERROR on every call, and
+/// `metrics_handler` calls this on every unauthenticated, unrate-limited
+/// request to `/metrics`. When multiple callers race through the first
+/// install, only one performs the actual install; on error all racing
+/// callers observe the error and the cell stays empty.
 pub fn install_global_recorder() -> Result<PrometheusHandle, PjsError> {
     RECORDER
         .get_or_try_init(|| {
             PrometheusBuilder::new().install_recorder().map_err(|e| {
-                PjsError::HttpError(format!("failed to install Prometheus recorder: {e}"))
+                log_recorder_build_failure_once(&e);
+                PjsError::HttpError("failed to install metrics recorder".to_string())
             })
         })
         .cloned()
+}
+
+/// Log once (per process) the raw error from `PrometheusBuilder::install_recorder()`,
+/// so a sustained failure doesn't flood logs at ERROR on every retry — see
+/// [`install_global_recorder`]'s `# Errors` section for why the guard is needed.
+fn log_recorder_build_failure_once(e: &impl std::fmt::Display) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::error!(error = %e, "failed to install Prometheus recorder (logged once)");
+    });
 }
 
 /// Return an axum handler that renders current Prometheus metrics.
@@ -65,24 +83,11 @@ pub async fn metrics_handler() -> impl axum::response::IntoResponse {
                         .expect("infallible empty response")
                 })
         }
-        Err(e) => {
-            log_recorder_install_failure_once(&e);
-            axum::response::Response::builder()
-                .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body(axum::body::Body::from("metrics recorder unavailable"))
-                .expect("infallible error response")
-        }
+        Err(_) => axum::response::Response::builder()
+            .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+            .body(axum::body::Body::from("metrics recorder unavailable"))
+            .expect("infallible error response"),
     }
-}
-
-/// Log once (per process) that the Prometheus recorder failed to install, so
-/// a sustained failure doesn't flood logs at ERROR on every request to the
-/// unauthenticated, unrate-limited `/metrics` endpoint.
-fn log_recorder_install_failure_once(e: &PjsError) {
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    WARNED.call_once(|| {
-        tracing::error!(error = %e, "failed to install prometheus recorder (logged once)");
-    });
 }
 
 #[cfg(test)]

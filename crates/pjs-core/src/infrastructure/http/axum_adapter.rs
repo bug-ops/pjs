@@ -744,6 +744,27 @@ pub enum PjsError {
     InvalidPriority(String),
 
     /// Generic HTTP-layer error not covered by other variants.
+    ///
+    /// # Invariant
+    ///
+    /// For any construction site reachable while handling a request (i.e.
+    /// the error can end up in a response sent to an HTTP client), the
+    /// wrapped `String` **must never** carry the `Display` output of a
+    /// wrapped or foreign error — that text may contain paths, connection
+    /// details, or other internals. Log the real error server-side (e.g. via
+    /// `tracing::error!`) and construct this variant with a generic,
+    /// client-safe message instead. Known channels that can leak the
+    /// wrapped string to a client: this type's `IntoResponse` implementation
+    /// (below), and any handler that builds a response body directly from
+    /// the error (e.g. `metrics_handler` in
+    /// [`crate::infrastructure::http::metrics`], which bypasses
+    /// `IntoResponse`).
+    ///
+    /// The construction sites in `build_cors_layer` (private, this module)
+    /// are the intentional exemption: they run at router-build time from
+    /// operator-supplied config, before any request is served, and their
+    /// `PjsError` is never routed into a response — a build failure aborts
+    /// server startup.
     #[error("HTTP error: {0}")]
     HttpError(String),
 }
