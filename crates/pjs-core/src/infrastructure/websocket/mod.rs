@@ -235,6 +235,12 @@ pub struct WebSocketStreamSession {
     pub client_metrics: ClientMetrics,
     /// Rate-limit guard scoped to this session, if installed.
     pub rate_limit_guard: Option<RateLimitGuard>,
+    /// Handle to abort the per-session frame-streaming task on teardown.
+    ///
+    /// Not `pub`: only ever set and read within this module, which keeps
+    /// this session-lifecycle detail out of the public struct-literal
+    /// surface.
+    stream_task: Option<tokio::task::AbortHandle>,
 }
 
 /// Client performance metrics for adaptive streaming
@@ -377,6 +383,7 @@ impl AdaptiveStreamController {
             acknowledged_frames: Vec::new(),
             client_metrics: ClientMetrics::default(),
             rate_limit_guard: None, // Will be set when connection is established
+            stream_task: None,      // Set when streaming starts
         };
 
         self.sessions
@@ -400,9 +407,31 @@ impl AdaptiveStreamController {
         let frame_tx = self.frame_tx.clone();
         let plan = session.plan.clone();
 
-        tokio::spawn(async move {
-            if let Err(e) = Self::stream_frames(session_id, plan, frame_tx).await {
+        let task_session_id = session_id.clone();
+        let handle = tokio::spawn(async move {
+            if let Err(e) = Self::stream_frames(task_session_id, plan, frame_tx).await {
                 error!("Error streaming frames: {}", e);
+            }
+        });
+
+        // Keep an abort handle so the task can be cancelled on session teardown,
+        // and supervise the join handle to surface panics that would otherwise
+        // be silently swallowed by the runtime. Abort any previous task first —
+        // a repeated start_streaming call for the same session would otherwise
+        // overwrite the handle and leak the earlier task.
+        if let Some(previous) = session.stream_task.replace(handle.abort_handle()) {
+            previous.abort();
+        }
+        tokio::spawn(async move {
+            match handle.await {
+                Ok(()) => {}
+                Err(join_err) if join_err.is_panic() => {
+                    error!(
+                        "Streaming task panicked for session {}: {}",
+                        session_id, join_err
+                    );
+                }
+                Err(_) => {} // task was aborted — expected on session teardown
             }
         });
 
@@ -541,13 +570,17 @@ impl AdaptiveStreamController {
     /// ```
     pub async fn remove_session(&self, session_id: &str) -> bool {
         let mut sessions = self.sessions.write().await;
-        let removed = sessions.remove(session_id).is_some();
-        if removed {
-            info!("Removed streaming session: {}", session_id);
-        } else {
-            debug!("remove_session called on unknown id: {}", session_id);
+        let removed = sessions.remove(session_id);
+        match &removed {
+            Some(session) => {
+                if let Some(abort_handle) = &session.stream_task {
+                    abort_handle.abort();
+                }
+                info!("Removed streaming session: {}", session_id);
+            }
+            None => debug!("remove_session called on unknown id: {}", session_id),
         }
-        removed
+        removed.is_some()
     }
 
     /// Clean up expired sessions
@@ -558,6 +591,9 @@ impl AdaptiveStreamController {
         sessions.retain(|id, session| {
             let expired = now.duration_since(session.created_at) > max_age;
             if expired {
+                if let Some(abort_handle) = &session.stream_task {
+                    abort_handle.abort();
+                }
                 info!("Cleaning up expired session: {}", id);
             }
             !expired
@@ -631,6 +667,65 @@ mod tests {
         let session = sessions.get(&session_id).unwrap();
         assert_eq!(session.acknowledged_frames, vec![0]);
         assert_eq!(session.client_metrics.average_processing_time_ms, 50.0);
+    }
+
+    /// Proves `remove_session` actually stops the streaming task rather
+    /// than merely dropping the session's bookkeeping entry: a long plan
+    /// is aborted before it can send every frame or the completion
+    /// message, instead of running to completion in the background.
+    #[tokio::test]
+    async fn test_remove_session_aborts_streaming_task_before_completion() {
+        let controller = AdaptiveStreamController::new();
+        let session_id = controller
+            .create_session(json!({"test": "data"}), StreamOptions::default())
+            .await
+            .unwrap();
+
+        // Long enough (10ms/frame) that the task is still far from done
+        // when we abort it immediately below.
+        {
+            let mut sessions = controller.sessions.write().await;
+            let session = sessions.get_mut(&session_id).unwrap();
+            session.plan = (0..200)
+                .map(|_| StreamFrame {
+                    data: json!({}),
+                    priority: Priority::HIGH,
+                    metadata: std::collections::HashMap::new(),
+                })
+                .collect();
+        }
+
+        let mut frames_rx = controller.subscribe_frames();
+
+        controller.start_streaming(&session_id).await.unwrap();
+        assert!(controller.remove_session(&session_id).await);
+
+        // Drain whatever the task managed to emit before the abort took
+        // effect, for a window far shorter than the full 200-frame plan
+        // (~2s) would take to complete on its own.
+        let mut saw_complete = false;
+        let mut frame_count = 0;
+        let drain_deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        while tokio::time::Instant::now() < drain_deadline {
+            match tokio::time::timeout(Duration::from_millis(20), frames_rx.recv()).await {
+                Ok(Ok((_, WsMessage::StreamComplete { .. }))) => {
+                    saw_complete = true;
+                    break;
+                }
+                Ok(Ok(_)) => frame_count += 1,
+                Ok(Err(_)) => break, // channel closed
+                Err(_) => {}         // no message in this slice; keep polling
+            }
+        }
+
+        assert!(
+            !saw_complete,
+            "streaming task must not run to completion after remove_session aborts it"
+        );
+        assert!(
+            frame_count < 200,
+            "streaming task must stop well short of the full plan once aborted, sent {frame_count} frames"
+        );
     }
 
     #[test]

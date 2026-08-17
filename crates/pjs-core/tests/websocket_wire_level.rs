@@ -578,3 +578,107 @@ async fn test_wire_stalled_write_times_out_and_closes_connection() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
+
+/// Negative control for [`test_wire_stalled_write_times_out_and_closes_connection`].
+///
+/// Reuses that test's exact stall setup (large frame, non-reading client)
+/// but with a `write_timeout` far longer than the 150ms one the sibling
+/// test uses. Asserts both halves of the causal claim: the connection
+/// stays open through an 800ms observation window (proving a closure
+/// for some unrelated reason, e.g. rejecting the large inbound frame,
+/// isn't what's happening), and it does eventually close, but not
+/// before this test's own `write_timeout` elapses (proving the stalled
+/// write was actually reached rather than the observation window simply
+/// expiring before the write phase began, and that closure is genuinely
+/// gated on `write_timeout`).
+#[tokio::test]
+async fn test_wire_stalled_write_stays_open_before_write_timeout() {
+    let write_timeout = Duration::from_secs(5);
+    let config = RateLimitConfig {
+        max_frame_size: 64 * 1024 * 1024,
+        write_timeout,
+        ..Default::default()
+    };
+    let (addr, transport) =
+        spawn_ws_test_server_with(AxumWebSocketTransport::with_rate_limit_config(config)).await;
+
+    let (mut ws, _) = connect_async(ws_url(addr))
+        .await
+        .expect("WebSocket handshake failed");
+
+    let big_data = "x".repeat(32 * 1024 * 1024);
+    let init = json!({
+        "type": "StreamInit",
+        "data": {
+            "session_id": "ignored",
+            "data": big_data,
+            "options": {
+                "max_frame_size": 64 * 1024 * 1024,
+                "client_fps": null,
+                "compression": false,
+                "priority_mapping": null
+            }
+        }
+    });
+
+    let write_start = tokio::time::Instant::now();
+    ws.send(Message::Text(init.to_string().into()))
+        .await
+        .expect("send StreamInit");
+
+    // Never read from `ws` again, and keep it alive — same rationale as the
+    // sibling test: an undrained connection keeps the server's outbound
+    // write genuinely stalled.
+    let _ws = ws;
+
+    // Wait for the server to register the connection before asserting it
+    // stays registered.
+    let established_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while transport.active_connection_count().await == 0 {
+        assert!(
+            tokio::time::Instant::now() < established_deadline,
+            "timed out waiting for the server to register the connection"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Poll for a window well short of the 5s write_timeout above (and well
+    // above the sibling test's 150ms write_timeout), asserting the
+    // connection never closes during it.
+    let patience = Duration::from_millis(800);
+    let observation_deadline = tokio::time::Instant::now() + patience;
+    while tokio::time::Instant::now() < observation_deadline {
+        assert_eq!(
+            transport.active_connection_count().await,
+            1,
+            "connection must stay open while the stalled write is still within write_timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Second half of the causal claim: the connection does eventually
+    // close (proving the stalled-write phase was actually reached, not
+    // skipped past by a too-short observation window above), and it does
+    // not close before `write_timeout` elapses (proving that closure,
+    // once it happens, is caused by the write timeout and not some
+    // unrelated path). A 15s deadline is generous relative to the 5s
+    // write_timeout so a hang here fails loudly instead of silently.
+    let close_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while transport.active_connection_count().await != 0 {
+        assert!(
+            tokio::time::Instant::now() < close_deadline,
+            "connection with a {:?} write_timeout must eventually close once truly stalled",
+            write_timeout
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let elapsed = write_start.elapsed();
+    assert!(
+        elapsed >= write_timeout,
+        "connection closed after {:?}, before its {:?} write_timeout could have elapsed — \
+         closure must not happen for a reason unrelated to the write timeout",
+        elapsed,
+        write_timeout
+    );
+}

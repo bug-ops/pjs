@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, warn};
@@ -48,6 +49,18 @@ const OUTGOING_QUEUE_CAPACITY: usize = 1000;
 /// predictable constant regardless of individual message size.
 const MAX_QUEUED_OUTGOING_BYTES: usize = 16 * 1024 * 1024;
 
+/// How often the background sweep spawned by
+/// [`AxumWebSocketTransport::with_rate_limit_config`] checks for streaming
+/// sessions older than [`SESSION_MAX_AGE`].
+const SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Maximum age of a controller-tracked streaming session before the
+/// background sweep removes it (aborting its streaming task) even if the
+/// owning connection's teardown never ran, e.g. a broadcast-lagged frame
+/// receiver or a session created but never associated with a live
+/// connection.
+const SESSION_MAX_AGE: Duration = Duration::from_secs(3600);
+
 /// Axum WebSocket transport implementation
 pub struct AxumWebSocketTransport {
     controller: Arc<AdaptiveStreamController>,
@@ -55,6 +68,10 @@ pub struct AxumWebSocketTransport {
     active_connections: Arc<RwLock<Vec<String>>>,
     /// Per-connection outgoing senders; keyed by connection ID
     outgoing_channels: Arc<RwLock<HashMap<String, ByteBoundedSender<String>>>>,
+    /// Streaming session IDs created by each connection (via `StreamInit`),
+    /// so [`Self::handle_socket`]'s teardown can abort the right sessions'
+    /// streaming tasks when the connection closes.
+    connection_sessions: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// Per-IP rate limiter applied to upgrade requests, connection establishment,
     /// and inbound application-level messages.
     rate_limiter: Arc<WebSocketRateLimiter>,
@@ -72,11 +89,34 @@ impl AxumWebSocketTransport {
     ///
     /// Use [`RateLimitConfig::high_traffic`] or [`RateLimitConfig::low_resource`]
     /// for preset profiles, or construct a custom [`RateLimitConfig`].
+    ///
+    /// Spawns a background sweep that periodically aborts streaming
+    /// sessions older than `SESSION_MAX_AGE` via
+    /// [`AdaptiveStreamController::cleanup_expired_sessions`]; the sweep
+    /// holds only a [`std::sync::Weak`] reference to the controller, so it
+    /// exits once every `Arc<AdaptiveStreamController>` (including this
+    /// transport's own) is dropped, instead of keeping the controller alive
+    /// forever.
     pub fn with_rate_limit_config(config: RateLimitConfig) -> Self {
+        let controller = Arc::new(AdaptiveStreamController::new());
+
+        let weak_controller = Arc::downgrade(&controller);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SESSION_CLEANUP_INTERVAL);
+            loop {
+                interval.tick().await;
+                let Some(controller) = weak_controller.upgrade() else {
+                    break;
+                };
+                controller.cleanup_expired_sessions(SESSION_MAX_AGE).await;
+            }
+        });
+
         Self {
-            controller: Arc::new(AdaptiveStreamController::new()),
+            controller,
             active_connections: Arc::new(RwLock::new(Vec::new())),
             outgoing_channels: Arc::new(RwLock::new(HashMap::new())),
+            connection_sessions: Arc::new(RwLock::new(HashMap::new())),
             rate_limiter: Arc::new(WebSocketRateLimiter::new(config)),
         }
     }
@@ -298,7 +338,24 @@ impl AxumWebSocketTransport {
         self.outgoing_channels.write().await.remove(&connection_id);
         let mut connections = self.active_connections.write().await;
         connections.retain(|conn_id| *conn_id != connection_id);
+        drop(connections);
         drop(guard);
+
+        // Abort every streaming task this connection started — otherwise a
+        // session's frame-streaming task keeps running (and its abort
+        // handle stays unreachable) after the client that requested it has
+        // disconnected.
+        if let Some(session_ids) = self
+            .connection_sessions
+            .write()
+            .await
+            .remove(&connection_id)
+        {
+            for session_id in session_ids {
+                self.controller.remove_session(&session_id).await;
+            }
+        }
+
         info!("WebSocket connection closed for {}", client_ip);
     }
 
@@ -342,6 +399,12 @@ impl AxumWebSocketTransport {
             } => {
                 let session_id = self.controller.create_session(data, options).await?;
                 self.controller.start_streaming(&session_id).await?;
+                self.connection_sessions
+                    .write()
+                    .await
+                    .entry(connection_id.clone())
+                    .or_default()
+                    .push(session_id);
                 info!(
                     "Created new streaming session for connection {}",
                     connection_id
