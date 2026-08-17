@@ -757,7 +757,7 @@ pub enum PjsError {
     /// wrapped string to a client: this type's `IntoResponse` implementation
     /// (below), and any handler that builds a response body directly from
     /// the error (e.g. `metrics_handler` in
-    /// [`crate::infrastructure::http::metrics`], which bypasses
+    /// `crate::infrastructure::http::metrics`, which bypasses
     /// `IntoResponse`).
     ///
     /// The construction sites in `build_cors_layer` (private, this module)
