@@ -4,11 +4,20 @@ use crate::domain::{
     DomainError, DomainResult,
     entities::{Frame, Stream, stream::StreamConfig},
     events::{DomainEvent, SessionState},
+    ports::{SystemTimeProvider, TimeProvider},
     value_objects::{JsonData, Priority, SessionId, StreamId},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+
+/// Default [`TimeProvider`] used when a session is constructed without an
+/// explicit one, and when a deserialized session needs one filled back in
+/// (trait objects are not `Deserialize`, so the field is skipped on the wire).
+fn default_time_provider() -> Arc<dyn TimeProvider> {
+    Arc::new(SystemTimeProvider)
+}
 
 /// Custom serde for SessionId within aggregates
 mod serde_session_id {
@@ -111,7 +120,7 @@ pub struct SessionStats {
 }
 
 /// StreamSession aggregate root - manages multiple prioritized streams
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StreamSession {
     #[serde(with = "serde_session_id")]
     id: SessionId,
@@ -132,12 +141,70 @@ pub struct StreamSession {
     client_info: Option<String>,
     user_agent: Option<String>,
     ip_address: Option<String>,
+
+    /// Source of "now" for expiry, timeout, and event timestamps.
+    ///
+    /// Not part of the wire format: a `dyn TimeProvider` cannot be
+    /// (de)serialized, so it is skipped and restored to [`SystemTimeProvider`]
+    /// on deserialize — matching the pre-existing behavior where a
+    /// deserialized session always used real system time.
+    #[serde(skip, default = "default_time_provider")]
+    time_provider: Arc<dyn TimeProvider>,
+}
+
+impl std::fmt::Debug for StreamSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamSession")
+            .field("id", &self.id)
+            .field("state", &self.state)
+            .field("config", &self.config)
+            .field("stats", &self.stats)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .field("expires_at", &self.expires_at)
+            .field("completed_at", &self.completed_at)
+            .field("streams", &self.streams)
+            .field("pending_events", &self.pending_events)
+            .field("client_info", &self.client_info)
+            .field("user_agent", &self.user_agent)
+            .field("ip_address", &self.ip_address)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StreamSession {
-    /// Create new session
+    /// Create new session, using real system time for expiry and event timestamps.
     pub fn new(config: SessionConfig) -> Self {
-        let now = Utc::now();
+        Self::with_time_provider(config, default_time_provider())
+    }
+
+    /// Create new session with an explicit [`TimeProvider`].
+    ///
+    /// Lets callers inject a fake clock so that *session-level* expiry,
+    /// timeout, and timestamp-ordering logic (`created_at`, `updated_at`,
+    /// `expires_at`, and event timestamps on `StreamSession` itself) can be
+    /// tested deterministically instead of relying on real wall-clock
+    /// delays. Child [`Stream`] entities are not clock-injected — they still
+    /// timestamp themselves via the real system clock, so a session with an
+    /// injected fake clock runs two independent time domains at once (e.g.
+    /// `Stream::duration()` reflects real elapsed time even when the owning
+    /// session's `updated_at` does not advance).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::domain::aggregates::stream_session::{SessionConfig, StreamSession};
+    /// use pjson_rs::domain::ports::SystemTimeProvider;
+    /// use std::sync::Arc;
+    ///
+    /// let session = StreamSession::with_time_provider(
+    ///     SessionConfig::default(),
+    ///     Arc::new(SystemTimeProvider),
+    /// );
+    /// assert!(!session.is_expired());
+    /// ```
+    pub fn with_time_provider(config: SessionConfig, time_provider: Arc<dyn TimeProvider>) -> Self {
+        let now = time_provider.now();
         let expires_at = now + chrono::Duration::seconds(config.session_timeout_seconds as i64);
 
         Self {
@@ -154,6 +221,7 @@ impl StreamSession {
             client_info: None,
             user_agent: None,
             ip_address: None,
+            time_provider,
         }
     }
 
@@ -209,7 +277,7 @@ impl StreamSession {
 
     /// Check if session is expired
     pub fn is_expired(&self) -> bool {
-        Utc::now() > self.expires_at
+        self.time_provider.now() > self.expires_at
     }
 
     /// Check if session is active
@@ -250,7 +318,7 @@ impl StreamSession {
         self.add_event(DomainEvent::StreamConfigUpdated {
             session_id: self.id,
             stream_id,
-            timestamp: Utc::now(),
+            timestamp: self.time_provider.now(),
         });
 
         Ok(())
@@ -282,7 +350,7 @@ impl StreamSession {
             self.add_event(DomainEvent::FramesBatched {
                 session_id: self.id,
                 frame_count: frames.len(),
-                timestamp: Utc::now(),
+                timestamp: self.time_provider.now(),
             });
         }
 
@@ -298,7 +366,7 @@ impl StreamSession {
 
                 self.add_event(DomainEvent::SessionActivated {
                     session_id: self.id,
-                    timestamp: Utc::now(),
+                    timestamp: self.time_provider.now(),
                 });
 
                 Ok(())
@@ -343,7 +411,7 @@ impl StreamSession {
         self.add_event(DomainEvent::StreamCreated {
             session_id: self.id,
             stream_id,
-            timestamp: Utc::now(),
+            timestamp: self.time_provider.now(),
         });
 
         Ok(stream_id)
@@ -362,7 +430,7 @@ impl StreamSession {
         self.add_event(DomainEvent::StreamStarted {
             session_id: self.id,
             stream_id,
-            timestamp: Utc::now(),
+            timestamp: self.time_provider.now(),
         });
 
         Ok(())
@@ -393,7 +461,7 @@ impl StreamSession {
         self.add_event(DomainEvent::StreamCompleted {
             session_id: self.id,
             stream_id,
-            timestamp: Utc::now(),
+            timestamp: self.time_provider.now(),
         });
 
         Ok(())
@@ -418,7 +486,7 @@ impl StreamSession {
             session_id: self.id,
             stream_id,
             error,
-            timestamp: Utc::now(),
+            timestamp: self.time_provider.now(),
         });
 
         Ok(())
@@ -469,7 +537,7 @@ impl StreamSession {
             self.add_event(DomainEvent::FramesBatched {
                 session_id: self.id,
                 frame_count: all_frames.len(),
-                timestamp: Utc::now(),
+                timestamp: self.time_provider.now(),
             });
         }
 
@@ -497,12 +565,12 @@ impl StreamSession {
                 }
 
                 self.state = SessionState::Completed;
-                self.completed_at = Some(Utc::now());
+                self.completed_at = Some(self.time_provider.now());
                 self.update_timestamp();
 
                 self.add_event(DomainEvent::SessionClosed {
                     session_id: self.id,
-                    timestamp: Utc::now(),
+                    timestamp: self.time_provider.now(),
                 });
 
                 Ok(())
@@ -523,7 +591,7 @@ impl StreamSession {
         // Force close regardless of current state
         let old_state = self.state.clone();
         self.state = SessionState::Failed;
-        self.completed_at = Some(Utc::now());
+        self.completed_at = Some(self.time_provider.now());
         self.update_timestamp();
 
         // Force cancel all streams with timeout reason
@@ -539,7 +607,7 @@ impl StreamSession {
             session_id: self.id,
             original_state: old_state,
             timeout_duration: self.config.session_timeout_seconds,
-            timestamp: Utc::now(),
+            timestamp: self.time_provider.now(),
         });
 
         Ok(true)
@@ -560,7 +628,7 @@ impl StreamSession {
             session_id: self.id,
             additional_seconds,
             new_expires_at: self.expires_at,
-            timestamp: Utc::now(),
+            timestamp: self.time_provider.now(),
         });
 
         Ok(())
@@ -608,7 +676,7 @@ impl StreamSession {
             active_streams: active_count,
             failed_streams: failed_count,
             is_expired: self.is_expired(),
-            uptime_seconds: (Utc::now() - self.created_at).num_seconds(),
+            uptime_seconds: (self.time_provider.now() - self.created_at).num_seconds(),
         }
     }
 
@@ -619,7 +687,7 @@ impl StreamSession {
 
     /// Private helper: Update timestamp
     fn update_timestamp(&mut self) {
-        self.updated_at = Utc::now();
+        self.updated_at = self.time_provider.now();
     }
 }
 

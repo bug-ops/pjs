@@ -13,13 +13,49 @@ use pjson_rs::domain::{
     aggregates::{StreamSession, stream_session::SessionConfig},
     entities::stream::StreamConfig as EntityStreamConfig,
     events::{DomainEvent, SessionState},
+    ports::TimeProvider,
     value_objects::{JsonData, StreamId},
 };
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 // Test fixtures
 fn default_config() -> SessionConfig {
     SessionConfig::default()
+}
+
+/// Fake clock for deterministic expiry/timeout/timestamp assertions.
+///
+/// Replaces `std::thread::sleep` in tests that need "now" to advance: the
+/// test controls exactly how far the clock moves instead of hoping a real
+/// delay was long enough. Share one instance behind `Arc<ManualTimeProvider>`
+/// between the test and the `StreamSession` it drives — the outer `Arc`
+/// (required to satisfy `Arc<dyn TimeProvider>`) is the only indirection
+/// needed, so this type does not implement `Clone`.
+struct ManualTimeProvider {
+    now: Mutex<chrono::DateTime<chrono::Utc>>,
+}
+
+impl ManualTimeProvider {
+    /// Seeds from a fixed instant (the Unix epoch), not real wall-clock
+    /// time, so the fake clock's starting value is itself deterministic.
+    fn new() -> Self {
+        Self {
+            now: Mutex::new(
+                chrono::DateTime::from_timestamp(0, 0).expect("epoch is a valid timestamp"),
+            ),
+        }
+    }
+
+    fn advance(&self, duration: chrono::Duration) {
+        *self.now.lock().unwrap() += duration;
+    }
+}
+
+impl TimeProvider for ManualTimeProvider {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        *self.now.lock().unwrap()
+    }
 }
 
 fn custom_config(max_streams: usize, timeout: u64) -> SessionConfig {
@@ -170,15 +206,15 @@ fn test_activate_from_active_fails() {
 
 #[test]
 fn test_activate_updates_timestamp() {
-    let mut session = StreamSession::new(default_config());
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(default_config(), clock.clone());
     let initial_update = session.updated_at();
 
-    // Small delay to ensure timestamp difference
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    clock.advance(chrono::Duration::milliseconds(10));
 
     session.activate().unwrap();
 
-    assert!(session.updated_at() >= initial_update);
+    assert!(session.updated_at() > initial_update);
 }
 
 // ============================================================================
@@ -495,11 +531,11 @@ fn test_is_expired_initially_false() {
 #[test]
 fn test_is_active_expired_session() {
     let config = custom_config(10, 0); // Zero timeout for immediate expiry
-    let mut session = StreamSession::new(config);
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    // Small delay to ensure expiration
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    clock.advance(chrono::Duration::milliseconds(10));
 
     // Session is expired, so not active
     assert!(session.is_expired());
@@ -509,10 +545,11 @@ fn test_is_active_expired_session() {
 #[test]
 fn test_force_close_expired_success() {
     let config = custom_config(10, 0);
-    let mut session = StreamSession::new(config);
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    clock.advance(chrono::Duration::milliseconds(10));
 
     let result = session.force_close_expired();
 
@@ -537,10 +574,11 @@ fn test_force_close_non_expired_no_op() {
 #[test]
 fn test_force_close_expired_generates_event() {
     let config = custom_config(10, 0);
-    let mut session = StreamSession::new(config);
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    clock.advance(chrono::Duration::milliseconds(10));
     session.take_events(); // Clear previous events
 
     session.force_close_expired().unwrap();
@@ -556,15 +594,16 @@ fn test_force_close_expired_generates_event() {
 fn test_force_close_expired_clears_streams() {
     // Use longer timeout to create stream before expiration
     let config = custom_config(10, 1); // 1 second timeout
-    let mut session = StreamSession::new(config);
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
     // Create stream while session is still active
     let _stream_id = session.create_stream(json_str("test", "data")).unwrap();
     assert_eq!(session.streams().len(), 1);
 
-    // Wait for expiration
-    std::thread::sleep(std::time::Duration::from_millis(1100));
+    // Advance the clock past expiration
+    clock.advance(chrono::Duration::milliseconds(1100));
 
     session.force_close_expired().unwrap();
 
@@ -602,10 +641,11 @@ fn test_extend_timeout_generates_event() {
 #[test]
 fn test_extend_timeout_on_expired_fails() {
     let config = custom_config(10, 0);
-    let mut session = StreamSession::new(config);
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    clock.advance(chrono::Duration::milliseconds(10));
 
     let result = session.extend_timeout(1800);
 
@@ -684,10 +724,11 @@ fn test_health_check_with_active_streams() {
 #[test]
 fn test_health_check_expired_session() {
     let config = custom_config(10, 0);
-    let mut session = StreamSession::new(config);
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    clock.advance(chrono::Duration::milliseconds(10));
 
     let health = session.health_check();
 
@@ -715,14 +756,15 @@ fn test_set_client_info() {
 
 #[test]
 fn test_set_client_info_updates_timestamp() {
-    let mut session = StreamSession::new(default_config());
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(default_config(), clock.clone());
     let initial_update = session.updated_at();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    clock.advance(chrono::Duration::milliseconds(10));
 
     session.set_client_info("Test Client".to_string(), None, None);
 
-    assert!(session.updated_at() >= initial_update);
+    assert!(session.updated_at() > initial_update);
 }
 
 // ============================================================================
@@ -738,16 +780,17 @@ fn test_duration_none_when_not_completed() {
 
 #[test]
 fn test_duration_some_when_completed() {
-    let mut session = StreamSession::new(default_config());
+    let clock = Arc::new(ManualTimeProvider::new());
+    let mut session = StreamSession::with_time_provider(default_config(), clock.clone());
     session.activate().unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    clock.advance(chrono::Duration::milliseconds(10));
 
     session.close().unwrap();
 
     let duration = session.duration();
     assert!(duration.is_some());
-    assert!(duration.unwrap().num_milliseconds() >= 10);
+    assert_eq!(duration.unwrap().num_milliseconds(), 10);
 }
 
 // ============================================================================
