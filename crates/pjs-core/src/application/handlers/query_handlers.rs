@@ -1726,6 +1726,50 @@ mod tests {
         assert_eq!(ids, vec![many_id, few_id, none_id]);
     }
 
+    #[tokio::test]
+    async fn test_search_sessions_sort_by_total_bytes_descending() {
+        use crate::domain::value_objects::{JsonData, Priority};
+
+        let repository = Arc::new(MockRepository::new());
+
+        // Session with a real byte-carrying patch frame batch.
+        let mut heavy = make_session(None);
+        let heavy_stream = heavy
+            .create_stream(JsonData::String(
+                "hello world payload, quite a few bytes here".to_owned(),
+            ))
+            .unwrap();
+        heavy.start_stream(heavy_stream).unwrap();
+        heavy
+            .create_stream_patch_frames(heavy_stream, Priority::LOW, 100)
+            .unwrap();
+        let heavy_id = heavy.id();
+
+        // Session with no streams, so total_bytes stays zero.
+        let empty = make_session(None);
+        let empty_id = empty.id();
+
+        assert!(heavy.stats().total_bytes > empty.stats().total_bytes);
+
+        repository.add_session(heavy);
+        repository.add_session(empty);
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: Some(SessionSortField::TotalBytes),
+            sort_order: Some(SortOrder::Descending),
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        let ids: Vec<_> = response.sessions.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec![heavy_id, empty_id]);
+    }
+
     /// Deterministic clock letting tests control `created_at`/`updated_at`
     /// ordering without relying on wall-clock sleeps. Each call to `now()`
     /// advances the clock so successive sessions/mutations get distinct,
