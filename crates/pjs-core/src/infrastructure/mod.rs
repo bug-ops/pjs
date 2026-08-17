@@ -4,6 +4,7 @@
 //! message queues, WebSocket transport, and other external systems.
 
 pub mod adapters;
+pub mod bounded_channel;
 #[cfg(feature = "http-server")]
 pub mod http;
 pub mod integration;
@@ -13,6 +14,9 @@ pub mod schema_repository;
 pub mod websocket;
 
 pub use adapters::*;
+pub use bounded_channel::{
+    ByteBoundedSender, Envelope, SendError, TrySendError, byte_bounded_channel,
+};
 #[cfg(feature = "http-server")]
 pub use http::*;
 pub use integration::*;
