@@ -26,13 +26,8 @@ cargo bench -p pjs-bench -- --baseline before
 
 ## SIMD Feature Flags
 
-Available optimizations (mutually exclusive except simd-auto):
-
-- `simd-auto` - Auto-detect best SIMD for platform (default)
-- `simd-sse42` - SSE 4.2
-- `simd-avx2` - AVX2
-- `simd-avx512` - AVX-512
-- `simd-neon` - ARM NEON
+- `simd-auto` - Enable the sonic-rs SIMD backend, runtime-dispatched to the best available instruction set (AVX-512/AVX2/SSE4.2/NEON) for the host CPU (default)
+- `simd-avx512` - x86_64-only. Additionally forwards to `sonic-rs/avx512`; requires `RUSTFLAGS="-C target-cpu=native"` to take effect
 
 ## Memory Safety
 

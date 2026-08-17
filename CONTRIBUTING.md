@@ -405,8 +405,11 @@ crates/
 PJS uses feature flags to minimize compile times and binary size. Be mindful when adding dependencies:
 
 ### Core Features (Default)
-- `simd-auto` - Auto-detect SIMD support
+- `simd-auto` - Auto-detect SIMD support at runtime (x86_64 and aarch64)
 - `schema-validation` - Schema validation engine
+
+### SIMD Features
+- `simd-avx512` - Forwards to `sonic-rs/avx512` (x86_64-only; requires `RUSTFLAGS="-C target-cpu=native"` to take effect)
 
 ### Optional Features
 - `compression` - Schema-based compression

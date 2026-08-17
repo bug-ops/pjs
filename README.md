@@ -217,11 +217,8 @@ cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin simple-demo-server --
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `simd-auto` | Auto-detect SIMD support at runtime | ✅ Yes |
-| `simd-avx2` | Force AVX2 SIMD path | No |
-| `simd-avx512` | Force AVX-512 SIMD path (sonic-rs) | No |
-| `simd-sse42` | Force SSE4.2 SIMD path | No |
-| `simd-neon` | Force ARM NEON SIMD path | No |
+| `simd-auto` | Enable the sonic-rs SIMD parser backend, which dispatches at runtime to the best available instruction set (AVX-512/AVX2/SSE4.2/NEON) for the host CPU | ✅ Yes |
+| `simd-avx512` | x86_64-only. Additionally forwards to `sonic-rs/avx512`; requires `RUSTFLAGS="-C target-cpu=native"` (or explicit `-C target-feature=+avx512f`) to actually take effect | No |
 | `schema-validation` | Schema validation engine | ✅ Yes |
 | `compression` | zlib/gzip/brotli/zstd decompression with per-session dictionaries | ✅ Yes |
 | `partial-parse` | Streaming partial JSON parsing (`jiter` backend) | No |
