@@ -4,12 +4,7 @@
 pub mod auth;
 pub mod axum_adapter;
 pub mod axum_extension;
-#[cfg(all(
-    feature = "http-server",
-    feature = "compression",
-    not(target_arch = "wasm32")
-))]
-pub mod dictionary;
+pub mod handlers;
 #[cfg(feature = "metrics")]
 pub mod metrics;
 pub mod middleware;
