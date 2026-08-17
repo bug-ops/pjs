@@ -29,7 +29,7 @@
 
 use crate::priority_assignment::PriorityAssigner;
 use crate::priority_config::PriorityConfigBuilder;
-use crate::security::{SecurityConfig, validate_input_size};
+use crate::security::{SecurityConfig, validate_input_size, validate_json_structure};
 use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FrameType;
 use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
@@ -321,6 +321,13 @@ impl PriorityStream {
                 return Err(JsValue::from_str(&format!("Parse error: {}", e)));
             }
         };
+
+        // Security: Validate array/object sizes at every nesting level
+        if let Err(e) = validate_json_structure(&value, &self.security_config) {
+            let error_msg = e.to_string();
+            self.emit_error(&error_msg);
+            return Err(JsValue::from_str(&error_msg));
+        }
 
         let json_data: JsonData = value.into();
 
@@ -647,6 +654,43 @@ mod wasm_tests {
         let stream = PriorityStream::with_config(config);
         let result = stream.start(r#"{"user_id": 123}"#);
         assert!(result.is_ok());
+    }
+
+    #[wasm_bindgen_test]
+    fn test_stream_start_array_too_large_emits_error() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use wasm_bindgen::closure::Closure;
+
+        let security = SecurityConfig::new().set_max_array_elements(2);
+        let mut stream = PriorityStream::new();
+        stream.set_security_config(security);
+
+        let received: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let received_clone = received.clone();
+        let callback = Closure::wrap(Box::new(move |err: JsValue| {
+            *received_clone.borrow_mut() = err.as_string();
+        }) as Box<dyn FnMut(JsValue)>);
+        stream.on_error(
+            callback
+                .as_ref()
+                .unchecked_ref::<js_sys::Function>()
+                .clone(),
+        );
+        callback.forget();
+
+        let result = stream.start(r#"{"items": [1, 2, 3]}"#);
+
+        assert!(result.is_err());
+        assert!(
+            received
+                .borrow()
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Array too large"),
+            "Expected onError to fire with array size message, got: {:?}",
+            received.borrow()
+        );
     }
 
     #[wasm_bindgen_test]

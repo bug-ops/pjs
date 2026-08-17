@@ -247,7 +247,15 @@ pub fn validate_input_size(input: &str, config: &SecurityConfig) -> Result<(), S
     Ok(())
 }
 
-/// Validate nesting depth during recursion
+/// Validate nesting depth during recursion.
+///
+/// Currently unused by the WASM entry points (`parser.rs`, `streaming.rs`):
+/// `max_depth` there governs truncation of skeleton/field-extraction recursion
+/// (see `create_skeleton_with_depth`), not rejection, so wiring this in would
+/// silently change `parse`/`generateFrames`/`start` from "truncate deep input"
+/// to "reject deep input" — a JS-visible breaking change. `serde_json::from_str`
+/// also already caps parse-time recursion at ~128 levels, bounding worst-case
+/// depth regardless.
 pub fn validate_depth(current_depth: usize, config: &SecurityConfig) -> Result<(), SecurityError> {
     if current_depth > config.max_depth {
         return Err(SecurityError::MaxDepthExceeded {
@@ -276,6 +284,46 @@ pub fn validate_object_size(count: usize, config: &SecurityConfig) -> Result<(),
             count,
             max: config.max_object_keys,
         });
+    }
+    Ok(())
+}
+
+/// Validate array and object element counts across an entire JSON tree.
+///
+/// [`validate_array_size`] and [`validate_object_size`] only check a single
+/// collection; calling them at the root alone lets an oversized array or object
+/// nested inside a small top-level structure slip through. This walks every
+/// level of `value` and applies both checks there, so the configured
+/// `max_array_elements` and `max_object_keys` limits are enforced everywhere,
+/// not just at the top.
+///
+/// # Examples
+///
+/// ```
+/// use pjs_wasm::security::{validate_json_structure, SecurityConfig};
+///
+/// let config = SecurityConfig::new().set_max_array_elements(2);
+/// let nested = serde_json::json!({ "items": [1, 2, 3] });
+/// assert!(validate_json_structure(&nested, &config).is_err());
+/// ```
+pub fn validate_json_structure(
+    value: &serde_json::Value,
+    config: &SecurityConfig,
+) -> Result<(), SecurityError> {
+    match value {
+        serde_json::Value::Array(arr) => {
+            validate_array_size(arr.len(), config)?;
+            for element in arr {
+                validate_json_structure(element, config)?;
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            validate_object_size(obj.len(), config)?;
+            for val in obj.values() {
+                validate_json_structure(val, config)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -365,6 +413,55 @@ mod tests {
         let config = SecurityConfig::new().set_max_object_keys(100);
         assert!(validate_object_size(50, &config).is_ok());
         assert!(validate_object_size(101, &config).is_err());
+    }
+
+    #[test]
+    fn test_validate_json_structure_nested_array_rejected() {
+        let config = SecurityConfig::new().set_max_array_elements(2);
+        let value = serde_json::json!({ "items": [1, 2, 3] });
+        let result = validate_json_structure(&value, &config);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::ArrayTooLarge { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_json_structure_nested_object_rejected() {
+        let config = SecurityConfig::new().set_max_object_keys(2);
+        let value = serde_json::json!({ "inner": { "a": 1, "b": 2, "c": 3 } });
+        let result = validate_json_structure(&value, &config);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::ObjectTooLarge { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_json_structure_boundary_accepted() {
+        let config = SecurityConfig::new().set_max_array_elements(3);
+        let value = serde_json::json!({ "items": [1, 2, 3] });
+        assert!(validate_json_structure(&value, &config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_json_structure_boundary_plus_one_rejected() {
+        let config = SecurityConfig::new().set_max_array_elements(3);
+        let value = serde_json::json!({ "items": [1, 2, 3, 4] });
+        assert!(validate_json_structure(&value, &config).is_err());
+    }
+
+    #[test]
+    fn test_validate_json_structure_many_small_arrays_accepted() {
+        let config = SecurityConfig::new().set_max_array_elements(3);
+        let value = serde_json::json!({
+            "a": [1, 2, 3],
+            "b": [1, 2, 3],
+            "c": [1, 2, 3],
+        });
+        assert!(validate_json_structure(&value, &config).is_ok());
     }
 
     #[test]

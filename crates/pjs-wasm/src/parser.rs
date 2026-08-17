@@ -6,7 +6,7 @@
 
 use crate::priority_assignment::{PriorityAssigner, group_by_priority, sort_priorities};
 use crate::priority_config::PriorityConfigBuilder;
-use crate::security::{SecurityConfig, validate_input_size};
+use crate::security::{SecurityConfig, validate_input_size, validate_json_structure};
 use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FramePatch;
 use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
@@ -160,6 +160,10 @@ impl PjsParser {
         let value: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
 
+        // Security: Validate array/object sizes at every nesting level
+        validate_json_structure(&value, &self.security_config)
+            .map_err(|e| JsValue::from_str(&format!("Security error: {}", e)))?;
+
         // Convert to domain JsonData
         let json_data: JsonData = value.into();
 
@@ -216,6 +220,10 @@ impl PjsParser {
         // Parse JSON
         let value: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
+
+        // Security: Validate array/object sizes at every nesting level
+        validate_json_structure(&value, &self.security_config)
+            .map_err(|e| JsValue::from_str(&format!("Security error: {}", e)))?;
 
         let json_data: JsonData = value.into();
 
@@ -777,6 +785,126 @@ mod wasm_tests {
         assert!(
             err_str.contains("Security error"),
             "Expected security error, got: {}",
+            err_str
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn test_parse_array_too_large_rejected() {
+        let security = SecurityConfig::new().set_max_array_elements(100);
+        let parser = PjsParser::with_security_config(security);
+
+        let large_array = format!(
+            "[{}]",
+            (0..200)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let result = parser.parse(&large_array);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.as_string().unwrap_or_default();
+        assert!(
+            err_str.contains("Array too large"),
+            "Expected array size error, got: {}",
+            err_str
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn test_parse_nested_array_too_large_rejected() {
+        let security = SecurityConfig::new().set_max_array_elements(100);
+        let parser = PjsParser::with_security_config(security);
+
+        let large_array = format!(
+            "[{}]",
+            (0..200)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let nested = format!(r#"{{"items": {}}}"#, large_array);
+        let result = parser.parse(&nested);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.as_string().unwrap_or_default();
+        assert!(
+            err_str.contains("Array too large"),
+            "Expected array size error, got: {}",
+            err_str
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn test_parse_object_too_many_keys_rejected() {
+        let security = SecurityConfig::new().set_max_object_keys(2);
+        let parser = PjsParser::with_security_config(security);
+
+        let result = parser.parse(r#"{"a": 1, "b": 2, "c": 3}"#);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.as_string().unwrap_or_default();
+        assert!(
+            err_str.contains("Object too large"),
+            "Expected object size error, got: {}",
+            err_str
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn test_generate_frames_array_too_large_rejected() {
+        let security = SecurityConfig::new().set_max_array_elements(100);
+        let parser = PjsParser::with_security_config(security);
+
+        let large_array = format!(
+            "[{}]",
+            (0..200)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let nested = format!(r#"{{"items": {}}}"#, large_array);
+        let result = parser.generate_frames(&nested, 10);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.as_string().unwrap_or_default();
+        assert!(
+            err_str.contains("Array too large"),
+            "Expected array size error, got: {}",
+            err_str
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn test_generate_frames_default_config_rejects_oversized_array() {
+        let parser = PjsParser::new();
+
+        let large_array = format!(
+            "[{}]",
+            (0..20_001)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let nested = format!(r#"{{"items": {}}}"#, large_array);
+        assert!(
+            nested.len() < 10 * 1024 * 1024,
+            "input must stay under the default 10 MB size limit to isolate the array-count check"
+        );
+
+        let result = parser.generate_frames(&nested, 10);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.as_string().unwrap_or_default();
+        assert!(
+            err_str.contains("Array too large"),
+            "Expected default SecurityConfig (10k element limit) to reject a 20k-element array, got: {}",
             err_str
         );
     }
