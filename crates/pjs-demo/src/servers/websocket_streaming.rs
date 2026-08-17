@@ -384,7 +384,7 @@ fn create_demo_frames(data: &JsonValue) -> DomainResult<Vec<pjson_rs::stream::St
     }
 
     // Sort by priority (highest first)
-    frames.sort_by(|a, b| b.priority.value().cmp(&a.priority.value()));
+    frames.sort_by_key(|a| std::cmp::Reverse(a.priority.value()));
 
     Ok(frames)
 }

@@ -1,7 +1,7 @@
 //! E-commerce dataset generation for PJS demonstrations
 
 use super::DatasetSize;
-use rand::Rng;
+use rand::RngExt;
 use serde_json::{Value, json};
 
 const PRODUCT_NAMES: &[&str] = &[
