@@ -10,19 +10,47 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import { existsSync } from 'fs';
-import { resolve } from 'path';
 import { WasmBackend, WasmStreamOptions } from '../../src/transport/wasm-backend.js';
 import { PJSClientConfig, FrameType, Frame, PJSError, Priority } from '../../src/types/index.js';
+import { loadWasmModule } from '../../src/utils/wasm-loader.js';
+import * as wasmLoader from '../../src/utils/wasm-loader.js';
+import { describeWasmPkg, wasmPkgVersion } from './wasm-pkg.js';
 
-// Skip the entire suite when pjs-wasm/pkg is not built
-const wasmPkgAvailable = existsSync(resolve(process.cwd(), 'crates/pjs-wasm/pkg/package.json'))
-  || existsSync(resolve(process.cwd(), '../pjs-wasm/pkg/package.json'));
-const describeWasm = wasmPkgAvailable ? describe : describe.skip;
-
-describeWasm('WasmBackend Integration Tests', () => {
+describeWasmPkg('WasmBackend Integration Tests', () => {
   let backend: WasmBackend;
   let config: Required<PJSClientConfig>;
+  let restorePriorityStream: (() => void) | null = null;
+
+  // `loadWasmModule()` returns a cached singleton module object, and
+  // `WasmBackend.startStream()` reads `PriorityStream` off it fresh on every
+  // call (not a value captured at `connect()` time) — so replacing the
+  // property in place lets a mock reach the instance the backend actually
+  // constructs internally, unlike getting a class reference from a separate
+  // `import('pjs-wasm')`.
+  async function installMockPriorityStream(): Promise<any> {
+    const wasmModule = (await loadWasmModule()) as any;
+    const instance: any = {
+      setMinPriority: jest.fn(),
+      onFrame: jest.fn(),
+      onComplete: jest.fn(),
+      onError: jest.fn(),
+      start: jest.fn(),
+      free: jest.fn()
+    };
+    // Capture the true original only on the first install of a test — a
+    // second call in the same test (not currently exercised, but should
+    // stay safe) must not overwrite it with the previous mock, or restore()
+    // would leave the mock in place instead of the real PriorityStream.
+    if (!restorePriorityStream) {
+      const original = wasmModule.PriorityStream;
+      restorePriorityStream = () => {
+        wasmModule.PriorityStream = original;
+        restorePriorityStream = null;
+      };
+    }
+    wasmModule.PriorityStream = jest.fn(() => instance);
+    return instance;
+  }
 
   beforeEach(() => {
     config = {
@@ -41,8 +69,14 @@ describeWasm('WasmBackend Integration Tests', () => {
   });
 
   afterEach(async () => {
-    if (backend) {
-      await backend.disconnect();
+    try {
+      if (backend) {
+        await backend.disconnect();
+      }
+    } finally {
+      if (restorePriorityStream) {
+        restorePriorityStream();
+      }
     }
   });
 
@@ -68,18 +102,21 @@ describeWasm('WasmBackend Integration Tests', () => {
       await backend.connect();
       const version = backend.getWasmVersion();
 
-      expect(version).toBe('0.1.0');
+      expect(version).toBe(wasmPkgVersion);
     });
 
     test('should handle initialization errors gracefully', async () => {
       const mockError = new Error('WASM module not found');
       const failingBackend = new WasmBackend(config);
 
-      // Mock import to fail
-      jest.spyOn(global, 'import' as any).mockRejectedValueOnce(mockError);
+      const loadSpy = jest.spyOn(wasmLoader, 'loadWasmModule').mockRejectedValueOnce(mockError);
 
-      await expect(failingBackend.connect()).rejects.toThrow(PJSError);
-      expect(failingBackend.isWasmAvailable()).toBe(false);
+      try {
+        await expect(failingBackend.connect()).rejects.toThrow(PJSError);
+        expect(failingBackend.isWasmAvailable()).toBe(false);
+      } finally {
+        loadSpy.mockRestore();
+      }
     });
   });
 
@@ -109,8 +146,7 @@ describeWasm('WasmBackend Integration Tests', () => {
       };
 
       // Simulate frame emission from WASM
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      const streamInstance = await installMockPriorityStream();
 
       // Mock frame callbacks
       let frameCallback: any;
@@ -193,10 +229,9 @@ describeWasm('WasmBackend Integration Tests', () => {
         minPriority: 50 // Only MEDIUM and above
       };
 
-      await backend.startStream('test-stream', options);
+      const streamInstance = await installMockPriorityStream();
 
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      await backend.startStream('test-stream', options);
 
       expect(streamInstance.setMinPriority).toHaveBeenCalledWith(50);
     });
@@ -232,10 +267,9 @@ describeWasm('WasmBackend Integration Tests', () => {
         streamId: 'stream-5'
       };
 
-      await backend.startStream('test-stream', options);
+      const streamInstance = await installMockPriorityStream();
 
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      await backend.startStream('test-stream', options);
 
       await backend.stopStream();
 
@@ -254,8 +288,7 @@ describeWasm('WasmBackend Integration Tests', () => {
         errors.push(error);
       });
 
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      const streamInstance = await installMockPriorityStream();
 
       let errorCallback: any;
       streamInstance.onError = jest.fn((cb: any) => {
@@ -297,8 +330,7 @@ describeWasm('WasmBackend Integration Tests', () => {
         errors.push(error);
       });
 
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      const streamInstance = await installMockPriorityStream();
 
       let frameCallback: any;
       streamInstance.onFrame = jest.fn((cb: any) => {
@@ -306,20 +338,25 @@ describeWasm('WasmBackend Integration Tests', () => {
       });
 
       streamInstance.start = jest.fn(() => {
-        // Emit frame with invalid payload
-        try {
-          frameCallback({
-            type: 'skeleton',
-            priority: 100,
-            sequence: 0n,
-            payload: 'invalid json{',
-            getPayloadObject: () => {
-              throw new Error('Parse failed');
-            }
-          });
-        } catch (error) {
-          // Expected to throw during frame conversion
-        }
+        // Emit frame with invalid payload — convertWasmFrame's JSON.parse
+        // throws synchronously here; let it propagate so startStream's own
+        // try/catch converts it to a PJSError and rejects, instead of being
+        // swallowed by this mock. NOTE: this asserts plain-JS exception
+        // propagation through a mocked PriorityStream. The real binding
+        // invokes onFrame from Rust across the wasm boundary and may not
+        // propagate the same way — see the TODO(follow-up) on the skipped
+        // streaming test in wasm-parser.test.ts, where a callback-internal
+        // side effect (stream.free()) is silently swallowed instead of
+        // throwing catchably.
+        frameCallback({
+          type: 'skeleton',
+          priority: 100,
+          sequence: 0n,
+          payload: 'invalid json{',
+          getPayloadObject: () => {
+            throw new Error('Parse failed');
+          }
+        });
       });
 
       const options: WasmStreamOptions = {
@@ -344,10 +381,9 @@ describeWasm('WasmBackend Integration Tests', () => {
         streamId: 'stream-9'
       };
 
-      await backend.startStream('test-stream', options);
+      const streamInstance = await installMockPriorityStream();
 
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      await backend.startStream('test-stream', options);
 
       await backend.disconnect();
 
@@ -380,8 +416,7 @@ describeWasm('WasmBackend Integration Tests', () => {
         frames.push(frame);
       });
 
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      const streamInstance = await installMockPriorityStream();
 
       let frameCallback: any;
       streamInstance.onFrame = jest.fn((cb: any) => {
@@ -420,8 +455,7 @@ describeWasm('WasmBackend Integration Tests', () => {
         frames.push(frame);
       });
 
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      const streamInstance = await installMockPriorityStream();
 
       let frameCallback: any;
       streamInstance.onFrame = jest.fn((cb: any) => {
@@ -463,8 +497,7 @@ describeWasm('WasmBackend Integration Tests', () => {
     });
 
     test('should reject unknown frame types', async () => {
-      const mockPriorityStream = (await import('pjs-wasm')).PriorityStream;
-      const streamInstance = new mockPriorityStream();
+      const streamInstance = await installMockPriorityStream();
 
       let frameCallback: any;
       streamInstance.onFrame = jest.fn((cb: any) => {
@@ -472,17 +505,17 @@ describeWasm('WasmBackend Integration Tests', () => {
       });
 
       streamInstance.start = jest.fn(() => {
-        try {
-          frameCallback({
-            type: 'unknown_type',
-            priority: 50,
-            sequence: 0n,
-            payload: '{}',
-            getPayloadObject: () => ({})
-          });
-        } catch (error) {
-          // Expected to throw
-        }
+        // mapFrameType throws synchronously here; let it propagate so
+        // startStream's own try/catch converts it to a PJSError and rejects.
+        // NOTE: mock-only propagation semantics — see the comment on the
+        // equivalent case in "should handle malformed frame payloads" above.
+        frameCallback({
+          type: 'unknown_type',
+          priority: 50,
+          sequence: 0n,
+          payload: '{}',
+          getPayloadObject: () => ({})
+        });
       });
 
       const options: WasmStreamOptions = {

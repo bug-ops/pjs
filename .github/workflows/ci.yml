@@ -58,6 +58,7 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.cargo/**'
+              - '.github/workflows/ci.yml'
             wasm:
               - 'crates/pjs-wasm/**'
               - 'crates/pjs-domain/**'
@@ -65,8 +66,10 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
             js:
               - 'crates/pjs-js-client/**'
+              - '.github/workflows/ci.yml'
 
   # ── Tier 1: entry gate ───────────────────────────────────────────────────
   # fmt + clippy gate.  Skipped when only JS files changed.
@@ -426,9 +429,19 @@ jobs:
     name: Build WASM (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [changes, quality]
+    # `quality` is deliberately not in `needs`: it's skipped on JS-only
+    # changes (rust==false), and GitHub Actions skips a job whose `needs`
+    # includes a skipped job regardless of that job's own `if` — depending
+    # on `quality` here would silently skip this job (and everything
+    # downstream of it: js-client-test, wasm-types-drift, wasm-node-example)
+    # on exactly the JS-only-change case the `changes.js` clause below
+    # exists to cover.
+    needs: [changes]
+    # Also triggered by JS-only changes: js-client-test, wasm-types-drift,
+    # and wasm-node-example all depend on the wasm-build-web artifact.
     if: |
       needs.changes.outputs.wasm == 'true' ||
+      needs.changes.outputs.js == 'true' ||
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch'
@@ -676,10 +689,11 @@ jobs:
   # ── JS Client Tests ──────────────────────────────────────────────────────
   js-client-test:
     name: JS Client Tests
-    needs: [changes]
+    needs: [changes, wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: |
+      needs.changes.outputs.wasm == 'true' ||
       needs.changes.outputs.js == 'true' ||
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
@@ -689,6 +703,11 @@ jobs:
         working-directory: crates/pjs-js-client
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: wasm-build-web
+          path: crates/pjs-wasm/pkg
 
       - uses: actions/setup-node@v7
         with:

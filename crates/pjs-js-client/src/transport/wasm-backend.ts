@@ -114,6 +114,7 @@ export class WasmBackend extends Transport {
     }
 
     this.isConnected = false;
+    this.wasmAvailable = false;
     this.emitDisconnect();
 
     if (this.config.debug) {
