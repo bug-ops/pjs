@@ -1,6 +1,6 @@
 {
   "name": "@pjs/client",
-  "version": "0.3.0-alpha.1",
+  "version": "0.3.0-alpha.2",
   "description": "Priority JSON Streaming Protocol (PJS) client library for JavaScript/TypeScript",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",

@@ -418,8 +418,7 @@ PJS uses feature flags to minimize compile times and binary size. Be mindful whe
 - `websocket-server` - WebSocket server
 - `http-client` - HTTP event publishing
 
-### Memory Allocators (Mutually Exclusive)
-- `jemalloc` - Use jemalloc allocator
+### Memory Allocators (Optional)
 - `mimalloc` - Use mimalloc allocator
 
 ### Adding New Features
@@ -479,7 +478,6 @@ fn platform_specific() {
 
 **Linux:**
 - Default CI platform
-- jemalloc works best here
 
 ### Testing Locally
 
