@@ -102,7 +102,15 @@ pub struct RateLimitConfig {
     /// see `infrastructure::websocket::WRITE_TIMEOUT`'s doc for the
     /// tradeoff this implies for large frames sent to slow clients, and
     /// raise this value if that tradeoff doesn't fit a deployment's
-    /// expected client bandwidth.
+    /// expected client bandwidth. Defaults to the same 10s value as
+    /// `infrastructure::websocket::WRITE_TIMEOUT`; the two constants are
+    /// independent (different feature gates), so an intentional change to
+    /// one should be mirrored in the other unless a divergence is
+    /// deliberate. [`Self::low_resource`] tightens this to 3s. This value
+    /// governs the server side only — `PjsWebSocketClient` has its own
+    /// independent write-timeout knob (see
+    /// `infrastructure::websocket::PjsWebSocketClient::with_write_timeout`),
+    /// also defaulting to `WRITE_TIMEOUT`.
     pub write_timeout: Duration,
 }
 
@@ -140,6 +148,23 @@ impl RateLimitConfig {
             max_frame_size: 256 * 1024, // 256KB
             max_messages_per_second: 5,
             burst_allowance: 2,
+            // 3s (30% of the 10s default) — within this preset's range of
+            // reductions applied to its other fields (16.7%-40% of
+            // `Default`, though above their ~20-25% median). Freeing a
+            // wedged connection task matters more under resource
+            // constraints than absorbing ordinary network jitter.
+            //
+            // Note: this does not shrink what a single outbound write must
+            // flush in time. `max_frame_size` above bounds inbound frames
+            // only; outbound frame size is governed elsewhere and is
+            // unaffected by this preset. A slow-but-honest client now
+            // needs roughly 3.3x the downlink bandwidth it needed under
+            // the 10s default to avoid being disconnected as "stalled"
+            // (see `infrastructure::websocket::WRITE_TIMEOUT`'s doc for
+            // the full bandwidth-vs-deadline tradeoff) — raise this value
+            // if a low-resource deployment still expects to serve large
+            // frames to bandwidth-constrained clients.
+            write_timeout: Duration::from_secs(3),
             ..Default::default()
         }
     }
@@ -745,6 +770,8 @@ mod tests {
         assert_eq!(config.max_messages_per_second, 5);
         assert_eq!(config.burst_allowance, 2);
         assert_eq!(config.max_frame_size, 256 * 1024);
+        assert_eq!(config.write_timeout, Duration::from_secs(3));
+        assert!(config.write_timeout < RateLimitConfig::default().write_timeout);
     }
 
     #[test]
