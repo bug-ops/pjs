@@ -64,7 +64,10 @@ fn frame_to_value(frame: &Frame) -> serde_json::Value {
     })
 }
 
-fn format_frame_owned(frame: &Frame, format: StreamFormat) -> Result<Vec<u8>, StreamError> {
+fn format_frame_owned(
+    frame: &Frame,
+    format: StreamFormat,
+) -> Result<Vec<u8>, StreamTransportError> {
     let v = frame_to_value(frame);
     match format {
         StreamFormat::Json | StreamFormat::Binary => Ok(serde_json::to_vec(&v)?),
@@ -87,7 +90,10 @@ fn format_frame_owned(frame: &Frame, format: StreamFormat) -> Result<Vec<u8>, St
 /// Each batch is serialized as newline-delimited JSON objects (one object per
 /// frame). `StreamFormat::Json` and `StreamFormat::NdJson` produce identical
 /// wire bytes; only `content_type()` differs.
-fn format_batch_owned(frames: &[Frame], format: StreamFormat) -> Result<Vec<u8>, StreamError> {
+fn format_batch_owned(
+    frames: &[Frame],
+    format: StreamFormat,
+) -> Result<Vec<u8>, StreamTransportError> {
     let values: Vec<_> = frames.iter().map(frame_to_value).collect();
     match format {
         // #167: NDJSON-of-objects — one JSON object per line per frame.
@@ -119,14 +125,14 @@ fn format_batch_owned(frames: &[Frame], format: StreamFormat) -> Result<Vec<u8>,
 /// payload of `bytes`. The output is binary — callers must propagate it as
 /// `Vec<u8>`/`Bytes`, never as `String`. See #226 for the architectural fix
 /// that replaced the previous UTF-8-only path.
-fn maybe_compress(bytes: Vec<u8>, enabled: bool) -> Result<Vec<u8>, StreamError> {
+fn maybe_compress(bytes: Vec<u8>, enabled: bool) -> Result<Vec<u8>, StreamTransportError> {
     #[cfg(feature = "compression")]
     if enabled {
         use crate::compression::secure::{ByteCodec, SecureCompressor};
         let compressor = SecureCompressor::with_default_security(ByteCodec::Gzip);
         let compressed = compressor
             .compress(&bytes)
-            .map_err(|e| StreamError::Io(e.to_string()))?;
+            .map_err(|e| StreamTransportError::Io(e.to_string()))?;
         return Ok(compressed.data);
     }
     #[cfg(not(feature = "compression"))]
@@ -188,7 +194,9 @@ where
     /// `ready_chunks(buffer_size)` polls the inner stream up to `buffer_size`
     /// times per wakeup, preserving the prefetch semantics of the original
     /// hand-rolled `poll_next` buffer loop.
-    pub fn into_stream(self) -> impl Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static {
+    pub fn into_stream(
+        self,
+    ) -> impl Stream<Item = Result<Vec<u8>, StreamTransportError>> + Send + 'static {
         let Self {
             inner,
             format,
@@ -251,7 +259,9 @@ where
     /// per line (NDJSON-of-objects, #167). The stream item type is binary
     /// (`Vec<u8>`, not `String`) for symmetry with `AdaptiveFrameStream` and
     /// to leave room for future per-batch compression (#226).
-    pub fn into_stream(self) -> impl Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static {
+    pub fn into_stream(
+        self,
+    ) -> impl Stream<Item = Result<Vec<u8>, StreamTransportError>> + Send + 'static {
         let Self {
             inner,
             format,
@@ -334,7 +344,9 @@ where
     /// Frames are buffered up to `buffer_size` and emitted highest-priority first.
     /// Items are `Vec<u8>` for symmetry with the rest of the streaming pipeline
     /// (#226).
-    pub fn into_stream(self) -> impl Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static {
+    pub fn into_stream(
+        self,
+    ) -> impl Stream<Item = Result<Vec<u8>, StreamTransportError>> + Send + 'static {
         let Self {
             inner,
             format,
@@ -378,7 +390,7 @@ where
 
 /// Stream error types
 #[derive(Debug, thiserror::Error)]
-pub enum StreamError {
+pub enum StreamTransportError {
     /// Frame failed to serialize to JSON.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -409,9 +421,9 @@ pub enum StreamError {
 pub fn create_streaming_response<S>(
     stream: S,
     format: StreamFormat,
-) -> Result<Response, StreamError>
+) -> Result<Response, StreamTransportError>
 where
-    S: Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static,
+    S: Stream<Item = Result<Vec<u8>, StreamTransportError>> + Send + 'static,
 {
     let body = axum::body::Body::from_stream(stream);
 
@@ -434,7 +446,7 @@ where
 
     response
         .body(body)
-        .map_err(|e| StreamError::Io(e.to_string()))
+        .map_err(|e| StreamTransportError::Io(e.to_string()))
 }
 
 /// Create a streaming response with an explicit `Content-Type`.
@@ -462,9 +474,9 @@ where
 pub fn create_streaming_response_with_content_type<S>(
     stream: S,
     content_type: &str,
-) -> Result<Response, StreamError>
+) -> Result<Response, StreamTransportError>
 where
-    S: Stream<Item = Result<Vec<u8>, StreamError>> + Send + 'static,
+    S: Stream<Item = Result<Vec<u8>, StreamTransportError>> + Send + 'static,
 {
     let body = axum::body::Body::from_stream(stream);
     Response::builder()
@@ -472,7 +484,7 @@ where
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "no-cache")
         .body(body)
-        .map_err(|e| StreamError::Io(e.to_string()))
+        .map_err(|e| StreamTransportError::Io(e.to_string()))
 }
 
 #[cfg(test)]
@@ -583,7 +595,7 @@ mod tests {
 
         // batch_size=2 → two full batches of 2 and one remainder batch of 1
         let batch_stream = BatchFrameStream::new(frame_stream, StreamFormat::Json, 2);
-        let collected: Vec<Result<Vec<u8>, StreamError>> =
+        let collected: Vec<Result<Vec<u8>, StreamTransportError>> =
             batch_stream.into_stream().collect().await;
 
         assert_eq!(
@@ -623,7 +635,7 @@ mod tests {
         let frame_stream = stream::iter(frames);
 
         let priority_stream = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 8);
-        let collected: Vec<Result<Vec<u8>, StreamError>> =
+        let collected: Vec<Result<Vec<u8>, StreamTransportError>> =
             priority_stream.into_stream().collect().await;
 
         assert_eq!(collected.len(), 4);
@@ -904,7 +916,8 @@ mod tests {
         let adaptive =
             AdaptiveFrameStream::new(frame_stream, StreamFormat::Json).with_compression(true);
 
-        let collected: Vec<Result<Vec<u8>, StreamError>> = adaptive.into_stream().collect().await;
+        let collected: Vec<Result<Vec<u8>, StreamTransportError>> =
+            adaptive.into_stream().collect().await;
 
         assert_eq!(
             collected.len(),

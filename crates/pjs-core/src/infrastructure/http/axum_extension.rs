@@ -158,13 +158,13 @@ async fn handle_stream_request(
     Extension(streamer): Extension<Arc<PriorityStreamer>>,
     headers: HeaderMap,
     Json(request): Json<StreamRequest>,
-) -> Result<impl IntoResponse, StreamError> {
+) -> Result<impl IntoResponse, StreamExtensionError> {
     let stream_id = uuid::Uuid::new_v4().to_string();
 
     // Create streaming plan
     let plan = streamer
         .analyze(&request.data)
-        .map_err(|e| StreamError::AnalysisError(e.to_string()))?;
+        .map_err(|e| StreamExtensionError::AnalysisError(e.to_string()))?;
 
     let format = request.format.unwrap_or_else(|| {
         headers
@@ -206,7 +206,7 @@ async fn handle_sse_stream(
     Path(_stream_id): Path<String>,
     Extension(streamer): Extension<Arc<PriorityStreamer>>,
     Query(_params): Query<HashMap<String, String>>,
-) -> Result<impl IntoResponse, StreamError> {
+) -> Result<impl IntoResponse, StreamExtensionError> {
     // In production, retrieve stream data from store using stream_id
     let sample_data = serde_json::json!({
         "products": [
@@ -222,7 +222,7 @@ async fn handle_sse_stream(
 
     let plan = streamer
         .analyze(&sample_data)
-        .map_err(|e| StreamError::AnalysisError(e.to_string()))?;
+        .map_err(|e| StreamExtensionError::AnalysisError(e.to_string()))?;
 
     // Collect frames to avoid lifetime issues
     let frames: Vec<_> = plan.frames().cloned().collect();
@@ -233,7 +233,7 @@ async fn handle_sse_stream(
         let data = serde_json::to_string(&frame).expect(
             "Frame serialization is infallible: JsonData rejects NaN/Infinity at construction",
         );
-        Ok::<_, StreamError>(format!("data: {data}\n\n"))
+        Ok::<_, StreamExtensionError>(format!("data: {data}\n\n"))
     });
 
     let response = axum::response::Response::builder()
@@ -243,7 +243,7 @@ async fn handle_sse_stream(
         .header(header::CONNECTION, "keep-alive")
         .header("Access-Control-Allow-Origin", "*")
         .body(axum::body::Body::from_stream(stream))
-        .map_err(|e| StreamError::ResponseError(e.to_string()))?;
+        .map_err(|e| StreamExtensionError::ResponseError(e.to_string()))?;
 
     Ok(response)
 }
@@ -265,7 +265,7 @@ async fn handle_pjs_health() -> Json<serde_json::Value> {
 
 /// Extension-specific errors
 #[derive(Debug, thiserror::Error)]
-pub enum StreamError {
+pub enum StreamExtensionError {
     /// Failed to analyze the requested payload.
     #[error("Analysis error: {0}")]
     AnalysisError(String),
@@ -279,12 +279,14 @@ pub enum StreamError {
     StreamNotFound(String),
 }
 
-impl IntoResponse for StreamError {
+impl IntoResponse for StreamExtensionError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
-            StreamError::AnalysisError(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            StreamError::ResponseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            StreamError::StreamNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
+            StreamExtensionError::AnalysisError(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            StreamExtensionError::ResponseError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
+            }
+            StreamExtensionError::StreamNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
         };
 
         (status, Json(serde_json::json!({"error": message}))).into_response()

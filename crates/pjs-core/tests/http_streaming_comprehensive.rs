@@ -18,8 +18,8 @@ use pjson_rs::{
     domain::entities::Frame,
     domain::value_objects::{JsonData, StreamId},
     infrastructure::http::streaming::{
-        AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamError, StreamFormat,
-        create_streaming_response,
+        AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamFormat,
+        StreamTransportError, create_streaming_response,
     },
 };
 
@@ -372,7 +372,7 @@ async fn test_priority_frame_stream_sse_format() {
 }
 
 // ============================================================================
-// StreamError Tests
+// StreamTransportError Tests
 // ============================================================================
 
 #[test]
@@ -381,28 +381,28 @@ fn test_stream_error_serialization() {
         std::io::ErrorKind::InvalidData,
         "test error",
     ));
-    let error = StreamError::Serialization(json_error);
+    let error = StreamTransportError::Serialization(json_error);
 
     assert!(error.to_string().contains("Serialization error"));
 }
 
 #[test]
 fn test_stream_error_io() {
-    let error = StreamError::Io("Connection lost".to_string());
+    let error = StreamTransportError::Io("Connection lost".to_string());
 
     assert_eq!(error.to_string(), "IO error: Connection lost");
 }
 
 #[test]
 fn test_stream_error_buffer_overflow() {
-    let error = StreamError::BufferOverflow;
+    let error = StreamTransportError::BufferOverflow;
 
     assert_eq!(error.to_string(), "Buffer overflow");
 }
 
 #[test]
 fn test_stream_error_stream_closed() {
-    let error = StreamError::StreamClosed;
+    let error = StreamTransportError::StreamClosed;
 
     assert_eq!(error.to_string(), "Stream closed");
 }
@@ -414,7 +414,7 @@ fn test_stream_error_stream_closed() {
 #[tokio::test]
 async fn test_create_streaming_response_json() {
     let stream = futures::stream::iter(vec![
-        Ok::<Vec<u8>, StreamError>(b"test1".to_vec()),
+        Ok::<Vec<u8>, StreamTransportError>(b"test1".to_vec()),
         Ok(b"test2".to_vec()),
     ]);
 
@@ -433,8 +433,9 @@ async fn test_create_streaming_response_json() {
 
 #[tokio::test]
 async fn test_create_streaming_response_sse() {
-    let stream =
-        futures::stream::iter(vec![Ok::<Vec<u8>, StreamError>(b"data: test\n\n".to_vec())]);
+    let stream = futures::stream::iter(vec![Ok::<Vec<u8>, StreamTransportError>(
+        b"data: test\n\n".to_vec(),
+    )]);
 
     let response = create_streaming_response(stream, StreamFormat::ServerSentEvents).unwrap();
 
@@ -456,7 +457,9 @@ async fn test_create_streaming_response_sse() {
 
 #[tokio::test]
 async fn test_create_streaming_response_ndjson() {
-    let stream = futures::stream::iter(vec![Ok::<Vec<u8>, StreamError>(b"test\n".to_vec())]);
+    let stream = futures::stream::iter(vec![Ok::<Vec<u8>, StreamTransportError>(
+        b"test\n".to_vec(),
+    )]);
 
     let response = create_streaming_response(stream, StreamFormat::NdJson).unwrap();
 
@@ -473,7 +476,9 @@ async fn test_create_streaming_response_ndjson() {
 
 #[tokio::test]
 async fn test_create_streaming_response_binary() {
-    let stream = futures::stream::iter(vec![Ok::<Vec<u8>, StreamError>(b"binary_data".to_vec())]);
+    let stream = futures::stream::iter(vec![Ok::<Vec<u8>, StreamTransportError>(
+        b"binary_data".to_vec(),
+    )]);
 
     let response = create_streaming_response(stream, StreamFormat::Binary).unwrap();
 
