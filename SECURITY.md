@@ -185,7 +185,7 @@ import { PriorityStream, SecurityConfig } from '@pjson/wasm';
 const security = new SecurityConfig()
     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB max
     .setMaxDepth(32)                   // 32 levels max
-    .setMaxArraySize(10000)            // 10K elements max
+    .setMaxArrayElements(10000)        // 10K elements max
     .setMaxObjectKeys(10000);          // 10K keys max
 
 const stream = PriorityStream.withSecurityConfig(security);
@@ -213,10 +213,10 @@ PJS includes defense-in-depth security:
 - Integer overflow protection: Checked arithmetic throughout
 
 **Parsing Limits:**
-- Max JSON depth: 64 levels (configurable)
-- Max JSON size: 10 MB (configurable)
-- Max array elements: 10,000 (configurable)
-- Max object keys: 10,000 (configurable)
+- Max JSON depth: 64 levels (configurable; in the WASM bindings this truncates deeper structure to `null` rather than rejecting the input, unlike the limits below)
+- Max JSON size: 10 MB (configurable, rejected on excess)
+- Max array elements: 10,000 (configurable, rejected on excess — enforced at every nesting level)
+- Max object keys: 10,000 (configurable, rejected on excess — enforced at every nesting level)
 
 **Rate Limiting:**
 - Configurable per-session and global limits
