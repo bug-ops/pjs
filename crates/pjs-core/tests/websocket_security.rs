@@ -136,9 +136,9 @@ async fn test_security_configuration_profiles() {
         .unwrap();
 
     // Get stats from all handlers
-    let default_stats = default_handler.get_security_stats();
-    let high_traffic_stats = high_traffic_handler.get_security_stats();
-    let low_resource_stats = low_resource_handler.get_security_stats();
+    let default_stats = default_handler.security_stats();
+    let high_traffic_stats = high_traffic_handler.security_stats();
+    let low_resource_stats = low_resource_handler.security_stats();
 
     assert!(default_stats.total_clients > 0);
     assert!(high_traffic_stats.total_clients > 0);
@@ -296,7 +296,7 @@ async fn test_concurrent_rate_limiting() {
     assert!(security_handler.validate_message(&guard2, 100).is_ok());
 
     // Stats should reflect multiple clients
-    let stats = security_handler.get_security_stats();
+    let stats = security_handler.security_stats();
     assert_eq!(stats.total_connections, 2);
 
     // Drop one guard

@@ -171,7 +171,7 @@ impl SonicParser {
     }
 
     /// Get performance statistics
-    pub fn get_stats(&self) -> SonicStats {
+    pub fn stats(&self) -> SonicStats {
         self.stats.borrow().clone()
     }
 

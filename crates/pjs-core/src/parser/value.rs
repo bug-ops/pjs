@@ -209,7 +209,7 @@ impl<'a> LazyArray<'a> {
     }
 
     /// Get element at index, parsing if necessary (simplified)
-    pub fn get_parsed(&self, index: usize) -> Option<JsonValue<'a>> {
+    pub fn parsed(&self, index: usize) -> Option<JsonValue<'a>> {
         self.get(index).map(JsonValue::Raw)
     }
 

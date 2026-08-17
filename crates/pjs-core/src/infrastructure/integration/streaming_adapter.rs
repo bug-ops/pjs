@@ -214,21 +214,18 @@ impl UniversalRequest {
     }
 
     /// Get a header value
-    pub fn get_header(&self, name: &str) -> Option<&Cow<'static, str>> {
+    pub fn header(&self, name: &str) -> Option<&Cow<'static, str>> {
         self.headers.get(name)
     }
 
     /// Get a query parameter
-    pub fn get_query(&self, name: &str) -> Option<&String> {
+    pub fn query(&self, name: &str) -> Option<&String> {
         self.query_params.get(name)
     }
 
     /// Check if request accepts a specific content type
     pub fn accepts(&self, content_type: &str) -> bool {
-        if let Some(accept) = self
-            .get_header("accept")
-            .or_else(|| self.get_header("Accept"))
-        {
+        if let Some(accept) = self.header("accept").or_else(|| self.header("Accept")) {
             accept.contains(content_type)
         } else {
             false
@@ -237,7 +234,7 @@ impl UniversalRequest {
 
     /// Get preferred streaming format from headers
     pub fn preferred_streaming_format(&self) -> StreamingFormat {
-        if let Some(accept) = self.get_header("accept") {
+        if let Some(accept) = self.header("accept") {
             StreamingFormat::from_accept_header(accept)
         } else {
             StreamingFormat::Json
@@ -590,7 +587,7 @@ mod tests {
         assert_eq!(request.method, "GET");
         assert_eq!(request.path, "/api/stream");
         assert!(request.accepts("text/event-stream"));
-        assert_eq!(request.get_query("priority"), Some(&"high".to_string()));
+        assert_eq!(request.query("priority"), Some(&"high".to_string()));
     }
 
     #[test]

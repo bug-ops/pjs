@@ -436,7 +436,7 @@ impl WebSocketRateLimiter {
     }
 
     /// Get current statistics for monitoring
-    pub fn get_stats(&self) -> RateLimitStats {
+    pub fn stats(&self) -> RateLimitStats {
         let mut stats = RateLimitStats::default();
 
         for entry in self.clients.iter() {
@@ -688,7 +688,7 @@ mod tests {
         assert!(limiter.check_connection(ip2).is_ok());
 
         // Should have 2 clients
-        assert_eq!(limiter.get_stats().total_clients, 2);
+        assert_eq!(limiter.stats().total_clients, 2);
 
         // Close connection for ip1
         limiter.close_connection(ip1);
@@ -700,7 +700,7 @@ mod tests {
         limiter.cleanup_expired();
 
         // After cleanup, ip1 should be removed but ip2 might remain if it has recent activity
-        let stats = limiter.get_stats();
+        let stats = limiter.stats();
         // At minimum, ip1 should be cleaned up if no connections
         assert!(stats.total_clients <= 2);
     }
@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_stats_accuracy() {
+    fn test_stats_accuracy() {
         let config = RateLimitConfig {
             max_connections_per_ip: 5,
             ..Default::default()
@@ -810,7 +810,7 @@ mod tests {
         assert!(limiter.check_connection(ip1).is_ok());
         assert!(limiter.check_connection(ip2).is_ok());
 
-        let stats = limiter.get_stats();
+        let stats = limiter.stats();
         assert_eq!(stats.total_clients, 2);
         assert_eq!(stats.total_connections, 3);
         assert_eq!(stats.active_clients, 2);
@@ -818,7 +818,7 @@ mod tests {
         // Close a connection
         limiter.close_connection(ip1);
 
-        let stats = limiter.get_stats();
+        let stats = limiter.stats();
         assert_eq!(stats.total_connections, 2);
     }
 
@@ -857,7 +857,7 @@ mod tests {
         assert!(limiter.check_connection(ip).is_ok());
 
         // Verify default config values are applied
-        let stats = limiter.get_stats();
+        let stats = limiter.stats();
         assert_eq!(stats.total_clients, 1);
         assert_eq!(stats.total_connections, 1);
     }
@@ -879,7 +879,7 @@ mod tests {
         assert!(limiter.check_request(ip2).is_ok());
         assert!(limiter.check_connection(ip3).is_ok());
 
-        let initial_stats = limiter.get_stats();
+        let initial_stats = limiter.stats();
         assert_eq!(initial_stats.total_clients, 3);
 
         // Wait for cleanup window
@@ -888,7 +888,7 @@ mod tests {
         // ip3 has no requests, so it should be removed
         limiter.cleanup_expired();
 
-        let after_cleanup = limiter.get_stats();
+        let after_cleanup = limiter.stats();
         // ip3 should be removed (no requests, no connections after cleanup)
         assert!(after_cleanup.total_clients <= initial_stats.total_clients);
     }
@@ -907,7 +907,7 @@ mod tests {
         assert!(limiter.check_request(ip).is_ok());
 
         // Verify client exists
-        let initial_stats = limiter.get_stats();
+        let initial_stats = limiter.stats();
         assert_eq!(initial_stats.total_clients, 1);
 
         // Wait beyond cleanup window (2x window_duration)
@@ -916,7 +916,7 @@ mod tests {
         // Cleanup should remove the client (no connections and stale requests)
         limiter.cleanup_expired();
 
-        let final_stats = limiter.get_stats();
+        let final_stats = limiter.stats();
         // The client should be removed if no active connections
         assert_eq!(final_stats.total_clients, 0);
     }
@@ -938,7 +938,7 @@ mod tests {
         // ip2: has recent request but no connection
         assert!(limiter.check_request(ip2).is_ok());
 
-        let initial_stats = limiter.get_stats();
+        let initial_stats = limiter.stats();
         assert_eq!(initial_stats.total_clients, 2);
 
         // Wait some time (but not beyond full cleanup window)
@@ -950,7 +950,7 @@ mod tests {
         // Cleanup should preserve both clients
         limiter.cleanup_expired();
 
-        let final_stats = limiter.get_stats();
+        let final_stats = limiter.stats();
         // ip1 should be preserved (active connection)
         assert!(final_stats.total_clients >= 1);
     }
@@ -964,7 +964,7 @@ mod tests {
         limiter.close_connection(ip);
 
         // Stats should be empty
-        let stats = limiter.get_stats();
+        let stats = limiter.stats();
         assert_eq!(stats.total_clients, 0);
     }
 
@@ -1026,7 +1026,7 @@ mod tests {
             let ip = IpAddr::V4(Ipv4Addr::from(i));
             limiter.check_request(ip).unwrap();
         }
-        assert_eq!(limiter.get_stats().total_clients, MAX_TRACKED_CLIENTS);
+        assert_eq!(limiter.stats().total_clients, MAX_TRACKED_CLIENTS);
 
         // A new, not-yet-tracked IP is rejected once at capacity — this is
         // what bounds the map's size *within* a single cleanup sweep window,
@@ -1037,7 +1037,7 @@ mod tests {
             result,
             Err(RateLimitError::CapacityExceeded { max }) if max == MAX_TRACKED_CLIENTS
         ));
-        assert_eq!(limiter.get_stats().total_clients, MAX_TRACKED_CLIENTS);
+        assert_eq!(limiter.stats().total_clients, MAX_TRACKED_CLIENTS);
 
         // An already-tracked IP is unaffected by the cap.
         let existing_ip = IpAddr::V4(Ipv4Addr::from(0u32));
@@ -1070,7 +1070,7 @@ mod tests {
             limiter.cleanup_expired(); // Must not panic for any window_secs above.
 
             assert_eq!(
-                limiter.get_stats().total_clients,
+                limiter.stats().total_clients,
                 1,
                 "a client with a just-now request must survive cleanup regardless \
                  of window_secs={window_secs}"
@@ -1116,6 +1116,6 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        assert_eq!(limiter.get_stats().total_clients, 0);
+        assert_eq!(limiter.stats().total_clients, 0);
     }
 }

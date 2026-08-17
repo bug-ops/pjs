@@ -370,7 +370,7 @@ async fn test_get_stream_success() {
         .create_stream(serde_json::json!({"test": "data"}).into())
         .unwrap();
 
-    let stream = session.get_stream(stream_id).unwrap().clone();
+    let stream = session.stream(stream_id).unwrap().clone();
 
     let repository = Arc::new(common::MockRepository::with_session(session));
     let event_publisher = Arc::new(common::MockEventPublisher::new());

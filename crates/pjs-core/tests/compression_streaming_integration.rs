@@ -15,7 +15,7 @@ use std::collections::HashMap;
 #[test]
 fn test_streaming_compressor_creation() {
     let compressor = StreamingCompressor::new();
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.total_input_bytes, 0);
     assert_eq!(stats.total_output_bytes, 0);
     assert_eq!(stats.frames_processed, 0);
@@ -39,7 +39,7 @@ fn test_streaming_compressor_with_custom_strategies() {
         StreamingCompressor::with_strategies(skeleton_strategy, content_strategy.clone());
 
     // Verify compressor was created successfully
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 0);
 }
 
@@ -65,7 +65,7 @@ fn test_compress_critical_priority_frame() {
     assert_eq!(compressed.frame.data, frame.data);
 
     // Verify stats were updated
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 1);
     assert!(stats.total_input_bytes > 0);
     assert!(stats.total_output_bytes > 0);
@@ -99,7 +99,7 @@ fn test_compress_multiple_frames_with_different_priorities() {
     let _r3 = compressor.compress_frame(medium_frame).unwrap();
 
     // Verify all frames were processed
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 3);
 
     // Verify different priority levels were tracked
@@ -228,13 +228,13 @@ fn test_reset_stats() {
     let _compressed = compressor.compress_frame(frame).unwrap();
 
     // Verify stats were recorded
-    assert_eq!(compressor.get_stats().frames_processed, 1);
+    assert_eq!(compressor.stats().frames_processed, 1);
 
     // Reset stats
     compressor.reset_stats();
 
     // Verify stats were cleared
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.total_input_bytes, 0);
     assert_eq!(stats.total_output_bytes, 0);
     assert_eq!(stats.frames_processed, 0);
@@ -244,7 +244,7 @@ fn test_reset_stats() {
 #[test]
 fn test_streaming_decompressor_creation() {
     let decompressor = StreamingDecompressor::new();
-    let stats = decompressor.get_stats();
+    let stats = decompressor.stats();
     assert_eq!(stats.frames_decompressed, 0);
     assert_eq!(stats.total_decompressed_bytes, 0);
 }
@@ -252,13 +252,13 @@ fn test_streaming_decompressor_creation() {
 #[test]
 fn test_decompressor_default_trait() {
     let decompressor = StreamingDecompressor::default();
-    assert_eq!(decompressor.get_stats().frames_decompressed, 0);
+    assert_eq!(decompressor.stats().frames_decompressed, 0);
 }
 
 #[test]
 fn test_compressor_default_trait() {
     let compressor = StreamingCompressor::default();
-    assert_eq!(compressor.get_stats().frames_processed, 0);
+    assert_eq!(compressor.stats().frames_processed, 0);
 }
 
 #[test]
@@ -295,7 +295,7 @@ fn test_decompress_frame_with_no_compression() {
     assert_eq!(decompressed.priority, Priority::MEDIUM);
 
     // Verify stats were updated
-    let stats = decompressor.get_stats();
+    let stats = decompressor.stats();
     assert_eq!(stats.frames_decompressed, 1);
     assert!(stats.total_decompressed_bytes > 0);
 }
@@ -568,7 +568,7 @@ fn test_decompressor_stats_accumulation() {
         let _result = decompressor.decompress_frame(compressed_frame).unwrap();
     }
 
-    let stats = decompressor.get_stats();
+    let stats = decompressor.stats();
     assert_eq!(stats.frames_decompressed, 5);
     assert!(stats.total_decompressed_bytes > 0);
     // Note: avg_decompression_time_us may be 0 for very fast operations
@@ -596,7 +596,7 @@ fn test_end_to_end_compression_decompression() {
     let compressed_frame = compressor.compress_frame(frame).unwrap();
 
     // Verify compression occurred
-    assert!(compressor.get_stats().frames_processed == 1);
+    assert!(compressor.stats().frames_processed == 1);
 
     // Decompress
     let decompressed_frame = decompressor.decompress_frame(compressed_frame).unwrap();
@@ -882,7 +882,7 @@ fn test_large_frame_compression() {
     let result = compressor.compress_frame(frame);
     assert!(result.is_ok());
 
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert!(stats.total_input_bytes > 1000); // Should be reasonably large
 }
 
@@ -899,7 +899,7 @@ fn test_compression_with_empty_data() {
     let result = compressor.compress_frame(frame);
     assert!(result.is_ok());
 
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 1);
 }
 

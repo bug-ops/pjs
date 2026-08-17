@@ -191,9 +191,9 @@ mod tests {
         let json_str = r#"{"name":"John","age":30,"active":true}"#;
         let parsed = JsonAdapter::parse_json_string(json_str).unwrap();
 
-        assert_eq!(parsed.get_path("name").unwrap().as_str(), Some("John"));
-        assert_eq!(parsed.get_path("age").unwrap().as_f64(), Some(30.0));
-        assert_eq!(parsed.get_path("active").unwrap().as_bool(), Some(true));
+        assert_eq!(parsed.path("name").unwrap().as_str(), Some("John"));
+        assert_eq!(parsed.path("age").unwrap().as_f64(), Some(30.0));
+        assert_eq!(parsed.path("active").unwrap().as_bool(), Some(true));
     }
 
     #[test]
@@ -221,9 +221,9 @@ mod tests {
 
         let merged = JsonAdapter::merge(JsonData::object(left), JsonData::object(right));
 
-        assert_eq!(merged.get_path("name").unwrap().as_str(), Some("John"));
-        assert_eq!(merged.get_path("age").unwrap().as_i64(), Some(30)); // Right wins
-        assert_eq!(merged.get_path("city").unwrap().as_str(), Some("NYC"));
+        assert_eq!(merged.path("name").unwrap().as_str(), Some("John"));
+        assert_eq!(merged.path("age").unwrap().as_i64(), Some(30)); // Right wins
+        assert_eq!(merged.path("city").unwrap().as_str(), Some("NYC"));
     }
 
     #[test]

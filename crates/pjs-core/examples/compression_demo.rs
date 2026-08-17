@@ -230,7 +230,7 @@ fn demo_streaming_compression() -> Result<(), Box<dyn std::error::Error>> {
         compressed_low.compressed_data.compressed_size
     );
 
-    let stats = streaming_compressor.get_stats();
+    let stats = streaming_compressor.stats();
     println!("\n📈 Streaming Compression Stats:");
     println!("   - Frames processed: {}", stats.frames_processed);
     println!("   - Total input: {} bytes", stats.total_input_bytes);

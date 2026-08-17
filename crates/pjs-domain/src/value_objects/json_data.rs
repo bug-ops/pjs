@@ -199,7 +199,7 @@ impl JsonData {
     }
 
     /// Get nested value by path (dot notation)
-    pub fn get_path(&self, path: &str) -> Option<&JsonData> {
+    pub fn path(&self, path: &str) -> Option<&JsonData> {
         let parts: Vec<&str> = path.split('.').collect();
         let mut current = self;
 
@@ -453,11 +453,11 @@ mod tests {
         assert!(data.set_path("user.age", JsonData::integer(30)));
 
         // Get nested path
-        assert_eq!(data.get_path("user.name").unwrap().as_str(), Some("John"));
-        assert_eq!(data.get_path("user.age").unwrap().as_i64(), Some(30));
+        assert_eq!(data.path("user.name").unwrap().as_str(), Some("John"));
+        assert_eq!(data.path("user.age").unwrap().as_i64(), Some(30));
 
         // Non-existent path
-        assert!(data.get_path("user.email").is_none());
+        assert!(data.path("user.email").is_none());
     }
 
     #[test]

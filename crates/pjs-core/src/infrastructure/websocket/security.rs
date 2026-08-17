@@ -92,8 +92,8 @@ impl SecureWebSocketHandler {
     }
 
     /// Get current rate limiting statistics
-    pub fn get_security_stats(&self) -> crate::security::RateLimitStats {
-        self.rate_limiter.get_stats()
+    pub fn security_stats(&self) -> crate::security::RateLimitStats {
+        self.rate_limiter.stats()
     }
 
     /// Force cleanup of expired rate limit entries
@@ -135,7 +135,7 @@ mod tests {
         );
 
         // Get stats
-        let stats = handler.get_security_stats();
+        let stats = handler.security_stats();
         assert!(stats.total_clients > 0);
     }
 

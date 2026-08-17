@@ -308,8 +308,8 @@ fn test_frame_with_metadata() {
         .with_metadata("version".to_string(), "1.0".to_string());
 
     assert_eq!(frame.metadata().len(), 2);
-    assert_eq!(frame.get_metadata("source"), Some(&"api".to_string()));
-    assert_eq!(frame.get_metadata("version"), Some(&"1.0".to_string()));
+    assert_eq!(frame.metadata_value("source"), Some(&"api".to_string()));
+    assert_eq!(frame.metadata_value("version"), Some(&"1.0".to_string()));
 }
 
 #[test]
@@ -324,10 +324,10 @@ fn test_frame_metadata_chaining() {
 }
 
 #[test]
-fn test_frame_get_metadata_nonexistent() {
+fn test_frame_metadata_value_nonexistent() {
     let stream_id = StreamId::new();
     let frame = Frame::skeleton(stream_id, 1, JsonData::Null);
-    assert!(frame.get_metadata("nonexistent").is_none());
+    assert!(frame.metadata_value("nonexistent").is_none());
 }
 
 #[test]

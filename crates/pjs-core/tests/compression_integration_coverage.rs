@@ -100,7 +100,7 @@ fn test_compressor_with_dictionary_strategy() {
 
     let result = compressor.compress_frame(frame);
     assert!(result.is_ok());
-    assert_eq!(compressor.get_stats().frames_processed, 1);
+    assert_eq!(compressor.stats().frames_processed, 1);
 }
 
 #[test]
@@ -245,14 +245,14 @@ fn test_reset_stats_clears_all_data() {
         compressor.compress_frame(frame).unwrap();
     }
 
-    assert!(compressor.get_stats().frames_processed > 0);
-    assert!(compressor.get_stats().total_input_bytes > 0);
+    assert!(compressor.stats().frames_processed > 0);
+    assert!(compressor.stats().total_input_bytes > 0);
 
     compressor.reset_stats();
 
-    assert_eq!(compressor.get_stats().total_input_bytes, 0);
-    assert_eq!(compressor.get_stats().total_output_bytes, 0);
-    assert_eq!(compressor.get_stats().frames_processed, 0);
+    assert_eq!(compressor.stats().total_input_bytes, 0);
+    assert_eq!(compressor.stats().total_output_bytes, 0);
+    assert_eq!(compressor.stats().frames_processed, 0);
 }
 
 // ============================================================================
@@ -354,7 +354,7 @@ fn test_compress_multiple_priorities_tracks_stats() {
         compressor.compress_frame(frame).unwrap();
     }
 
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 5);
     assert!(stats.total_input_bytes > 0);
     assert!(stats.total_output_bytes > 0);
@@ -390,7 +390,7 @@ fn test_decompress_frame_with_none_strategy() {
 
     let result = decompressor.decompress_frame(frame);
     assert!(result.is_ok());
-    assert_eq!(decompressor.get_stats().frames_decompressed, 1);
+    assert_eq!(decompressor.stats().frames_decompressed, 1);
 }
 
 #[test]
@@ -485,7 +485,7 @@ fn test_decompress_multiple_frames_updates_stats() {
         decompressor.decompress_frame(frame).unwrap();
     }
 
-    let stats = decompressor.get_stats();
+    let stats = decompressor.stats();
     assert_eq!(stats.frames_decompressed, 10);
     assert!(stats.total_decompressed_bytes > 0);
     // avg_decompression_time_us is u64, always >= 0 (type guarantee)
@@ -499,7 +499,7 @@ fn test_decompress_multiple_frames_updates_stats() {
 #[test]
 fn test_streaming_compressor_default() {
     let compressor = StreamingCompressor::default();
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 0);
     assert_eq!(stats.total_input_bytes, 0);
     assert_eq!(stats.total_output_bytes, 0);
@@ -508,7 +508,7 @@ fn test_streaming_compressor_default() {
 #[test]
 fn test_streaming_decompressor_default() {
     let decompressor = StreamingDecompressor::default();
-    let stats = decompressor.get_stats();
+    let stats = decompressor.stats();
     assert_eq!(stats.frames_decompressed, 0);
     assert_eq!(stats.total_decompressed_bytes, 0);
     assert_eq!(stats.avg_decompression_time_us, 0);
@@ -627,7 +627,7 @@ fn test_compress_frame_empty_data() {
     let result = compressor.compress_frame(frame);
     assert!(result.is_ok());
 
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 1);
 }
 
@@ -717,7 +717,7 @@ fn test_compression_stats_single_frame() {
 
     compressor.compress_frame(frame).unwrap();
 
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 1);
     assert!(stats.total_input_bytes > 0);
 }
@@ -748,7 +748,7 @@ fn test_decompression_stats_running_average() {
     };
 
     decompressor.decompress_frame(frame1).unwrap();
-    let stats1 = decompressor.get_stats();
+    let stats1 = decompressor.stats();
     assert_eq!(stats1.frames_decompressed, 1);
 
     // Second frame
@@ -773,7 +773,7 @@ fn test_decompression_stats_running_average() {
     };
 
     decompressor.decompress_frame(frame2).unwrap();
-    let stats2 = decompressor.get_stats();
+    let stats2 = decompressor.stats();
     assert_eq!(stats2.frames_decompressed, 2);
     // Running average calculated (u64 type always >= 0, might be 0 on very fast machines)
 }

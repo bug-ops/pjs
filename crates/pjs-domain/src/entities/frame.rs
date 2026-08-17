@@ -280,7 +280,7 @@ impl Frame {
     }
 
     /// Get metadata value
-    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+    pub fn metadata_value(&self, key: &str) -> Option<&String> {
         self.metadata.get(key)
     }
 
@@ -477,8 +477,8 @@ mod tests {
             .with_metadata("source".to_string(), "api".to_string())
             .with_metadata("version".to_string(), "1.0".to_string());
 
-        assert_eq!(frame.get_metadata("source"), Some(&"api".to_string()));
-        assert_eq!(frame.get_metadata("version"), Some(&"1.0".to_string()));
+        assert_eq!(frame.metadata_value("source"), Some(&"api".to_string()));
+        assert_eq!(frame.metadata_value("version"), Some(&"1.0".to_string()));
         assert_eq!(frame.metadata().len(), 2);
     }
 

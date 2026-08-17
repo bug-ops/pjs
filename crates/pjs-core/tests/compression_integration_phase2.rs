@@ -448,7 +448,7 @@ fn test_compress_frame_critical_priority() {
 
     let result = compressor.compress_frame(frame);
     assert!(result.is_ok());
-    assert_eq!(compressor.get_stats().frames_processed, 1);
+    assert_eq!(compressor.stats().frames_processed, 1);
 }
 
 #[test]
@@ -492,7 +492,7 @@ fn test_compress_frame_multiple_frames() {
         compressor.compress_frame(frame).unwrap();
     }
 
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 5);
 }
 
@@ -521,10 +521,10 @@ fn test_reset_stats() {
     };
 
     compressor.compress_frame(frame).unwrap();
-    assert!(compressor.get_stats().frames_processed > 0);
+    assert!(compressor.stats().frames_processed > 0);
 
     compressor.reset_stats();
-    assert_eq!(compressor.get_stats().frames_processed, 0);
+    assert_eq!(compressor.stats().frames_processed, 0);
 }
 
 #[test]
@@ -557,7 +557,7 @@ fn test_compressor_with_custom_strategies() {
 fn test_decompressor_stats_increments() {
     let mut decompressor = StreamingDecompressor::new();
 
-    assert_eq!(decompressor.get_stats().frames_decompressed, 0);
+    assert_eq!(decompressor.stats().frames_decompressed, 0);
 
     let frame = CompressedFrame {
         frame: StreamFrame {
@@ -581,7 +581,7 @@ fn test_decompressor_stats_increments() {
 
     decompressor.decompress_frame(frame).unwrap();
 
-    let stats = decompressor.get_stats();
+    let stats = decompressor.stats();
     assert_eq!(stats.frames_decompressed, 1);
     assert!(stats.total_decompressed_bytes > 0);
 }
@@ -614,7 +614,7 @@ fn test_decompressor_running_average() {
         decompressor.decompress_frame(frame).unwrap();
     }
 
-    let stats = decompressor.get_stats();
+    let stats = decompressor.stats();
     assert_eq!(stats.frames_decompressed, 3);
 }
 
@@ -625,13 +625,13 @@ fn test_decompressor_running_average() {
 #[test]
 fn test_compressor_default() {
     let compressor = StreamingCompressor::default();
-    assert_eq!(compressor.get_stats().frames_processed, 0);
+    assert_eq!(compressor.stats().frames_processed, 0);
 }
 
 #[test]
 fn test_decompressor_default() {
     let decompressor = StreamingDecompressor::default();
-    assert_eq!(decompressor.get_stats().frames_decompressed, 0);
+    assert_eq!(decompressor.stats().frames_decompressed, 0);
 }
 
 // ============================================================================
@@ -1446,7 +1446,7 @@ fn test_compression_stats_with_different_priorities() {
         compressor.compress_frame(frame).unwrap();
     }
 
-    let stats = compressor.get_stats();
+    let stats = compressor.stats();
     assert_eq!(stats.frames_processed, 5);
 }
 

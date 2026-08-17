@@ -815,11 +815,11 @@ fn test_universal_request_with_headers() {
         .with_header("Authorization", "Bearer token");
 
     assert_eq!(
-        request.get_header("Content-Type"),
+        request.header("Content-Type"),
         Some(&Cow::Borrowed("application/json"))
     );
     assert_eq!(
-        request.get_header("Authorization"),
+        request.header("Authorization"),
         Some(&Cow::Borrowed("Bearer token"))
     );
 }
@@ -830,8 +830,8 @@ fn test_universal_request_with_query_params() {
         .with_query("page", "1")
         .with_query("limit", "10");
 
-    assert_eq!(request.get_query("page"), Some(&"1".to_string()));
-    assert_eq!(request.get_query("limit"), Some(&"10".to_string()));
+    assert_eq!(request.query("page"), Some(&"1".to_string()));
+    assert_eq!(request.query("limit"), Some(&"10".to_string()));
 }
 
 #[test]
@@ -1147,8 +1147,8 @@ fn test_universal_request_case_insensitive_headers() {
         .with_header("Accept", "application/json");
 
     // Both lowercase and capitalized should work
-    assert!(request.get_header("accept").is_some());
-    assert!(request.get_header("Accept").is_some());
+    assert!(request.header("accept").is_some());
+    assert!(request.header("Accept").is_some());
 }
 
 #[test]
