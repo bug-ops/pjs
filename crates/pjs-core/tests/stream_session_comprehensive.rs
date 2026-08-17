@@ -14,7 +14,7 @@ use pjson_rs::domain::{
     entities::stream::StreamConfig as EntityStreamConfig,
     events::{DomainEvent, SessionState},
     ports::TimeProvider,
-    value_objects::{JsonData, StreamId},
+    value_objects::{JsonData, Priority, StreamId},
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -808,6 +808,57 @@ fn test_stream_nonexistent() {
 }
 
 // ============================================================================
+// Stream Patch Frame Creation
+// ============================================================================
+
+#[test]
+fn test_create_stream_patch_frames_updates_total_bytes() {
+    let mut session = StreamSession::new(default_config());
+    session.activate().unwrap();
+
+    let stream_id = session
+        .create_stream(json_str(
+            "payload",
+            "hello world payload, quite a few bytes here",
+        ))
+        .unwrap();
+    session.start_stream(stream_id).unwrap();
+
+    assert_eq!(session.stats().total_bytes, 0);
+
+    let frames = session
+        .create_stream_patch_frames(stream_id, Priority::LOW, 100)
+        .unwrap();
+
+    assert!(!frames.is_empty());
+    let expected_bytes: u64 = frames.iter().map(|f| f.estimated_size() as u64).sum();
+    assert_eq!(session.stats().total_bytes, expected_bytes);
+    assert!(session.stats().total_bytes > 0);
+}
+
+#[test]
+fn test_create_stream_patch_frames_zero_max_frames_does_not_increment_total_bytes() {
+    let mut session = StreamSession::new(default_config());
+    session.activate().unwrap();
+
+    let stream_id = session
+        .create_stream(json_str(
+            "payload",
+            "hello world payload, quite a few bytes here",
+        ))
+        .unwrap();
+    session.start_stream(stream_id).unwrap();
+
+    let frames = session
+        .create_stream_patch_frames(stream_id, Priority::LOW, 0)
+        .unwrap();
+
+    assert!(frames.is_empty());
+    assert_eq!(session.stats().total_frames, 0);
+    assert_eq!(session.stats().total_bytes, 0);
+}
+
+// ============================================================================
 // Priority Frame Creation (Complex Scenario)
 // ============================================================================
 
@@ -849,6 +900,55 @@ fn test_create_priority_frames_updates_stats() {
 
     // Stats should be consistent (no panic)
     assert!(session.stats().total_frames >= initial_frame_count);
+}
+
+/// `create_priority_frames` generates frames per stream, then globally sorts
+/// by priority and truncates to `batch_size` — discarding some generated
+/// frames. Unlike `create_stream_patch_frames` (a simple before/after delta
+/// of the child stream's own byte counter), `total_bytes` here must equal
+/// the sum over only the frames actually retained, strictly less than the
+/// sum over every frame every stream generated.
+#[test]
+fn test_create_priority_frames_updates_total_bytes_excludes_discarded_frames() {
+    let mut session = StreamSession::new(default_config());
+    session.activate().unwrap();
+
+    // Three streams, each with two scalar leaf fields: with `create_priority_frames`'s
+    // hardcoded `max_frames = 5` per stream, 2 patches per stream chunk to 2 frames
+    // each (chunk_size = ceil(2/5) = 1), so 6 frames are generated in total.
+    let mut stream_ids = Vec::new();
+    for i in 0..3 {
+        let payload = json_data_object(&[
+            (
+                "field_a",
+                JsonData::String(format!("stream-{i}-field-a-payload-value")),
+            ),
+            (
+                "field_b",
+                JsonData::String(format!("stream-{i}-field-b-payload-value")),
+            ),
+        ]);
+        let stream_id = session.create_stream(payload).unwrap();
+        session.start_stream(stream_id).unwrap();
+        stream_ids.push(stream_id);
+    }
+
+    // Retain fewer frames than the 6 generated, forcing truncation.
+    let batch_size = 3;
+    let frames = session.create_priority_frames(batch_size).unwrap();
+    assert_eq!(frames.len(), batch_size);
+
+    let expected_bytes: u64 = frames.iter().map(|f| f.estimated_size() as u64).sum();
+    assert_eq!(session.stats().total_bytes, expected_bytes);
+
+    let total_child_bytes: u64 = stream_ids
+        .iter()
+        .map(|id| session.stream(*id).unwrap().stats().total_bytes)
+        .sum();
+    assert!(
+        session.stats().total_bytes < total_child_bytes,
+        "session total_bytes must exclude frames discarded by batch_size truncation"
+    );
 }
 
 // ============================================================================

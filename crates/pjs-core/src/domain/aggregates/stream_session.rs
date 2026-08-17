@@ -113,7 +113,13 @@ pub struct SessionStats {
     pub failed_streams: u64,
     /// Total number of frames emitted by the session.
     pub total_frames: u64,
-    /// Total payload bytes emitted by the session.
+    /// Total estimated payload bytes emitted by the session, accumulated
+    /// from [`Frame::estimated_size`] over every frame batch produced by
+    /// [`StreamSession::create_stream_patch_frames`] and
+    /// [`StreamSession::create_priority_frames`]. Counts bytes emitted over
+    /// the wire, not distinct payload volume: patch generation is
+    /// content-idempotent, so repeated polling against unchanged source data
+    /// keeps adding the same bytes rather than counting them once.
     pub total_bytes: u64,
     /// Average per-stream duration, in milliseconds.
     pub average_stream_duration_ms: f64,
@@ -327,9 +333,16 @@ impl StreamSession {
     /// Generate patch frames for a child stream through the aggregate root.
     ///
     /// Wraps [`Stream::create_patch_frames`] so that session-level statistics
-    /// (`stats.total_frames`) and the `updated_at` timestamp stay consistent
-    /// with the child mutation, and a [`DomainEvent::FramesBatched`] event is
-    /// raised when frames are produced.
+    /// (`stats.total_frames`, `stats.total_bytes`) and the `updated_at`
+    /// timestamp stay consistent with the child mutation, and a
+    /// [`DomainEvent::FramesBatched`] event is raised when frames are
+    /// produced.
+    ///
+    /// `stats.total_bytes` is taken as a before/after delta of the child
+    /// [`Stream`]'s own `total_bytes` counter — which `create_patch_frames`
+    /// already computes internally via [`Frame::estimated_size`] for every
+    /// frame it returns — rather than re-summing `estimated_size()` here,
+    /// avoiding a second full JSON serialization pass per frame.
     pub fn create_stream_patch_frames(
         &mut self,
         stream_id: StreamId,
@@ -341,9 +354,12 @@ impl StreamSession {
             .get_mut(&stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
 
+        let bytes_before = stream.stats().total_bytes;
         let frames = stream.create_patch_frames(priority_threshold, max_frames)?;
+        let bytes_after = stream.stats().total_bytes;
 
         self.stats.total_frames += frames.len() as u64;
+        self.stats.total_bytes += bytes_after - bytes_before;
         self.update_timestamp();
 
         if !frames.is_empty() {
@@ -493,6 +509,13 @@ impl StreamSession {
     }
 
     /// Create frames for all active streams based on priority
+    ///
+    /// Unlike [`Self::create_stream_patch_frames`], `stats.total_bytes` here
+    /// cannot be taken as a child `Stream` before/after delta: frames are
+    /// generated per-stream but then globally sorted by priority and
+    /// truncated to `batch_size`, so a per-stream delta would count bytes
+    /// for frames this call discards. `estimated_size()` is summed directly
+    /// over only the frames actually retained in `all_frames`.
     pub fn create_priority_frames(&mut self, batch_size: usize) -> DomainResult<Vec<Frame>> {
         if !self.is_active() {
             return Err(DomainError::InvalidSessionState(
@@ -531,6 +554,10 @@ impl StreamSession {
 
         // Update session stats
         self.stats.total_frames += frame_count;
+        self.stats.total_bytes += all_frames
+            .iter()
+            .map(|frame| frame.estimated_size() as u64)
+            .sum::<u64>();
         self.update_timestamp();
 
         if !all_frames.is_empty() {
@@ -744,6 +771,45 @@ mod tests {
         assert!(session.complete_stream(stream_id).is_ok());
         assert_eq!(session.stats().active_streams, 0);
         assert_eq!(session.stats().completed_streams, 1);
+    }
+
+    #[test]
+    fn test_create_stream_patch_frames_tracks_total_bytes() {
+        let mut session = StreamSession::new(SessionConfig::default());
+        assert!(session.activate().is_ok());
+
+        let source_data: JsonData = serde_json::json!({
+            "id": "abc-123",
+            "name": "Alice",
+            "bio": "a".repeat(500),
+            "items": [1, 2, 3, 4, 5]
+        })
+        .into();
+
+        let stream_id = session.create_stream(source_data).unwrap();
+        assert!(session.start_stream(stream_id).is_ok());
+        assert_eq!(session.stats().total_bytes, 0);
+
+        let frames = session
+            .create_stream_patch_frames(stream_id, Priority::BACKGROUND, 16)
+            .expect("frame generation must succeed");
+        assert!(!frames.is_empty());
+
+        let expected_bytes: u64 = frames.iter().map(|f| f.estimated_size() as u64).sum();
+        assert_eq!(session.stats().total_bytes, expected_bytes);
+        assert!(session.stats().total_bytes > 0);
+
+        // A smaller payload must accumulate proportionally fewer bytes.
+        let mut small_session = StreamSession::new(SessionConfig::default());
+        assert!(small_session.activate().is_ok());
+        let small_data: JsonData = serde_json::json!({ "id": "x" }).into();
+        let small_stream_id = small_session.create_stream(small_data).unwrap();
+        assert!(small_session.start_stream(small_stream_id).is_ok());
+        small_session
+            .create_stream_patch_frames(small_stream_id, Priority::BACKGROUND, 16)
+            .expect("frame generation must succeed");
+
+        assert!(session.stats().total_bytes > small_session.stats().total_bytes);
     }
 
     #[test]
