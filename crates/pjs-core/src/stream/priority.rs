@@ -205,6 +205,30 @@ impl PriorityStreamer {
         }
     }
 
+    /// Deep-clone `value`, emptying every array reachable via a JsonPath-encodable
+    /// key — mirrors `extract_patches`'s own traversal exactly. A subtree under a
+    /// key `JsonPath` cannot encode (`.`/`[`/`]`) is left fully populated, since
+    /// `extract_patches`'s recursion will never reach it to emit a compensating
+    /// `Append` (see #394 C3). Encodability depends only on the key string itself
+    /// (`JsonPath::append_key`'s sole failure mode), not on the accumulated path,
+    /// so this check does not need to thread a `JsonPath` through the recursion.
+    fn skeletonize_arrays(value: &JsonValue) -> JsonValue {
+        match value {
+            JsonValue::Object(map) => {
+                let skeleton = map
+                    .iter()
+                    .map(|(key, v)| match JsonPath::root().append_key(key) {
+                        Ok(_) => (key.clone(), Self::skeletonize_arrays(v)),
+                        Err(_) => (key.clone(), v.clone()),
+                    })
+                    .collect();
+                JsonValue::Object(skeleton)
+            }
+            JsonValue::Array(_) => JsonValue::Array(vec![]),
+            other => other.clone(),
+        }
+    }
+
     /// Extract patches from JSON structure
     fn extract_patches(
         &self,
@@ -220,32 +244,49 @@ impl PriorityStreamer {
                     let Ok(field_path) = current_path.append_key(key) else {
                         continue;
                     };
-                    let priority = self.calculate_field_priority(&field_path, key, value);
+                    let own_priority = self.calculate_field_priority(&field_path, key, value);
 
-                    // Create patch for this field
+                    let mut child_patches = Vec::new();
+                    self.extract_patches(value, &field_path, &mut child_patches)?;
+
+                    // Hoist the Set's priority to at least the highest Append
+                    // priority anywhere in its subtree, so a Set can never be
+                    // sorted/applied after an Append it must precede (#394 C1/C2).
+                    let append_ceiling = child_patches
+                        .iter()
+                        .filter(|p| matches!(p.operation, PatchOperation::Append { .. }))
+                        .map(|p| p.priority)
+                        .max();
+                    let priority =
+                        append_ceiling.map_or(own_priority, |ceiling| own_priority.max(ceiling));
+
                     patches.push(JsonPatch {
                         path: field_path.clone(),
                         operation: PatchOperation::Set {
-                            value: value.clone(),
+                            value: Self::skeletonize_arrays(value),
                         },
                         priority,
                     });
 
-                    // Recursively process nested structures
-                    self.extract_patches(value, &field_path, patches)?;
+                    patches.extend(child_patches);
                 }
             }
             JsonValue::Array(arr) => {
                 // For arrays, create append operations in chunks
                 if arr.len() > 10 {
-                    // Chunk large arrays
+                    // Priority is computed once from the full array so every
+                    // chunk of the same array shares it: computing it per-chunk
+                    // let a short tail chunk outrank the bulk chunks and jump
+                    // ahead of them in the priority sort, corrupting element
+                    // order on reconstruction (#394 C2, chunked variant).
+                    let priority = self.calculate_array_priority(current_path, arr);
                     for chunk in arr.chunks(self.config.max_patch_size) {
                         patches.push(JsonPatch {
                             path: current_path.clone(),
                             operation: PatchOperation::Append {
                                 values: chunk.to_vec(),
                             },
-                            priority: self.calculate_array_priority(current_path, chunk),
+                            priority,
                         });
                     }
                 } else if !arr.is_empty() {
@@ -368,7 +409,22 @@ impl Default for PriorityStreamer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stream::reconstruction::JsonReconstructor;
     use serde_json::json;
+
+    /// Runs `payload` through `PriorityStreamer::analyze()` and applies every
+    /// produced frame to a fresh `JsonReconstructor`, returning the reconstructed
+    /// document. Exercises the full `analyze()` -> `JsonReconstructor` pipeline,
+    /// not just patch inspection (see spec NFR-004).
+    fn round_trip(streamer: &PriorityStreamer, payload: &JsonValue) -> JsonValue {
+        let plan = streamer.analyze(payload).unwrap();
+        let mut reconstructor = JsonReconstructor::new();
+        for frame in plan.frames {
+            reconstructor.add_frame(frame);
+        }
+        reconstructor.process_all_frames().unwrap();
+        reconstructor.current_state().clone()
+    }
 
     #[test]
     fn test_json_path_creation() {
@@ -447,5 +503,241 @@ mod tests {
         let plan = streamer.analyze(&json).unwrap();
         assert!(!plan.is_complete());
         assert!(plan.remaining_frames() > 0);
+    }
+
+    // Regression tests for object-nested array duplication (spec 031 / issue #394):
+    // `extract_patches` used to emit a `Set` patch carrying the full array value for
+    // an object field, then recurse and emit an `Append` patch for the same array,
+    // duplicating every non-empty object-nested array after a full analyze() ->
+    // JsonReconstructor round trip. These tests wire analyze() directly into
+    // JsonReconstructor (not just patch inspection) per US-003/NFR-004.
+
+    #[test]
+    fn test_round_trip_exact_repro_case() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!({"items": [1, 2, 3]});
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+        assert_eq!(result["items"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn test_round_trip_multi_entity_payload() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!({
+            "users": [
+                {"id": 1, "name": "Alice"},
+                {"id": 2, "name": "Bob"}
+            ],
+            "metadata": {
+                "nested": {
+                    "deep": [1, 2, 3, 4, 5]
+                }
+            }
+        });
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_chunked_array_exceeds_max_patch_size() {
+        let config = StreamerConfig {
+            max_patch_size: 5,
+            ..StreamerConfig::default()
+        };
+        let streamer = PriorityStreamer::with_config(config);
+        let items: Vec<JsonValue> = (0..23).map(|i| json!(i)).collect();
+        let payload = json!({ "data": items });
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+        assert_eq!(result["data"].as_array().unwrap().len(), 23);
+    }
+
+    #[test]
+    fn test_round_trip_chunked_array_divergent_chunk_priority() {
+        // #394 M2: guards against computing `calculate_array_priority` per
+        // chunk slice instead of once for the whole array. With
+        // max_patch_size 60 over a 130-element "items" array, chunks are
+        // 60/60/10: under the old per-chunk scheme the 10-element tail (len
+        // <= 50) would fall through to the "items" last-key boost and get
+        // MEDIUM priority, while the two 60-element head chunks (len > 50)
+        // get BACKGROUND — the higher-priority tail would then sort ahead of
+        // the head chunks and be applied first, corrupting element order.
+        let config = StreamerConfig {
+            max_patch_size: 60,
+            ..StreamerConfig::default()
+        };
+        let streamer = PriorityStreamer::with_config(config);
+        let items: Vec<JsonValue> = (0..130).map(|i| json!(i)).collect();
+        let payload = json!({ "items": items });
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_array_nested_at_depth_three() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!({
+            "level1": {
+                "level2": {
+                    "level3": [1, 2, 3, 4]
+                }
+            }
+        });
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_array_of_arrays() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!({
+            "matrix": [[1, 2], [3, 4]]
+        });
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_array_of_objects_with_nested_arrays() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!({
+            "users": [
+                {"name": "Alice", "tags": ["admin", "active"]},
+                {"name": "Bob", "tags": ["guest"]}
+            ]
+        });
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_empty_array_field() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!({"items": []});
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_top_level_bare_array() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!([1, 2, 3]);
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_mixed_payload_no_regression() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!({
+            "id": 1,
+            "name": "widget",
+            "tags": ["a", "b", "c"],
+            "details": {
+                "color": "red",
+                "size": 10
+            }
+        });
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+        assert_eq!(result["tags"], json!(["a", "b", "c"]));
+        assert_eq!(result["details"], json!({"color": "red", "size": 10}));
+    }
+
+    // Regression cases for the Set/Append priority-inversion data-loss bug
+    // (impl-critic findings C1-C3, tracked alongside issue #394's redesign).
+    // `analyze()` sorts patches by priority *descending*, independently of
+    // path/depth, so a field's `Append` (or a descendant's `Set`/`Append`) can
+    // land in an earlier-processed, higher-priority batch than its own or an
+    // ancestor's `Set`. Pre-fix this was harmless (`Set` always carried the
+    // full pristine value); post-fix `Set` carries a skeleton, so an
+    // out-of-order `Set` destructively wipes already-applied data. These are
+    // expected to FAIL until the ordering issue is fixed (see task #9).
+
+    #[test]
+    fn test_round_trip_same_path_priority_inversion() {
+        // "history" gets BACKGROUND field priority (matches the
+        // id/uuid/.../history critical-field-name list) but its Append gets
+        // MEDIUM array priority ("history" is absent from the
+        // reviews|comments|logs array-priority boost list) -> Append (MEDIUM)
+        // applies before Set (BACKGROUND) wipes the field to `[]`.
+        let streamer = PriorityStreamer::new();
+        let payload = json!({"history": [1, 2, 3]});
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_parent_object_priority_inversion() {
+        // Any key containing "stats"/"analytics"/"meta" gets LOW field
+        // priority, but its nested array field defaults to MEDIUM -> the
+        // nested Set/Append pair (MEDIUM) applies and populates correctly,
+        // then the ancestor's skeletonized Set (LOW) applies afterward and
+        // wipes the nested field back to `[]`.
+        let streamer = PriorityStreamer::new();
+        let payload = json!({"stats": {"values": [1, 2, 3]}});
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_round_trip_parent_object_priority_inversion_chunked() {
+        // Same class as above, but with a >100-element array so the chunking
+        // branch fires: the tail chunk (<=50 elements) gets MEDIUM while the
+        // head chunk (>50 elements) and the ancestor's Set get BACKGROUND/LOW
+        // respectively, so only some elements survive the ancestor Set wipe.
+        let streamer = PriorityStreamer::new();
+        let values: Vec<JsonValue> = (0..101).map(|i| json!(i)).collect();
+        let payload = json!({"stats": {"values": values}});
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
+        assert_eq!(
+            result["stats"]["values"].as_array().unwrap().len(),
+            101,
+            "expected all 101 elements to survive the round trip"
+        );
+    }
+
+    #[test]
+    fn test_round_trip_unencodable_key_parent_wipe() {
+        // `extract_patches` skips recursion into keys JsonPath cannot encode
+        // (containing '.', '[', ']'), so no Set/Append is ever emitted for
+        // "weird.key" itself. Pre-fix, the parent "outer" field's Set carried
+        // the full pristine value (including "weird.key"'s array) as a safety
+        // net. Post-fix, `skeletonize_arrays` recurses into "outer" and empties
+        // "weird.key"'s array too, permanently losing the only copy of its data.
+        let streamer = PriorityStreamer::new();
+        let payload = json!({"outer": {"weird.key": [1, 2, 3]}});
+
+        let result = round_trip(&streamer, &payload);
+
+        assert_eq!(result, payload);
     }
 }
