@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **BREAKING** `RateLimitError` (public on `pjson-rs`) gained a new `CapacityExceeded { max: usize }` variant as part of the #346 fix below. `RateLimitError` is not `#[non_exhaustive]`, so this breaks any external code exhaustively matching on it without a wildcard arm
+- **BREAKING** Removed the `simd-avx2`, `simd-neon`, and `simd-sse42` Cargo features from `pjson-rs`. All three compiled to identical behavior as `simd-auto` — they only ever gated the same coarse SIMD-enable switch in `crates/pjs-core/build.rs` (which sets the sonic-rs backend on or off), never a distinct per-ISA code path, and their README documentation incorrectly implied each one "forced" a specific instruction set. Builds passing `--features simd-avx2`/`simd-neon`/`simd-sse42` explicitly now fail with an unknown-feature error instead of silently accepting a redundant flag. Use `simd-auto` (default, runtime-dispatches to the best available instruction set; x86_64 and aarch64) or `simd-avx512` (x86_64-only, also forwards to `sonic-rs/avx512`) instead. `crates/pjs-bench`'s own disconnected copies of these features, along with the dead `features::has_simd()` helper that only ever reflected them, were also removed (closes #324)
 
 ### Fixed
 

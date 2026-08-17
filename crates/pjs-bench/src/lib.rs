@@ -240,15 +240,6 @@ pub mod features {
     pub fn has_streaming() -> bool {
         cfg!(feature = "streaming")
     }
-
-    /// Check if SIMD features are available
-    pub fn has_simd() -> bool {
-        cfg!(any(
-            feature = "simd-auto",
-            feature = "simd-avx2",
-            feature = "simd-sse42"
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -260,20 +251,6 @@ mod tests {
         let bench = BenchSuite::new();
         // StreamConfig doesn't have chunk_size method, just ensure config exists
         let _config = bench.config();
-    }
-
-    #[test]
-    #[allow(clippy::overly_complex_bool_expr)]
-    fn test_feature_detection() {
-        use crate::features;
-
-        // These will depend on compilation features
-        let has_streaming = features::has_streaming();
-        let has_simd = features::has_simd();
-
-        // Just ensure they return boolean values (always true, but validates API)
-        assert!(has_streaming || !has_streaming);
-        assert!(has_simd || !has_simd);
     }
 
     #[test]
