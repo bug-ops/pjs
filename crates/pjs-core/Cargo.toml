@@ -27,7 +27,7 @@ chrono = { workspace = true, features = ["serde"] }
 crossbeam = { workspace = true }
 dashmap = { workspace = true }
 flate2 = { workspace = true, optional = true }
-futures = { workspace = true, optional = true }
+futures = { workspace = true }
 getrandom = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
 jiter = { workspace = true, optional = true }
@@ -101,7 +101,6 @@ http-server = [
     "dep:axum",
     "dep:tower",
     "dep:tower-http",
-    "dep:futures",
     "dep:subtle",
     "dep:hmac",
     "dep:sha2",

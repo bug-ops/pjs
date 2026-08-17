@@ -12,6 +12,7 @@ use crate::domain::{
     value_objects::{Priority, SessionId, StreamId},
 };
 use chrono::Utc;
+use futures::future::try_join_all;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -26,6 +27,14 @@ pub struct StreamingStats {
     /// Number of payload bytes written during the operation.
     pub bytes_written: usize,
     /// Total wall-clock time spent processing.
+    ///
+    /// Measured over the whole [`GatStreamingOrchestrator::stream_with_priority`]
+    /// call (session lookup, frame processing, and event publish), not just
+    /// frame processing. When multiple streams run concurrently via
+    /// [`GatStreamingOrchestrator::process_concurrent_streams`], every stream in
+    /// the batch starts at approximately the same instant, so this value
+    /// approximates the whole batch's elapsed time rather than that stream's
+    /// individual share of it.
     pub processing_time: Duration,
     /// Number of cache hits encountered during processing.
     pub cache_hits: usize,
@@ -154,7 +163,12 @@ where
         })
     }
 
-    /// Process multiple streams concurrently using GAT futures
+    /// Process multiple streams concurrently using GAT futures.
+    ///
+    /// Streams are driven to completion together via [`try_join_all`], so
+    /// each stream's I/O-bound work overlaps instead of running one after
+    /// another. Input is truncated to [`OrchestratorConfig::max_concurrent_streams`]
+    /// before scheduling.
     pub async fn process_concurrent_streams(
         &self,
         streams: Vec<(SessionId, StreamId, Vec<Frame>)>,
@@ -172,23 +186,15 @@ where
             );
         }
 
-        let limited_streams = streams
+        // Drive all GAT futures concurrently instead of awaiting them one at a time.
+        let tasks = streams
             .into_iter()
             .take(self.config.max_concurrent_streams)
-            .collect::<Vec<_>>();
+            .map(|(session_id, stream_id, frames)| {
+                self.stream_with_priority(session_id, stream_id, frames)
+            });
 
-        // Use GAT futures for true zero-cost concurrency
-        let mut tasks = Vec::new();
-        for (session_id, stream_id, frames) in limited_streams {
-            let future = self.stream_with_priority(session_id, stream_id, frames);
-            tasks.push(future);
-        }
-
-        // Process all streams concurrently
-        let mut results = Vec::new();
-        for task in tasks {
-            results.push(task.await?);
-        }
+        let results = try_join_all(tasks).await?;
 
         let total_time = start_time.elapsed();
         info!(
@@ -374,12 +380,21 @@ mod tests {
     /// Mock GAT repository for testing
     struct MockGatRepository {
         sessions: Arc<RwLock<Vec<StreamSession>>>,
+        delay: Duration,
     }
 
     impl MockGatRepository {
         fn new() -> Self {
             Self {
                 sessions: Arc::new(RwLock::new(Vec::new())),
+                delay: Duration::ZERO,
+            }
+        }
+
+        fn with_delay(delay: Duration) -> Self {
+            Self {
+                sessions: Arc::new(RwLock::new(Vec::new())),
+                delay,
             }
         }
 
@@ -426,6 +441,7 @@ mod tests {
 
         fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
             async move {
+                tokio::time::sleep(self.delay).await;
                 let sessions = self.sessions.read().await;
                 Ok(sessions.iter().find(|s| s.id() == session_id).cloned())
             }
@@ -617,6 +633,44 @@ mod tests {
             assert_eq!(stats.frames_processed, 1);
             assert!(stats.bytes_written > 0);
         }
+    }
+
+    #[tokio::test]
+    async fn test_gat_orchestrator_concurrent_streams_overlap_in_time() {
+        let repository = Arc::new(MockGatRepository::with_delay(Duration::from_millis(50)));
+        let publisher = Arc::new(MockGatEventPublisher::new());
+        let orchestrator = GatOrchestratorFactory::create_default(repository.clone(), publisher);
+
+        let mut streams = Vec::new();
+        for i in 0..5 {
+            let stream_id = StreamId::new();
+            let session = StreamSession::new(
+                crate::domain::aggregates::stream_session::SessionConfig::default(),
+            );
+            let session_id = session.id();
+            repository.add_session(session).await;
+            let frames = vec![Frame::skeleton(
+                stream_id,
+                1,
+                JsonData::String(format!("stream_{}", i)),
+            )];
+            streams.push((session_id, stream_id, frames));
+        }
+
+        let start = Instant::now();
+        let results = orchestrator
+            .process_concurrent_streams(streams)
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+
+        assert_eq!(results.len(), 5);
+        // Sequential (old impl) would take >= 5 * 50ms = 250ms; concurrent stays near 50ms.
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "expected concurrent execution, took {:?}",
+            elapsed
+        );
     }
 
     #[tokio::test]
