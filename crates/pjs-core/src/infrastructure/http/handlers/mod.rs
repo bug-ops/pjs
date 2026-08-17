@@ -7,6 +7,6 @@
 
 #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 pub mod dictionary;
-pub mod health;
-pub mod sessions;
-pub mod streams;
+pub(crate) mod health;
+pub(crate) mod sessions;
+pub(crate) mod streams;
