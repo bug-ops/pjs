@@ -23,7 +23,7 @@ use crate::{
     },
     infrastructure::http::axum_adapter::{
         CreateSessionRequest, CreateSessionResponse, PaginationParams, PjsAppState, PjsError,
-        SearchSessionsParams, SessionHealthResponse,
+        SearchSessionsParams, SessionHealthResponse, parse_session_id,
     },
 };
 
@@ -81,8 +81,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let session_id =
-        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
+    let session_id = parse_session_id(session_id)?;
 
     let query = GetSessionQuery {
         session_id: session_id.into(),
@@ -108,8 +107,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let session_id =
-        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
+    let session_id = parse_session_id(session_id)?;
 
     let query = GetSessionHealthQuery {
         session_id: session_id.into(),
@@ -204,8 +202,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let session_id =
-        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
+    let session_id = parse_session_id(session_id)?;
 
     let query = GetSessionStatsQuery {
         session_id: session_id.into(),

@@ -12,10 +12,18 @@ pub mod limits;
 pub mod metrics_collector;
 
 // Re-export commonly used adapters
-pub use event_publisher::*;
+pub use event_publisher::{
+    CompositeEventPublisher, EventPublisherVariant, HttpEventPublisher, InMemoryEventPublisher,
+    StoredEvent,
+};
 pub use frame_store::InMemoryFrameStore;
-pub use gat_memory_repository::*;
+pub use gat_memory_repository::{GatInMemoryStreamRepository, GatInMemoryStreamStore};
 pub use generic_store::{InMemoryStore, SessionStore, StreamStore};
-pub use json_adapter::*;
-pub use limits::*;
-pub use metrics_collector::*;
+pub use json_adapter::JsonAdapter;
+pub use limits::{
+    ALLOWED_SORT_FIELDS, MAX_HEALTH_METRICS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
+    MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT,
+};
+pub use metrics_collector::{
+    InMemoryMetricsCollector, PerformanceMetrics, SessionMetrics, StreamMetrics, TimestampedMetrics,
+};

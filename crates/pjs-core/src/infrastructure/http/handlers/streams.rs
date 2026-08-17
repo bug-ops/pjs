@@ -18,13 +18,13 @@ use crate::{
     domain::{
         entities::Frame,
         ports::{EventPublisherGat, StreamRepositoryGat, StreamStoreGat},
-        value_objects::{Priority, SessionId, StreamId},
+        value_objects::{Priority, StreamId},
     },
     infrastructure::{
         adapters::InMemoryFrameStore,
         http::axum_adapter::{
             FrameQueryParams, GenerateFramesRequest, GenerateFramesResponse, PjsAppState, PjsError,
-            StartStreamRequest,
+            StartStreamRequest, parse_session_and_stream_id, parse_session_id,
         },
     },
 };
@@ -44,8 +44,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let session_id =
-        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
+    let session_id = parse_session_id(session_id)?;
 
     let command = CreateStreamCommand {
         session_id: session_id.into(),
@@ -73,10 +72,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    let stream_id =
-        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
+    let (session_id, stream_id) = parse_session_and_stream_id(session_id, stream_id)?;
 
     let command = StartStreamCommand {
         session_id: session_id.into(),
@@ -113,10 +109,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    let stream_id =
-        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
+    let (session_id, stream_id) = parse_session_and_stream_id(session_id, stream_id)?;
 
     let Json(request) = request.unwrap_or_default();
 
@@ -157,10 +150,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    let stream_id =
-        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
+    let (session_id, stream_id) = parse_session_and_stream_id(session_id, stream_id)?;
 
     let query = GetStreamQuery {
         session_id: session_id.into(),
@@ -187,10 +177,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    let stream_id =
-        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
+    let (session_id, stream_id) = parse_session_and_stream_id(session_id, stream_id)?;
 
     let priority_filter = params
         .priority

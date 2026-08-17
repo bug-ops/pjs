@@ -31,6 +31,7 @@ use crate::{
             DictionaryStore, EventPublisherGat, FrameStoreGat, NoopDictionaryStore,
             StreamRepositoryGat, StreamStoreGat,
         },
+        value_objects::{SessionId, StreamId},
     },
     infrastructure::{
         adapters::InMemoryFrameStore,
@@ -663,6 +664,23 @@ where
         .layer(TraceLayer::new_for_http()))
 }
 
+/// Parse a raw path segment into a [`SessionId`], mapping failure to [`PjsError::InvalidSessionId`].
+pub(crate) fn parse_session_id(raw: String) -> Result<SessionId, PjsError> {
+    SessionId::from_string(&raw).map_err(|_| PjsError::InvalidSessionId(raw))
+}
+
+/// Parse raw `(session_id, stream_id)` path segments, mapping failures to the matching
+/// [`PjsError::InvalidSessionId`] / [`PjsError::InvalidStreamId`] variant.
+pub(crate) fn parse_session_and_stream_id(
+    session_raw: String,
+    stream_raw: String,
+) -> Result<(SessionId, StreamId), PjsError> {
+    let session_id = parse_session_id(session_raw)?;
+    let stream_id =
+        StreamId::from_string(&stream_raw).map_err(|_| PjsError::InvalidStreamId(stream_raw))?;
+    Ok((session_id, stream_id))
+}
+
 /// Pagination parameters
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
@@ -845,6 +863,58 @@ mod tests {
             build_cors_layer(&HttpServerConfig::default()).is_ok(),
             "default HttpServerConfig must produce a valid CORS layer"
         );
+    }
+
+    // --- parse_session_id / parse_session_and_stream_id unit tests ---
+
+    #[test]
+    fn parse_session_id_valid_roundtrips() {
+        let id = SessionId::new();
+        let parsed = parse_session_id(id.to_string()).expect("valid uuid must parse");
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn parse_session_id_invalid_returns_invalid_session_id_error() {
+        let raw = "not-a-valid-uuid".to_string();
+        let err = parse_session_id(raw.clone()).unwrap_err();
+        match err {
+            PjsError::InvalidSessionId(msg) => assert_eq!(msg, raw),
+            other => panic!("expected InvalidSessionId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_session_and_stream_id_valid_roundtrips() {
+        let session_id = SessionId::new();
+        let stream_id = StreamId::new();
+        let (parsed_session, parsed_stream) =
+            parse_session_and_stream_id(session_id.to_string(), stream_id.to_string())
+                .expect("valid uuids must parse");
+        assert_eq!(parsed_session, session_id);
+        assert_eq!(parsed_stream, stream_id);
+    }
+
+    #[test]
+    fn parse_session_and_stream_id_invalid_session_short_circuits() {
+        let raw_session = "bad-session".to_string();
+        let err = parse_session_and_stream_id(raw_session.clone(), StreamId::new().to_string())
+            .unwrap_err();
+        match err {
+            PjsError::InvalidSessionId(msg) => assert_eq!(msg, raw_session),
+            other => panic!("expected InvalidSessionId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_session_and_stream_id_invalid_stream_returns_invalid_stream_id_error() {
+        let raw_stream = "bad-stream".to_string();
+        let err = parse_session_and_stream_id(SessionId::new().to_string(), raw_stream.clone())
+            .unwrap_err();
+        match err {
+            PjsError::InvalidStreamId(msg) => assert_eq!(msg, raw_stream),
+            other => panic!("expected InvalidStreamId, got {other:?}"),
+        }
     }
 
     // --- existing integration tests ---

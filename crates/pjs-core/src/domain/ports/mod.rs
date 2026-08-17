@@ -15,7 +15,12 @@ pub mod writer;
 pub use dictionary_store::{DictionaryFuture, DictionaryStore, NoopDictionaryStore};
 
 // GAT traits (canonical interfaces)
-pub use gat::*;
+pub use gat::{
+    CacheGat, ConnectionMonitorGat, EventPublisherGat, EventStoreGat, FrameRepositoryGat,
+    FrameSinkGat, FrameSinkGatExt, FrameSourceGat, FrameStoreGat, FrameStorePage, FrameWriterGat,
+    MetricsCollectorGat, SessionMetricsGat, SessionTransactionGat, StreamRepositoryGat,
+    StreamStoreGat, WriterFactoryGat,
+};
 
 // Supporting types only (no async_trait traits)
 pub use repositories::{

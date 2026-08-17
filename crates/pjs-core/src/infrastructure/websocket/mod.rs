@@ -27,10 +27,10 @@ pub mod security;
 pub mod server;
 
 #[cfg(feature = "websocket-client")]
-pub use client::*;
+pub use client::{PjsWebSocketClient, StreamStats};
 pub use security::SecureWebSocketHandler;
 #[cfg(feature = "http-server")]
-pub use server::*;
+pub use server::{AxumWebSocketTransport, create_websocket_router};
 
 /// Default deadline for a single outbound WebSocket sink write.
 ///
