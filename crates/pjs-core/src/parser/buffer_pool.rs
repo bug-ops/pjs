@@ -363,8 +363,16 @@ impl AlignedBuffer {
         // Minimum alignment should be at least size of usize for proper alignment
         let alignment = alignment.max(mem::align_of::<usize>());
 
-        // Align capacity to SIMD boundaries
-        let aligned_capacity = (capacity + alignment - 1) & !(alignment - 1);
+        // Align capacity to SIMD boundaries. `capacity + alignment - 1` can overflow `usize`
+        // when `capacity` is near `usize::MAX`; wrapping would silently mask `aligned_capacity`
+        // down to a small value instead of surfacing the out-of-range request as an error.
+        let rounded = capacity.checked_add(alignment - 1).ok_or_else(|| {
+            DomainError::InvalidInput(format!(
+                "Capacity {} overflows when rounding to alignment {}",
+                capacity, alignment
+            ))
+        })?;
+        let aligned_capacity = rounded & !(alignment - 1);
 
         // Ensure minimum capacity for safety
         let aligned_capacity = aligned_capacity.max(alignment);
@@ -464,8 +472,34 @@ impl AlignedBuffer {
             return Ok(());
         }
 
-        // Align new capacity
-        let aligned_capacity = (new_capacity + self.alignment - 1) & !(self.alignment - 1);
+        // Align new capacity. `new_capacity + self.alignment - 1` can overflow `usize` when
+        // `new_capacity` is near `usize::MAX`; wrapping would silently mask `aligned_capacity`
+        // down to a small (possibly zero) value that would then slip past the `isize::MAX`
+        // check below despite the request being out of range.
+        let rounded = new_capacity
+            .checked_add(self.alignment - 1)
+            .ok_or_else(|| {
+                DomainError::InvalidInput(format!(
+                    "Capacity {} overflows when rounding to alignment {}",
+                    new_capacity, self.alignment
+                ))
+            })?;
+        let aligned_capacity = rounded & !(self.alignment - 1);
+
+        // `realloc` requires the rounded size to be greater than zero and to not overflow
+        // `isize::MAX`; reject here so this safe method can never pass an out-of-contract
+        // size to the unsafe allocator call.
+        if aligned_capacity == 0 || aligned_capacity > isize::MAX as usize {
+            return Err(DomainError::InvalidInput(format!(
+                "Aligned capacity {} is invalid (zero or exceeds isize::MAX)",
+                aligned_capacity
+            )));
+        }
+
+        // Build the new layout before reallocating: if this fails, we return early without
+        // having touched `self.ptr`, which `realloc_aligned` below would otherwise invalidate.
+        let new_layout = Layout::from_size_align(aligned_capacity, self.alignment)
+            .map_err(|e| DomainError::InvalidInput(format!("Invalid layout: {}", e)))?;
 
         // Use global SIMD allocator for reallocation
         let allocator = aligned_allocator();
@@ -473,14 +507,11 @@ impl AlignedBuffer {
         // Reallocate using the allocator (which will handle data copying).
         // SAFETY: `self.ptr` was allocated (or previously reallocated) via
         // `AlignedAllocator::alloc_aligned` with `self.layout`. `aligned_capacity` is
-        // positive because it is at least `new_capacity > self.capacity >= self.alignment`.
-        // After this call `self.ptr` must not be used — it is replaced below.
+        // nonzero and does not overflow `isize::MAX` per the check above, satisfying `realloc`'s
+        // documented precondition. After this call `self.ptr` must not be used — it is
+        // replaced below.
         let new_ptr =
             unsafe { allocator.realloc_aligned(self.ptr, self.layout, aligned_capacity)? };
-
-        // Update layout for the new size
-        let new_layout = Layout::from_size_align(aligned_capacity, self.alignment)
-            .map_err(|e| DomainError::InvalidInput(format!("Invalid layout: {}", e)))?;
 
         self.ptr = new_ptr;
         self.capacity = aligned_capacity;
@@ -968,6 +999,132 @@ mod tests {
 
         buffer.reserve(1024).unwrap();
         assert_eq!(buffer.as_slice(), &old_data[..]);
+    }
+
+    #[test]
+    fn test_reserve_rejects_capacity_exceeding_isize_max() {
+        // `additional` is comfortably past isize::MAX while still passing the
+        // `len.checked_add(additional)` overflow check.
+        let mut buffer = AlignedBuffer::new(64, 32).unwrap();
+
+        let result = buffer.reserve(usize::MAX - 1000);
+
+        match result {
+            Err(DomainError::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("isize::MAX"),
+                    "unexpected error message: {}",
+                    msg
+                );
+            }
+            other => panic!("expected InvalidInput error, got {:?}", other),
+        }
+
+        // Buffer must remain usable after the rejected reserve.
+        assert_eq!(buffer.capacity(), 64);
+        buffer.extend_from_slice(b"still usable").unwrap();
+        assert_eq!(buffer.as_slice(), b"still usable");
+    }
+
+    #[test]
+    fn test_reserve_rejects_alignment_rounding_past_isize_max() {
+        // `new_capacity == isize::MAX` passes the raw `new_capacity <= isize::MAX`
+        // check, but rounding it up to the next 32-byte alignment boundary produces a
+        // value that still overflows past isize::MAX (without wrapping `usize` itself,
+        // since `isize::MAX + 31` fits comfortably in `usize`).
+        let mut buffer = AlignedBuffer::new(64, 32).unwrap();
+
+        let result = buffer.reserve(isize::MAX as usize);
+
+        assert!(
+            matches!(result, Err(DomainError::InvalidInput(_))),
+            "expected InvalidInput error due to alignment rounding overflow, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_reserve_rejects_usize_wraparound_in_alignment_rounding() {
+        // `new_capacity == usize::MAX` makes `new_capacity + (alignment - 1)` overflow
+        // `usize` and wrap around to a small value; masking that wrapped value down to
+        // the alignment boundary can produce 0, which would silently pass a naive
+        // `aligned_capacity > isize::MAX` check and reach `realloc` with `new_size == 0` —
+        // itself undefined behavior. The checked addition must reject this before rounding.
+        let mut buffer = AlignedBuffer::new(64, 32).unwrap();
+
+        let result = buffer.reserve(usize::MAX);
+
+        assert!(
+            matches!(result, Err(DomainError::InvalidInput(_))),
+            "expected InvalidInput error due to usize wraparound in alignment rounding, got {:?}",
+            result
+        );
+
+        // Buffer must remain usable after the rejected reserve.
+        assert_eq!(buffer.capacity(), 64);
+        buffer.extend_from_slice(b"still usable").unwrap();
+        assert_eq!(buffer.as_slice(), b"still usable");
+    }
+
+    #[test]
+    fn test_reserve_rejects_capacity_at_wraparound_boundary() {
+        // With `alignment == 32`, the smallest `new_capacity` for which
+        // `new_capacity + (alignment - 1)` overflows `usize` is `usize::MAX - 30`
+        // (i.e. `usize::MAX - alignment + 2`). Verify the checked addition rejects
+        // exactly at this boundary, not just for deep overflow like `usize::MAX`.
+        let mut buffer = AlignedBuffer::new(64, 32).unwrap();
+        let boundary_additional = usize::MAX - 30;
+
+        let result = buffer.reserve(boundary_additional);
+
+        match result {
+            Err(DomainError::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("overflows"),
+                    "expected the checked-add overflow guard's message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected InvalidInput error, got {:?}", other),
+        }
+
+        // One less than the boundary must not overflow `usize` during rounding; it is
+        // still rejected, but via the isize::MAX bound rather than the overflow guard —
+        // assert the distinct message to prove the two guards were exercised separately.
+        let result = buffer.reserve(boundary_additional - 1);
+        match result {
+            Err(DomainError::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("isize::MAX"),
+                    "expected the isize::MAX bound guard's message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected InvalidInput error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_new_rejects_capacity_overflowing_alignment_rounding() {
+        // `capacity == usize::MAX` makes `capacity + (alignment - 1)` overflow `usize`
+        // in `AlignedBuffer::new`'s rounding step; this must be rejected rather than
+        // silently wrapping to a small aligned capacity.
+        let result = AlignedBuffer::new(usize::MAX, 64);
+
+        assert!(
+            matches!(result, Err(DomainError::InvalidInput(_))),
+            "expected InvalidInput error due to usize wraparound in alignment rounding, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_new_zero_capacity_rounds_up_to_alignment() {
+        // `capacity == 0` is the ordinary "give me at least one alignment's worth" case,
+        // not an overflow: `checked_add` succeeds trivially, and `.max(alignment)` clamps
+        // the rounded-to-zero result up to `alignment` bytes rather than erroring.
+        let buffer = AlignedBuffer::new(0, 64).unwrap();
+        assert_eq!(buffer.capacity(), 64);
     }
 
     #[test]
