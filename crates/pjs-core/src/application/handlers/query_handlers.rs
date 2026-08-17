@@ -1533,4 +1533,85 @@ mod tests {
         assert_eq!(response.sessions.len(), 1);
         assert!(!response.has_more);
     }
+
+    #[tokio::test]
+    async fn test_search_sessions_with_pagination_has_more_true() {
+        let repository = Arc::new(MockRepository::new());
+        for _ in 0..10 {
+            repository.add_session(make_session(None));
+        }
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: None,
+            sort_order: None,
+            limit: Some(4),
+            offset: Some(3),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 4);
+        assert_eq!(response.total_count, 10);
+        assert!(response.has_more);
+    }
+
+    #[tokio::test]
+    async fn test_search_sessions_last_page_has_more_false() {
+        let repository = Arc::new(MockRepository::new());
+        for _ in 0..7 {
+            repository.add_session(make_session(None));
+        }
+        let handler = SessionQueryHandler::new(repository);
+
+        // offset=3, limit=4 → page of 4 exactly reaches total_count=7 → full last page
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: None,
+            sort_order: None,
+            limit: Some(4),
+            offset: Some(3),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 4);
+        assert_eq!(response.total_count, 7);
+        assert!(!response.has_more);
+    }
+
+    #[tokio::test]
+    async fn test_search_sessions_filter_and_pagination_combined() {
+        let repository = Arc::new(MockRepository::new());
+        // 8 sessions matching the "active" state filter.
+        for _ in 0..8 {
+            repository.add_session(make_session(None));
+        }
+        // 3 sessions in a non-matching state (never activated).
+        for _ in 0..3 {
+            repository.add_session(StreamSession::new(SessionConfig::default()));
+        }
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters {
+                state: Some("active".to_owned()),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: Some(3),
+            offset: Some(2),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 3);
+        assert_eq!(response.total_count, 8);
+        assert!(response.has_more);
+    }
 }
