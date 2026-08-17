@@ -34,4 +34,4 @@ path = "src/servers/simple_demo.rs"
 
 [[bin]]
 name = "websocket-streaming-server"
-path = "src/servers/websocket_streaming.rs"
+path = "src/bin/websocket_streaming_server.rs"

@@ -5,6 +5,7 @@
 
 // Re-enabling data module to fix compilation errors - will fix JSON macro issues
 pub mod data;
+pub mod servers;
 pub mod utils;
 
 pub use data::*;
