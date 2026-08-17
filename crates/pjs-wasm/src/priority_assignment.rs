@@ -402,13 +402,13 @@ mod tests {
 
         let id_field = fields
             .iter()
-            .find(|f| f.path.as_str() == "$.id")
+            .find(|f| f.path.to_string() == "$.id")
             .expect("id field present");
         assert_eq!(id_field.priority, Priority::CRITICAL);
 
         let name_field = fields
             .iter()
-            .find(|f| f.path.as_str() == "$.name")
+            .find(|f| f.path.to_string() == "$.name")
             .expect("name field present");
         assert_eq!(name_field.priority, Priority::HIGH);
     }

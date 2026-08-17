@@ -37,7 +37,7 @@ pub mod value_objects;
 pub use entities::{Frame, Stream};
 pub use events::{DomainEvent, SessionState};
 pub use services::{PriorityHeuristicConfig, compute_priority};
-pub use value_objects::{JsonData, JsonPath, Priority, Schema, SessionId, StreamId};
+pub use value_objects::{JsonData, JsonPath, PathSegment, Priority, Schema, SessionId, StreamId};
 
 /// Domain Result type
 pub type DomainResult<T> = Result<T, DomainError>;

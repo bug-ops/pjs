@@ -171,13 +171,13 @@ pub fn compute_priority(
     path: &JsonPath,
     value: &JsonData,
 ) -> Priority {
-    let last_key = match path.last_segment() {
-        Some(PathSegment::Key(k)) => Some(k),
+    let last_key: Option<&str> = match path.last_segment() {
+        Some(PathSegment::Key(k)) => Some(k.as_str()),
         _ => None,
     };
 
-    if let Some(key) = last_key.as_ref() {
-        if let Some(p) = config.overrides.get(key.as_str()) {
+    if let Some(key) = last_key {
+        if let Some(p) = config.overrides.get(key) {
             return *p;
         }
         let lower = key.to_ascii_lowercase();

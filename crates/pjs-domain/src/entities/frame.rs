@@ -50,27 +50,6 @@ mod serde_priority {
     }
 }
 
-/// Custom serde for JsonPath within entities
-mod serde_json_path {
-    use crate::value_objects::JsonPath;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(path: &JsonPath, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        path.as_str().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<JsonPath, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        JsonPath::new(s).map_err(serde::de::Error::custom)
-    }
-}
-
 /// Frame types for different stages of streaming
 ///
 /// # Wire format
@@ -361,7 +340,6 @@ impl Frame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FramePatch {
     /// JSON path to the target location
-    #[serde(with = "serde_json_path")]
     pub path: JsonPath,
     /// Operation to perform at the path
     pub operation: PatchOperation,

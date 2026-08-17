@@ -42,6 +42,7 @@ pub use domain::{
     DomainResult,
     Frame as DomainFrame,
     JsonPath,
+    PathSegment,
     Priority,
     SessionId,
     Stream,
@@ -114,10 +115,10 @@ pub use stream::{
 pub mod prelude {
     pub use super::{
         ApplicationError, ApplicationResult, DomainError, DomainEvent, DomainFrame, DomainResult,
-        Error, Frame, FrameFlags, FrameHeader, JsonData, JsonPath, JsonReconstructor, Priority,
-        PriorityDistribution, PriorityPercentages, ProcessResult, Result, Schema, SchemaId,
-        SchemaRepository, SchemaType, SchemaValidationError, SemanticMeta, SemanticType, SessionId,
-        Stream, StreamId, StreamProcessor, StreamSession, ValidationService,
+        Error, Frame, FrameFlags, FrameHeader, JsonData, JsonPath, JsonReconstructor, PathSegment,
+        Priority, PriorityDistribution, PriorityPercentages, ProcessResult, Result, Schema,
+        SchemaId, SchemaRepository, SchemaType, SchemaValidationError, SemanticMeta, SemanticType,
+        SessionId, Stream, StreamId, StreamProcessor, StreamSession, ValidationService,
     };
 }
 

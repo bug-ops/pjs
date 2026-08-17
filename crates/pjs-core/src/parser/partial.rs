@@ -23,19 +23,14 @@
 //!
 //! `pjs-domain` must not depend on `jiter`. All jiter imports are confined to
 //! this module inside `pjs-core`.
-//!
-//! # TODO(critic): consolidate JsonPath — pjs-domain::value_objects::JsonPath
-//! (string newtype) and pjs-core::stream::priority::JsonPath (segmented) overlap;
-//! tracked as follow-up to #117.
 
 use std::collections::HashMap;
 
 use jiter::{Jiter, JiterErrorType, JsonErrorType, NumberAny, NumberInt, Peek};
-use pjson_rs_domain::value_objects::JsonData;
+use pjson_rs_domain::value_objects::{JsonData, JsonPath};
 
 use crate::Result;
 use crate::error::Error;
-use crate::stream::priority::JsonPath;
 
 mod private {
     /// Sealing token — external crates cannot implement [`super::PartialJsonParser`].
@@ -705,7 +700,10 @@ fn walk_object(
 
     loop {
         let key = next_key.take().expect("loop invariant: always set at top");
-        let child_path = path.append_key(&key);
+        // Keys JsonPath cannot encode (`.`, `[`, `]`, empty) fall back to the
+        // parent path: the token stream must still be consumed in lockstep,
+        // so this cannot skip the value the way a post-hoc tree walk can.
+        let child_path = path.append_key(&key).unwrap_or_else(|_| path.clone());
 
         // Peek at the value following the key.
         let peek = match jiter.peek() {
@@ -898,7 +896,7 @@ fn collect_leaves(value: &JsonData, path: &JsonPath, out: &mut Vec<JsonPath>) {
     match value {
         JsonData::Object(map) => {
             for (key, child) in map {
-                let child_path = path.append_key(key);
+                let child_path = path.append_key(key).unwrap_or_else(|_| path.clone());
                 collect_leaves(child, &child_path, out);
             }
         }
@@ -1154,9 +1152,7 @@ mod tests {
         );
         // The single leaf path should end with key "a".
         assert!(
-            hint.stable_paths
-                .iter()
-                .any(|p| p.last_key().as_deref() == Some("a")),
+            hint.stable_paths.iter().any(|p| p.last_key() == Some("a")),
             "stable_paths should contain a path ending with key 'a'"
         );
     }
