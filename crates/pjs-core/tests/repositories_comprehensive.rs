@@ -125,6 +125,7 @@ fn test_session_query_criteria_empty() {
         has_active_streams: None,
         min_stream_count: None,
         max_stream_count: None,
+        exclude_expired: false,
     };
 
     assert!(criteria.states.is_none());
@@ -142,6 +143,7 @@ fn test_session_query_criteria_with_states() {
         has_active_streams: None,
         min_stream_count: None,
         max_stream_count: None,
+        exclude_expired: false,
     };
 
     assert_eq!(criteria.states.as_ref().unwrap().len(), 2);
@@ -158,6 +160,7 @@ fn test_session_query_criteria_with_dates() {
         has_active_streams: None,
         min_stream_count: None,
         max_stream_count: None,
+        exclude_expired: false,
     };
 
     assert!(criteria.created_after.is_some());
@@ -174,6 +177,7 @@ fn test_session_query_criteria_with_stream_counts() {
         has_active_streams: Some(true),
         min_stream_count: Some(1),
         max_stream_count: Some(10),
+        exclude_expired: false,
     };
 
     assert_eq!(criteria.min_stream_count, Some(1));
@@ -191,6 +195,7 @@ fn test_session_query_criteria_clone() {
         has_active_streams: None,
         min_stream_count: None,
         max_stream_count: None,
+        exclude_expired: false,
     };
 
     let cloned = criteria.clone();

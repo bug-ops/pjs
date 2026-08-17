@@ -3,7 +3,6 @@
 use crate::{
     application::{ApplicationError, ApplicationResult, handlers::QueryHandlerGat, queries::*},
     domain::{
-        aggregates::StreamSession,
         entities::Stream,
         ports::{
             FrameStoreGat, Pagination, SessionQueryCriteria, SortOrder as RepoSortOrder,
@@ -145,50 +144,69 @@ where
 
     fn handle(&self, query: SearchSessionsQuery) -> Self::HandleFuture<'_> {
         async move {
-            // Load all active sessions (in production, this would be more efficient with database filtering)
-            let mut sessions = self
+            const MAX_PAGE_SIZE: usize = 100;
+            let limit = query.limit.unwrap_or(MAX_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE);
+            let offset = query
+                .offset
+                .unwrap_or(0)
+                .min(crate::domain::config::MAX_PAGINATION_OFFSET);
+
+            // With no explicit state filter, default to the same active-only
+            // scope the legacy `find_active_sessions()` provided (state ==
+            // Active and not expired), so the endpoint's default result set
+            // is unchanged. An explicit `filters.state` opts out of that
+            // default and matches only the requested state(s), expired or not.
+            let (states, exclude_expired) = match query.filters.state {
+                Some(state) => (Some(vec![state]), false),
+                None => (
+                    Some(vec![
+                        crate::domain::SessionState::Active.as_str().to_string(),
+                    ]),
+                    true,
+                ),
+            };
+
+            let criteria = SessionQueryCriteria {
+                states,
+                exclude_expired,
+                created_after: query.filters.created_after,
+                created_before: query.filters.created_before,
+                client_info_pattern: query.filters.client_info,
+                has_active_streams: query.filters.has_active_streams,
+                ..SessionQueryCriteria::default()
+            };
+
+            let sort_by = query.sort_by.map(|field| {
+                match field {
+                    SessionSortField::CreatedAt => "created_at",
+                    SessionSortField::UpdatedAt => "updated_at",
+                    SessionSortField::StreamCount => "stream_count",
+                    SessionSortField::TotalBytes => "total_bytes",
+                }
+                .to_string()
+            });
+            let sort_order = match query.sort_order {
+                Some(SortOrder::Descending) => RepoSortOrder::Descending,
+                _ => RepoSortOrder::Ascending,
+            };
+
+            let pagination = Pagination {
+                offset,
+                limit,
+                sort_by,
+                sort_order,
+            };
+
+            let result = self
                 .repository
-                .find_active_sessions()
+                .find_sessions_by_criteria(criteria, pagination)
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Apply filters
-            sessions.retain(|session| self.matches_filters(session, &query.filters));
-
-            // Apply sorting
-            if let Some(sort_field) = &query.sort_by {
-                let ascending = query
-                    .sort_order
-                    .as_ref()
-                    .is_none_or(|order| matches!(order, SortOrder::Ascending));
-
-                sessions.sort_by(|a, b| {
-                    let cmp = match sort_field {
-                        SessionSortField::CreatedAt => a.created_at().cmp(&b.created_at()),
-                        SessionSortField::UpdatedAt => a.updated_at().cmp(&b.updated_at()),
-                        SessionSortField::StreamCount => a.streams().len().cmp(&b.streams().len()),
-                        SessionSortField::TotalBytes => {
-                            a.stats().total_bytes.cmp(&b.stats().total_bytes)
-                        }
-                    };
-
-                    if ascending { cmp } else { cmp.reverse() }
-                });
-            }
-
-            // Apply pagination with bounded page size
-            const MAX_PAGE_SIZE: usize = 100;
-            let total_count = sessions.len();
-            let offset = query.offset.unwrap_or(0);
-            let limit = query.limit.unwrap_or(MAX_PAGE_SIZE).min(MAX_PAGE_SIZE);
-
-            let sessions: Vec<_> = sessions.into_iter().skip(offset).take(limit).collect();
-            let has_more = offset + sessions.len() < total_count;
-
             Ok(SessionsResponse {
-                sessions,
-                total_count,
-                has_more,
+                sessions: result.sessions,
+                total_count: result.total_count,
+                has_more: result.has_more,
             })
         }
     }
@@ -229,60 +247,6 @@ where
                 duration_ms: session.duration().map(|d| d.num_milliseconds()),
             })
         }
-    }
-}
-
-impl<R> SessionQueryHandler<R>
-where
-    R: StreamRepositoryGat + 'static,
-{
-    fn matches_filters(&self, session: &StreamSession, filters: &SessionFilters) -> bool {
-        // State filter
-        if let Some(ref state_filter) = filters.state {
-            let state_str = format!("{:?}", session.state()).to_lowercase();
-            if !state_str.contains(&state_filter.to_lowercase()) {
-                return false;
-            }
-        }
-
-        // Date range filters
-        if let Some(after) = filters.created_after
-            && session.created_at() <= after
-        {
-            return false;
-        }
-
-        if let Some(before) = filters.created_before
-            && session.created_at() >= before
-        {
-            return false;
-        }
-
-        // Client info filter — case-insensitive substring match, consistent with the
-        // state filter above.
-        if let Some(ref client_filter) = filters.client_info {
-            match session.client_info() {
-                Some(info) => {
-                    if !info
-                        .to_lowercase()
-                        .contains(&client_filter.to_lowercase() as &str)
-                    {
-                        return false;
-                    }
-                }
-                None => return false,
-            }
-        }
-
-        // Active streams filter
-        if let Some(has_active) = filters.has_active_streams {
-            let has_active_streams = session.streams().values().any(|stream| stream.is_active());
-            if has_active != has_active_streams {
-                return false;
-            }
-        }
-
-        true
     }
 }
 
@@ -566,12 +530,70 @@ mod tests {
         aggregates::{StreamSession, stream_session::SessionConfig},
         ports::{
             Pagination, PriorityDistribution, SessionHealthSnapshot, SessionQueryCriteria,
-            SessionQueryResult, StreamFilter, StreamStatistics, StreamStatus,
+            SessionQueryResult, StreamFilter, StreamStatistics, StreamStatus, TimeProvider,
         },
         value_objects::{SessionId, StreamId},
     };
     use chrono::Utc;
     use std::collections::HashMap;
+
+    /// Mirrors `GatInMemoryStreamRepository::matches_criteria` so mocked
+    /// `find_sessions_by_criteria` tests exercise real filtering semantics.
+    fn session_matches_criteria(session: &StreamSession, criteria: &SessionQueryCriteria) -> bool {
+        if let Some(states) = &criteria.states {
+            let state_str = session.state().as_str();
+            if !states.iter().any(|s| s.eq_ignore_ascii_case(state_str)) {
+                return false;
+            }
+        }
+
+        if criteria.exclude_expired && session.is_expired() {
+            return false;
+        }
+
+        if let Some(after) = criteria.created_after
+            && session.created_at() < after
+        {
+            return false;
+        }
+        if let Some(before) = criteria.created_before
+            && session.created_at() > before
+        {
+            return false;
+        }
+
+        if let Some(has_active) = criteria.has_active_streams {
+            let has_active_streams = session.streams().values().any(|stream| stream.is_active());
+            if has_active != has_active_streams {
+                return false;
+            }
+        }
+
+        let stream_count = session.streams().len();
+        if let Some(min) = criteria.min_stream_count
+            && stream_count < min
+        {
+            return false;
+        }
+        if let Some(max) = criteria.max_stream_count
+            && stream_count > max
+        {
+            return false;
+        }
+
+        if let Some(pattern) = &criteria.client_info_pattern {
+            match session.client_info() {
+                Some(info) => {
+                    if !info.to_lowercase().contains(&pattern.to_lowercase()) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        true
+    }
 
     // Mock implementations for testing
     struct MockRepository {
@@ -658,12 +680,35 @@ mod tests {
 
         fn find_sessions_by_criteria(
             &self,
-            _criteria: SessionQueryCriteria,
+            criteria: SessionQueryCriteria,
             pagination: Pagination,
         ) -> Self::FindSessionsByCriteriaFuture<'_> {
             async move {
-                let sessions: Vec<_> = self.sessions.lock().values().cloned().collect();
+                let mut sessions: Vec<_> = self
+                    .sessions
+                    .lock()
+                    .values()
+                    .filter(|session| session_matches_criteria(session, &criteria))
+                    .cloned()
+                    .collect();
                 let total_count = sessions.len();
+
+                if let Some(sort_field) = &pagination.sort_by {
+                    sessions.sort_by(|a, b| {
+                        let cmp = match sort_field.as_str() {
+                            "created_at" => a.created_at().cmp(&b.created_at()),
+                            "updated_at" => a.updated_at().cmp(&b.updated_at()),
+                            "stream_count" => a.streams().len().cmp(&b.streams().len()),
+                            "total_bytes" => a.stats().total_bytes.cmp(&b.stats().total_bytes),
+                            _ => std::cmp::Ordering::Equal,
+                        };
+                        match pagination.sort_order {
+                            RepoSortOrder::Ascending => cmp,
+                            RepoSortOrder::Descending => cmp.reverse(),
+                        }
+                    });
+                }
+
                 let paginated: Vec<_> = sessions
                     .into_iter()
                     .skip(pagination.offset)
@@ -1613,5 +1658,348 @@ mod tests {
         assert_eq!(response.sessions.len(), 3);
         assert_eq!(response.total_count, 8);
         assert!(response.has_more);
+    }
+
+    #[tokio::test]
+    async fn test_search_sessions_max_page_size_clamped() {
+        let repository = Arc::new(MockRepository::new());
+        for _ in 0..150 {
+            repository.add_session(make_session(None));
+        }
+        let handler = SessionQueryHandler::new(repository);
+
+        // Requested limit exceeds MAX_PAGE_SIZE (100); the handler must clamp it.
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: None,
+            sort_order: None,
+            limit: Some(500),
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 100);
+        assert_eq!(response.total_count, 150);
+        assert!(response.has_more);
+    }
+
+    #[tokio::test]
+    async fn test_search_sessions_sort_by_stream_count_descending() {
+        use crate::domain::value_objects::JsonData;
+
+        let repository = Arc::new(MockRepository::new());
+
+        let mut few = make_session(None);
+        few.create_stream(JsonData::from(serde_json::json!({"k": "v"})))
+            .unwrap();
+        let few_id = few.id();
+
+        let mut many = make_session(None);
+        for _ in 0..3 {
+            many.create_stream(JsonData::from(serde_json::json!({"k": "v"})))
+                .unwrap();
+        }
+        let many_id = many.id();
+
+        let none = make_session(None);
+        let none_id = none.id();
+
+        repository.add_session(few);
+        repository.add_session(many);
+        repository.add_session(none);
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: Some(SessionSortField::StreamCount),
+            sort_order: Some(SortOrder::Descending),
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        let ids: Vec<_> = response.sessions.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec![many_id, few_id, none_id]);
+    }
+
+    /// Deterministic clock letting tests control `created_at`/`updated_at`
+    /// ordering without relying on wall-clock sleeps. Each call to `now()`
+    /// advances the clock so successive sessions/mutations get distinct,
+    /// strictly increasing timestamps.
+    struct FixedTimeProvider {
+        counter: std::sync::atomic::AtomicI64,
+    }
+
+    impl FixedTimeProvider {
+        fn new() -> Self {
+            Self {
+                counter: std::sync::atomic::AtomicI64::new(0),
+            }
+        }
+    }
+
+    impl TimeProvider for FixedTimeProvider {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            let offset = self
+                .counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Utc::now() + chrono::Duration::seconds(offset)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_sessions_sort_by_created_at_descending() {
+        let clock = std::sync::Arc::new(FixedTimeProvider::new());
+        let repository = Arc::new(MockRepository::new());
+
+        let mut first = StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        first.activate().unwrap();
+        let first_id = first.id();
+
+        let mut second = StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        second.activate().unwrap();
+        let second_id = second.id();
+
+        repository.add_session(first);
+        repository.add_session(second);
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: Some(SessionSortField::CreatedAt),
+            sort_order: Some(SortOrder::Descending),
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        let ids: Vec<_> = response.sessions.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec![second_id, first_id]);
+    }
+
+    #[tokio::test]
+    async fn test_search_sessions_created_after_before_filter() {
+        let clock = std::sync::Arc::new(FixedTimeProvider::new());
+        let repository = Arc::new(MockRepository::new());
+
+        // Three sessions created at strictly increasing timestamps (t=0,1,2).
+        let mut early = StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        early.activate().unwrap();
+
+        let mut middle = StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        middle.activate().unwrap();
+        let middle_id = middle.id();
+        let middle_created_at = middle.created_at();
+
+        let mut late = StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        late.activate().unwrap();
+
+        repository.add_session(early);
+        repository.add_session(middle);
+        repository.add_session(late);
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters {
+                created_after: Some(middle_created_at - chrono::Duration::milliseconds(1)),
+                created_before: Some(middle_created_at + chrono::Duration::milliseconds(1)),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 1);
+        assert_eq!(response.sessions[0].id(), middle_id);
+    }
+
+    #[tokio::test]
+    async fn test_search_sessions_has_active_streams_filter() {
+        use crate::domain::value_objects::JsonData;
+
+        let repository = Arc::new(MockRepository::new());
+
+        let mut with_active = make_session(None);
+        let stream_id = with_active
+            .create_stream(JsonData::from(serde_json::json!({"k": "v"})))
+            .unwrap();
+        with_active.start_stream(stream_id).unwrap();
+        let with_active_id = with_active.id();
+
+        let without_active = make_session(None);
+        let without_active_id = without_active.id();
+
+        repository.add_session(with_active);
+        repository.add_session(without_active);
+        let handler = SessionQueryHandler::new(repository);
+
+        let query_active_only = SearchSessionsQuery {
+            filters: SessionFilters {
+                has_active_streams: Some(true),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+        let result = QueryHandlerGat::handle(&handler, query_active_only).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 1);
+        assert_eq!(response.sessions[0].id(), with_active_id);
+
+        let query_inactive_only = SearchSessionsQuery {
+            filters: SessionFilters {
+                has_active_streams: Some(false),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+        let result = QueryHandlerGat::handle(&handler, query_inactive_only).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 1);
+        assert_eq!(response.sessions[0].id(), without_active_id);
+    }
+
+    /// Locks in the exact-match state filter semantics that replaced the old
+    /// in-process substring match (see `matches_filters`, removed in #391).
+    /// Under the old behavior a partial word like "complet" would still have
+    /// matched a "Completed" session; the new criteria-based path requires an
+    /// exact (case-insensitive) match, consistent with `GetActiveSessionsQuery`.
+    #[tokio::test]
+    async fn test_search_sessions_state_filter_is_exact_not_substring() {
+        let repository = Arc::new(MockRepository::new());
+        let mut session = make_session(None);
+        session.close().unwrap(); // Active -> Completed
+        repository.add_session(session);
+        let handler = SessionQueryHandler::new(repository);
+
+        // Partial word: would have matched under the old substring semantics.
+        let partial_query = SearchSessionsQuery {
+            filters: SessionFilters {
+                state: Some("complet".to_owned()),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+        let result = QueryHandlerGat::handle(&handler, partial_query).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sessions.len(), 0);
+
+        // Full word, case-insensitive: still matches.
+        let exact_query = SearchSessionsQuery {
+            filters: SessionFilters {
+                state: Some("COMPLETED".to_owned()),
+                ..Default::default()
+            },
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+        let result = QueryHandlerGat::handle(&handler, exact_query).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sessions.len(), 1);
+    }
+
+    /// Regression test for the search endpoint's default scope: with no
+    /// explicit `filters.state`, results must stay limited to active,
+    /// non-expired sessions, matching the legacy `find_active_sessions()`
+    /// contract (`state == Active && !is_expired()`). Uses the real
+    /// `GatInMemoryStreamRepository` (not `MockRepository`) so the criteria
+    /// actually flow through `matches_criteria`, the same path `GET
+    /// /pjs/sessions/search` exercises in production.
+    #[tokio::test]
+    async fn test_search_sessions_default_scope_excludes_non_active_and_expired() {
+        use crate::infrastructure::GatInMemoryStreamRepository;
+
+        let repository = Arc::new(GatInMemoryStreamRepository::new());
+
+        let mut active = StreamSession::new(SessionConfig::default());
+        active.activate().unwrap();
+        let active_id = active.id();
+        repository.save_session(active).await.unwrap();
+
+        let mut completed = StreamSession::new(SessionConfig::default());
+        completed.activate().unwrap();
+        completed.close().unwrap();
+        repository.save_session(completed).await.unwrap();
+
+        let mut expired = StreamSession::new(SessionConfig {
+            session_timeout_seconds: 0,
+            ..SessionConfig::default()
+        });
+        expired.activate().unwrap();
+        // Give the real clock a moment to move past `expires_at`.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        repository.save_session(expired).await.unwrap();
+
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: None,
+            sort_order: None,
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.sessions.len(), 1);
+        assert_eq!(response.sessions[0].id(), active_id);
+    }
+
+    /// Regression test: `limit=0` and an offset beyond `MAX_PAGINATION_OFFSET`
+    /// must not surface `Pagination::validate()`'s `DomainError::InvalidInput`
+    /// (which the HTTP layer maps to a 500). The handler must clamp both
+    /// before they reach the repository. Uses the real
+    /// `GatInMemoryStreamRepository` so `Pagination::validate()` actually runs.
+    #[tokio::test]
+    async fn test_search_sessions_limit_zero_and_excessive_offset_do_not_error() {
+        use crate::infrastructure::GatInMemoryStreamRepository;
+
+        let repository = Arc::new(GatInMemoryStreamRepository::new());
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        repository.save_session(session).await.unwrap();
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: None,
+            sort_order: None,
+            limit: Some(0),
+            offset: Some(usize::MAX),
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(
+            result.is_ok(),
+            "expected clamped pagination, got {result:?}"
+        );
+        let response = result.unwrap();
+        assert_eq!(response.total_count, 1);
+        assert!(response.sessions.is_empty());
     }
 }

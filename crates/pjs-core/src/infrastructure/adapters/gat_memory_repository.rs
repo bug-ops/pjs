@@ -163,6 +163,11 @@ impl GatInMemoryStreamRepository {
             }
         }
 
+        // Check expiry filter
+        if criteria.exclude_expired && session.is_expired() {
+            return false;
+        }
+
         // Check time range
         if let Some(after) = criteria.created_after
             && session.created_at() < after
@@ -220,6 +225,7 @@ impl GatInMemoryStreamRepository {
             "created_at" => a.created_at().cmp(&b.created_at()),
             "updated_at" => a.updated_at().cmp(&b.updated_at()),
             "stream_count" => a.streams().len().cmp(&b.streams().len()),
+            "total_bytes" => a.stats().total_bytes.cmp(&b.stats().total_bytes),
             _ => Ordering::Equal,
         }
     }
