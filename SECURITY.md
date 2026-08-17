@@ -6,9 +6,9 @@ We actively support the following versions of PJS with security updates:
 
 | Version | Supported          | Notes                                    |
 | ------- | ------------------ | ---------------------------------------- |
-| 0.4.x   | :white_check_mark: | Current stable release (recommended)     |
-| 0.3.x   | :x:                | Unsupported - upgrade to 0.4.x           |
-| < 0.3   | :x:                | Unsupported - upgrade to 0.4.x           |
+| 0.6.x   | :white_check_mark: | Current stable release (recommended)     |
+| 0.5.x   | :x:                | Unsupported - upgrade to 0.6.x           |
+| < 0.5   | :x:                | Unsupported - upgrade to 0.6.x           |
 
 **Recommendation:** Always use the latest patch version within the supported major.minor release.
 
