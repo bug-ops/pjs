@@ -164,7 +164,7 @@ Get the parser version.
 
 ```javascript
 const v = PjsParser.version();
-console.log(v); // "0.1.0"
+console.log(v); // e.g. "0.6.3"
 ```
 
 ##### `generateFrames(jsonStr: string, minPriority: number): Frame[]`
@@ -224,8 +224,34 @@ Get the WASM module version.
 
 ```javascript
 import { version } from '@pjson/wasm';
-console.log(version()); // "0.1.0"
+console.log(version()); // e.g. "0.6.3"
 ```
+
+## Security Limits
+
+`SecurityConfig` bounds JSON input size, nesting depth, array element count, and object key count to prevent DoS via oversized or maliciously crafted payloads. All limits are enforced during parsing, not just checked against the raw input size.
+
+```javascript
+import { PjsParser, PriorityStream, SecurityConfig } from '@pjson/wasm';
+
+const security = new SecurityConfig()
+    .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB
+    .setMaxDepth(32)                   // 32 levels
+    .setMaxArrayElements(1000)         // per array, at every nesting level
+    .setMaxObjectKeys(1000);           // per object, at every nesting level
+
+const parser = PjsParser.withSecurityConfig(security);
+
+const stream = new PriorityStream();
+stream.setSecurityConfig(security);
+```
+
+**Default limits:**
+
+- Max JSON size: 10 MB
+- Max nesting depth: 64 levels
+- Max array elements per level: 10,000
+- Max object keys per level: 10,000
 
 ## Building from Source
 

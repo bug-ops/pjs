@@ -243,7 +243,8 @@ const security = new SecurityConfig()
     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB limit
     .setMaxDepth(32);                  // 32 levels max
 
-const stream = PriorityStream.withSecurityConfig(security);
+const stream = new PriorityStream();
+stream.setSecurityConfig(security);
 ```
 
 **Default Limits:**
