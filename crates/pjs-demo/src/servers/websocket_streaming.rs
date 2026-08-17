@@ -25,7 +25,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::time::sleep;
+use tokio::{sync::watch, time::sleep};
 use tracing::{error, info, warn};
 
 /// WebSocket streaming server state
@@ -101,6 +101,31 @@ pub struct StreamResponse {
     session_id: String,
     websocket_url: String,
     config: StreamConfig,
+}
+
+/// Delivery control state of an active `stream_data` task.
+///
+/// Sent over a `watch` channel from the WebSocket receive loop to `stream_data`;
+/// only the latest value matters, which fits "pause"/"resume" signaling where
+/// intermediate commands sent while no one is listening can be dropped.
+///
+/// A struct (rather than a bare `Running`/`Paused` enum) so a future control
+/// field can be added without silently un-pausing a stream that was paused
+/// when the new field's update was sent — `watch` is latest-wins, so a bare
+/// enum would have no way to represent "paused, with an unrelated update".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct StreamControl {
+    paused: bool,
+}
+
+/// Client-issued command parsed from an incoming WebSocket `Message::Text` frame.
+///
+/// Example wire format: `{"command":"pause"}` or `{"command":"resume"}`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "command", rename_all = "lowercase", deny_unknown_fields)]
+enum ClientCommand {
+    Pause,
+    Resume,
 }
 
 impl Default for AppState {
@@ -258,11 +283,15 @@ async fn handle_websocket(socket: WebSocket, state: AppState, session_id: Sessio
 
     let (mut sender, mut receiver) = socket.split();
 
+    let (cmd_tx, cmd_rx) = watch::channel(StreamControl::default());
+
     // Start streaming task
     let streaming_state = state.clone();
     let streaming_session_id = session_id;
-    let streaming_task = tokio::spawn(async move {
-        if let Err(e) = stream_data(&mut sender, streaming_state, streaming_session_id).await {
+    let mut streaming_task = tokio::spawn(async move {
+        if let Err(e) =
+            stream_data(&mut sender, streaming_state, streaming_session_id, cmd_rx).await
+        {
             error!(
                 "Streaming error for session {}: {}",
                 streaming_session_id, e
@@ -271,13 +300,38 @@ async fn handle_websocket(socket: WebSocket, state: AppState, session_id: Sessio
     });
 
     // Handle incoming messages
-    let receive_task = tokio::spawn(async move {
+    let receive_session_id = session_id;
+    let mut receive_task = tokio::spawn(async move {
         while let Some(msg) = receiver.next().await {
             match msg {
-                Ok(Message::Text(text)) => {
-                    info!("Received message: {}", text);
-                    // TODO(#406): Handle client commands (pause, resume, config changes)
-                }
+                Ok(Message::Text(text)) => match serde_json::from_str::<ClientCommand>(&text) {
+                    Ok(ClientCommand::Pause) => {
+                        if cmd_tx.send(StreamControl { paused: true }).is_err() {
+                            warn!(
+                                "Session {} received pause but its stream already ended",
+                                receive_session_id
+                            );
+                        } else {
+                            info!("Session {} paused by client", receive_session_id);
+                        }
+                    }
+                    Ok(ClientCommand::Resume) => {
+                        if cmd_tx.send(StreamControl { paused: false }).is_err() {
+                            warn!(
+                                "Session {} received resume but its stream already ended",
+                                receive_session_id
+                            );
+                        } else {
+                            info!("Session {} resumed by client", receive_session_id);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Ignoring malformed command from session {}: {} ({})",
+                            receive_session_id, text, e
+                        );
+                    }
+                },
                 Ok(Message::Binary(_)) => {
                     warn!("Received unexpected binary message");
                 }
@@ -294,13 +348,16 @@ async fn handle_websocket(socket: WebSocket, state: AppState, session_id: Sessio
         }
     });
 
-    // Wait for either task to complete
+    // Wait for either task to complete, then abort the other so it doesn't
+    // keep running (and logging) against a session that's about to be removed.
     tokio::select! {
-        _ = streaming_task => {
+        _ = &mut streaming_task => {
             info!("Streaming completed for session: {}", session_id);
+            receive_task.abort();
         }
-        _ = receive_task => {
+        _ = &mut receive_task => {
             info!("Receive task completed for session: {}", session_id);
+            streaming_task.abort();
         }
     }
 
@@ -312,6 +369,7 @@ async fn stream_data(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
     state: AppState,
     session_id: SessionId,
+    mut cmd_rx: watch::Receiver<StreamControl>,
 ) -> DomainResult<()> {
     // Generate sample data
     let sample_data = generate_sample_streaming_data();
@@ -327,6 +385,8 @@ async fn stream_data(
 
     // Send frames in priority order
     for (index, frame) in frames.iter().enumerate() {
+        wait_while_paused(&mut cmd_rx).await;
+
         // Apply compression if enabled
         let compressed_data = if should_compress(frame) {
             match state.compressor.compress(&frame.data) {
@@ -377,6 +437,10 @@ async fn stream_data(
         );
     }
 
+    // A pause requested after the last frame but before completion should
+    // still hold back the completion signal.
+    wait_while_paused(&mut cmd_rx).await;
+
     // Send completion signal
     let completion_message = serde_json::json!({
         "@type": "stream_complete",
@@ -393,14 +457,29 @@ async fn stream_data(
     Ok(())
 }
 
-/// Create demo frames from JSON data
+/// Block the caller until `cmd_rx` reports `paused: false`.
+///
+/// A closed channel means the receive loop ended, so fall through and treat
+/// the stream as resumed rather than blocking forever.
+async fn wait_while_paused(cmd_rx: &mut watch::Receiver<StreamControl>) {
+    while cmd_rx.borrow().paused {
+        if cmd_rx.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Create demo frames from JSON data.
+///
+/// Expects the shape produced by [`generate_sample_streaming_data`], which
+/// nests all streamable fields one level down under a `"dashboard"` key.
 fn create_demo_frames(data: &JsonValue) -> DomainResult<Vec<pjson_rs::stream::StreamFrame>> {
     use pjson_rs::domain::Priority;
     use std::collections::HashMap;
 
     let mut frames = Vec::new();
 
-    if let JsonValue::Object(obj) = data {
+    if let Some(JsonValue::Object(obj)) = data.get("dashboard") {
         for (key, value) in obj {
             let priority = match key.as_str() {
                 "title" | "last_updated" => {

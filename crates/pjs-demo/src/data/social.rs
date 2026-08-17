@@ -68,7 +68,7 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
         let user_id = (i % USERNAMES.len()) + 1;
         let post_type = POST_TYPES[i % POST_TYPES.len()];
         let likes = rng.random_range(0..1000);
-        let shares = rng.random_range(0..likes/3);
+        let shares = rng.random_range(0..=likes / 3);
         let comments_count = rng.random_range(0..50);
 
         let mut post = json!({
@@ -95,7 +95,7 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
                 "likes": likes,
                 "shares": shares,
                 "comments": comments_count,
-                "views": rng.random_range(likes..likes*10)
+                "views": if likes == 0 { 0 } else { rng.random_range(likes..likes * 10) }
             },
             "location": if rng.random_bool(0.4) {
                 Some(["San Francisco, CA", "New York, NY", "London, UK", "Berlin, Germany", "Tokyo, Japan"][rng.random_range(0..5)])
