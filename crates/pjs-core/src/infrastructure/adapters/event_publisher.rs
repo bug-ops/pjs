@@ -15,6 +15,7 @@ use crate::domain::{
     ports::EventPublisherGat,
     value_objects::SessionId,
 };
+use crate::infrastructure::bounded_channel::{ByteBoundedSender, Envelope, byte_bounded_channel};
 
 /// Lock-free notification system using DashMap for maximum concurrency
 type NotificationId = u64;
@@ -23,12 +24,22 @@ type NotificationCallback = Arc<dyn Fn(&DomainEvent) + Send + Sync>;
 /// Capacity of the streaming channel returned by [`InMemoryEventPublisher::with_channel`].
 ///
 /// Gives `publish`/`publish_batch` room to absorb bursts before a full
-/// channel starts dropping events (logged via [`mpsc::error::TrySendError`]
-/// rather than blocking the publish hot path — see [`EventPublisherGat`]'s
-/// doc). 1000 is a conservative default chosen without a specific
+/// channel starts dropping events (logged rather than blocking the publish
+/// hot path — see [`EventPublisherGat`]'s doc). This is a message-count
+/// bound only; [`MAX_QUEUED_EVENT_BYTES`] additionally bounds cumulative
+/// queued bytes. 1000 is a conservative default chosen without a specific
 /// throughput target; sizing it from an expected consumer lag or event
 /// rate is tracked as a follow-up.
 const EVENT_CHANNEL_CAPACITY: usize = 1000;
+
+/// Cumulative byte budget for the streaming channel, on top of
+/// [`EVENT_CHANNEL_CAPACITY`]'s message-count bound.
+///
+/// Keeps worst-case queued memory a small, predictable constant regardless
+/// of individual event size (e.g. an event carrying large `metadata`).
+/// Sized via [`StoredEvent::approx_byte_size`], not an exact serialized
+/// size — see that method's doc for why.
+const MAX_QUEUED_EVENT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Maximum number of entries `event_log` is allowed to hold before
 /// [`InMemoryEventPublisher::evict_oldest_if_over_capacity`] trims it back
@@ -54,7 +65,7 @@ pub struct InMemoryEventPublisher {
     /// recover chronological order for eviction and [`Self::recent_events`].
     next_sequence: Arc<AtomicU64>,
     /// Optional channel for streaming events
-    channel_tx: Arc<tokio::sync::RwLock<Option<mpsc::Sender<StoredEvent>>>>,
+    channel_tx: Arc<tokio::sync::RwLock<Option<ByteBoundedSender<StoredEvent>>>>,
 }
 
 impl Clone for InMemoryEventPublisher {
@@ -99,6 +110,37 @@ pub struct StoredEvent {
     pub sequence: u64,
 }
 
+impl StoredEvent {
+    /// Rough byte-size estimate used only to charge
+    /// [`InMemoryEventPublisher::with_channel`]'s streaming-channel byte
+    /// budget ([`MAX_QUEUED_EVENT_BYTES`]).
+    ///
+    /// Not an exact serialized size: `SessionId`/`EventId` don't implement
+    /// `Serialize`, so this covers the variable-length parts (`event_type`,
+    /// `metadata`) that dominate real payload size, plus a fixed allowance
+    /// for the small fixed-size fields. It also doesn't account for
+    /// heap/allocator overhead or JSON-escaping expansion, so it under-counts
+    /// real memory use — acceptable today because
+    /// `DomainEvent::metadata()` (`pjs-domain/src/events/mod.rs`) only ever
+    /// produces a handful of small fixed entries, keeping every
+    /// `StoredEvent` small regardless of this estimate's precision. If a
+    /// future `DomainEvent` variant lets `metadata()` carry large or
+    /// caller-controlled content, revisit this estimate (and
+    /// `MAX_QUEUED_EVENT_BYTES`, which is sized assuming today's small
+    /// events and is otherwise essentially unreachable) — it would no
+    /// longer be a safe stand-in for actual memory pressure.
+    fn approx_byte_size(&self) -> usize {
+        const FIXED_FIELD_ALLOWANCE: usize = 96;
+        self.event_type.len()
+            + self
+                .metadata
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>()
+            + FIXED_FIELD_ALLOWANCE
+    }
+}
+
 impl InMemoryEventPublisher {
     /// Create an empty publisher with no subscribers and no streaming channel.
     pub fn new() -> Self {
@@ -112,8 +154,8 @@ impl InMemoryEventPublisher {
     }
 
     /// Initialize event streaming channel (lock-free)
-    pub fn with_channel() -> (Self, mpsc::Receiver<StoredEvent>) {
-        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+    pub fn with_channel() -> (Self, mpsc::Receiver<Envelope<StoredEvent>>) {
+        let (tx, rx) = byte_bounded_channel(EVENT_CHANNEL_CAPACITY, MAX_QUEUED_EVENT_BYTES);
         let publisher = Self {
             notification_callbacks: Arc::new(DashMap::new()),
             event_log: Arc::new(DashMap::new()),
@@ -259,12 +301,14 @@ impl EventPublisherGat for InMemoryEventPublisher {
 
             // Send to channel if configured. `try_send` keeps this hot path
             // non-blocking: a stalled consumer must not stall unrelated
-            // event publishing, so a full channel drops the event and logs
-            // rather than awaiting capacity.
+            // event publishing, so a full channel (or an over-budget event,
+            // see `MAX_QUEUED_EVENT_BYTES`) drops the event and logs rather
+            // than awaiting capacity.
+            let approx_size = stored_event.approx_byte_size();
             if let Some(tx) = self.channel_tx.read().await.as_ref()
-                && let Err(e) = tx.try_send(stored_event)
+                && let Err(e) = tx.try_send(stored_event, approx_size)
             {
-                tracing::warn!("Dropping event from streaming channel: {e}");
+                tracing::warn!("Dropping event from streaming channel: {e:?}");
             }
 
             // Notify callbacks (lock-free iteration)
@@ -321,8 +365,9 @@ impl EventPublisherGat for InMemoryEventPublisher {
             // on a full channel instead of stalling the batch.
             if let Some(tx) = self.channel_tx.read().await.as_ref() {
                 for stored_event in stored_events {
-                    if let Err(e) = tx.try_send(stored_event) {
-                        tracing::warn!("Dropping event from streaming channel: {e}");
+                    let approx_size = stored_event.approx_byte_size();
+                    if let Err(e) = tx.try_send(stored_event, approx_size) {
+                        tracing::warn!("Dropping event from streaming channel: {e:?}");
                     }
                 }
             }
@@ -783,6 +828,37 @@ mod tests {
         assert_eq!(
             drained, EVENT_CHANNEL_CAPACITY,
             "the overflow event must have been dropped from the channel, not queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_streaming_channel_rejects_event_exceeding_byte_budget() {
+        // Regression test for #349: a message-count bound alone doesn't
+        // bound queued bytes. Exercises the byte-bounded channel directly
+        // with a small budget (rather than `MAX_QUEUED_EVENT_BYTES`, which
+        // no `StoredEvent` producible through the public `publish` API can
+        // realistically reach, since `DomainEvent::metadata()` is always
+        // small) to prove an over-budget event is rejected rather than
+        // queued.
+        let (tx, _rx) = byte_bounded_channel::<StoredEvent>(EVENT_CHANNEL_CAPACITY, 10);
+        let mut large_metadata = std::collections::HashMap::new();
+        large_metadata.insert("key".to_string(), "x".repeat(1000));
+        let event = StoredEvent {
+            id: EventId::new(),
+            event_type: "test".to_string(),
+            session_id: None,
+            timestamp: chrono::Utc::now(),
+            metadata: large_metadata,
+            sequence: 0,
+        };
+        let size = event.approx_byte_size();
+
+        assert!(
+            matches!(
+                tx.try_send(event, size),
+                Err(crate::infrastructure::bounded_channel::TrySendError::BudgetExceeded(_))
+            ),
+            "an event whose approximate size exceeds the byte budget must be rejected"
         );
     }
 

@@ -4,6 +4,7 @@
 use super::{AdaptiveStreamController, StreamOptions, WebSocketTransport, WsMessage};
 use crate::{
     Result as PjsResult,
+    infrastructure::bounded_channel::{self, ByteBoundedSender, byte_bounded_channel},
     security::{RateLimitConfig, RateLimitGuard, WebSocketRateLimiter},
 };
 #[cfg(feature = "http-server")]
@@ -15,7 +16,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
@@ -23,7 +24,6 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 use uuid;
 
@@ -32,12 +32,21 @@ use uuid;
 /// Bounds how many frames can queue for a slow client before `send_frame`
 /// drops further frames rather than growing memory without limit (see
 /// `send_frame`'s doc for why it drops instead of awaiting capacity).
-/// 1000 is a conservative default, not a byte-size bound: at the maximum
-/// configured WebSocket frame size, a fully-queued connection can still
-/// hold a large amount of memory. Sizing this from configured frame-size
-/// limits, or tracking queued bytes instead of message count, is tracked
-/// as a follow-up.
+/// This is a message-count bound only; [`MAX_QUEUED_OUTGOING_BYTES`]
+/// additionally bounds cumulative queued bytes, so a connection queuing
+/// many large frames is capped well before it could reach
+/// `OUTGOING_QUEUE_CAPACITY * max_frame_size`.
 const OUTGOING_QUEUE_CAPACITY: usize = 1000;
+
+/// Cumulative byte budget for a single connection's outgoing message
+/// channel, on top of [`OUTGOING_QUEUE_CAPACITY`]'s message-count bound.
+///
+/// Without this, `OUTGOING_QUEUE_CAPACITY` alone bounds queue depth but
+/// not queued bytes: at the default 16 MiB `max_websocket_frame_size`, a
+/// fully-queued connection could hold up to `1000 * 16 MiB` ≈ 16 GiB.
+/// 16 MiB keeps worst-case per-connection queued memory a small,
+/// predictable constant regardless of individual message size.
+const MAX_QUEUED_OUTGOING_BYTES: usize = 16 * 1024 * 1024;
 
 /// Axum WebSocket transport implementation
 pub struct AxumWebSocketTransport {
@@ -45,7 +54,7 @@ pub struct AxumWebSocketTransport {
     /// Active connection IDs for tracking open sockets
     active_connections: Arc<RwLock<Vec<String>>>,
     /// Per-connection outgoing senders; keyed by connection ID
-    outgoing_channels: Arc<RwLock<HashMap<String, Sender<WsMessage>>>>,
+    outgoing_channels: Arc<RwLock<HashMap<String, ByteBoundedSender<String>>>>,
     /// Per-IP rate limiter applied to upgrade requests, connection establishment,
     /// and inbound application-level messages.
     rate_limiter: Arc<WebSocketRateLimiter>,
@@ -78,6 +87,14 @@ impl AxumWebSocketTransport {
     /// requests that exceed the per-IP request budget with HTTP 429 before any
     /// WebSocket frames are exchanged.
     ///
+    /// Configures axum/tungstenite's transport-level `max_message_size` and
+    /// `max_frame_size` from the transport's [`RateLimitConfig::max_frame_size`],
+    /// so an oversized frame is rejected during frame assembly instead of
+    /// being fully buffered first and only rejected afterward by the
+    /// application-level `check_message` call (which remains as
+    /// defense-in-depth for messages under the transport cap but still over
+    /// policy in other ways).
+    ///
     /// The router must be served with
     /// `into_make_service_with_connect_info::<SocketAddr>()` so the peer
     /// address is populated; otherwise the upgrade response is HTTP 500.
@@ -93,12 +110,19 @@ impl AxumWebSocketTransport {
             return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
         }
 
+        let max_frame_size = transport.rate_limiter.config().max_frame_size;
+        let ws = ws
+            .max_message_size(max_frame_size)
+            .max_frame_size(max_frame_size);
+
         ws.on_upgrade(move |socket| transport.handle_socket(socket, client_ip))
     }
 
     /// Handle WebSocket connection lifecycle
     pub async fn handle_socket(self: Arc<Self>, socket: WebSocket, client_ip: IpAddr) {
         info!("New WebSocket connection established from {}", client_ip);
+
+        let write_timeout = self.rate_limiter.config().write_timeout;
 
         let guard = match RateLimitGuard::new(self.rate_limiter.clone(), client_ip) {
             Ok(g) => Arc::new(g),
@@ -108,12 +132,15 @@ impl AxumWebSocketTransport {
                     client_ip, e
                 );
                 let (mut sender, _) = socket.split();
-                let _ = sender
-                    .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                let _ = super::send_with_write_timeout(
+                    &mut sender,
+                    Message::Close(Some(axum::extract::ws::CloseFrame {
                         code: 1008, // Policy Violation
                         reason: e.to_string().into(),
-                    })))
-                    .await;
+                    })),
+                    write_timeout,
+                )
+                .await;
                 return;
             }
         };
@@ -128,7 +155,7 @@ impl AxumWebSocketTransport {
 
         // Create channel for sending outgoing messages to this connection
         let (outgoing_tx, mut outgoing_rx) =
-            tokio::sync::mpsc::channel::<WsMessage>(OUTGOING_QUEUE_CAPACITY);
+            byte_bounded_channel::<String>(OUTGOING_QUEUE_CAPACITY, MAX_QUEUED_OUTGOING_BYTES);
         self.outgoing_channels
             .write()
             .await
@@ -153,7 +180,7 @@ impl AxumWebSocketTransport {
                                 Ok((_session_id, message)) => {
                                     match serde_json::to_string(&message) {
                                         Ok(json_str) => {
-                                            if let Err(e) = sender.send(Message::Text(json_str.into())).await {
+                                            if let Err(e) = super::send_with_write_timeout(&mut sender, Message::Text(json_str.into()), write_timeout).await {
                                                 error!("Failed to send message to client: {}", e);
                                                 break;
                                             }
@@ -172,18 +199,16 @@ impl AxumWebSocketTransport {
                                 }
                             }
                         }
-                        // Handle outgoing messages from application
-                        Some(message) = outgoing_rx.recv() => {
-                            match serde_json::to_string(&message) {
-                                Ok(json_str) => {
-                                    if let Err(e) = sender.send(Message::Text(json_str.into())).await {
-                                        error!("Failed to send message to client: {}", e);
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("Failed to serialize outgoing message: {}", e);
-                                }
+                        // Handle outgoing messages from application. Already
+                        // serialized at `send_frame` time — see its doc for why.
+                        // `split` (rather than `into_inner`) keeps the byte
+                        // budget charged until the write actually completes,
+                        // not just until the item leaves the channel.
+                        Some(envelope) = outgoing_rx.recv() => {
+                            let (json_str, _budget_permit) = envelope.split();
+                            if let Err(e) = super::send_with_write_timeout(&mut sender, Message::Text(json_str.into()), write_timeout).await {
+                                error!("Failed to send outgoing message to client: {}", e);
+                                break;
                             }
                         }
                         // Handle incoming messages from client
@@ -195,12 +220,14 @@ impl AxumWebSocketTransport {
                                             "Inbound text frame rejected for IP {} (rate limit): {}",
                                             client_ip, e
                                         );
-                                        let _ = sender
-                                            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                                        let _ = super::send_with_write_timeout(
+                                            &mut sender,
+                                            Message::Close(Some(axum::extract::ws::CloseFrame {
                                                 code: 1008,
                                                 reason: e.to_string().into(),
-                                            })))
-                                            .await;
+                                            })),
+                                            write_timeout,
+                                        ).await;
                                         break;
                                     }
                                     match serde_json::from_str::<WsMessage>(&text) {
@@ -220,18 +247,20 @@ impl AxumWebSocketTransport {
                                             "Inbound binary frame rejected for IP {} (rate limit): {}",
                                             client_ip, e
                                         );
-                                        let _ = sender
-                                            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                                        let _ = super::send_with_write_timeout(
+                                            &mut sender,
+                                            Message::Close(Some(axum::extract::ws::CloseFrame {
                                                 code: 1008,
                                                 reason: e.to_string().into(),
-                                            })))
-                                            .await;
+                                            })),
+                                            write_timeout,
+                                        ).await;
                                         break;
                                     }
                                     debug!("Received binary data: {} bytes", data.len());
                                 }
                                 Ok(Message::Ping(data)) => {
-                                    if let Err(e) = sender.send(Message::Pong(data)).await {
+                                    if let Err(e) = super::send_with_write_timeout(&mut sender, Message::Pong(data), write_timeout).await {
                                         error!("Failed to send pong: {}", e);
                                         break;
                                     }
@@ -382,6 +411,14 @@ impl WebSocketTransport for AxumWebSocketTransport {
     /// wait forever on a receiver that can't run. Using `try_send` here
     /// keeps that latent hazard from becoming a real deadlock — see
     /// `WebSocketTransport::send_frame`'s doc for the general contract.
+    ///
+    /// Always returns `Ok(())` even when the frame is dropped (channel
+    /// full, or larger than `MAX_QUEUED_OUTGOING_BYTES`) — this mirrors
+    /// the underlying channel's own fire-and-forget delivery guarantee
+    /// (an `Ok` `try_send` on a normal `mpsc` channel doesn't promise the
+    /// receiver will ever read the item either) and matches how the
+    /// broadcast-based `frame_rx` delivery path also has no per-frame
+    /// delivery acknowledgment. Both drop reasons are logged via `warn!`.
     fn send_frame(
         &self,
         connection: Arc<Self::Connection>,
@@ -398,12 +435,37 @@ impl WebSocketTransport for AxumWebSocketTransport {
                 .get(connection.as_ref())
                 .cloned();
             if let Some(tx) = tx {
-                if let Err(e) = tx.try_send(message) {
-                    warn!(
-                        "send_frame: dropping frame for connection {} (channel full or closed): {}",
-                        connection.as_ref(),
-                        e
-                    );
+                // Serialized once here, rather than in the consuming loop:
+                // this is also what the byte-budget check in `try_send`
+                // measures, so the queued-bytes accounting matches the
+                // actual bytes held in memory.
+                match serde_json::to_string(&message) {
+                    Ok(json_str) => {
+                        let len = json_str.len();
+                        match tx.try_send(json_str, len) {
+                            Ok(()) => {}
+                            Err(bounded_channel::TrySendError::BudgetExceeded(_)) => {
+                                warn!(
+                                    "send_frame: dropping frame for connection {} (byte budget exceeded, {} bytes)",
+                                    connection.as_ref(),
+                                    len
+                                );
+                            }
+                            Err(bounded_channel::TrySendError::Channel(_)) => {
+                                warn!(
+                                    "send_frame: dropping frame for connection {} (channel full or closed)",
+                                    connection.as_ref()
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "send_frame: failed to serialize frame for connection {}: {}",
+                            connection.as_ref(),
+                            e
+                        );
+                    }
                 }
             } else {
                 warn!(
@@ -519,24 +581,64 @@ mod tests {
         // used to be unbounded, so a stalled consumer let it grow without
         // limit. It must now reject sends once `OUTGOING_QUEUE_CAPACITY`
         // is reached instead of growing memory indefinitely.
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<WsMessage>(OUTGOING_QUEUE_CAPACITY);
+        let (tx, mut rx) =
+            byte_bounded_channel::<String>(OUTGOING_QUEUE_CAPACITY, MAX_QUEUED_OUTGOING_BYTES);
 
         for _ in 0..OUTGOING_QUEUE_CAPACITY {
-            tx.try_send(WsMessage::Ping { timestamp: 0 })
+            tx.try_send("ping".to_string(), 4)
                 .expect("channel should accept sends up to its capacity");
         }
 
-        let result = tx.try_send(WsMessage::Ping { timestamp: 0 });
+        let result = tx.try_send("ping".to_string(), 4);
         assert!(
-            matches!(result, Err(tokio::sync::mpsc::error::TrySendError::Full(_))),
+            matches!(
+                result,
+                Err(bounded_channel::TrySendError::Channel(
+                    tokio::sync::mpsc::error::TrySendError::Full(_)
+                ))
+            ),
             "channel must reject sends past capacity instead of growing unbounded"
         );
 
         // Draining a slot frees capacity again — this is the flow-control
         // behavior an unbounded channel could never provide.
         rx.recv().await.expect("receiver should still be open");
-        tx.try_send(WsMessage::Ping { timestamp: 0 })
+        tx.try_send("ping".to_string(), 4)
             .expect("channel should accept a send after capacity is freed");
+    }
+
+    #[tokio::test]
+    async fn test_send_frame_drops_when_byte_budget_exceeded() {
+        // Regression test for #349: a message-count bound alone doesn't
+        // bound queued bytes. A single frame larger than
+        // `MAX_QUEUED_OUTGOING_BYTES` must be dropped even though the
+        // channel is nowhere near its message-count capacity.
+        let transport = AxumWebSocketTransport::new();
+        let connection_id = "test-connection".to_string();
+        let (tx, mut rx) =
+            byte_bounded_channel::<String>(OUTGOING_QUEUE_CAPACITY, MAX_QUEUED_OUTGOING_BYTES);
+        transport
+            .outgoing_channels
+            .write()
+            .await
+            .insert(connection_id.clone(), tx);
+
+        let connection = Arc::new(connection_id);
+        let oversized_message = WsMessage::Error {
+            session_id: None,
+            error: "x".repeat(MAX_QUEUED_OUTGOING_BYTES + 1),
+            code: 0,
+        };
+
+        transport
+            .send_frame(connection, oversized_message)
+            .await
+            .expect("send_frame returns Ok even when it drops the frame");
+
+        assert!(
+            rx.try_recv().is_err(),
+            "an over-budget frame must be dropped, not queued"
+        );
     }
 
     #[tokio::test]
@@ -551,7 +653,8 @@ mod tests {
         // out of the lock before sending for lock hygiene.
         let transport = AxumWebSocketTransport::new();
         let connection_id = "test-connection".to_string();
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<WsMessage>(OUTGOING_QUEUE_CAPACITY);
+        let (tx, mut rx) =
+            byte_bounded_channel::<String>(OUTGOING_QUEUE_CAPACITY, MAX_QUEUED_OUTGOING_BYTES);
         transport
             .outgoing_channels
             .write()

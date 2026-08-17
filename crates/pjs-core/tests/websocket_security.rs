@@ -24,6 +24,7 @@ async fn test_websocket_rate_limiting_integration() {
         // messages are allowed before the rate limit is enforced.
         burst_allowance: 2,
         max_frame_size: 1024,
+        ..Default::default()
     };
 
     let security_handler = SecureWebSocketHandler::new(rate_config);
@@ -326,6 +327,7 @@ async fn test_security_config_integration() {
             .max_messages_per_second,
         burst_allowance: security_config.network.rate_limiting.burst_allowance,
         max_frame_size: security_config.network.max_websocket_frame_size,
+        ..Default::default()
     };
 
     let security_handler = SecureWebSocketHandler::new(rate_config);

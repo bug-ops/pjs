@@ -6,6 +6,7 @@
 use crate::{
     Error as PjsError, Result as PjsResult, StreamFrame, domain::Priority, security::RateLimitGuard,
 };
+use futures::{Sink, SinkExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -30,6 +31,90 @@ pub use client::*;
 pub use security::SecureWebSocketHandler;
 #[cfg(feature = "http-server")]
 pub use server::*;
+
+/// Default deadline for a single outbound WebSocket sink write.
+///
+/// Writing to the sink blocks until the peer's TCP receive buffer drains;
+/// a peer that stops reading (dead connection, slow-loris) would otherwise
+/// wedge the connection's task — and, on the server, the
+/// `Arc<RateLimitGuard>` it holds — until the OS eventually times out the
+/// socket. No existing timeout in `config::security::NetworkLimits` fits
+/// this: `connection_timeout_secs` bounds establishing a connection, not a
+/// steady-state write. 10s is long enough to absorb ordinary network
+/// jitter while still freeing a stuck connection promptly.
+///
+/// This bounds a single `feed`+`flush`, not a minimum throughput: a
+/// legitimate large frame (see `MAX_QUEUED_OUTGOING_BYTES` in `server.rs`,
+/// up to 16 MiB) sent to a genuinely slow-but-honest client needs roughly
+/// 13 Mbps to flush inside 10s, or it gets disconnected same as a stalled
+/// peer would. This is an accepted, documented tradeoff rather than a
+/// per-byte deadline: distinguishing "slow but making progress" from
+/// "stalled" would need tracking partial-write progress, which
+/// `Sink::send`'s `feed`+`flush` doesn't expose, and misclassifying a
+/// stalled peer as "still making progress" is the failure mode this
+/// timeout exists to close. Operators serving large frames to
+/// bandwidth-constrained clients should raise the value passed to
+/// [`send_with_write_timeout`] accordingly (the server threads its value
+/// through `RateLimitConfig::write_timeout`).
+pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Writes `message` to `sink`, aborting the write if it does not complete
+/// within `timeout` (see [`WRITE_TIMEOUT`] for the production default and
+/// the rationale/tradeoffs of a fixed per-write deadline).
+///
+/// Used at every outbound WebSocket write site (server and client). A
+/// timeout is treated the same as a genuine send error — both mean the
+/// caller should stop and close the connection. Taking `timeout` as a
+/// parameter (rather than hardcoding [`WRITE_TIMEOUT`]) lets callers
+/// configure it (see `RateLimitConfig::write_timeout`) and lets tests
+/// exercise a real stall deterministically with a short deadline instead
+/// of waiting out the production value.
+pub(crate) async fn send_with_write_timeout<S, M>(
+    sink: &mut S,
+    message: M,
+    timeout: Duration,
+) -> Result<(), String>
+where
+    S: Sink<M> + Unpin,
+    S::Error: std::fmt::Display,
+{
+    match tokio::time::timeout(timeout, sink.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("send failed: {e}")),
+        Err(_elapsed) => Err(format!("write stalled for {timeout:?}")),
+    }
+}
+
+#[cfg(test)]
+mod write_timeout_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn test_send_with_write_timeout_times_out_on_stalled_sink() {
+        let handle = tokio::spawn(async {
+            let mut sink = futures::sink::unfold((), |_, _item: &str| {
+                futures::future::pending::<Result<(), std::io::Error>>()
+            });
+            send_with_write_timeout(&mut sink, "hello", Duration::from_millis(200)).await
+        });
+
+        tokio::time::advance(Duration::from_millis(201)).await;
+
+        let result = handle.await.expect("task panicked");
+        assert!(
+            result.is_err(),
+            "a write that never completes must time out, not hang forever"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_with_write_timeout_succeeds_on_ready_sink() {
+        let mut sink = futures::sink::drain();
+        send_with_write_timeout(&mut sink, "hello", WRITE_TIMEOUT)
+            .await
+            .expect("a sink that accepts immediately must not be treated as stalled");
+    }
+}
 
 /// WebSocket message types for PJS streaming
 #[derive(Debug, Clone, Serialize, Deserialize)]

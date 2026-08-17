@@ -55,6 +55,16 @@ pub struct RateLimitConfig {
     pub max_messages_per_second: u32,
     /// Burst allowance (extra messages above rate)
     pub burst_allowance: u32,
+    /// Deadline for a single outbound WebSocket sink write before the
+    /// connection is treated as stalled and closed.
+    ///
+    /// Guards against a peer that stops reading wedging the connection's
+    /// task indefinitely. Bounds a single write, not overall throughput —
+    /// see `infrastructure::websocket::WRITE_TIMEOUT`'s doc for the
+    /// tradeoff this implies for large frames sent to slow clients, and
+    /// raise this value if that tradeoff doesn't fit a deployment's
+    /// expected client bandwidth.
+    pub write_timeout: Duration,
 }
 
 impl Default for RateLimitConfig {
@@ -66,6 +76,7 @@ impl Default for RateLimitConfig {
             max_frame_size: 1024 * 1024, // 1MB
             max_messages_per_second: 30,
             burst_allowance: 5,
+            write_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -168,6 +179,11 @@ impl WebSocketRateLimiter {
             config,
             clients: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Returns the rate-limit configuration this limiter was constructed with.
+    pub fn config(&self) -> &RateLimitConfig {
+        &self.config
     }
 
     /// Check if request is allowed (HTTP upgrade to WebSocket)
