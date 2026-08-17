@@ -50,6 +50,67 @@ const EVENT_LOG_CAPACITY: usize = 10_000;
 /// [`EVENT_LOG_CAPACITY`].
 const EVENT_LOG_EVICT_TARGET: usize = 9_000;
 
+/// One-shot pause point armed inside [`InMemoryEventPublisher::evict_oldest_if_over_capacity`],
+/// used by `tests::test_concurrent_eviction_forced_interleaving_stays_at_target`
+/// to deterministically reproduce a stale-length-vs-fresh-snapshot
+/// interleaving: `excess` sized from a `len()` read before a concurrent
+/// evictor shrinks `event_log`, then applied to a snapshot taken after.
+/// This hazard was caught and prevented during #352's code review (see that
+/// PR's `evict_oldest_if_over_capacity` comment) and never shipped, but a
+/// future edit could reintroduce it, so this hook lets a test pin it down
+/// as a regression guard rather than relying on organic tokio scheduling to
+/// hit a window only a few CPU instructions wide (#353). `cfg(test)`-only:
+/// absent from every non-test build.
+#[cfg(test)]
+static EVICTION_RACE_HOOK: std::sync::Mutex<
+    Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+> = std::sync::Mutex::new(None);
+
+/// Handle returned by [`arm_eviction_race_pause`] to synchronize with the
+/// eviction pass it armed.
+#[cfg(test)]
+struct EvictionRacePause {
+    paused_rx: std::sync::mpsc::Receiver<()>,
+    resume_tx: std::sync::mpsc::Sender<()>,
+}
+
+#[cfg(test)]
+impl EvictionRacePause {
+    /// Blocks the calling thread until the armed eviction pass reaches its
+    /// pause point, or up to 10 seconds. Call from a blocking context (e.g.
+    /// `spawn_blocking`), not directly on an async task, to avoid stalling
+    /// the runtime. The timeout keeps a broken hook a fast test failure
+    /// instead of an indefinite CI hang.
+    fn wait_until_paused(&self) {
+        self.paused_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("evict_oldest_if_over_capacity never reached the armed pause point");
+    }
+
+    /// Releases the paused eviction pass to continue.
+    fn resume(self) {
+        let _ = self.resume_tx.send(());
+    }
+}
+
+/// Arms a one-shot pause point inside
+/// [`InMemoryEventPublisher::evict_oldest_if_over_capacity`]: the next call
+/// that finds `event_log` over capacity blocks right after its capacity
+/// check, before collecting its eviction snapshot, until
+/// [`EvictionRacePause::resume`] is called. This lets a test run a second
+/// eviction pass to completion in between, so the paused pass resumes
+/// against an already-shrunk `event_log`.
+#[cfg(test)]
+fn arm_eviction_race_pause() -> EvictionRacePause {
+    let (paused_tx, paused_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    *EVICTION_RACE_HOOK.lock().unwrap() = Some((paused_tx, resume_rx));
+    EvictionRacePause {
+        paused_rx,
+        resume_tx,
+    }
+}
+
 /// In-memory event publisher with subscription support
 pub struct InMemoryEventPublisher {
     /// Lock-free notification callbacks using DashMap
@@ -227,6 +288,20 @@ impl InMemoryEventPublisher {
         // makes `excess` overstate what's left, over-evicting (up to
         // wiping `event_log` entirely under enough concurrent pressure).
         if self.event_log.len() > EVENT_LOG_CAPACITY {
+            // The `.take()` result is bound in its own statement, not
+            // directly in the `if let` scrutinee: temporaries in an `if
+            // let` condition stay alive for the whole block, which would
+            // otherwise hold the `MutexGuard` (and thus the lock) for as
+            // long as this pass stays paused below — deadlocking any other
+            // eviction pass that hits this same gate meanwhile.
+            #[cfg(test)]
+            let armed_pause = EVICTION_RACE_HOOK.lock().unwrap().take();
+            #[cfg(test)]
+            if let Some((paused_tx, resume_rx)) = armed_pause {
+                let _ = paused_tx.send(());
+                let _ = resume_rx.recv();
+            }
+
             let mut by_sequence: Vec<(EventId, u64)> = self
                 .event_log
                 .iter()
@@ -881,5 +956,80 @@ mod tests {
 
         assert_eq!(publisher1.event_count(), 1);
         assert_eq!(publisher2.event_count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_eviction_forced_interleaving_stays_at_target() {
+        // Deterministic regression guard for #353: pins down the
+        // stale-`len()`-vs-fresh-snapshot interleaving hazard identified
+        // during #352's code review (see this file's
+        // `evict_oldest_if_over_capacity` comment) instead of relying on
+        // organic tokio scheduling, which essentially never hits a race
+        // window only a few CPU instructions wide (see
+        // `event_publisher_comprehensive::test_concurrent_eviction_stays_bounded_near_target`
+        // in `tests/`, which does rely on natural scheduling and is a
+        // coarse sanity check only).
+        //
+        // Sequence:
+        // 1. Arm the pause hook, then publish a large batch (task A) that
+        //    pushes `event_log` over capacity. Its eviction pass blocks
+        //    right after the capacity check, before it takes its own
+        //    eviction snapshot.
+        // 2. While A is paused, publish one more event (task B) whose
+        //    eviction pass runs to completion, shrinking `event_log` down
+        //    to exactly EVENT_LOG_EVICT_TARGET.
+        // 3. Resume A. It now takes its eviction snapshot against the
+        //    already-shrunk `event_log`.
+        //
+        // If `excess` were sized from the stale `len()` read *before*
+        // pausing (~20,000) instead of the post-resume snapshot (~9,000
+        // entries), A would remove far more than the snapshot holds and
+        // wipe `event_log` to 0. Deriving `excess` from the snapshot's own
+        // length means A removes ~0 additional entries, so the outcome is
+        // fully deterministic: exactly EVENT_LOG_EVICT_TARGET.
+        let publisher = Arc::new(InMemoryEventPublisher::new());
+        let session_id = SessionId::new();
+
+        let pause = arm_eviction_race_pause();
+
+        let publisher_a = Arc::clone(&publisher);
+        let task_a = tokio::spawn(async move {
+            let events: Vec<DomainEvent> = (0..20_000)
+                .map(|_| DomainEvent::SessionActivated {
+                    session_id,
+                    timestamp: chrono::Utc::now(),
+                })
+                .collect();
+            publisher_a.publish_batch(events).await.unwrap();
+        });
+
+        // Block a dedicated thread waiting for task A's eviction pass to
+        // hit the pause point, so as not to stall the runtime's async
+        // worker threads.
+        let paused = tokio::task::spawn_blocking(move || {
+            pause.wait_until_paused();
+            pause
+        })
+        .await
+        .unwrap();
+
+        // Task B's eviction pass runs to completion while A is still
+        // paused, shrinking event_log down to EVENT_LOG_EVICT_TARGET.
+        publisher
+            .publish(DomainEvent::SessionActivated {
+                session_id,
+                timestamp: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        paused.resume();
+        task_a.await.unwrap();
+
+        assert_eq!(
+            publisher.event_count(),
+            EVENT_LOG_EVICT_TARGET,
+            "forced eviction-race interleaving left event_log away from the deterministic target"
+        );
     }
 }

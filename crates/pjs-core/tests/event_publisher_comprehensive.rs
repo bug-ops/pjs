@@ -623,6 +623,19 @@ async fn test_memory_management_evicts_old_events() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_concurrent_eviction_stays_bounded_near_target() {
+    // NOTE: this is a coarse load-bearing sanity check, not a reliable
+    // regression guard for the specific stale-`len()`-vs-fresh-snapshot
+    // interleaving hazard identified during #352's code review (see that
+    // PR's `evict_oldest_if_over_capacity` comment). It relies on organic
+    // tokio scheduling to race two eviction passes, but that race window is
+    // only a few CPU instructions wide with no `.await` in between —
+    // reintroducing the hazard locally and running this test repeatedly
+    // showed it passes essentially every time regardless (see #353). It
+    // still has value as a bound check under realistic concurrent load; for
+    // a test that reliably goes red against that specific hazard, see
+    // `event_publisher::tests::test_concurrent_eviction_forced_interleaving_stays_at_target`
+    // in `src/infrastructure/adapters/event_publisher.rs`, which uses a
+    // deterministic pause hook instead of natural scheduling.
     let publisher = Arc::new(InMemoryEventPublisher::new());
     let session_id = SessionId::new();
 
