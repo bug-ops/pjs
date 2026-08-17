@@ -43,8 +43,10 @@ pub fn install_global_recorder() -> Result<PrometheusHandle, PjsError> {
 ///
 /// The handler installs the global recorder on the first call if not already
 /// installed. Subsequent calls reuse the cached handle.
-// TODO(critic): Avoid leaking recorder error details to /metrics consumers;
-// log the error and return a generic 500 body instead.
+///
+/// `/metrics` is unauthenticated, so on installation failure the response
+/// body must never expose the underlying error's `Display` text — the
+/// error is logged server-side only and the client gets a generic message.
 pub async fn metrics_handler() -> impl axum::response::IntoResponse {
     match install_global_recorder() {
         Ok(handle) => {
@@ -63,11 +65,24 @@ pub async fn metrics_handler() -> impl axum::response::IntoResponse {
                         .expect("infallible empty response")
                 })
         }
-        Err(e) => axum::response::Response::builder()
-            .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-            .body(axum::body::Body::from(e.to_string()))
-            .expect("infallible error response"),
+        Err(e) => {
+            log_recorder_install_failure_once(&e);
+            axum::response::Response::builder()
+                .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::from("metrics recorder unavailable"))
+                .expect("infallible error response")
+        }
     }
+}
+
+/// Log once (per process) that the Prometheus recorder failed to install, so
+/// a sustained failure doesn't flood logs at ERROR on every request to the
+/// unauthenticated, unrate-limited `/metrics` endpoint.
+fn log_recorder_install_failure_once(e: &PjsError) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::error!(error = %e, "failed to install prometheus recorder (logged once)");
+    });
 }
 
 #[cfg(test)]
