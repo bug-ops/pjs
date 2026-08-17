@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `pjs-wasm`'s `PjsParser.withSecurityConfig` and `PriorityStream.setSecurityConfig` took `SecurityConfig` by value on the Rust side. Under wasm-bindgen, passing a `#[wasm_bindgen]` struct by value into an exported function transfers ownership into Rust and invalidates the JS-side wrapper, so sharing one `SecurityConfig` instance across a parser and a stream — the exact pattern documented in the README's "Security Limits" section and the crate's module docs — threw `Error: null pointer passed to rust` on the second call. Both now take `&SecurityConfig` and clone internally; the generated TypeScript signatures (`withSecurityConfig(security: SecurityConfig): PjsParser`, `setSecurityConfig(config: SecurityConfig): void`) are unchanged, so this is not a breaking change for JS/TS consumers — the same `SecurityConfig` instance can now safely be passed to both calls (#404)
+- The identical by-value ownership-transfer hazard also affected `PjsParser.withConfig` and `PriorityStream.withConfig`, which both took `PriorityConfigBuilder` by value — sharing one `PriorityConfigBuilder` between a parser and a stream (the pattern shown in the README's API reference for `withConfig`) hit the same `Error: null pointer passed to rust`. Both now take `&PriorityConfigBuilder`; `PriorityConfigBuilder` gained `#[derive(Clone)]` and its internal `build_internal` clones from the reference. Generated TypeScript signatures are unchanged, so this is likewise not a breaking change for JS/TS consumers (#404)
+
 ## [0.6.3] - 2026-08-18
 
 ### Security

@@ -64,6 +64,8 @@ impl PjsParser {
     /// Create a parser with custom priority configuration.
     ///
     /// This allows you to customize which fields get which priorities.
+    /// Takes the builder by reference so the same `PriorityConfigBuilder`
+    /// instance can also be applied to a `PriorityStream` via `withConfig`.
     ///
     /// # Arguments
     ///
@@ -76,16 +78,17 @@ impl PjsParser {
     /// # Example
     ///
     /// ```javascript
-    /// import { PjsParser, PriorityConfigBuilder } from 'pjs-wasm';
+    /// import { PjsParser, PriorityStream, PriorityConfigBuilder } from 'pjs-wasm';
     ///
     /// const config = new PriorityConfigBuilder()
     ///   .addCriticalField('user_id')
     ///   .addHighField('display_name');
     ///
     /// const parser = PjsParser.withConfig(config);
+    /// const stream = PriorityStream.withConfig(config);
     /// ```
     #[wasm_bindgen(js_name = withConfig)]
-    pub fn with_config(config_builder: PriorityConfigBuilder) -> Self {
+    pub fn with_config(config_builder: &PriorityConfigBuilder) -> Self {
         let config = config_builder.build_internal();
         Self {
             priority_assigner: PriorityAssigner::with_config(config),
@@ -95,6 +98,9 @@ impl PjsParser {
 
     /// Create a parser with custom security configuration.
     ///
+    /// Takes the config by reference so the same `SecurityConfig` instance
+    /// can also be applied to a `PriorityStream` via `setSecurityConfig`.
+    ///
     /// # Arguments
     ///
     /// * `security_config` - A SecurityConfig with custom limits
@@ -102,19 +108,21 @@ impl PjsParser {
     /// # Example
     ///
     /// ```javascript
-    /// import { PjsParser, SecurityConfig } from 'pjs-wasm';
+    /// import { PjsParser, PriorityStream, SecurityConfig } from 'pjs-wasm';
     ///
     /// const security = new SecurityConfig()
     ///     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB
     ///     .setMaxDepth(32);
     ///
     /// const parser = PjsParser.withSecurityConfig(security);
+    /// const stream = new PriorityStream();
+    /// stream.setSecurityConfig(security);
     /// ```
     #[wasm_bindgen(js_name = withSecurityConfig)]
-    pub fn with_security_config(security_config: SecurityConfig) -> Self {
+    pub fn with_security_config(security_config: &SecurityConfig) -> Self {
         Self {
             priority_assigner: PriorityAssigner::new(),
-            security_config,
+            security_config: security_config.clone(),
         }
     }
 
@@ -385,7 +393,7 @@ mod tests {
     #[test]
     fn test_parser_with_config() {
         let config = PriorityConfigBuilder::new().add_critical_field("custom_id".to_string());
-        let _parser = PjsParser::with_config(config);
+        let _parser = PjsParser::with_config(&config);
         // Parser created successfully with custom config
     }
 
@@ -557,7 +565,7 @@ mod tests {
         let security = SecurityConfig::new()
             .set_max_json_size(1024)
             .set_max_depth(10);
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
         assert_eq!(parser.security_config.max_json_size(), 1024);
         assert_eq!(parser.security_config.max_depth(), 10);
     }
@@ -599,7 +607,7 @@ mod tests {
     fn test_generate_frames_internal_respects_depth_limit() {
         // Create parser with shallow depth limit
         let security = SecurityConfig::new().set_max_depth(3);
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
         let stream_id = StreamId::new();
 
         // Create nested structure deeper than limit
@@ -703,7 +711,7 @@ mod wasm_tests {
             .add_critical_field("user_id".to_string())
             .add_high_field("display_name".to_string());
 
-        let parser = PjsParser::with_config(config);
+        let parser = PjsParser::with_config(&config);
         let result = parser.generate_frames(r#"{"user_id": 123, "display_name": "Alice"}"#, 10);
         assert!(result.is_ok());
     }
@@ -754,7 +762,7 @@ mod wasm_tests {
     #[wasm_bindgen_test]
     fn test_parse_input_too_large() {
         let security = SecurityConfig::new().set_max_json_size(100);
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
 
         // Create input larger than 100 bytes
         let large_input = format!(r#"{{"data": "{}"}}"#, "x".repeat(200));
@@ -773,7 +781,7 @@ mod wasm_tests {
     #[wasm_bindgen_test]
     fn test_generate_frames_input_too_large() {
         let security = SecurityConfig::new().set_max_json_size(50);
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
 
         // Create input larger than 50 bytes
         let large_input = r#"{"id": 1, "name": "Alice", "bio": "This is a long biography"}"#;
@@ -792,7 +800,7 @@ mod wasm_tests {
     #[wasm_bindgen_test]
     fn test_parse_array_too_large_rejected() {
         let security = SecurityConfig::new().set_max_array_elements(100);
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
 
         let large_array = format!(
             "[{}]",
@@ -816,7 +824,7 @@ mod wasm_tests {
     #[wasm_bindgen_test]
     fn test_parse_nested_array_too_large_rejected() {
         let security = SecurityConfig::new().set_max_array_elements(100);
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
 
         let large_array = format!(
             "[{}]",
@@ -841,7 +849,7 @@ mod wasm_tests {
     #[wasm_bindgen_test]
     fn test_parse_object_too_many_keys_rejected() {
         let security = SecurityConfig::new().set_max_object_keys(2);
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
 
         let result = parser.parse(r#"{"a": 1, "b": 2, "c": 3}"#);
 
@@ -858,7 +866,7 @@ mod wasm_tests {
     #[wasm_bindgen_test]
     fn test_generate_frames_array_too_large_rejected() {
         let security = SecurityConfig::new().set_max_array_elements(100);
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
 
         let large_array = format!(
             "[{}]",
@@ -915,7 +923,7 @@ mod wasm_tests {
             .set_max_json_size(1024 * 1024) // 1 MB
             .set_max_depth(32);
 
-        let parser = PjsParser::with_security_config(security);
+        let parser = PjsParser::with_security_config(&security);
 
         // Small input should work
         let result = parser.parse(r#"{"id": 1}"#);

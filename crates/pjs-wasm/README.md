@@ -194,7 +194,7 @@ const frames = parser.generateFrames('{"id": 1, "name": "Alice"}', 50);
 
 ##### `withConfig(config: PriorityConfigBuilder): PjsParser` (static)
 
-Create a parser with custom priority configuration.
+Create a parser with custom priority configuration. `config` is taken by reference, so the same `PriorityConfigBuilder` instance can also be applied to a `PriorityStream` via its own `withConfig`.
 
 **Parameters:**
 
@@ -210,6 +210,7 @@ Create a parser with custom priority configuration.
 const config = new PriorityConfigBuilder()
     .addCriticalField('user_id');
 const parser = PjsParser.withConfig(config);
+const stream = PriorityStream.withConfig(config);
 ```
 
 ### `version(): string`
@@ -230,6 +231,8 @@ console.log(version()); // e.g. "0.6.3"
 ## Security Limits
 
 `SecurityConfig` bounds JSON input size, nesting depth, array element count, and object key count to prevent DoS via oversized or maliciously crafted payloads. All limits are enforced during parsing, not just checked against the raw input size.
+
+`withSecurityConfig` and `setSecurityConfig` accept the config by reference, so one `SecurityConfig` instance can be shared across a `PjsParser` and a `PriorityStream` (the `setMax*` builder methods still consume and return a new instance, as usual — build the config fully before sharing it).
 
 ```javascript
 import { PjsParser, PriorityStream, SecurityConfig } from '@pjson/wasm';
