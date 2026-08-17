@@ -175,8 +175,8 @@ async fn test_pjs_middleware_no_metrics_headers() {
 // RateLimitMiddleware Tests
 // ============================================================================
 
-#[test]
-fn test_rate_limit_middleware_creation() {
+#[tokio::test]
+async fn test_rate_limit_middleware_creation() {
     use pjson_rs::infrastructure::http::RateLimitConfig;
     let config = RateLimitConfig::new(100);
     let _rate_limit = RateLimitMiddleware::new(config);
@@ -184,8 +184,8 @@ fn test_rate_limit_middleware_creation() {
     // RateLimitMiddleware created successfully
 }
 
-#[test]
-fn test_rate_limit_middleware_burst_calculation() {
+#[tokio::test]
+async fn test_rate_limit_middleware_burst_calculation() {
     use pjson_rs::infrastructure::http::RateLimitConfig;
     let config = RateLimitConfig::new(200);
     let _rate_limit = RateLimitMiddleware::new(config);
@@ -193,8 +193,8 @@ fn test_rate_limit_middleware_burst_calculation() {
     // RateLimitMiddleware created successfully
 }
 
-#[test]
-fn test_rate_limit_middleware_small_limit() {
+#[tokio::test]
+async fn test_rate_limit_middleware_small_limit() {
     use pjson_rs::infrastructure::http::RateLimitConfig;
     let config = RateLimitConfig::new(4);
     let _rate_limit = RateLimitMiddleware::new(config);
@@ -202,8 +202,8 @@ fn test_rate_limit_middleware_small_limit() {
     // RateLimitMiddleware created successfully
 }
 
-#[test]
-fn test_rate_limit_middleware_clone() {
+#[tokio::test]
+async fn test_rate_limit_middleware_clone() {
     use pjson_rs::infrastructure::http::RateLimitConfig;
     let config = RateLimitConfig::new(150);
     let rate_limit1 = RateLimitMiddleware::new(config);

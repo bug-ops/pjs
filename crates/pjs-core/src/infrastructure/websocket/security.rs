@@ -1,5 +1,6 @@
 //! WebSocket security integration with rate limiting
 
+use crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL;
 use crate::security::{RateLimitConfig, RateLimitError, RateLimitGuard, WebSocketRateLimiter};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -13,19 +14,15 @@ pub struct SecureWebSocketHandler {
 
 impl SecureWebSocketHandler {
     /// Create new secure handler with rate limiting configuration
+    ///
+    /// Wires periodic cleanup via [`WebSocketRateLimiter::spawn_cleanup_task`]
+    /// — idempotent (safe if this same limiter is later shared with an HTTP
+    /// `RateLimitMiddleware` via `from_limiter`, which won't spawn a second
+    /// loop) and non-panicking outside a Tokio runtime (logs a warning and
+    /// skips instead; a later call from within a runtime can still succeed).
     pub fn new(rate_limit_config: RateLimitConfig) -> Self {
         let rate_limiter = Arc::new(WebSocketRateLimiter::new(rate_limit_config));
-
-        // Start background cleanup task
-        let limiter_cleanup = rate_limiter.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 minutes
-            loop {
-                interval.tick().await;
-                limiter_cleanup.cleanup_expired();
-                info!("Rate limiter cleanup completed");
-            }
-        });
+        rate_limiter.spawn_cleanup_task(DEFAULT_CLEANUP_INTERVAL);
 
         Self { rate_limiter }
     }

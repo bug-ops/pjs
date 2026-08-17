@@ -243,6 +243,11 @@ pub struct RateLimitMiddleware {
 
 impl RateLimitMiddleware {
     /// Build a fresh middleware with its own internal `WebSocketRateLimiter`.
+    ///
+    /// Spawns a background task that periodically prunes expired per-IP
+    /// entries (see [`crate::security::rate_limit::WebSocketRateLimiter::spawn_cleanup_task`])
+    /// if called from within a Tokio runtime; otherwise construction still
+    /// succeeds, but periodic pruning is skipped with a logged warning.
     pub fn new(config: RateLimitConfig) -> Self {
         let trusted_proxies = config.trusted_proxies.clone();
         let rate_limit_config = crate::security::rate_limit::RateLimitConfig {
@@ -251,18 +256,28 @@ impl RateLimitMiddleware {
             ..Default::default()
         };
 
+        let limiter = std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
+            rate_limit_config,
+        ));
+        limiter.spawn_cleanup_task(crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL);
+
         Self {
-            limiter: std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
-                rate_limit_config,
-            )),
+            limiter,
             trusted_proxies,
         }
     }
 
     /// Wrap an externally constructed `WebSocketRateLimiter` (lets several middlewares share state).
+    ///
+    /// Spawns a background cleanup task via
+    /// [`crate::security::rate_limit::WebSocketRateLimiter::spawn_cleanup_task`],
+    /// which is a no-op if one is already running for this limiter (e.g.
+    /// because another `RateLimitMiddleware` already wraps the same `Arc`).
     pub fn from_limiter(
         limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
     ) -> Self {
+        limiter.spawn_cleanup_task(crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL);
+
         Self {
             limiter,
             trusted_proxies: None,
@@ -330,27 +345,65 @@ where
                     Ok(response)
                 }
                 Err(err) => {
-                    // Rate limit exceeded - return 429
+                    let (status, retry_after, error_label) = rate_limit_error_response_parts(&err);
+
                     let error_body = serde_json::json!({
-                        "error": "Too Many Requests",
+                        "error": error_label,
                         "message": err.to_string(),
-                        "retry_after": 60
+                        "retry_after": retry_after
                     })
                     .to_string();
 
                     let mut response = Response::builder()
-                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .status(status)
                         .header(header::CONTENT_TYPE, "application/json")
-                        .header("Retry-After", "60")
+                        .header("Retry-After", retry_after.to_string())
                         .body(error_body.into())
-                        .unwrap_or_else(|_| Response::new("Too Many Requests".into()));
+                        .unwrap_or_else(|_| Response::new(error_label.into()));
 
-                    add_rate_limit_headers(&mut response, &limiter, client_ip);
+                    // A `CapacityExceeded` rejection has no per-client bucket
+                    // to describe — the IP was never admitted into the
+                    // tracked-client table — so the X-RateLimit-* quota
+                    // headers would misleadingly describe a bucket that
+                    // doesn't exist. Only attach them for per-client
+                    // rejections, where they're meaningful.
+                    if status != StatusCode::SERVICE_UNAVAILABLE {
+                        add_rate_limit_headers(&mut response, &limiter, client_ip);
+                    }
 
                     Ok(response)
                 }
             }
         })
+    }
+}
+
+/// Map a [`crate::security::rate_limit::RateLimitError`] to the `(status,
+/// retry_after_secs, error_label)` triple used to build the 429/503 response.
+///
+/// A `CapacityExceeded` rejection is a server-side condition (the
+/// tracked-client table is full) rather than "you exceeded your own quota" —
+/// folding it into 429 would mislead the caller into backing off their own
+/// request rate, which does nothing to free capacity. It gets `503` instead,
+/// with a `Retry-After` tied to the cleanup sweep interval since that's the
+/// only thing that can free a slot. See `MAX_TRACKED_CLIENTS`'s docs in
+/// `security::rate_limit` for the accepted reject-new-clients tradeoff this
+/// implies under a sustained capacity attack. Every other variant keeps the
+/// existing `429` + fixed 60s hint.
+fn rate_limit_error_response_parts(
+    err: &crate::security::rate_limit::RateLimitError,
+) -> (StatusCode, u64, &'static str) {
+    if matches!(
+        err,
+        crate::security::rate_limit::RateLimitError::CapacityExceeded { .. }
+    ) {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL.as_secs(),
+            "Service Unavailable",
+        )
+    } else {
+        (StatusCode::TOO_MANY_REQUESTS, 60, "Too Many Requests")
     }
 }
 
@@ -817,10 +870,90 @@ mod tests {
         assert_eq!(config.window_duration, std::time::Duration::from_secs(30));
     }
 
-    #[test]
-    fn test_rate_limit_middleware_creation() {
+    #[tokio::test]
+    async fn test_rate_limit_middleware_creation() {
         let config = RateLimitConfig::default();
         let _middleware = RateLimitMiddleware::new(config);
+    }
+
+    #[tokio::test]
+    async fn test_from_limiter_claims_cleanup_spawn() {
+        // `RateLimitMiddleware::new`/`from_limiter` always spawn with the
+        // production `DEFAULT_CLEANUP_INTERVAL` (300s), which is too slow to
+        // wait out in a test — the underlying `spawn_cleanup_task` mechanism
+        // (real eviction after a short period, idempotency across repeated
+        // calls) is proven directly and quickly in `security::rate_limit`'s
+        // own tests. What this test proves instead, deterministically and
+        // fast, is that `from_limiter` actually calls it: `from_limiter` is
+        // the *first* caller here (not pre-empted by a manual
+        // `spawn_cleanup_task` call, which would make this a no-op check).
+        let limiter = std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
+            crate::security::rate_limit::RateLimitConfig::default(),
+        ));
+        assert!(!limiter.is_cleanup_task_spawned());
+
+        let _middleware = RateLimitMiddleware::from_limiter(limiter.clone());
+
+        assert!(
+            limiter.is_cleanup_task_spawned(),
+            "RateLimitMiddleware::from_limiter must wire up periodic cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_new_claims_cleanup_spawn() {
+        let middleware = RateLimitMiddleware::new(RateLimitConfig::default());
+
+        assert!(
+            middleware.limiter.is_cleanup_task_spawned(),
+            "RateLimitMiddleware::new must wire up periodic cleanup"
+        );
+    }
+
+    #[test]
+    fn test_capacity_exceeded_maps_to_503_with_sweep_interval_retry_after() {
+        let err = crate::security::rate_limit::RateLimitError::CapacityExceeded {
+            max: crate::security::rate_limit::MAX_TRACKED_CLIENTS,
+        };
+        let (status, retry_after, label) = rate_limit_error_response_parts(&err);
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            retry_after,
+            crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL.as_secs()
+        );
+        assert_eq!(label, "Service Unavailable");
+    }
+
+    #[test]
+    fn test_other_rate_limit_errors_map_to_429() {
+        let err = crate::security::rate_limit::RateLimitError::LimitExceeded {
+            limit: 10,
+            window: std::time::Duration::from_secs(60),
+        };
+        let (status, retry_after, label) = rate_limit_error_response_parts(&err);
+
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(retry_after, 60);
+        assert_eq!(label, "Too Many Requests");
+    }
+
+    #[tokio::test]
+    async fn test_from_limiter_on_already_spawned_limiter_does_not_reclaim() {
+        // Simulates the scenario `from_limiter`'s docs describe: a limiter
+        // whose cleanup was already spawned elsewhere (e.g. by
+        // `SecureWebSocketHandler::new` sharing the same `Arc`). Wrapping it
+        // again must observe the claim as already made, not attempt (or
+        // need) a second spawn.
+        let limiter = std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
+            crate::security::rate_limit::RateLimitConfig::default(),
+        ));
+        limiter.spawn_cleanup_task(crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL);
+        assert!(limiter.is_cleanup_task_spawned());
+
+        let _middleware = RateLimitMiddleware::from_limiter(limiter.clone());
+
+        assert!(limiter.is_cleanup_task_spawned());
     }
 
     #[test]

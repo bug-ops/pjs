@@ -4,10 +4,40 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::{
     net::IpAddr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use thiserror::Error;
+
+/// Hard upper bound on the number of distinct client IPs [`WebSocketRateLimiter`]
+/// tracks at once, independent of the periodic TTL-based [`WebSocketRateLimiter::cleanup_expired`]
+/// sweep. The sweep only runs every few minutes ([`DEFAULT_CLEANUP_INTERVAL`]) and
+/// cannot by itself prevent an in-window burst of distinct IPs from growing the
+/// map unboundedly between sweeps. Once at capacity, requests from IPs not
+/// already tracked are rejected with [`RateLimitError::CapacityExceeded`]
+/// rather than growing the map further; already-tracked IPs are unaffected.
+///
+/// **Reject-new, not evict-to-admit — a deliberate choice.** At capacity, a
+/// not-yet-tracked IP is turned away rather than evicting an arbitrary
+/// existing entry to make room. Evict-to-admit would let an attacker forge
+/// fresh IPs to repeatedly evict *established* clients' rate-limit state,
+/// letting them bypass their own accumulated request count — the opposite of
+/// what this limiter exists to prevent. Reject-new instead trades that for:
+/// under a sustained attack that fills the table faster than
+/// [`WebSocketRateLimiter::cleanup_expired`] can free idle entries, new
+/// clients are turned away (a `503`, see `RateLimitService::call` in
+/// `infrastructure::http::middleware`) until capacity frees up. This is
+/// considered the safer default — it protects already-established traffic at
+/// the cost of new-client admission under capacity pressure, rather than the
+/// reverse.
+pub const MAX_TRACKED_CLIENTS: usize = 100_000;
+
+/// Default interval between periodic [`WebSocketRateLimiter::cleanup_expired`]
+/// sweeps spawned by [`WebSocketRateLimiter::spawn_cleanup_task`].
+pub const DEFAULT_CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Rate limiting errors
 #[derive(Error, Debug, Clone)]
@@ -36,6 +66,15 @@ pub enum RateLimitError {
         /// Observed frame size in bytes.
         size: usize,
         /// Configured maximum frame size in bytes.
+        max: usize,
+    },
+
+    /// The limiter is already tracking [`MAX_TRACKED_CLIENTS`] distinct
+    /// clients; requests from not-yet-tracked clients are rejected until the
+    /// next cleanup sweep frees capacity.
+    #[error("Rate limiter at capacity: {max} tracked clients")]
+    CapacityExceeded {
+        /// Configured maximum number of tracked clients.
         max: usize,
     },
 }
@@ -164,6 +203,18 @@ impl ClientRateLimit {
 pub struct WebSocketRateLimiter {
     config: RateLimitConfig,
     clients: Arc<DashMap<IpAddr, ClientRateLimit>>,
+    /// Guards [`WebSocketRateLimiter::spawn_cleanup_task`] so it spawns at
+    /// most one background task per limiter even if called repeatedly (e.g.
+    /// by several `RateLimitMiddleware`s sharing the same `Arc`).
+    ///
+    /// An `AtomicBool` rather than `std::sync::Once`: `Once` permanently
+    /// consumes its "run" on the first call regardless of what that call
+    /// does, so a first call outside a Tokio runtime would consume it and
+    /// silently prevent every later, in-runtime call from ever spawning.
+    /// This flag is only set `true` once a spawn actually succeeds; a failed
+    /// attempt (no runtime) rolls it back to `false` so a later call can
+    /// retry.
+    cleanup_spawned: AtomicBool,
 }
 
 impl Default for WebSocketRateLimiter {
@@ -178,6 +229,7 @@ impl WebSocketRateLimiter {
         Self {
             config,
             clients: Arc::new(DashMap::new()),
+            cleanup_spawned: AtomicBool::new(false),
         }
     }
 
@@ -186,8 +238,79 @@ impl WebSocketRateLimiter {
         &self.config
     }
 
+    /// Spawn a background task that periodically calls [`Self::cleanup_expired`].
+    ///
+    /// Idempotent: calling this more than once on the same limiter (e.g. when
+    /// several `RateLimitMiddleware`s wrap the same shared `Arc`) spawns only
+    /// one task. Requires a Tokio runtime; if none is available, logs a
+    /// warning and returns without spawning rather than panicking, since
+    /// bare construction of this limiter (and its wrappers) must remain
+    /// usable from non-async contexts — a later call to this method (e.g.
+    /// once code has entered an async runtime) can still succeed.
+    ///
+    /// The task holds only a `Weak` reference to `self` and exits on its
+    /// own once every strong reference to the limiter is dropped, so it never
+    /// keeps the limiter (or its client map) alive past its last owner.
+    pub fn spawn_cleanup_task(self: &Arc<Self>, period: Duration) {
+        // Claim the right to spawn. If another call already claimed it
+        // (whether it succeeded or is in flight), this call is a no-op.
+        //
+        // Narrow window, not airtight: a concurrent in-runtime caller whose
+        // `swap` lands between a no-runtime caller's `swap(true)` above and
+        // its rollback `store(false)` below observes the claim as already
+        // taken and returns without spawning, even though it could have
+        // succeeded. No current call site constructs a limiter and races
+        // `spawn_cleanup_task` from both a runtime and a non-runtime thread
+        // concurrently, so this is intentionally left as a plain `swap`
+        // rather than a CAS retry loop; revisit if that changes.
+        if self.cleanup_spawned.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // Release the claim: no runtime was available, so nothing was
+            // actually spawned. A later call must be able to retry rather
+            // than finding cleanup permanently disabled.
+            self.cleanup_spawned.store(false, Ordering::Release);
+            tracing::warn!(
+                "WebSocketRateLimiter::spawn_cleanup_task: no Tokio runtime available; \
+                 periodic cleanup not started"
+            );
+            return;
+        };
+
+        let weak = Arc::downgrade(self);
+        handle.spawn(async move {
+            let mut interval = tokio::time::interval(period);
+            loop {
+                interval.tick().await;
+                let Some(limiter) = weak.upgrade() else {
+                    break;
+                };
+                limiter.cleanup_expired();
+                tracing::debug!("WebSocketRateLimiter: cleanup pass completed");
+            }
+        });
+    }
+
+    /// Whether a cleanup task spawn has been successfully claimed (test-only).
+    ///
+    /// Lets tests assert that a call site (e.g. `RateLimitMiddleware::new`/
+    /// `from_limiter`) actually wired up `spawn_cleanup_task` without waiting
+    /// for a real cleanup pass on the production [`DEFAULT_CLEANUP_INTERVAL`].
+    #[cfg(test)]
+    pub(crate) fn is_cleanup_task_spawned(&self) -> bool {
+        self.cleanup_spawned.load(Ordering::Acquire)
+    }
+
     /// Check if request is allowed (HTTP upgrade to WebSocket)
     pub fn check_request(&self, ip: IpAddr) -> Result<(), RateLimitError> {
+        if !self.clients.contains_key(&ip) && self.clients.len() >= MAX_TRACKED_CLIENTS {
+            return Err(RateLimitError::CapacityExceeded {
+                max: MAX_TRACKED_CLIENTS,
+            });
+        }
+
         let now = Instant::now();
         let burst = self.config.burst_allowance;
         let mut client = self
@@ -195,9 +318,34 @@ impl WebSocketRateLimiter {
             .entry(ip)
             .or_insert_with(|| ClientRateLimit::new(burst));
 
-        // Clean old requests outside window
-        let window_start = now - self.config.window_duration;
-        client.requests.retain(|&time| time > window_start);
+        // `checked_sub` rather than a bare subtraction: on a host whose
+        // uptime is shorter than `window_duration` (observed to matter on
+        // Windows' QPC-backed `Instant`, which is in the CI matrix), the
+        // naive subtraction underflows and panics on the request hot path.
+        //
+        // On underflow, skip trimming this call rather than either
+        // panicking or wiping the client's history: wiping (falling back to
+        // an empty window) would fail *open* for exactly the client this
+        // control exists to stop — one already at or over its limit could
+        // bypass it entirely just by making one more request during this
+        // narrow condition (a freshly booted host, or a deliberately
+        // crashed-and-restarted service). Denying every request outright
+        // instead would fail closed correctly, but for *every* client,
+        // including ones that have never made a request before — no
+        // different from a hard outage for up to `window_duration` after
+        // every process start, on a host that happens to hit this edge
+        // case. Keeping the untrimmed history is the fail-closed choice
+        // that costs neither: an already-over-limit client's stale entries
+        // still count against it (a superset of the correctly windowed
+        // history is at least as likely to already be at/over the limit),
+        // while a client with no prior history is unaffected either way.
+        // The history transiently over-retains stale entries only for the
+        // (self-limiting) duration this condition holds; once real uptime
+        // exceeds `window_duration`, `checked_sub` succeeds again and
+        // trimming resumes, catching up on the backlog in one pass.
+        if let Some(window_start) = now.checked_sub(self.config.window_duration) {
+            client.requests.retain(|&time| time > window_start);
+        }
 
         // Check request rate limit
         if client.requests.len() >= self.config.max_requests_per_window as usize {
@@ -214,6 +362,12 @@ impl WebSocketRateLimiter {
 
     /// Check if new connection is allowed
     pub fn check_connection(&self, ip: IpAddr) -> Result<(), RateLimitError> {
+        if !self.clients.contains_key(&ip) && self.clients.len() >= MAX_TRACKED_CLIENTS {
+            return Err(RateLimitError::CapacityExceeded {
+                max: MAX_TRACKED_CLIENTS,
+            });
+        }
+
         let burst = self.config.burst_allowance;
         let mut client = self
             .clients
@@ -275,7 +429,15 @@ impl WebSocketRateLimiter {
     /// Clean up expired entries (call periodically)
     pub fn cleanup_expired(&self) {
         let now = Instant::now();
-        let cutoff = now - self.config.window_duration * 2; // Keep some history
+        // `checked_sub` rather than a bare subtraction: on a host whose
+        // uptime is shorter than `window_duration * 2` (fresh container, or
+        // a large configured window), the naive subtraction underflows
+        // `Instant` and panics, permanently killing whichever loop calls
+        // this. Skip this pass instead — the next sweep, once enough
+        // wall-clock time has elapsed, will succeed.
+        let Some(cutoff) = now.checked_sub(self.config.window_duration * 2) else {
+            return;
+        };
 
         self.clients.retain(|_, client| {
             // Remove clients with no recent activity and no connections
@@ -827,5 +989,106 @@ mod tests {
         assert!(guard.check_message(512).is_ok());
         assert!(guard.check_message(512).is_ok());
         assert!(guard.check_message(512).is_err());
+    }
+
+    #[test]
+    fn test_capacity_cap_rejects_new_clients_when_full() {
+        let limiter = WebSocketRateLimiter::default();
+
+        for i in 0..MAX_TRACKED_CLIENTS as u32 {
+            let ip = IpAddr::V4(Ipv4Addr::from(i));
+            limiter.check_request(ip).unwrap();
+        }
+        assert_eq!(limiter.get_stats().total_clients, MAX_TRACKED_CLIENTS);
+
+        // A new, not-yet-tracked IP is rejected once at capacity — this is
+        // what bounds the map's size *within* a single cleanup sweep window,
+        // not just across sweeps.
+        let overflow_ip = IpAddr::V4(Ipv4Addr::from(MAX_TRACKED_CLIENTS as u32));
+        let result = limiter.check_request(overflow_ip);
+        assert!(matches!(
+            result,
+            Err(RateLimitError::CapacityExceeded { max }) if max == MAX_TRACKED_CLIENTS
+        ));
+        assert_eq!(limiter.get_stats().total_clients, MAX_TRACKED_CLIENTS);
+
+        // An already-tracked IP is unaffected by the cap.
+        let existing_ip = IpAddr::V4(Ipv4Addr::from(0u32));
+        assert!(limiter.check_request(existing_ip).is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_expired_never_panics_regardless_of_window_duration() {
+        // `Instant` intentionally exposes no public constructor for an
+        // arbitrary point in time, so whether `Instant::now().checked_sub(..)`
+        // actually underflows for a given `window_duration` depends on the
+        // OS's monotonic clock epoch, which is unspecified and cannot be
+        // forced deterministically from a portable unit test (observed to
+        // matter in practice on Windows' QPC-backed `Instant` near process
+        // or host start — exercised naturally by the Windows CI legs, not by
+        // this test). What this test pins down instead is the invariant that
+        // actually matters regardless of which branch runs on a given host:
+        // `cleanup_expired` must never panic for any configured
+        // `window_duration`, including ones designed to underflow, and must
+        // never evict a client with a request timestamped just now.
+        for window_secs in [1, 60, 3600, u64::MAX / 8] {
+            let config = RateLimitConfig {
+                window_duration: Duration::from_secs(window_secs),
+                ..Default::default()
+            };
+            let limiter = WebSocketRateLimiter::new(config);
+            let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+            limiter.check_request(ip).unwrap();
+
+            limiter.cleanup_expired(); // Must not panic for any window_secs above.
+
+            assert_eq!(
+                limiter.get_stats().total_clients,
+                1,
+                "a client with a just-now request must survive cleanup regardless \
+                 of window_secs={window_secs}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_request_never_panics_regardless_of_window_duration() {
+        // Same rationale as the `cleanup_expired` test above, but for the
+        // `checked_sub` guard on the request hot path in `check_request`.
+        // Whether `checked_sub` actually underflows for a given window_secs
+        // is platform-dependent (see `test_cleanup_expired_never_panics_...`
+        // above) — this test only pins down that it never panics regardless
+        // of which branch runs.
+        for window_secs in [1, 60, 3600, u64::MAX / 8] {
+            let config = RateLimitConfig {
+                window_duration: Duration::from_secs(window_secs),
+                ..Default::default()
+            };
+            let limiter = WebSocketRateLimiter::new(config);
+            let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+            let _ = limiter.check_request(ip); // Must not panic for any window_secs above.
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spawn_cleanup_task_is_idempotent() {
+        let limiter = Arc::new(WebSocketRateLimiter::new(RateLimitConfig {
+            window_duration: Duration::from_millis(1),
+            ..Default::default()
+        }));
+
+        // Calling this more than once must not spawn a second task (and must
+        // not panic); the loop below only passes if exactly the expected
+        // single cleanup pass took effect.
+        limiter.spawn_cleanup_task(Duration::from_millis(10));
+        limiter.spawn_cleanup_task(Duration::from_millis(10));
+
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        limiter.check_request(ip).unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert_eq!(limiter.get_stats().total_clients, 0);
     }
 }
