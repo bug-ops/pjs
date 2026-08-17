@@ -23,7 +23,7 @@ use axum::{
 };
 use pjson_rs::Priority;
 use pjson_rs::infrastructure::http::axum_extension::{
-    HttpExtensionConfig, PjsExtension, PjsStreamingRequest, StreamError, StreamRequest,
+    HttpExtensionConfig, PjsExtension, PjsStreamingRequest, StreamExtensionError, StreamRequest,
     StreamResponse,
 };
 use serde_json::json;
@@ -219,24 +219,24 @@ fn test_pjs_streaming_request_clone() {
 }
 
 // ============================================================================
-// StreamError Tests
+// StreamExtensionError Tests
 // ============================================================================
 
 #[test]
 fn test_stream_error_display() {
-    let error = StreamError::AnalysisError("Invalid JSON".to_string());
+    let error = StreamExtensionError::AnalysisError("Invalid JSON".to_string());
     assert_eq!(error.to_string(), "Analysis error: Invalid JSON");
 
-    let error = StreamError::ResponseError("Failed to build".to_string());
+    let error = StreamExtensionError::ResponseError("Failed to build".to_string());
     assert_eq!(error.to_string(), "Response error: Failed to build");
 
-    let error = StreamError::StreamNotFound("stream-123".to_string());
+    let error = StreamExtensionError::StreamNotFound("stream-123".to_string());
     assert_eq!(error.to_string(), "Stream not found: stream-123");
 }
 
 #[test]
 fn test_stream_error_into_response() {
-    let error = StreamError::AnalysisError("test error".to_string());
+    let error = StreamExtensionError::AnalysisError("test error".to_string());
     let response = error.into_response();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -244,7 +244,7 @@ fn test_stream_error_into_response() {
 
 #[test]
 fn test_stream_error_not_found_response() {
-    let error = StreamError::StreamNotFound("missing-stream".to_string());
+    let error = StreamExtensionError::StreamNotFound("missing-stream".to_string());
     let response = error.into_response();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -252,7 +252,7 @@ fn test_stream_error_not_found_response() {
 
 #[test]
 fn test_stream_error_internal_error_response() {
-    let error = StreamError::ResponseError("internal issue".to_string());
+    let error = StreamExtensionError::ResponseError("internal issue".to_string());
     let response = error.into_response();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);

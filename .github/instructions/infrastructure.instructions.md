@@ -56,7 +56,8 @@ some_async_op(&value).await;
 
 ## HTTP Integration (`infrastructure/http/`)
 
-- Axum handlers in `axum_adapter.rs`
+- Router assembly, shared state, and error mapping in `axum_adapter.rs`
+- Route handlers grouped by domain concept in `handlers/{sessions,streams,health,dictionary}.rs`
 - Middleware in `middleware.rs`
 - Streaming responses in `streaming.rs`
 

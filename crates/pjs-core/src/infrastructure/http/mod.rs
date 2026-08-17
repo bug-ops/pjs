@@ -4,12 +4,7 @@
 pub mod auth;
 pub mod axum_adapter;
 pub mod axum_extension;
-#[cfg(all(
-    feature = "http-server",
-    feature = "compression",
-    not(target_arch = "wasm32")
-))]
-pub mod dictionary;
+pub mod handlers;
 #[cfg(feature = "metrics")]
 pub mod metrics;
 pub mod middleware;
@@ -25,6 +20,6 @@ pub use axum_adapter::{create_pjs_router_with_auth, create_pjs_router_with_rate_
 pub use axum_extension::{HttpExtensionConfig, PjsExtension};
 pub use middleware::{RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig};
 pub use streaming::{
-    AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamError, StreamFormat,
+    AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamFormat, StreamTransportError,
     create_streaming_response, create_streaming_response_with_content_type,
 };

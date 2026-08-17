@@ -2,10 +2,10 @@
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path as AxumPath, Query, State},
+    extract::DefaultBodyLimit,
     http::{
         HeaderValue, Method, StatusCode,
-        header::{self, AUTHORIZATION, CONTENT_TYPE},
+        header::{AUTHORIZATION, CONTENT_TYPE},
     },
     middleware,
     response::{IntoResponse, Response},
@@ -20,29 +20,33 @@ use tower_http::{
 };
 
 use crate::{
-    application::{
-        commands::*,
-        dto::PriorityDto,
-        handlers::{
-            CommandHandlerGat, QueryHandlerGat,
-            command_handlers::SessionCommandHandler,
-            query_handlers::{SessionQueryHandler, StreamQueryHandler, SystemQueryHandler},
-        },
-        queries::*,
+    application::handlers::{
+        command_handlers::SessionCommandHandler,
+        query_handlers::{SessionQueryHandler, StreamQueryHandler, SystemQueryHandler},
     },
     domain::{
-        aggregates::stream_session::{SessionConfig, SessionHealth},
+        aggregates::stream_session::SessionHealth,
         entities::Frame,
         ports::{
             DictionaryStore, EventPublisherGat, FrameStoreGat, NoopDictionaryStore,
             StreamRepositoryGat, StreamStoreGat,
         },
-        value_objects::{Priority, SessionId, StreamId},
     },
     infrastructure::{
         adapters::InMemoryFrameStore,
         http::middleware::{RateLimitMiddleware, security_middleware},
     },
+};
+
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+use super::handlers::dictionary::get_session_dictionary;
+use super::handlers::{
+    health::{get_system_stats, system_health},
+    sessions::{
+        create_session, get_session, get_session_stats, list_sessions, search_sessions,
+        session_health,
+    },
+    streams::{create_stream, generate_frames, get_stream, get_stream_frames, start_stream},
 };
 
 /// HTTP server configuration.
@@ -165,8 +169,9 @@ fn build_cors_layer(config: &HttpServerConfig) -> Result<CorsLayer, PjsError> {
 
 /// Axum application state with PJS GAT-based handlers.
 ///
-/// The `dictionary_store` field is `pub(crate)` so the dictionary handler can
-/// access it without exposing it as a public API.
+/// All fields are `pub(crate)` so the route handlers in
+/// [`crate::infrastructure::http::handlers`] can access them without
+/// exposing them as public API.
 pub struct PjsAppState<R, P, S, F = InMemoryFrameStore>
 where
     R: StreamRepositoryGat + Send + Sync + 'static,
@@ -174,10 +179,10 @@ where
     S: StreamStoreGat + Send + Sync + 'static,
     F: FrameStoreGat + Send + Sync + 'static,
 {
-    command_handler: Arc<SessionCommandHandler<R, P, F>>,
-    session_query_handler: Arc<SessionQueryHandler<R>>,
-    stream_query_handler: Arc<StreamQueryHandler<R, S, F>>,
-    system_handler: Arc<SystemQueryHandler<R>>,
+    pub(crate) command_handler: Arc<SessionCommandHandler<R, P, F>>,
+    pub(crate) session_query_handler: Arc<SessionQueryHandler<R>>,
+    pub(crate) stream_query_handler: Arc<StreamQueryHandler<R, S, F>>,
+    pub(crate) system_handler: Arc<SystemQueryHandler<R>>,
     pub(crate) dictionary_store: Arc<dyn DictionaryStore>,
 }
 
@@ -325,7 +330,7 @@ pub struct StreamParams {
 ///
 /// Both fields are optional; defaults match the lowest-cost configuration that
 /// still drives the priority pipeline:
-/// - `priority_threshold` defaults to [`Priority::BACKGROUND`] (10) — accepts every frame.
+/// - `priority_threshold` defaults to [`crate::domain::value_objects::Priority::BACKGROUND`] (10) — accepts every frame.
 /// - `max_frames` defaults to 16 — bounded so a single request cannot emit an
 ///   unbounded number of frames.
 #[derive(Debug, Default, Deserialize)]
@@ -626,7 +631,7 @@ where
     #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     let router = router.route(
         "/pjs/sessions/{session_id}/dictionary",
-        get(crate::infrastructure::http::dictionary::get_session_dictionary::<R, P, S>),
+        get(get_session_dictionary::<R, P, S>),
     );
 
     router
@@ -658,320 +663,6 @@ where
         .layer(TraceLayer::new_for_http()))
 }
 
-/// Create a new streaming session
-async fn create_session<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    headers: axum::http::HeaderMap,
-    Json(request): Json<CreateSessionRequest>,
-) -> Result<Json<CreateSessionResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let config = SessionConfig {
-        max_concurrent_streams: request.max_concurrent_streams.unwrap_or(10),
-        session_timeout_seconds: request.timeout_seconds.unwrap_or(3600),
-        default_stream_config: Default::default(),
-        enable_compression: true,
-        metadata: Default::default(),
-    };
-
-    let user_agent = headers
-        .get(header::USER_AGENT)
-        .and_then(|h| h.to_str().ok())
-        .map(String::from);
-
-    let command = CreateSessionCommand {
-        config,
-        client_info: request.client_info,
-        user_agent,
-        ip_address: None,
-    };
-
-    let session_id: SessionId = CommandHandlerGat::handle(&*state.command_handler, command)
-        .await
-        .map_err(PjsError::Application)?;
-
-    let expires_at = chrono::Utc::now()
-        + chrono::Duration::seconds(request.timeout_seconds.unwrap_or(3600) as i64);
-
-    Ok(Json(CreateSessionResponse {
-        session_id: session_id.to_string(),
-        expires_at,
-    }))
-}
-
-/// Get session information
-async fn get_session<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    AxumPath(session_id): AxumPath<String>,
-) -> Result<Json<SessionResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let session_id =
-        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
-
-    let query = GetSessionQuery {
-        session_id: session_id.into(),
-    };
-
-    let response = <SessionQueryHandler<R> as QueryHandlerGat<GetSessionQuery>>::handle(
-        &*state.session_query_handler,
-        query,
-    )
-    .await
-    .map_err(PjsError::Application)?;
-
-    Ok(Json(response))
-}
-
-/// Get session health status
-async fn session_health<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    AxumPath(session_id): AxumPath<String>,
-) -> Result<Json<SessionHealthResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let session_id =
-        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
-
-    let query = GetSessionHealthQuery {
-        session_id: session_id.into(),
-    };
-
-    let response = <SessionQueryHandler<R> as QueryHandlerGat<GetSessionHealthQuery>>::handle(
-        &*state.session_query_handler,
-        query,
-    )
-    .await
-    .map_err(PjsError::Application)?;
-
-    Ok(Json(SessionHealthResponse::from(response.health)))
-}
-
-/// Create a new stream within a session
-///
-/// TODO(CQ-007): Optimize double JSON processing
-/// Current: serde_json::Value -> JsonDataDto -> JsonData
-/// Optimization: Direct JsonData deserialization or use sonic-rs
-async fn create_stream<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    AxumPath(session_id): AxumPath<String>,
-    Json(request): Json<StartStreamRequest>,
-) -> Result<Json<serde_json::Value>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let session_id =
-        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
-
-    let command = CreateStreamCommand {
-        session_id: session_id.into(),
-        source_data: request.data,
-        config: None,
-    };
-
-    let stream_id: StreamId = CommandHandlerGat::handle(&*state.command_handler, command)
-        .await
-        .map_err(PjsError::Application)?;
-
-    Ok(Json(serde_json::json!({
-        "stream_id": stream_id.to_string(),
-        "status": "created"
-    })))
-}
-
-/// Start streaming for a specific stream
-async fn start_stream<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    AxumPath((session_id, stream_id)): AxumPath<(String, String)>,
-) -> Result<Json<serde_json::Value>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    let stream_id =
-        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
-
-    let command = StartStreamCommand {
-        session_id: session_id.into(),
-        stream_id: stream_id.into(),
-    };
-
-    <SessionCommandHandler<R, P> as CommandHandlerGat<StartStreamCommand>>::handle(
-        &*state.command_handler,
-        command,
-    )
-    .await
-    .map_err(PjsError::Application)?;
-
-    Ok(Json(serde_json::json!({
-        "stream_id": stream_id.to_string(),
-        "status": "started"
-    })))
-}
-
-/// Generate priority-filtered frames for an existing stream.
-///
-/// Dispatches [`GenerateFramesCommand`] so the produced frames are fed into
-/// the per-session dictionary-training corpus (see
-/// [`SessionCommandHandler::with_dictionary_store`]). Without this route the
-/// `GET /pjs/sessions/{id}/dictionary` endpoint stays at `404 Not Found` for
-/// HTTP-only clients regardless of how many sessions and streams they create.
-async fn generate_frames<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    AxumPath((session_id, stream_id)): AxumPath<(String, String)>,
-    request: Option<Json<GenerateFramesRequest>>,
-) -> Result<Json<GenerateFramesResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    let stream_id =
-        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
-
-    let Json(request) = request.unwrap_or_default();
-
-    let priority_value = request
-        .priority_threshold
-        .unwrap_or(Priority::BACKGROUND.value());
-    let priority_threshold =
-        PriorityDto::new(priority_value).map_err(|e| PjsError::InvalidPriority(e.to_string()))?;
-    let max_frames = request.max_frames.unwrap_or(16);
-
-    let command = GenerateFramesCommand {
-        session_id: session_id.into(),
-        stream_id: stream_id.into(),
-        priority_threshold,
-        max_frames,
-    };
-
-    let frames: Vec<Frame> = <SessionCommandHandler<R, P> as CommandHandlerGat<
-        GenerateFramesCommand,
-    >>::handle(&*state.command_handler, command)
-    .await
-    .map_err(PjsError::Application)?;
-
-    let frame_count = frames.len();
-    Ok(Json(GenerateFramesResponse {
-        frames,
-        frame_count,
-    }))
-}
-
-/// Get stream information
-async fn get_stream<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    AxumPath((session_id, stream_id)): AxumPath<(String, String)>,
-) -> Result<Json<StreamResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    let stream_id =
-        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
-
-    let query = GetStreamQuery {
-        session_id: session_id.into(),
-        stream_id: stream_id.into(),
-    };
-
-    let response = <StreamQueryHandler<R, S, InMemoryFrameStore> as QueryHandlerGat<
-        GetStreamQuery,
-    >>::handle(&*state.stream_query_handler, query)
-    .await
-    .map_err(PjsError::Application)?;
-
-    Ok(Json(response))
-}
-
-/// List active sessions
-async fn list_sessions<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    Query(params): Query<PaginationParams>,
-) -> Result<Json<SessionsResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let query = GetActiveSessionsQuery {
-        limit: params.limit,
-        offset: params.offset,
-    };
-
-    let response = <SessionQueryHandler<R> as QueryHandlerGat<GetActiveSessionsQuery>>::handle(
-        &*state.session_query_handler,
-        query,
-    )
-    .await
-    .map_err(PjsError::Application)?;
-
-    Ok(Json(response))
-}
-
-/// Search sessions with filters and sorting.
-async fn search_sessions<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    Query(params): Query<SearchSessionsParams>,
-) -> Result<Json<SessionsResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let sort_by = params.sort_by.as_deref().and_then(|s| match s {
-        "created_at" => Some(SessionSortField::CreatedAt),
-        "updated_at" => Some(SessionSortField::UpdatedAt),
-        "stream_count" => Some(SessionSortField::StreamCount),
-        "total_bytes" => Some(SessionSortField::TotalBytes),
-        _ => None,
-    });
-    let sort_order = params.sort_order.as_deref().and_then(|s| match s {
-        "ascending" | "asc" => Some(SortOrder::Ascending),
-        "descending" | "desc" => Some(SortOrder::Descending),
-        _ => None,
-    });
-    let query = SearchSessionsQuery {
-        filters: SessionFilters {
-            state: params.state,
-            created_after: None,
-            created_before: None,
-            client_info: None,
-            has_active_streams: None,
-        },
-        sort_by,
-        sort_order,
-        limit: params.limit,
-        offset: params.offset,
-    };
-    let response = <SessionQueryHandler<R> as QueryHandlerGat<SearchSessionsQuery>>::handle(
-        &*state.session_query_handler,
-        query,
-    )
-    .await
-    .map_err(PjsError::Application)?;
-    Ok(Json(response))
-}
-
 /// Pagination parameters
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
@@ -996,38 +687,6 @@ pub struct SearchSessionsParams {
     pub offset: Option<usize>,
 }
 
-/// System health endpoint
-async fn system_health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "status": "healthy",
-        "version": env!("CARGO_PKG_VERSION"),
-        "features": ["pjs_streaming", "axum_integration", "gat_handlers"]
-    }))
-}
-
-/// Real-time system statistics: uptime, session counts, frame throughput.
-async fn get_system_stats<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-) -> Result<Json<SystemStatsResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let query = GetSystemStatsQuery {
-        include_historical: false,
-    };
-
-    let response = <SystemQueryHandler<R> as QueryHandlerGat<GetSystemStatsQuery>>::handle(
-        &*state.system_handler,
-        query,
-    )
-    .await
-    .map_err(PjsError::Application)?;
-
-    Ok(Json(response))
-}
-
 /// Query parameters for frame listing
 #[derive(Debug, Deserialize)]
 pub struct FrameQueryParams {
@@ -1037,72 +696,6 @@ pub struct FrameQueryParams {
     pub priority: Option<u8>,
     /// Maximum number of frames to return.
     pub limit: Option<usize>,
-}
-
-/// Get frames for a stream (currently returns empty; no persistent frame store exists yet)
-async fn get_stream_frames<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    AxumPath((session_id, stream_id)): AxumPath<(String, String)>,
-    Query(params): Query<FrameQueryParams>,
-) -> Result<Json<FramesResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let session_id = SessionId::from_string(&session_id)
-        .map_err(|_| PjsError::InvalidSessionId(session_id.clone()))?;
-    let stream_id =
-        StreamId::from_string(&stream_id).map_err(|_| PjsError::InvalidStreamId(stream_id))?;
-
-    let priority_filter = params
-        .priority
-        .map(|p| Priority::new(p).map(Into::into))
-        .transpose()
-        .map_err(|e: crate::domain::DomainError| PjsError::InvalidPriority(e.to_string()))?;
-
-    let query = GetStreamFramesQuery {
-        session_id: session_id.into(),
-        stream_id: stream_id.into(),
-        since_sequence: params.since_sequence,
-        priority_filter,
-        limit: params.limit,
-    };
-
-    let response = <StreamQueryHandler<R, S, InMemoryFrameStore> as QueryHandlerGat<
-        GetStreamFramesQuery,
-    >>::handle(&*state.stream_query_handler, query)
-    .await
-    .map_err(PjsError::Application)?;
-
-    Ok(Json(response))
-}
-
-/// Get statistics for a session
-async fn get_session_stats<R, P, S>(
-    State(state): State<PjsAppState<R, P, S>>,
-    AxumPath(session_id): AxumPath<String>,
-) -> Result<Json<SessionStatsResponse>, PjsError>
-where
-    R: StreamRepositoryGat + Send + Sync + 'static,
-    P: EventPublisherGat + Send + Sync + 'static,
-    S: StreamStoreGat + Send + Sync + 'static,
-{
-    let session_id =
-        SessionId::from_string(&session_id).map_err(|_| PjsError::InvalidSessionId(session_id))?;
-
-    let query = GetSessionStatsQuery {
-        session_id: session_id.into(),
-    };
-
-    let response = <SessionQueryHandler<R> as QueryHandlerGat<GetSessionStatsQuery>>::handle(
-        &*state.session_query_handler,
-        query,
-    )
-    .await
-    .map_err(PjsError::Application)?;
-
-    Ok(Json(response))
 }
 
 // HTTP rate limiting is implemented by `RateLimitMiddleware`
@@ -1172,6 +765,7 @@ impl IntoResponse for PjsError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::header;
 
     // --- build_cors_layer unit tests ---
 
