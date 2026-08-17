@@ -39,7 +39,8 @@ pub const MAX_PAGINATION_OFFSET: usize = 1_000_000;
 ///
 /// Whitelist of fields that can be used in sort_by parameter.
 /// Only add fields that have corresponding indexes in storage.
-pub const ALLOWED_SORT_FIELDS: &[&str] = &["created_at", "updated_at", "stream_count"];
+pub const ALLOWED_SORT_FIELDS: &[&str] =
+    &["created_at", "updated_at", "stream_count", "total_bytes"];
 
 /// Default maximum number of frames retained per stream by the in-memory
 /// `FrameStore`.

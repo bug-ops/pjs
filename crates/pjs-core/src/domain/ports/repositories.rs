@@ -83,6 +83,8 @@ pub struct SessionQueryCriteria {
     pub min_stream_count: Option<usize>,
     /// Maximum number of streams the session may contain.
     pub max_stream_count: Option<usize>,
+    /// When `true`, exclude sessions past their `expires_at` regardless of `states`.
+    pub exclude_expired: bool,
 }
 
 impl SessionQueryCriteria {
