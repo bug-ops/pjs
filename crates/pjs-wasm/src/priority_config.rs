@@ -24,6 +24,7 @@ use wasm_bindgen::prelude::*;
 /// const parser = PjsParser.withConfig(config);
 /// ```
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct PriorityConfigBuilder {
     config: PriorityConfig,
 }
@@ -184,10 +185,10 @@ impl PriorityConfigBuilder {
 
     /// Build the final configuration (internal use).
     ///
-    /// This method consumes the builder and returns the configuration.
-    /// It's used internally by the parser and not exposed to JavaScript.
-    pub(crate) fn build_internal(self) -> PriorityConfig {
-        self.config
+    /// Clones the builder's configuration. It's used internally by the
+    /// parser and streaming API and not exposed to JavaScript.
+    pub(crate) fn build_internal(&self) -> PriorityConfig {
+        self.config.clone()
     }
 }
 

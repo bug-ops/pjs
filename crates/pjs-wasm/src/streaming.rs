@@ -162,6 +162,9 @@ impl PriorityStream {
 
     /// Create a PriorityStream with custom priority configuration.
     ///
+    /// Takes the builder by reference so the same `PriorityConfigBuilder`
+    /// instance can also be applied to a `PjsParser` via `withConfig`.
+    ///
     /// # Arguments
     ///
     /// * `config_builder` - Custom priority configuration
@@ -174,7 +177,7 @@ impl PriorityStream {
     /// const stream = PriorityStream.withConfig(config);
     /// ```
     #[wasm_bindgen(js_name = withConfig)]
-    pub fn with_config(config_builder: PriorityConfigBuilder) -> Self {
+    pub fn with_config(config_builder: &PriorityConfigBuilder) -> Self {
         let config = config_builder.build_internal();
         Self {
             priority_assigner: PriorityAssigner::with_config(config),
@@ -187,6 +190,9 @@ impl PriorityStream {
     }
 
     /// Set custom security limits.
+    ///
+    /// Takes the config by reference so the same `SecurityConfig` instance
+    /// can also be applied to a `PjsParser` via `withSecurityConfig`.
     ///
     /// # Arguments
     ///
@@ -201,8 +207,8 @@ impl PriorityStream {
     /// stream.setSecurityConfig(security);
     /// ```
     #[wasm_bindgen(js_name = setSecurityConfig)]
-    pub fn set_security_config(&mut self, config: SecurityConfig) {
-        self.security_config = config;
+    pub fn set_security_config(&mut self, config: &SecurityConfig) {
+        self.security_config = config.clone();
     }
 
     /// Set the minimum priority threshold.
@@ -651,9 +657,45 @@ mod wasm_tests {
     #[wasm_bindgen_test]
     fn test_stream_with_config() {
         let config = PriorityConfigBuilder::new().add_critical_field("user_id".to_string());
-        let stream = PriorityStream::with_config(config);
+        let stream = PriorityStream::with_config(&config);
         let result = stream.start(r#"{"user_id": 123}"#);
         assert!(result.is_ok());
+    }
+
+    #[wasm_bindgen_test]
+    fn test_security_config_shared_between_parser_and_stream() {
+        // Regression test for #404: a single SecurityConfig instance must be
+        // usable by both PjsParser::with_security_config and
+        // PriorityStream::set_security_config without either call consuming it.
+        use crate::PjsParser;
+
+        let security = SecurityConfig::new()
+            .set_max_json_size(1024)
+            .set_max_depth(10);
+
+        let parser = PjsParser::with_security_config(&security);
+        let mut stream = PriorityStream::new();
+        stream.set_security_config(&security);
+
+        assert!(parser.parse(r#"{"id": 1}"#).is_ok());
+        assert!(stream.start(r#"{"id": 1}"#).is_ok());
+    }
+
+    #[wasm_bindgen_test]
+    fn test_priority_config_builder_shared_between_parser_and_stream() {
+        // Regression test for #404 (same by-value hazard, different type): a
+        // single PriorityConfigBuilder instance must be usable by both
+        // PjsParser::with_config and PriorityStream::with_config without
+        // either call consuming it.
+        use crate::PjsParser;
+
+        let config = PriorityConfigBuilder::new().add_critical_field("id".to_string());
+
+        let parser = PjsParser::with_config(&config);
+        let stream = PriorityStream::with_config(&config);
+
+        assert!(parser.parse(r#"{"id": 1}"#).is_ok());
+        assert!(stream.start(r#"{"id": 1}"#).is_ok());
     }
 
     #[wasm_bindgen_test]
@@ -664,7 +706,7 @@ mod wasm_tests {
 
         let security = SecurityConfig::new().set_max_array_elements(2);
         let mut stream = PriorityStream::new();
-        stream.set_security_config(security);
+        stream.set_security_config(&security);
 
         let received: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let received_clone = received.clone();

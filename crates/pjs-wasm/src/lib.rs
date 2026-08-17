@@ -55,12 +55,17 @@
 //!
 //! # Security Configuration
 //!
+//! `SecurityConfig` can be shared across a `PjsParser` and a `PriorityStream`
+//! since both `withSecurityConfig` and `setSecurityConfig` take it by reference.
+//!
 //! ```javascript
-//! import { PriorityStream, SecurityConfig } from 'pjs-wasm';
+//! import { PjsParser, PriorityStream, SecurityConfig } from 'pjs-wasm';
 //!
 //! const security = new SecurityConfig()
 //!     .setMaxJsonSize(5 * 1024 * 1024)
 //!     .setMaxDepth(32);
+//!
+//! const parser = PjsParser.withSecurityConfig(security);
 //!
 //! const stream = new PriorityStream();
 //! stream.setSecurityConfig(security);
