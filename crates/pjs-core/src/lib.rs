@@ -31,6 +31,10 @@ pub mod stream;
 // Global allocator diagnostics
 pub use global_alloc::global_allocator_name;
 
+/// Re-export of `pastey` for the `gat_port!` macro's expansion; not part of the public API.
+#[doc(hidden)]
+pub use pastey as __pastey;
+
 // Domain layer exports
 pub use domain::{
     DomainError,

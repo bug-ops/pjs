@@ -83,7 +83,7 @@ macro_rules! gat_port {
         $(#[$trait_meta])*
         $vis trait $trait_name: ::std::marker::Send + ::std::marker::Sync {
             $(
-                ::paste::paste! {
+                $crate::__pastey::paste! {
                     $(#[$method_meta])*
                     #[doc = ""]
                     #[doc = concat!("Future type for `", stringify!($method), "` method")]
@@ -95,7 +95,7 @@ macro_rules! gat_port {
                 }
 
                 $(#[$method_meta])*
-                fn $method( $($args)* ) -> ::paste::paste! { Self::[<$method:camel Future>]<'_> };
+                fn $method( $($args)* ) -> $crate::__pastey::paste! { Self::[<$method:camel Future>]<'_> };
             )*
         }
     };

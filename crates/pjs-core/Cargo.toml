@@ -36,7 +36,7 @@ maplit = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
-paste = { workspace = true }
+pastey = { workspace = true }
 pjson-rs-domain = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true, optional = true }

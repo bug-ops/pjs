@@ -10,12 +10,6 @@ no-default-features = false
 db-urls = ["https://github.com/rustsec/advisory-db"]
 db-path = "~/.cargo/advisory-db"
 
-# Ignore specific advisories
-ignore = [
-    # paste 1.0.x is unmaintained; tracked in follow-up to migrate to pastey
-    { id = "RUSTSEC-2024-0436", reason = "paste is used for macro hygiene; migration to pastey tracked separately" },
-]
-
 [licenses]
 version = 2
 allow = [
