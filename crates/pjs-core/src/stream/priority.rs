@@ -7,7 +7,7 @@
 //! - Incremental reconstruction
 
 use crate::Result;
-use crate::domain::value_objects::Priority;
+use crate::domain::value_objects::{JsonPath, Priority};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::VecDeque;
 
@@ -22,25 +22,6 @@ mod serde_priority {
     {
         priority.value().serialize(serializer)
     }
-}
-
-/// JSON Path for addressing specific nodes in the JSON structure
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct JsonPath {
-    segments: Vec<PathSegment>,
-}
-
-/// Single segment of a [`JsonPath`].
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub enum PathSegment {
-    /// Root marker (`$`).
-    Root,
-    /// Object property key.
-    Key(String),
-    /// Array index.
-    Index(usize),
-    /// Wildcard matching any segment.
-    Wildcard,
 }
 
 /// Patch operation for updating JSON structure
@@ -234,7 +215,11 @@ impl PriorityStreamer {
         match json {
             JsonValue::Object(map) => {
                 for (key, value) in map {
-                    let field_path = current_path.append_key(key);
+                    // Keys JsonPath cannot encode (`.`, `[`, `]`) are skipped:
+                    // one weird key must not abort the whole streaming plan.
+                    let Ok(field_path) = current_path.append_key(key) else {
+                        continue;
+                    };
                     let priority = self.calculate_field_priority(&field_path, key, value);
 
                     // Create patch for this field
@@ -320,10 +305,10 @@ impl PriorityStreamer {
 
         // Arrays in certain paths get different priorities
         if let Some(last_key) = path.last_key() {
-            if matches!(last_key.as_str(), "reviews" | "comments" | "logs") {
+            if matches!(last_key, "reviews" | "comments" | "logs") {
                 return Priority::BACKGROUND;
             }
-            if matches!(last_key.as_str(), "items" | "data" | "results") {
+            if matches!(last_key, "items" | "data" | "results") {
                 return Priority::MEDIUM;
             }
         }
@@ -374,85 +359,6 @@ impl StreamingPlan {
     }
 }
 
-impl JsonPath {
-    /// Create root path
-    pub fn root() -> Self {
-        let segments = vec![PathSegment::Root];
-        Self { segments }
-    }
-
-    /// Append key segment
-    pub fn append_key(&self, key: &str) -> Self {
-        let mut segments = self.segments.clone();
-        segments.push(PathSegment::Key(key.to_string()));
-        Self { segments }
-    }
-
-    /// Append index segment
-    pub fn append_index(&self, index: usize) -> Self {
-        let mut segments = self.segments.clone();
-        segments.push(PathSegment::Index(index));
-        Self { segments }
-    }
-
-    /// Get the last key in the path
-    pub fn last_key(&self) -> Option<String> {
-        self.segments.iter().rev().find_map(|segment| {
-            if let PathSegment::Key(key) = segment {
-                Some(key.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Get segments (read-only)
-    pub fn segments(&self) -> &[PathSegment] {
-        &self.segments
-    }
-
-    /// Get number of segments
-    pub fn len(&self) -> usize {
-        self.segments.len()
-    }
-
-    /// Check if path is empty
-    pub fn is_empty(&self) -> bool {
-        self.segments.is_empty()
-    }
-
-    /// Create JsonPath from segments (for testing)
-    pub fn from_segments(segments: Vec<PathSegment>) -> Self {
-        Self { segments }
-    }
-
-    /// Convert to JSON Pointer string format
-    pub fn to_json_pointer(&self) -> String {
-        let mut pointer = String::new();
-        for segment in &self.segments {
-            match segment {
-                PathSegment::Root => {}
-                PathSegment::Key(key) => {
-                    pointer.push('/');
-                    pointer.push_str(key);
-                }
-                PathSegment::Index(idx) => {
-                    pointer.push('/');
-                    pointer.push_str(&idx.to_string());
-                }
-                PathSegment::Wildcard => {
-                    pointer.push_str("/*");
-                }
-            }
-        }
-        if pointer.is_empty() {
-            "/".to_string()
-        } else {
-            pointer
-        }
-    }
-}
-
 impl Default for PriorityStreamer {
     fn default() -> Self {
         Self::new()
@@ -469,7 +375,12 @@ mod tests {
         let path = JsonPath::root();
         assert_eq!(path.to_json_pointer(), "/");
 
-        let path = path.append_key("users").append_index(0).append_key("name");
+        let path = path
+            .append_key("users")
+            .unwrap()
+            .append_index(0)
+            .append_key("name")
+            .unwrap();
         assert_eq!(path.to_json_pointer(), "/users/0/name");
     }
 

@@ -94,10 +94,8 @@ fn wasm_assigner_matches_domain_for_default_config() {
         let wasm_priority = assigner.calculate_field_priority(&path, &value);
         let domain_priority = compute_priority(&domain_cfg, &path, &value);
         assert_eq!(
-            wasm_priority,
-            domain_priority,
+            wasm_priority, domain_priority,
             "priority mismatch at {path}: WASM={wasm_priority:?}, domain={domain_priority:?}",
-            path = path.as_str(),
         );
     }
 }

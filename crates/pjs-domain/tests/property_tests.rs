@@ -111,7 +111,7 @@ proptest! {
     fn json_path_array_index_valid(index in 0usize..10000) {
         let path = JsonPath::root().append_index(index);
         let expected = format!("$[{index}]");
-        prop_assert_eq!(path.as_str(), expected);
+        prop_assert_eq!(path.to_string(), expected);
     }
 }
 
@@ -245,7 +245,7 @@ proptest! {
         for i in 0..depth {
             path = path.append_key(&format!("key{i}")).unwrap();
         }
-        let string_repr = path.as_str();
+        let string_repr = path.to_string();
         prop_assert!(string_repr.starts_with('$'));
     }
 
@@ -458,6 +458,6 @@ proptest! {
             }
         }
         prop_assert!(path.depth() <= keys.len());
-        prop_assert!(path.as_str().starts_with('$'));
+        prop_assert!(path.to_string().starts_with('$'));
     }
 }

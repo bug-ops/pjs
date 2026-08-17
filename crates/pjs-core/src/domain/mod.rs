@@ -19,6 +19,6 @@ pub use entities::{Frame, Stream};
 pub use events::{DomainEvent, SessionState};
 pub use ports::{FrameSinkGat, FrameSourceGat, StreamRepositoryGat};
 pub use value_objects::{
-    Id, IdMarker, JsonData, JsonPath, Priority, Schema, SchemaId, SessionId, SessionMarker,
-    StreamId, StreamMarker,
+    Id, IdMarker, JsonData, JsonPath, PathSegment, Priority, Schema, SchemaId, SessionId,
+    SessionMarker, StreamId, StreamMarker,
 };
