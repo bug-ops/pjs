@@ -130,6 +130,36 @@ where
         }
     }
 
+    /// Load a session by id, mapping a missing session to `ApplicationError::NotFound`.
+    async fn load_session(&self, session_id: SessionId) -> ApplicationResult<StreamSession>
+    where
+        R: StreamRepositoryGat + Send + Sync,
+    {
+        self.repository
+            .find_session(session_id)
+            .await
+            .map_err(ApplicationError::Domain)?
+            .ok_or_else(|| ApplicationError::NotFound(format!("Session {session_id} not found")))
+    }
+
+    /// Persist a mutated session and publish its accumulated domain events.
+    async fn save_and_publish(&self, session: &mut StreamSession) -> ApplicationResult<()>
+    where
+        R: StreamRepositoryGat + Send + Sync,
+        P: EventPublisherGat + Send + Sync,
+    {
+        self.repository
+            .save_session(session.clone())
+            .await
+            .map_err(ApplicationError::Domain)?;
+        let events: Vec<_> = session.take_events().into_iter().collect();
+        self.event_publisher
+            .publish_batch(events)
+            .await
+            .map_err(ApplicationError::Domain)?;
+        Ok(())
+    }
+
     /// Persist generated frames into the [`FrameStoreGat`], grouping by
     /// `stream_id` so a single batch may span multiple streams.
     async fn persist_frames_grouped_by_stream(&self, frames: &[Frame]) -> ApplicationResult<()>
@@ -220,15 +250,7 @@ where
 
     fn handle(&self, command: CreateStreamCommand) -> Self::HandleFuture<'_> {
         async move {
-            // Load session
-            let mut session = self
-                .repository
-                .find_session(command.session_id.into())
-                .await
-                .map_err(ApplicationError::Domain)?
-                .ok_or_else(|| {
-                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-                })?;
+            let mut session = self.load_session(command.session_id.into()).await?;
 
             // Convert at application boundary (DTO -> Domain)
             let domain_data: JsonData = JsonDataDto::from(command.source_data).into();
@@ -243,18 +265,7 @@ where
                     .map_err(ApplicationError::Domain)?;
             }
 
-            // Save updated session
-            self.repository
-                .save_session(session.clone())
-                .await
-                .map_err(ApplicationError::Domain)?;
-
-            // Publish events in batch for better performance
-            let events: Vec<_> = session.take_events().into_iter().collect();
-            self.event_publisher
-                .publish_batch(events)
-                .await
-                .map_err(ApplicationError::Domain)?;
+            self.save_and_publish(&mut session).await?;
 
             Ok(stream_id)
         }
@@ -276,33 +287,13 @@ where
 
     fn handle(&self, command: StartStreamCommand) -> Self::HandleFuture<'_> {
         async move {
-            // Load session
-            let mut session = self
-                .repository
-                .find_session(command.session_id.into())
-                .await
-                .map_err(ApplicationError::Domain)?
-                .ok_or_else(|| {
-                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-                })?;
+            let mut session = self.load_session(command.session_id.into()).await?;
 
-            // Start stream
             session
                 .start_stream(command.stream_id.into())
                 .map_err(ApplicationError::Domain)?;
 
-            // Save updated session
-            self.repository
-                .save_session(session.clone())
-                .await
-                .map_err(ApplicationError::Domain)?;
-
-            // Publish events in batch for better performance
-            let events: Vec<_> = session.take_events().into_iter().collect();
-            self.event_publisher
-                .publish_batch(events)
-                .await
-                .map_err(ApplicationError::Domain)?;
+            self.save_and_publish(&mut session).await?;
 
             Ok(())
         }
@@ -324,33 +315,13 @@ where
 
     fn handle(&self, command: CompleteStreamCommand) -> Self::HandleFuture<'_> {
         async move {
-            // Load session
-            let mut session = self
-                .repository
-                .find_session(command.session_id.into())
-                .await
-                .map_err(ApplicationError::Domain)?
-                .ok_or_else(|| {
-                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-                })?;
+            let mut session = self.load_session(command.session_id.into()).await?;
 
-            // Complete stream
             session
                 .complete_stream(command.stream_id.into())
                 .map_err(ApplicationError::Domain)?;
 
-            // Save updated session
-            self.repository
-                .save_session(session.clone())
-                .await
-                .map_err(ApplicationError::Domain)?;
-
-            // Publish events in batch for better performance
-            let events: Vec<_> = session.take_events().into_iter().collect();
-            self.event_publisher
-                .publish_batch(events)
-                .await
-                .map_err(ApplicationError::Domain)?;
+            self.save_and_publish(&mut session).await?;
 
             Ok(())
         }
@@ -372,15 +343,7 @@ where
 
     fn handle(&self, command: GenerateFramesCommand) -> Self::HandleFuture<'_> {
         async move {
-            // Load session
-            let mut session = self
-                .repository
-                .find_session(command.session_id.into())
-                .await
-                .map_err(ApplicationError::Domain)?
-                .ok_or_else(|| {
-                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-                })?;
+            let mut session = self.load_session(command.session_id.into()).await?;
 
             // Generate frames through the aggregate root so session-level
             // stats and events stay consistent with the child stream mutation.
@@ -415,18 +378,7 @@ where
                 .await
                 .map_err(ApplicationError::Domain)?;
 
-            // Save updated session
-            self.repository
-                .save_session(session.clone())
-                .await
-                .map_err(ApplicationError::Domain)?;
-
-            // Publish events in batch for better performance
-            let events: Vec<_> = session.take_events().into_iter().collect();
-            self.event_publisher
-                .publish_batch(events)
-                .await
-                .map_err(ApplicationError::Domain)?;
+            self.save_and_publish(&mut session).await?;
 
             Ok(frames)
         }
@@ -448,15 +400,7 @@ where
 
     fn handle(&self, command: BatchGenerateFramesCommand) -> Self::HandleFuture<'_> {
         async move {
-            // Load session
-            let mut session = self
-                .repository
-                .find_session(command.session_id.into())
-                .await
-                .map_err(ApplicationError::Domain)?
-                .ok_or_else(|| {
-                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-                })?;
+            let mut session = self.load_session(command.session_id.into()).await?;
 
             // Generate priority frames across all streams
             let frames = session
@@ -479,18 +423,7 @@ where
             // Frames may span multiple streams in a batch; group by stream_id.
             self.persist_frames_grouped_by_stream(&frames).await?;
 
-            // Save updated session
-            self.repository
-                .save_session(session.clone())
-                .await
-                .map_err(ApplicationError::Domain)?;
-
-            // Publish events in batch for better performance
-            let events: Vec<_> = session.take_events().into_iter().collect();
-            self.event_publisher
-                .publish_batch(events)
-                .await
-                .map_err(ApplicationError::Domain)?;
+            self.save_and_publish(&mut session).await?;
 
             Ok(frames)
         }
@@ -512,31 +445,11 @@ where
 
     fn handle(&self, command: CloseSessionCommand) -> Self::HandleFuture<'_> {
         async move {
-            // Load session
-            let mut session = self
-                .repository
-                .find_session(command.session_id.into())
-                .await
-                .map_err(ApplicationError::Domain)?
-                .ok_or_else(|| {
-                    ApplicationError::NotFound(format!("Session {} not found", command.session_id))
-                })?;
+            let mut session = self.load_session(command.session_id.into()).await?;
 
-            // Close session
             session.close().map_err(ApplicationError::Domain)?;
 
-            // Save updated session
-            self.repository
-                .save_session(session.clone())
-                .await
-                .map_err(ApplicationError::Domain)?;
-
-            // Publish events in batch for better performance
-            let events: Vec<_> = session.take_events().into_iter().collect();
-            self.event_publisher
-                .publish_batch(events)
-                .await
-                .map_err(ApplicationError::Domain)?;
+            self.save_and_publish(&mut session).await?;
 
             Ok(())
         }
