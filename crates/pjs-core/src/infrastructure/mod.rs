@@ -30,8 +30,7 @@ pub use http::{
     HttpExtensionConfig, HttpServerConfig, PjsAppState, PjsError, PjsExtension,
     PriorityFrameStream, RateLimitConfig, RateLimitMiddleware, StartStreamRequest, StreamFormat,
     StreamParams, StreamTransportError, TrustedProxyConfig, create_pjs_router,
-    create_pjs_router_with_auth,
-    create_pjs_router_with_config, create_pjs_router_with_rate_limit,
+    create_pjs_router_with_auth, create_pjs_router_with_config, create_pjs_router_with_rate_limit,
     create_pjs_router_with_rate_limit_and_auth, create_pjs_router_with_rate_limit_and_config,
     create_streaming_response, create_streaming_response_with_content_type,
 };
