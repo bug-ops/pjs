@@ -340,7 +340,7 @@ where
                 })?;
 
             let stream = session
-                .get_stream(query.stream_id.into())
+                .stream(query.stream_id.into())
                 .ok_or_else(|| {
                     ApplicationError::NotFound(format!("Stream {} not found", query.stream_id))
                 })?
@@ -412,7 +412,7 @@ where
                 })?;
 
             // Validate stream exists within the session.
-            session.get_stream(query.stream_id.into()).ok_or_else(|| {
+            session.stream(query.stream_id.into()).ok_or_else(|| {
                 ApplicationError::NotFound(format!("Stream {} not found", query.stream_id))
             })?;
 

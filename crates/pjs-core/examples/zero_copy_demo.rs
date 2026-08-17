@@ -126,7 +126,7 @@ fn demo_buffer_pool() -> Result<(), Box<dyn std::error::Error>> {
     let buffer_sizes = vec![BufferSize::Small, BufferSize::Medium, BufferSize::Large];
 
     for size in buffer_sizes {
-        let buffer = pool.get_buffer(size)?;
+        let buffer = pool.acquire(size)?;
         println!("  {:?}: {} bytes capacity", size, buffer.capacity());
         // Buffer is automatically returned to pool when dropped
     }

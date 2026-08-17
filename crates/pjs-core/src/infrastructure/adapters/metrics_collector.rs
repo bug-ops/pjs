@@ -123,22 +123,22 @@ impl InMemoryMetricsCollector {
     }
 
     /// Get current performance snapshot
-    pub fn get_performance_snapshot(&self) -> PerformanceMetrics {
+    pub fn performance_snapshot(&self) -> PerformanceMetrics {
         self.metrics.read().clone()
     }
 
     /// Get metrics for specific session
-    pub fn get_session_metrics(&self, session_id: SessionId) -> Option<SessionMetrics> {
+    pub fn session_metrics(&self, session_id: SessionId) -> Option<SessionMetrics> {
         self.session_metrics.read().get(&session_id).cloned()
     }
 
     /// Get metrics for specific stream
-    pub fn get_stream_metrics(&self, stream_id: StreamId) -> Option<StreamMetrics> {
+    pub fn stream_metrics(&self, stream_id: StreamId) -> Option<StreamMetrics> {
         self.stream_metrics.read().get(&stream_id).cloned()
     }
 
     /// Get time series data for the last N minutes
-    pub fn get_time_series(&self, minutes: u32) -> Vec<TimestampedMetrics> {
+    pub fn time_series(&self, minutes: u32) -> Vec<TimestampedMetrics> {
         let duration = Duration::from_secs(minutes as u64 * 60);
         let now = Instant::now();
 
@@ -497,17 +497,17 @@ mod tests {
             .await
             .unwrap();
 
-        let snapshot = collector.get_performance_snapshot();
+        let snapshot = collector.performance_snapshot();
         assert_eq!(snapshot.active_sessions, 1);
         assert_eq!(snapshot.total_sessions_created, 1);
 
         // Test session metrics
-        let session_metrics = collector.get_session_metrics(session_id).unwrap();
+        let session_metrics = collector.session_metrics(session_id).unwrap();
         assert_eq!(session_metrics.session_id, session_id);
 
         // Test session ending
         collector.record_session_ended(session_id).await.unwrap();
-        let snapshot = collector.get_performance_snapshot();
+        let snapshot = collector.performance_snapshot();
         assert_eq!(snapshot.active_sessions, 0);
     }
 
@@ -547,16 +547,16 @@ mod tests {
             .await
             .unwrap();
 
-        let snapshot = collector.get_performance_snapshot();
+        let snapshot = collector.performance_snapshot();
         assert_eq!(snapshot.active_streams, 1);
         assert_eq!(snapshot.total_streams_created, 1);
 
         // Verify session metrics updated
-        let session_metrics = collector.get_session_metrics(session_id).unwrap();
+        let session_metrics = collector.session_metrics(session_id).unwrap();
         assert_eq!(session_metrics.streams_created, 1);
 
         // Verify stream metrics created
-        let stream_metrics = collector.get_stream_metrics(stream_id).unwrap();
+        let stream_metrics = collector.stream_metrics(stream_id).unwrap();
         assert_eq!(stream_metrics.stream_id, stream_id);
         assert_eq!(stream_metrics.session_id, session_id);
     }
@@ -577,16 +577,16 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(collector.get_performance_snapshot().active_streams, 1);
+        assert_eq!(collector.performance_snapshot().active_streams, 1);
 
         // Complete the stream
         collector.record_stream_completed(stream_id).await.unwrap();
 
-        let snapshot = collector.get_performance_snapshot();
+        let snapshot = collector.performance_snapshot();
         assert_eq!(snapshot.active_streams, 0);
 
         // Verify stream metrics marked as completed
-        let stream_metrics = collector.get_stream_metrics(stream_id).unwrap();
+        let stream_metrics = collector.stream_metrics(stream_id).unwrap();
         assert!(stream_metrics.completed_at.is_some());
     }
 
@@ -601,7 +601,7 @@ mod tests {
             .await
             .unwrap();
 
-        let session_metrics_before = collector.get_session_metrics(session_id).unwrap();
+        let session_metrics_before = collector.session_metrics(session_id).unwrap();
         let last_activity_before = session_metrics_before.last_activity;
 
         // Wait briefly to ensure time difference
@@ -617,7 +617,7 @@ mod tests {
             .unwrap();
 
         // Verify last_activity was updated
-        let session_metrics_after = collector.get_session_metrics(session_id).unwrap();
+        let session_metrics_after = collector.session_metrics(session_id).unwrap();
         assert!(session_metrics_after.last_activity > last_activity_before);
     }
 
@@ -651,7 +651,7 @@ mod tests {
             .unwrap();
 
         // Verify processing_times was updated
-        let stream_metrics = collector.get_stream_metrics(stream_id).unwrap();
+        let stream_metrics = collector.stream_metrics(stream_id).unwrap();
         assert_eq!(stream_metrics.processing_times.len(), 1);
         assert_eq!(
             stream_metrics.processing_times[0],
@@ -676,7 +676,7 @@ mod tests {
         }
 
         // Verify time series contains snapshots
-        let time_series = collector.get_time_series(60);
+        let time_series = collector.time_series(60);
         assert!(time_series.len() >= 5);
 
         // Verify each snapshot has increasing session counts

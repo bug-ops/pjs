@@ -257,12 +257,12 @@ mod lazy_array_tests {
     }
 
     #[test]
-    fn test_lazy_array_get_parsed() {
+    fn test_lazy_array_parsed() {
         let raw = b"[1, 2, 3]";
         let scan_result = ScanResult::new();
         let array = LazyArray::from_scan(raw, scan_result);
 
-        assert!(array.get_parsed(0).is_some());
+        assert!(array.parsed(0).is_some());
     }
 
     #[test]

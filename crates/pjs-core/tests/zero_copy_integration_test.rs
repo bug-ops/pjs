@@ -63,7 +63,7 @@ async fn test_buffer_pool_integration() {
     let pool = global_buffer_pool();
 
     // Get a buffer from the pool
-    let buffer = pool.get_buffer(BufferSize::Medium).unwrap();
+    let buffer = pool.acquire(BufferSize::Medium).unwrap();
     assert!(buffer.capacity() >= BufferSize::Medium as usize);
 
     // Check pool statistics

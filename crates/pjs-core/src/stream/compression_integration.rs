@@ -136,7 +136,7 @@ impl StreamingCompressor {
     }
 
     /// Get current compression statistics
-    pub fn get_stats(&self) -> &CompressionStats {
+    pub fn stats(&self) -> &CompressionStats {
         &self.stats
     }
 
@@ -594,7 +594,7 @@ impl StreamingDecompressor {
     }
 
     /// Get decompression statistics
-    pub fn get_stats(&self) -> &DecompressionStats {
+    pub fn stats(&self) -> &DecompressionStats {
         &self.stats
     }
 }
@@ -726,7 +726,7 @@ mod tests {
         let _critical_result = compressor.compress_frame(critical_frame).unwrap();
         let _low_result = compressor.compress_frame(low_frame).unwrap();
 
-        let stats = compressor.get_stats();
+        let stats = compressor.stats();
         assert_eq!(stats.frames_processed, 2);
         assert!(stats.total_input_bytes > 0);
     }
@@ -1615,7 +1615,7 @@ mod tests {
         let mut compressor = StreamingCompressor::new();
         compressor.update_stats(Priority::MEDIUM, 0, 10);
 
-        let stats = compressor.get_stats();
+        let stats = compressor.stats();
         assert_eq!(stats.frames_processed, 1);
         assert_eq!(stats.total_input_bytes, 0);
         assert_eq!(stats.total_output_bytes, 10);
@@ -1630,7 +1630,7 @@ mod tests {
         let mut compressor = StreamingCompressor::new();
         compressor.update_stats(Priority::HIGH, 1000, 500);
 
-        let stats = compressor.get_stats();
+        let stats = compressor.stats();
         assert_eq!(stats.frames_processed, 1);
         assert_eq!(stats.total_input_bytes, 1000);
         assert_eq!(stats.total_output_bytes, 500);
@@ -1648,7 +1648,7 @@ mod tests {
 
         decompressor.update_decompression_stats(&data, duration);
 
-        let stats = decompressor.get_stats();
+        let stats = decompressor.stats();
         assert_eq!(stats.frames_decompressed, 1);
         assert_eq!(stats.avg_decompression_time_us, 100);
     }
@@ -1662,7 +1662,7 @@ mod tests {
         decompressor.update_decompression_stats(&data, std::time::Duration::from_micros(200));
         decompressor.update_decompression_stats(&data, std::time::Duration::from_micros(300));
 
-        let stats = decompressor.get_stats();
+        let stats = decompressor.stats();
         assert_eq!(stats.frames_decompressed, 3);
         assert_eq!(stats.avg_decompression_time_us, 200); // (100 + 200 + 300) / 3
     }
@@ -1913,7 +1913,7 @@ mod tests {
         let result = compressor.compress_frame(frame);
         assert!(result.is_ok());
 
-        let stats = compressor.get_stats();
+        let stats = compressor.stats();
         assert_eq!(stats.frames_processed, 1);
         assert!(stats.total_input_bytes > 1000);
     }

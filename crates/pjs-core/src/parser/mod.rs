@@ -154,7 +154,7 @@ impl Parser {
     /// Get parser statistics
     pub fn stats(&self) -> ParseStats {
         if self.use_sonic {
-            let sonic_stats = self.sonic.get_stats();
+            let sonic_stats = self.sonic.stats();
             ParseStats {
                 total_parses: sonic_stats.total_parses,
                 semantic_detections: sonic_stats.sonic_successes,

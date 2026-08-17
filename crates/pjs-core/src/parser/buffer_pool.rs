@@ -144,8 +144,8 @@ impl BufferPool {
         Self::with_config(PoolConfig::from(&security_config))
     }
 
-    /// Get buffer of specified size, reusing if available
-    pub fn get_buffer(&self, size: BufferSize) -> DomainResult<PooledBuffer> {
+    /// Acquire a buffer of specified size, reusing if available
+    pub fn acquire(&self, size: BufferSize) -> DomainResult<PooledBuffer> {
         // Security validation: check buffer size
         self.config
             .validator
@@ -198,10 +198,10 @@ impl BufferPool {
         ))
     }
 
-    /// Get buffer with at least the specified capacity
-    pub fn get_buffer_with_capacity(&self, min_capacity: usize) -> DomainResult<PooledBuffer> {
+    /// Acquire a buffer with at least the specified capacity
+    pub fn acquire_with_capacity(&self, min_capacity: usize) -> DomainResult<PooledBuffer> {
         let size = BufferSize::for_capacity(min_capacity);
-        self.get_buffer(size)
+        self.acquire(size)
     }
 
     /// Perform cleanup of old unused buffers
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn test_buffer_allocation() {
         let pool = BufferPool::new();
-        let buffer = pool.get_buffer(BufferSize::Medium);
+        let buffer = pool.acquire(BufferSize::Medium);
         assert!(buffer.is_ok());
 
         let buffer = buffer.unwrap();
@@ -835,11 +835,11 @@ mod tests {
 
         // Allocate and drop buffer
         {
-            let _buffer = pool.get_buffer(BufferSize::Small).unwrap();
+            let _buffer = pool.acquire(BufferSize::Small).unwrap();
         }
 
         // Allocate another buffer of same size
-        let _buffer2 = pool.get_buffer(BufferSize::Small).unwrap();
+        let _buffer2 = pool.acquire(BufferSize::Small).unwrap();
 
         // Should have cache hit
         let stats = pool.stats().unwrap();
@@ -1095,7 +1095,7 @@ mod tests {
 
         // Allocate and drop buffer
         {
-            let _buffer = pool.get_buffer(BufferSize::Small).unwrap();
+            let _buffer = pool.acquire(BufferSize::Small).unwrap();
         }
 
         // Wait for TTL
@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn test_global_buffer_pool() {
         let pool = global_buffer_pool();
-        let buffer = pool.get_buffer(BufferSize::Medium);
+        let buffer = pool.acquire(BufferSize::Medium);
         assert!(buffer.is_ok());
     }
 
@@ -1123,7 +1123,7 @@ mod tests {
         let pool = BufferPool::with_config(config);
 
         // Create a buffer that exceeds the memory limit
-        let result = pool.get_buffer(BufferSize::Medium); // 8KB > 1KB limit
+        let result = pool.acquire(BufferSize::Medium); // 8KB > 1KB limit
 
         assert!(result.is_err());
 
@@ -1143,7 +1143,7 @@ mod tests {
 
         // Allocate and drop buffers to fill the bucket
         for _ in 0..3 {
-            let _buffer = pool.get_buffer(BufferSize::Small).unwrap();
+            let _buffer = pool.acquire(BufferSize::Small).unwrap();
             // Buffer goes back to pool on drop
         }
 
@@ -1158,7 +1158,7 @@ mod tests {
 
         // All standard buffer sizes should be valid
         for size in BufferSize::all_sizes() {
-            let result = pool.get_buffer(*size);
+            let result = pool.acquire(*size);
             assert!(result.is_ok(), "Buffer size {:?} should be valid", size);
         }
     }
@@ -1267,7 +1267,7 @@ mod tests {
         };
         let pool = BufferPool::with_config(config);
 
-        let buffer = pool.get_buffer(BufferSize::Medium).unwrap();
+        let buffer = pool.acquire(BufferSize::Medium).unwrap();
         assert!(buffer.buffer().unwrap().is_aligned());
         assert!(
             buffer

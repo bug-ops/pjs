@@ -103,11 +103,11 @@ fn test_universal_request_with_header() {
 
     assert_eq!(request.headers.len(), 2);
     assert_eq!(
-        request.get_header("Accept"),
+        request.header("Accept"),
         Some(&Cow::Borrowed("text/event-stream"))
     );
     assert_eq!(
-        request.get_header("Authorization"),
+        request.header("Authorization"),
         Some(&Cow::Borrowed("Bearer token123"))
     );
 }
@@ -119,12 +119,9 @@ fn test_universal_request_with_query_params() {
         .with_query("session_id", "test-123");
 
     assert_eq!(request.query_params.len(), 2);
-    assert_eq!(request.get_query("priority"), Some(&"high".to_string()));
-    assert_eq!(
-        request.get_query("session_id"),
-        Some(&"test-123".to_string())
-    );
-    assert_eq!(request.get_query("nonexistent"), None);
+    assert_eq!(request.query("priority"), Some(&"high".to_string()));
+    assert_eq!(request.query("session_id"), Some(&"test-123".to_string()));
+    assert_eq!(request.query("nonexistent"), None);
 }
 
 #[test]
@@ -600,10 +597,10 @@ fn test_universal_request_case_insensitive_header_lookup() {
 
     // Test both lowercase and proper case
     assert_eq!(
-        request.get_header("Accept"),
+        request.header("Accept"),
         Some(&Cow::Borrowed("text/event-stream"))
     );
-    assert_eq!(request.get_header("accept"), None); // HashMap is case-sensitive
+    assert_eq!(request.header("accept"), None); // HashMap is case-sensitive
 }
 
 #[test]

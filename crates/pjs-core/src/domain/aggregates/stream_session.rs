@@ -291,7 +291,7 @@ impl StreamSession {
     }
 
     /// Get stream by ID
-    pub fn get_stream(&self, stream_id: StreamId) -> Option<&Stream> {
+    pub fn stream(&self, stream_id: StreamId) -> Option<&Stream> {
         self.streams.get(&stream_id)
     }
 

@@ -295,7 +295,7 @@ fn test_json_data_get_non_object() {
 // ============================================================================
 
 #[test]
-fn test_json_data_get_path_simple() {
+fn test_json_data_path_simple() {
     let mut inner = HashMap::new();
     inner.insert("name".to_string(), JsonData::String("John".to_string()));
 
@@ -304,11 +304,11 @@ fn test_json_data_get_path_simple() {
 
     let data = JsonData::Object(outer);
 
-    assert_eq!(data.get_path("user.name").unwrap().as_str(), Some("John"));
+    assert_eq!(data.path("user.name").unwrap().as_str(), Some("John"));
 }
 
 #[test]
-fn test_json_data_get_path_deep_nesting() {
+fn test_json_data_path_deep_nesting() {
     let mut level3 = HashMap::new();
     level3.insert("value".to_string(), JsonData::Integer(42));
 
@@ -320,30 +320,27 @@ fn test_json_data_get_path_deep_nesting() {
 
     let data = JsonData::Object(level1);
 
-    assert_eq!(
-        data.get_path("level2.level3.value").unwrap().as_i64(),
-        Some(42)
-    );
+    assert_eq!(data.path("level2.level3.value").unwrap().as_i64(), Some(42));
 }
 
 #[test]
-fn test_json_data_get_path_nonexistent() {
+fn test_json_data_path_nonexistent() {
     let data = JsonData::Object(HashMap::new());
-    assert!(data.get_path("nonexistent").is_none());
-    assert!(data.get_path("a.b.c").is_none());
+    assert!(data.path("nonexistent").is_none());
+    assert!(data.path("a.b.c").is_none());
 }
 
 #[test]
-fn test_json_data_get_path_not_object() {
+fn test_json_data_path_not_object() {
     let data = JsonData::Integer(42);
-    assert!(data.get_path("some.path").is_none());
+    assert!(data.path("some.path").is_none());
 }
 
 #[test]
 fn test_json_data_set_path_simple() {
     let mut data = JsonData::Object(HashMap::new());
     assert!(data.set_path("name", JsonData::String("Alice".to_string())));
-    assert_eq!(data.get_path("name").unwrap().as_str(), Some("Alice"));
+    assert_eq!(data.path("name").unwrap().as_str(), Some("Alice"));
 }
 
 #[test]
@@ -352,8 +349,8 @@ fn test_json_data_set_path_nested() {
     assert!(data.set_path("user.name", JsonData::String("Bob".to_string())));
     assert!(data.set_path("user.age", JsonData::Integer(25)));
 
-    assert_eq!(data.get_path("user.name").unwrap().as_str(), Some("Bob"));
-    assert_eq!(data.get_path("user.age").unwrap().as_i64(), Some(25));
+    assert_eq!(data.path("user.name").unwrap().as_str(), Some("Bob"));
+    assert_eq!(data.path("user.age").unwrap().as_i64(), Some(25));
 }
 
 #[test]
@@ -361,7 +358,7 @@ fn test_json_data_set_path_deep_nesting() {
     let mut data = JsonData::Object(HashMap::new());
     assert!(data.set_path("a.b.c.d", JsonData::Bool(true)));
 
-    assert_eq!(data.get_path("a.b.c.d").unwrap().as_bool(), Some(true));
+    assert_eq!(data.path("a.b.c.d").unwrap().as_bool(), Some(true));
 }
 
 #[test]
@@ -370,7 +367,7 @@ fn test_json_data_set_path_overwrite() {
     assert!(data.set_path("key", JsonData::Integer(1)));
     assert!(data.set_path("key", JsonData::Integer(2)));
 
-    assert_eq!(data.get_path("key").unwrap().as_i64(), Some(2));
+    assert_eq!(data.path("key").unwrap().as_i64(), Some(2));
 }
 
 #[test]

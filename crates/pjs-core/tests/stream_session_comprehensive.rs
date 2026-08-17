@@ -233,7 +233,7 @@ fn test_create_stream_in_active_session() {
     let stream_id = result.unwrap();
 
     assert_eq!(session.streams().len(), 1);
-    assert!(session.get_stream(stream_id).is_some());
+    assert!(session.stream(stream_id).is_some());
 }
 
 #[test]
@@ -798,13 +798,13 @@ fn test_duration_some_when_completed() {
 // ============================================================================
 
 #[test]
-fn test_get_stream_nonexistent() {
+fn test_stream_nonexistent() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
     let fake_id = StreamId::new();
 
-    assert!(session.get_stream(fake_id).is_none());
+    assert!(session.stream(fake_id).is_none());
 }
 
 // ============================================================================
