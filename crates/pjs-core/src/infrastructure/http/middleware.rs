@@ -7,7 +7,7 @@ use axum::{
     response::Response,
 };
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{
     future::Future,
     pin::Pin,
@@ -345,7 +345,8 @@ where
                     Ok(response)
                 }
                 Err(err) => {
-                    let (status, retry_after, error_label) = rate_limit_error_response_parts(&err);
+                    let (status, retry_after, error_label) =
+                        rate_limit_error_response_parts(&err, &limiter, client_ip);
 
                     let error_body = serde_json::json!({
                         "error": error_label,
@@ -388,10 +389,18 @@ where
 /// with a `Retry-After` tied to the cleanup sweep interval since that's the
 /// only thing that can free a slot. See `MAX_TRACKED_CLIENTS`'s docs in
 /// `security::rate_limit` for the accepted reject-new-clients tradeoff this
-/// implies under a sustained capacity attack. Every other variant keeps the
-/// existing `429` + fixed 60s hint.
+/// implies under a sustained capacity attack.
+///
+/// Every other variant (in practice only `LimitExceeded`, the sole other
+/// variant [`WebSocketRateLimiter::check_request`] returns) gets `429` with a
+/// `Retry-After` derived from [`WebSocketRateLimiter::reset_after`] — the
+/// real per-client sliding-window expiry, consistent with the
+/// `X-RateLimit-Reset` header `add_rate_limit_headers` attaches to the same
+/// response.
 fn rate_limit_error_response_parts(
     err: &crate::security::rate_limit::RateLimitError,
+    limiter: &crate::security::rate_limit::WebSocketRateLimiter,
+    client_ip: std::net::IpAddr,
 ) -> (StatusCode, u64, &'static str) {
     if matches!(
         err,
@@ -403,8 +412,25 @@ fn rate_limit_error_response_parts(
             "Service Unavailable",
         )
     } else {
-        (StatusCode::TOO_MANY_REQUESTS, 60, "Too Many Requests")
+        let retry_after = duration_secs_ceil(limiter.reset_after(client_ip)).max(1);
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            retry_after,
+            "Too Many Requests",
+        )
     }
+}
+
+/// Rounds a [`Duration`] up to whole seconds, so any positive sub-second
+/// remainder still counts as a full extra second rather than being truncated
+/// away — a real (even if `<1s`) wait must never be reported as already
+/// elapsed (e.g. a sub-second `window_duration` would otherwise report a
+/// `Reset`/`Retry-After` of `0`, implying the quota already reset when it has
+/// not). `window_duration` is a `pub` field on a `Deserialize` config, so an
+/// operator-supplied value near `u64::MAX` seconds is reachable — `saturating_add`
+/// avoids a debug-panicking overflow on the `+1` ceiling adjustment.
+fn duration_secs_ceil(d: Duration) -> u64 {
+    d.as_secs().saturating_add(u64::from(d.subsec_nanos() > 0))
 }
 
 /// Extract the client IP address used as the rate-limit key.
@@ -519,33 +545,31 @@ fn add_rate_limit_headers(
 ) {
     use std::time::SystemTime;
 
-    // Get stats for the client (we'll need to access internals or add a method)
-    // For now, add standard headers with static values
-    // TODO: Add method to WebSocketRateLimiter to get current limit status
+    let config = limiter.config();
 
+    response.headers_mut().insert(
+        "X-RateLimit-Limit",
+        HeaderValue::from(config.max_requests_per_window),
+    );
+
+    let remaining = limiter.remaining_for(client_ip);
     response
         .headers_mut()
-        .insert("X-RateLimit-Limit", HeaderValue::from_static("100"));
+        .insert("X-RateLimit-Remaining", HeaderValue::from(remaining));
 
-    // Calculate remaining requests (simplified - would need access to client state)
-    response
-        .headers_mut()
-        .insert("X-RateLimit-Remaining", HeaderValue::from_static("99"));
-
-    // Calculate reset time (current time + 60 seconds)
-    if let Some(reset_value) = SystemTime::now()
+    // The real per-client sliding-window expiry, not an approximation:
+    // `client.requests` is push-ordered ascending, so the oldest tracked
+    // request determines exactly when the next slot frees.
+    let reset_after_secs = duration_secs_ceil(limiter.reset_after(client_ip));
+    if let Some(reset_time) = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .ok()
-        .map(|d| d.as_secs() + 60)
-        .and_then(|time| HeaderValue::from_str(&time.to_string()).ok())
+        .map(|d| d.as_secs().saturating_add(reset_after_secs))
     {
         response
             .headers_mut()
-            .insert("X-RateLimit-Reset", reset_value);
+            .insert("X-RateLimit-Reset", HeaderValue::from(reset_time));
     }
-
-    // Suppress unused variable warning
-    let _ = (limiter, client_ip);
 }
 
 /// Connection upgrade middleware for WebSocket support
@@ -600,32 +624,6 @@ pub async fn compression_middleware(headers: HeaderMap, request: Request, next: 
         // In production, would apply actual compression here
         // using tower-http::compression::CompressionLayer
     }
-
-    response
-}
-
-/// CORS middleware specifically configured for PJS streaming
-pub async fn pjs_cors_middleware(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
-
-    // Add CORS headers for streaming endpoints
-    let headers = response.headers_mut();
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_ORIGIN,
-        HeaderValue::from_static("*"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET,POST,OPTIONS"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("Content-Type,Authorization,X-PJS-Priority,X-PJS-Format"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_EXPOSE_HEADERS,
-        HeaderValue::from_static("X-PJS-Duration-Ms,X-PJS-Version,X-PJS-Stream-Id"),
-    );
 
     response
 }
@@ -915,7 +913,9 @@ mod tests {
         let err = crate::security::rate_limit::RateLimitError::CapacityExceeded {
             max: crate::security::rate_limit::MAX_TRACKED_CLIENTS,
         };
-        let (status, retry_after, label) = rate_limit_error_response_parts(&err);
+        let limiter = crate::security::rate_limit::WebSocketRateLimiter::default();
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+        let (status, retry_after, label) = rate_limit_error_response_parts(&err, &limiter, ip);
 
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
@@ -926,16 +926,94 @@ mod tests {
     }
 
     #[test]
-    fn test_other_rate_limit_errors_map_to_429() {
-        let err = crate::security::rate_limit::RateLimitError::LimitExceeded {
-            limit: 10,
-            window: std::time::Duration::from_secs(60),
+    fn test_other_rate_limit_errors_map_to_429_with_real_reset_derived_retry_after() {
+        let config = crate::security::rate_limit::RateLimitConfig {
+            max_requests_per_window: 1,
+            window_duration: std::time::Duration::from_secs(30),
+            ..Default::default()
         };
-        let (status, retry_after, label) = rate_limit_error_response_parts(&err);
+        let limiter = crate::security::rate_limit::WebSocketRateLimiter::new(config);
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+
+        limiter.check_request(ip).unwrap();
+        let err = limiter.check_request(ip).unwrap_err();
+
+        let (status, retry_after, label) = rate_limit_error_response_parts(&err, &limiter, ip);
 
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(retry_after, 60);
+        // The single prior request happened microseconds ago, so almost the
+        // entire 30s window remains — ceil-rounded up from just under 30s.
+        assert_eq!(retry_after, 30);
         assert_eq!(label, "Too Many Requests");
+    }
+
+    #[test]
+    fn test_duration_secs_ceil_rounds_up_any_positive_remainder() {
+        assert_eq!(duration_secs_ceil(Duration::ZERO), 0);
+        assert_eq!(duration_secs_ceil(Duration::from_secs(1)), 1);
+        assert_eq!(duration_secs_ceil(Duration::from_millis(1)), 1);
+        assert_eq!(duration_secs_ceil(Duration::from_millis(500)), 1);
+        assert_eq!(duration_secs_ceil(Duration::from_millis(1500)), 2);
+        assert_eq!(duration_secs_ceil(Duration::from_nanos(1_000_000_001)), 2);
+    }
+
+    #[test]
+    fn test_duration_secs_ceil_saturates_instead_of_panicking_near_u64_max() {
+        // `Duration::MAX.as_secs() == u64::MAX` with a positive sub-second
+        // remainder, so a plain `+1` on the ceiling adjustment would
+        // debug-panic on overflow; `saturating_add` must not.
+        assert_eq!(duration_secs_ceil(Duration::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn test_add_rate_limit_headers_never_panics_with_extreme_window() {
+        // `window_duration` is a `pub` field on a `Deserialize` config, so a
+        // near-`u64::MAX`-seconds value is reachable. `reset_after` then
+        // fails closed to the full window (see its doc), and the header's
+        // `now_unix_secs + reset_after_secs` must saturate rather than
+        // overflow-panic in debug.
+        let config = crate::security::rate_limit::RateLimitConfig {
+            window_duration: Duration::from_secs(u64::MAX),
+            ..Default::default()
+        };
+        let limiter = crate::security::rate_limit::WebSocketRateLimiter::new(config);
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+        limiter.check_request(ip).unwrap();
+
+        let mut response = Response::new(axum::body::Body::empty());
+        add_rate_limit_headers(&mut response, &limiter, ip); // Must not panic.
+
+        let reset = response
+            .headers()
+            .get("X-RateLimit-Reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap();
+        assert_eq!(reset, u64::MAX);
+    }
+
+    #[test]
+    fn test_rate_limit_error_response_parts_sub_second_window_never_reports_zero_retry_after() {
+        // A sub-second `window_duration` would make `reset_after` return a
+        // sub-second `Duration`; without ceil-rounding + the `.max(1)` floor,
+        // truncating that to whole seconds would report `Retry-After: 0`,
+        // falsely implying the quota already reset when a real (if short)
+        // wait remains.
+        let config = crate::security::rate_limit::RateLimitConfig {
+            max_requests_per_window: 1,
+            window_duration: Duration::from_millis(200),
+            ..Default::default()
+        };
+        let limiter = crate::security::rate_limit::WebSocketRateLimiter::new(config);
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+
+        limiter.check_request(ip).unwrap();
+        let err = limiter.check_request(ip).unwrap_err();
+
+        let (status, retry_after, _label) = rate_limit_error_response_parts(&err, &limiter, ip);
+
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(retry_after >= 1, "Retry-After must never be 0 on a 429");
     }
 
     #[tokio::test]

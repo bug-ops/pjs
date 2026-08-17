@@ -30,6 +30,42 @@ pub struct HttpExtensionConfig {
     pub max_streams_per_client: usize,
     /// Session timeout
     pub session_timeout: Duration,
+    /// Origins allowed to receive `Access-Control-Allow-Origin` on the PJS
+    /// routes mounted by [`PjsExtension::extend_router`] (including the SSE
+    /// stream endpoint), validated with the same rules as
+    /// [`super::axum_adapter::HttpServerConfig::allowed_origins`].
+    ///
+    /// # Security
+    ///
+    /// Defaults to `vec![]` — same-origin only, no `Access-Control-Allow-Origin`
+    /// header is added at all. `PjsExtension` is meant to bolt onto an
+    /// arbitrary existing router, so it must not weaken that router's
+    /// cross-origin exposure unless the operator explicitly opts in here
+    /// (CWE-942): earlier versions unconditionally emitted a hardcoded
+    /// `Access-Control-Allow-Origin: *` on the SSE endpoint regardless of
+    /// the mounting application's own CORS policy.
+    ///
+    /// Set this to the origin(s) a cross-origin consumer runs on — e.g.
+    /// `pjs-js-client`'s `EventSource`-based SSE transport — to opt back
+    /// into cross-origin access with a validated allowlist instead of an
+    /// unconditional wildcard. `["*"]` allows any origin; mixing `"*"` with
+    /// explicit origins is invalid and falls back to no CORS layer at all
+    /// (logged) rather than panicking. Origins are matched against the
+    /// request's `Origin` header by case-sensitive byte equality — write
+    /// them in lowercase.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::infrastructure::http::HttpExtensionConfig;
+    ///
+    /// let config = HttpExtensionConfig {
+    ///     allowed_origins: vec!["https://app.example.com".to_string()],
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(config.allowed_origins.len(), 1);
+    /// ```
+    pub allowed_origins: Vec<String>,
 }
 
 impl Default for HttpExtensionConfig {
@@ -40,6 +76,7 @@ impl Default for HttpExtensionConfig {
             default_priority: Priority::MEDIUM,
             max_streams_per_client: 10,
             session_timeout: Duration::from_secs(3600),
+            allowed_origins: Vec::new(),
         }
     }
 }
@@ -59,7 +96,13 @@ impl PjsExtension {
         }
     }
 
-    /// Add PJS capabilities to an existing Axum router
+    /// Add PJS capabilities to an existing Axum router.
+    ///
+    /// The mounted routes (including the SSE stream endpoint) add no
+    /// `Access-Control-Allow-Origin` header unless
+    /// [`HttpExtensionConfig::allowed_origins`] is set — see that field's
+    /// docs if a cross-origin consumer (e.g. `pjs-js-client`'s SSE
+    /// transport) needs to reach these routes.
     pub fn extend_router<S>(self, router: axum::Router<S>) -> axum::Router<S>
     where
         S: Clone + Send + Sync + 'static,
@@ -76,7 +119,7 @@ impl PjsExtension {
     where
         S: Clone + Send + Sync + 'static,
     {
-        axum::Router::new()
+        let router = axum::Router::new()
             .route("/stream", axum::routing::post(handle_stream_request))
             .route(
                 "/stream/{stream_id}/sse",
@@ -84,7 +127,29 @@ impl PjsExtension {
             )
             .route("/health", axum::routing::get(handle_pjs_health))
             .layer(Extension(self.config.clone()))
-            .layer(Extension(self.streamer.clone()))
+            .layer(Extension(self.streamer.clone()));
+
+        // `allowed_origins` defaults to empty (same-origin only, see its doc
+        // for the CWE-942 rationale), so no CORS layer is added unless the
+        // operator opts in.
+        if self.config.allowed_origins.is_empty() {
+            return router;
+        }
+
+        match super::axum_adapter::build_cors_layer_from_origins(&self.config.allowed_origins) {
+            Ok(cors) => router.layer(cors),
+            Err(err) => {
+                // Fail closed: an invalid list (e.g. mixing "*" with
+                // explicit origins) must not silently fall back to
+                // permissive behavior, so no CORS layer is added at all —
+                // same as leaving `allowed_origins` empty.
+                tracing::error!(
+                    "PjsExtension: invalid `allowed_origins` config ({err}); \
+                     no CORS header will be added to PJS routes"
+                );
+                router
+            }
+        }
     }
 }
 
@@ -202,6 +267,12 @@ async fn handle_stream_request(
 }
 
 /// Handle Server-Sent Events streaming
+///
+/// Sets no `Access-Control-Allow-Origin` header itself. Any such header
+/// comes from the `CorsLayer` `PjsExtension::create_pjs_routes` conditionally
+/// wraps the PJS routes in, driven by [`HttpExtensionConfig::allowed_origins`]
+/// — see that field's docs for why this handler must not impose its own
+/// unconditional CORS policy (CWE-942).
 async fn handle_sse_stream(
     Path(_stream_id): Path<String>,
     Extension(streamer): Extension<Arc<PriorityStreamer>>,
@@ -241,7 +312,6 @@ async fn handle_sse_stream(
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .header("Access-Control-Allow-Origin", "*")
         .body(axum::body::Body::from_stream(stream))
         .map_err(|e| StreamExtensionError::ResponseError(e.to_string()))?;
 

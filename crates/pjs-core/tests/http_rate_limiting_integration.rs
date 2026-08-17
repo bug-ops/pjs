@@ -174,6 +174,41 @@ async fn test_rate_limit_headers_format() {
     assert!(reset.unwrap() > now);
 }
 
+#[tokio::test]
+async fn test_rate_limit_remaining_decreases_across_requests() {
+    // All requests here share the same fallback bucket (no `ConnectInfo`
+    // extension), so consecutive requests must show `X-RateLimit-Remaining`
+    // strictly decreasing rather than just being present/parseable.
+    let config = RateLimitConfig::new(5).with_window(Duration::from_secs(60));
+    let app = create_test_router(config);
+
+    let remaining_of = |response: &axum::response::Response| -> u32 {
+        response
+            .headers()
+            .get("X-RateLimit-Remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap()
+    };
+
+    let mut previous = None;
+    for _ in 0..3 {
+        let request = Request::builder().uri("/test").body(Body::empty()).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let remaining = remaining_of(&response);
+        if let Some(prev) = previous {
+            assert_eq!(
+                remaining,
+                prev - 1,
+                "X-RateLimit-Remaining must decrease by exactly one per request"
+            );
+        }
+        previous = Some(remaining);
+    }
+}
+
 /// Without a `ConnectInfo<SocketAddr>` extension (i.e. the router not served
 /// via `into_make_service_with_connect_info`), the real peer is unknown and
 /// every request falls back to the same key. `X-Forwarded-For` is never

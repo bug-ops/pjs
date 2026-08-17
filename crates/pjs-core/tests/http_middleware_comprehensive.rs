@@ -8,7 +8,6 @@
 // - RateLimitMiddleware creation
 // - WebSocket upgrade middleware
 // - Compression middleware
-// - CORS middleware
 // - Security middleware
 // - Circuit breaker middleware
 // - Health check middleware
@@ -21,15 +20,14 @@ use axum::{
     Router,
     body::Body,
     extract::Request,
-    http::{StatusCode, header},
+    http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
     routing::get,
 };
 use pjson_rs::infrastructure::http::middleware::{
     CircuitBreakerMiddleware, PjsMiddleware, RateLimitMiddleware, compression_middleware,
-    health_check_middleware, pjs_cors_middleware, security_middleware,
-    websocket_upgrade_middleware,
+    health_check_middleware, security_middleware, websocket_upgrade_middleware,
 };
 use tower::ServiceExt;
 
@@ -233,16 +231,6 @@ fn test_compression_middleware_imports() {
 }
 
 // ============================================================================
-// CORS Middleware Tests
-// ============================================================================
-
-#[test]
-fn test_pjs_cors_middleware_imports() {
-    // Test that we can import pjs_cors_middleware
-    let _ = pjs_cors_middleware;
-}
-
-// ============================================================================
 // Security Middleware Tests
 // ============================================================================
 
@@ -327,7 +315,6 @@ async fn test_middleware_stack() {
     let app = Router::new()
         .route("/test", get(handler))
         .layer(middleware::from_fn(security_middleware))
-        .layer(middleware::from_fn(pjs_cors_middleware))
         .layer(middleware::from_fn(health_check_middleware))
         .layer(PjsMiddleware::new());
 
@@ -338,11 +325,6 @@ async fn test_middleware_stack() {
 
     // Should have headers from all middleware
     assert!(response.headers().contains_key("X-PJS-Health"));
-    assert!(
-        response
-            .headers()
-            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
-    );
     assert!(response.headers().contains_key("X-Content-Type-Options"));
     assert!(response.headers().contains_key("X-PJS-Duration-Ms"));
 }

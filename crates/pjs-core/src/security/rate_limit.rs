@@ -263,6 +263,80 @@ impl WebSocketRateLimiter {
         &self.config
     }
 
+    /// Returns the number of requests still permitted for `ip` within the
+    /// current window: `max_requests_per_window` minus the number of request
+    /// timestamps currently recorded for that client that still fall inside
+    /// `window_duration`.
+    ///
+    /// An IP with no tracked state (never seen, or evicted by
+    /// [`Self::cleanup_expired`]) has its full quota remaining. Read-only —
+    /// unlike [`Self::check_request`], this never prunes `client.requests`
+    /// itself; it counts a window-filtered view without mutating state, using
+    /// the same `checked_sub`/fail-closed guard `check_request` uses (skip
+    /// filtering, i.e. count every tracked timestamp, rather than panicking
+    /// or under-counting on a host whose uptime is shorter than
+    /// `window_duration`). This reflects only the request-count window
+    /// backing `check_request`/`X-RateLimit-*` response headers — it says
+    /// nothing about the independent connection-count
+    /// ([`Self::check_connection`]) or message-rate ([`Self::check_message`])
+    /// limits.
+    pub fn remaining_for(&self, ip: IpAddr) -> u32 {
+        let Some(client) = self.clients.get(&ip) else {
+            return self.config.max_requests_per_window;
+        };
+
+        let now = Instant::now();
+        let window_start = now.checked_sub(self.config.window_duration);
+        let used = client
+            .requests
+            .iter()
+            .filter(|&&t| window_start.is_none_or(|start| t > start))
+            .count();
+
+        self.config
+            .max_requests_per_window
+            .saturating_sub(used as u32)
+    }
+
+    /// Returns the duration until `ip`'s rate-limit window next admits at
+    /// least one more request — i.e. until its oldest currently-counted
+    /// request timestamp ages out of `window_duration`. `Duration::ZERO` if
+    /// `ip` is untracked or has no request currently counted against it
+    /// (quota is already fully available, so there is nothing to wait for).
+    ///
+    /// `client.requests` is push-ordered ascending and `retain` (used by
+    /// [`Self::check_request`]) preserves that order, so the earliest entry
+    /// still inside the window is the next to expire and determines this
+    /// value — this is the real sliding-window reset instant, not an
+    /// approximation. Backs both the `X-RateLimit-Reset` response header and
+    /// the `Retry-After` hint on a `429` rejection.
+    ///
+    /// Fails closed like [`Self::remaining_for`]: on a host whose uptime is
+    /// shorter than `window_duration` (`now.checked_sub` underflows), this
+    /// returns the full `window_duration` rather than treating every
+    /// untrimmed timestamp as already-expired — the latter would report
+    /// `Duration::ZERO` (quota already fully available) for a client that
+    /// is, in reality, still within its window.
+    pub fn reset_after(&self, ip: IpAddr) -> Duration {
+        let Some(client) = self.clients.get(&ip) else {
+            return Duration::ZERO;
+        };
+
+        let now = Instant::now();
+        let Some(window_start) = now.checked_sub(self.config.window_duration) else {
+            return self.config.window_duration;
+        };
+        let earliest_active = client.requests.iter().find(|&&t| t > window_start);
+
+        match earliest_active {
+            Some(&earliest) => self
+                .config
+                .window_duration
+                .saturating_sub(now.saturating_duration_since(earliest)),
+            None => Duration::ZERO,
+        }
+    }
+
     /// Spawn a background task that periodically calls [`Self::cleanup_expired`].
     ///
     /// Idempotent: calling this more than once on the same limiter (e.g. when
@@ -1081,11 +1155,15 @@ mod tests {
     #[test]
     fn test_check_request_never_panics_regardless_of_window_duration() {
         // Same rationale as the `cleanup_expired` test above, but for the
-        // `checked_sub` guard on the request hot path in `check_request`.
-        // Whether `checked_sub` actually underflows for a given window_secs
-        // is platform-dependent (see `test_cleanup_expired_never_panics_...`
-        // above) — this test only pins down that it never panics regardless
-        // of which branch runs.
+        // `checked_sub` guard on the request hot path in `check_request`,
+        // and its two read-only siblings `remaining_for`/`reset_after`
+        // (which share the same guard). Whether `checked_sub` actually
+        // underflows for a given window_secs is platform-dependent (see
+        // `test_cleanup_expired_never_panics_...` above) — this test only
+        // pins down that none of the three ever panics regardless of which
+        // branch runs, including with a `window_duration` near `u64::MAX`
+        // seconds (reachable, since `RateLimitConfig` is `Deserialize` with
+        // an all-`pub` `window_duration: Duration` field).
         for window_secs in [1, 60, 3600, u64::MAX / 8] {
             let config = RateLimitConfig {
                 window_duration: Duration::from_secs(window_secs),
@@ -1095,7 +1173,145 @@ mod tests {
             let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
             let _ = limiter.check_request(ip); // Must not panic for any window_secs above.
+            let _ = limiter.remaining_for(ip);
+            let _ = limiter.reset_after(ip);
         }
+    }
+
+    #[test]
+    fn test_remaining_for_fresh_ip_returns_full_quota() {
+        let config = RateLimitConfig {
+            max_requests_per_window: 10,
+            ..Default::default()
+        };
+        let limiter = WebSocketRateLimiter::new(config);
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        // Never-seen IP has its full quota remaining.
+        assert_eq!(limiter.remaining_for(ip), 10);
+    }
+
+    #[test]
+    fn test_remaining_for_decreases_with_consumed_requests() {
+        let config = RateLimitConfig {
+            max_requests_per_window: 5,
+            window_duration: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let limiter = WebSocketRateLimiter::new(config);
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        assert_eq!(limiter.remaining_for(ip), 5);
+
+        limiter.check_request(ip).unwrap();
+        assert_eq!(limiter.remaining_for(ip), 4);
+
+        limiter.check_request(ip).unwrap();
+        limiter.check_request(ip).unwrap();
+        assert_eq!(limiter.remaining_for(ip), 2);
+    }
+
+    #[test]
+    fn test_remaining_for_saturates_at_zero_when_quota_exhausted() {
+        let config = RateLimitConfig {
+            max_requests_per_window: 2,
+            window_duration: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let limiter = WebSocketRateLimiter::new(config);
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        // Exhaust the quota; the second call succeeds, the third is rejected
+        // and must not record an extra timestamp.
+        assert!(limiter.check_request(ip).is_ok());
+        assert!(limiter.check_request(ip).is_ok());
+        assert!(limiter.check_request(ip).is_err());
+
+        // `saturating_sub` must not underflow even if usage ever exceeded
+        // the configured limit.
+        assert_eq!(limiter.remaining_for(ip), 0);
+    }
+
+    #[test]
+    fn test_remaining_for_isolated_per_ip() {
+        let config = RateLimitConfig {
+            max_requests_per_window: 3,
+            window_duration: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let limiter = WebSocketRateLimiter::new(config);
+        let ip1 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let ip2 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+
+        limiter.check_request(ip1).unwrap();
+        limiter.check_request(ip1).unwrap();
+
+        assert_eq!(limiter.remaining_for(ip1), 1);
+        assert_eq!(limiter.remaining_for(ip2), 3);
+    }
+
+    #[test]
+    fn test_remaining_for_prunes_expired_requests_like_check_request() {
+        // Deterministic counterexample for the gap `remaining_for` used to
+        // have: without window pruning, 5 requests at t=0 under a 500ms
+        // window would still read as 0 remaining at t=1000ms, even though
+        // `check_request` would freely admit all 5 again by then. Timing
+        // margins are kept generous (5x an earlier, tighter version) to stay
+        // well clear of OS timer granularity / nextest parallelism jitter.
+        let config = RateLimitConfig {
+            max_requests_per_window: 5,
+            window_duration: Duration::from_millis(500),
+            ..Default::default()
+        };
+        let limiter = WebSocketRateLimiter::new(config);
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        for _ in 0..5 {
+            limiter.check_request(ip).unwrap();
+        }
+        assert_eq!(limiter.remaining_for(ip), 0);
+
+        thread::sleep(Duration::from_millis(1000));
+
+        assert_eq!(limiter.remaining_for(ip), 5);
+        assert!(limiter.check_request(ip).is_ok());
+    }
+
+    #[test]
+    fn test_reset_after_untracked_ip_is_zero() {
+        let limiter = WebSocketRateLimiter::default();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        assert_eq!(limiter.reset_after(ip), Duration::ZERO);
+    }
+
+    #[test]
+    fn test_reset_after_reflects_oldest_active_request() {
+        // Timing margins scaled up (5x an earlier, tighter version) to stay
+        // well clear of OS timer granularity / nextest parallelism jitter.
+        let config = RateLimitConfig {
+            max_requests_per_window: 5,
+            window_duration: Duration::from_millis(1000),
+            ..Default::default()
+        };
+        let limiter = WebSocketRateLimiter::new(config);
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        limiter.check_request(ip).unwrap();
+        let just_after = limiter.reset_after(ip);
+        // Just after the request, almost the entire window remains.
+        assert!(just_after > Duration::from_millis(750));
+        assert!(just_after <= Duration::from_millis(1000));
+
+        thread::sleep(Duration::from_millis(600));
+        let later = limiter.reset_after(ip);
+        // The wait has shrunk by roughly the elapsed sleep.
+        assert!(later < just_after);
+        assert!(later <= Duration::from_millis(400));
+
+        thread::sleep(Duration::from_millis(1000));
+        // The oldest (only) request has now aged out of the window.
+        assert_eq!(limiter.reset_after(ip), Duration::ZERO);
     }
 
     #[tokio::test]

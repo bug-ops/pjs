@@ -54,6 +54,7 @@ fn test_pjs_config_custom_values() {
         default_priority: Priority::HIGH,
         max_streams_per_client: 5,
         session_timeout: Duration::from_secs(7200),
+        allowed_origins: vec!["https://app.example.com".to_string()],
     };
 
     assert_eq!(config.route_prefix, "/api/stream");
@@ -61,6 +62,10 @@ fn test_pjs_config_custom_values() {
     assert_eq!(config.default_priority, Priority::HIGH);
     assert_eq!(config.max_streams_per_client, 5);
     assert_eq!(config.session_timeout, Duration::from_secs(7200));
+    assert_eq!(
+        config.allowed_origins,
+        vec!["https://app.example.com".to_string()]
+    );
 }
 
 #[test]
@@ -562,7 +567,11 @@ async fn test_sse_stream_endpoint_returns_event_stream() {
 }
 
 #[tokio::test]
-async fn test_sse_stream_endpoint_cors_headers() {
+async fn test_sse_stream_endpoint_sets_no_cors_header_by_default() {
+    // `PjsExtension` bolts onto an arbitrary existing router, so it must not
+    // impose its own CORS policy by default (CWE-942) — `allowed_origins`
+    // defaults to empty, and no `Access-Control-Allow-Origin` header is
+    // added unless an operator opts in (see the next test).
     let config = HttpExtensionConfig::default();
     let extension = PjsExtension::new(config);
 
@@ -573,18 +582,115 @@ async fn test_sse_stream_endpoint_cors_headers() {
         .oneshot(
             Request::builder()
                 .uri("/pjs/stream/test-123/sse")
+                .header("Origin", "https://app.example.com")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
 
-    // Check CORS header
+    assert!(
+        response
+            .headers()
+            .get("Access-Control-Allow-Origin")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn test_sse_stream_endpoint_honors_configured_allowed_origins() {
+    // Opting in via `allowed_origins` (e.g. for a cross-origin `pjs-js-client`
+    // `EventSource` consumer) must echo back a matching, validated origin.
+    let config = HttpExtensionConfig {
+        allowed_origins: vec!["https://app.example.com".to_string()],
+        ..Default::default()
+    };
+    let extension = PjsExtension::new(config);
+
+    let app = Router::new();
+    let app = extension.extend_router(app);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pjs/stream/test-123/sse")
+                .header("Origin", "https://app.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response
+            .headers()
+            .get("Access-Control-Allow-Origin")
+            .unwrap(),
+        "https://app.example.com"
+    );
+}
+
+#[tokio::test]
+async fn test_sse_stream_endpoint_honors_wildcard_allowed_origins() {
+    let config = HttpExtensionConfig {
+        allowed_origins: vec!["*".to_string()],
+        ..Default::default()
+    };
+    let extension = PjsExtension::new(config);
+
+    let app = Router::new();
+    let app = extension.extend_router(app);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pjs/stream/test-123/sse")
+                .header("Origin", "https://anything.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
     assert_eq!(
         response
             .headers()
             .get("Access-Control-Allow-Origin")
             .unwrap(),
         "*"
+    );
+}
+
+#[tokio::test]
+async fn test_sse_stream_endpoint_invalid_allowed_origins_fails_closed() {
+    // Mixing "*" with an explicit origin is invalid; `extend_router` must
+    // fail closed (no CORS layer at all) rather than falling back to a
+    // permissive wildcard or panicking.
+    let config = HttpExtensionConfig {
+        allowed_origins: vec!["*".to_string(), "https://app.example.com".to_string()],
+        ..Default::default()
+    };
+    let extension = PjsExtension::new(config);
+
+    let app = Router::new();
+    let app = extension.extend_router(app);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pjs/stream/test-123/sse")
+                .header("Origin", "https://app.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get("Access-Control-Allow-Origin")
+            .is_none()
     );
 }
