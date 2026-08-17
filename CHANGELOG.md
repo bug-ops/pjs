@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING** `Priority::unwrap_or` (public on `pjson-rs`/`pjson-rs-domain`). It silently discarded its `default` argument and always returned the wrapped value, making it dead weight that misled callers into believing a fallback was applied; `Priority::value()` already returns the same result unconditionally. Pre-1.0 breaking change; no deprecation cycle (#332)
+- **BREAKING** `FlowControlCredits` (public on `pjson-rs`/`pjson-rs-domain`, `value_objects` module). Nothing in the workspace constructed or called it outside its own unit tests, and its `consume()` method returned a stringly-typed `Result<(), String>` error rather than a proper domain error type. Removed entirely, including its `Default` impl and dedicated unit tests; `BackpressureSignal` in the same file is unaffected. Flow control is provided by `infrastructure::bounded_channel::byte_bounded_channel`, not by a credit-tracking primitive. Pre-1.0 breaking change; no deprecation cycle (#335)
 - **BREAKING** `DomainEvent::event_id()` (public on `pjson-rs`/`pjson-rs-domain`). It derived identity from a content hash, which is exactly the bug behind #328's silent event-log collisions; there is no drop-in replacement because identity is no longer a property of `DomainEvent` itself — see the `Fixed` entry above for where identity is now assigned. Pre-1.0 breaking change; no deprecation cycle (#328)
 
 ### Changed

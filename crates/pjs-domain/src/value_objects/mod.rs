@@ -10,7 +10,7 @@ mod json_path;
 mod priority;
 mod schema;
 
-pub use backpressure::{BackpressureSignal, FlowControlCredits};
+pub use backpressure::BackpressureSignal;
 pub use id::{Id, IdMarker, SessionId, SessionMarker, StreamId, StreamMarker};
 pub use json_data::JsonData;
 pub use json_path::{JsonPath, PathSegment};
