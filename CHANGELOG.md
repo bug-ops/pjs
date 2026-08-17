@@ -85,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SchemaAnalyzer::total_string_bytes` (an internal ratio-normalization field, now unused) is removed
 - Dictionary index assignment is now deterministic (candidates sorted descending by `count * length`, lexicographic tie-break) instead of iterating a `HashMap`, so compressed output bytes are reproducible across runs on identical input
 - Added `CompressionConfig::validate()`, called from `PjsConfig::validate()`, validating the potential/ratio fields (`uuid_compression_potential`, `min_delta_potential`, `min_compression_potential`) are in `0.0..=1.0` and the threshold fields (`delta_threshold`, `run_length_threshold`) are finite and non-negative
+- Sorted `[workspace.dependencies]` in the root `Cargo.toml` alphabetically; no version, feature, or attribute changes (closes #380)
 
 ### CI
 
