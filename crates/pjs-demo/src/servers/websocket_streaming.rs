@@ -6,11 +6,11 @@
 use axum::{
     Json, Router,
     extract::{
-        State,
+        Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
-    response::Html,
+    response::{Html, Response},
     routing::{get, post},
 };
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -42,8 +42,24 @@ struct SessionInfo {
     session_id: SessionId,
     #[allow(dead_code)] // TODO: Use for session analytics
     started_at: Instant,
+    /// Whether a WebSocket connection has already claimed this session.
+    ///
+    /// Guards against a TOCTOU double-bind: without this, two concurrent
+    /// upgrade requests for the same `session_id` could both pass a plain
+    /// existence check and both attach a stream to it.
+    bound: bool,
     frame_count: usize,
     total_bytes: u64,
+}
+
+/// Outcome of attempting to atomically claim a session for one WebSocket connection.
+enum SessionBind {
+    /// The session existed and was unbound; it is now claimed by the caller.
+    Bound,
+    /// The session exists but another connection already claimed it.
+    AlreadyBound,
+    /// No session with this id exists.
+    NotFound,
 }
 
 /// WebSocket streaming configuration
@@ -102,13 +118,15 @@ impl AppState {
         }
     }
 
-    fn add_session(&self, session_id: SessionId) {
+    /// Register a new streaming session, created via `POST /stream`.
+    pub fn add_session(&self, session_id: SessionId) {
         let mut sessions = self.active_sessions.lock().unwrap();
         sessions.insert(
             session_id,
             SessionInfo {
                 session_id,
                 started_at: Instant::now(),
+                bound: false,
                 frame_count: 0,
                 total_bytes: 0,
             },
@@ -120,6 +138,20 @@ impl AppState {
         sessions.remove(session_id);
     }
 
+    /// Atomically check that `session_id` exists and is not yet bound to a
+    /// WebSocket connection, and if so, claim it in the same lock hold.
+    fn try_bind_session(&self, session_id: &SessionId) -> SessionBind {
+        let mut sessions = self.active_sessions.lock().unwrap();
+        match sessions.get_mut(session_id) {
+            None => SessionBind::NotFound,
+            Some(session) if session.bound => SessionBind::AlreadyBound,
+            Some(session) => {
+                session.bound = true;
+                SessionBind::Bound
+            }
+        }
+    }
+
     fn update_session_stats(&self, session_id: &SessionId, bytes_sent: u64) {
         let mut sessions = self.active_sessions.lock().unwrap();
         if let Some(session) = sessions.get_mut(session_id) {
@@ -129,26 +161,24 @@ impl AppState {
     }
 }
 
-/// Main WebSocket streaming server
-#[tokio::main]
-async fn main() -> ApplicationResult<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
-
-    let app_state = AppState::new();
-
-    let app = Router::new()
+/// Build the router for the WebSocket streaming demo server.
+pub fn app(state: AppState) -> Router {
+    Router::new()
         .route("/", get(index_page))
         .route("/stream", post(create_stream))
-        .route(
-            "/ws",
-            get(|ws: WebSocketUpgrade, state: State<AppState>| async {
-                ws.on_upgrade(move |socket| handle_websocket(socket, state.0))
-            }),
-        )
+        .route("/ws/{session_id}", get(ws_upgrade))
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
-        .with_state(app_state);
+        .with_state(state)
+}
+
+/// Run the WebSocket streaming demo server on `127.0.0.1:3001`.
+///
+/// # Errors
+///
+/// Returns an error if the TCP listener cannot bind, or if the server fails while serving.
+pub async fn run() -> ApplicationResult<()> {
+    let app_state = AppState::new();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3001")
         .await
@@ -161,7 +191,7 @@ async fn main() -> ApplicationResult<()> {
     info!("WebSocket streaming server running on http://127.0.0.1:3001");
     info!("WebSocket endpoint: ws://127.0.0.1:3001/ws/{{session_id}}");
 
-    axum::serve(listener, app)
+    axum::serve(listener, app(app_state))
         .await
         .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Server error: {e}"))))?;
 
@@ -197,10 +227,31 @@ async fn create_stream(
     Ok(Json(response))
 }
 
-/// Handle WebSocket connection
-async fn handle_websocket(socket: WebSocket, state: AppState) {
-    let session_id = SessionId::new();
+/// Validate and atomically claim the path-bound session, then upgrade the connection.
+///
+/// Rejects the upgrade with `400 Bad Request` when `session_id` is not a
+/// well-formed session identifier, `404 Not Found` when it is unknown to
+/// `state` (e.g. never created via `POST /stream`, or already closed), and
+/// `409 Conflict` when another connection already claimed it — sessions are
+/// single-owner, not fan-out.
+async fn ws_upgrade(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, StatusCode> {
+    let session_id = SessionId::from_string(&session_id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
+    match state.try_bind_session(&session_id) {
+        SessionBind::NotFound => return Err(StatusCode::NOT_FOUND),
+        SessionBind::AlreadyBound => return Err(StatusCode::CONFLICT),
+        SessionBind::Bound => {}
+    }
+
+    Ok(ws.on_upgrade(move |socket| handle_websocket(socket, state, session_id)))
+}
+
+/// Handle WebSocket connection
+async fn handle_websocket(socket: WebSocket, state: AppState, session_id: SessionId) {
     info!(
         "WebSocket connection established for session: {}",
         session_id
@@ -398,7 +449,7 @@ fn should_compress(frame: &pjson_rs::stream::StreamFrame) -> bool {
 
 /// Generate sample data for streaming demonstration
 fn generate_sample_streaming_data() -> JsonValue {
-    use pjs_demo::data::{DatasetSize, analytics, ecommerce, social};
+    use crate::data::{DatasetSize, analytics, ecommerce, social};
 
     serde_json::json!({
         "dashboard": {
