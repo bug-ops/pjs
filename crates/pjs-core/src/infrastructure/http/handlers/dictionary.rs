@@ -48,7 +48,10 @@ where
         .dictionary_store
         .get_dictionary(sid)
         .await
-        .map_err(|e| PjsError::HttpError(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(error = %e, session_id = %sid, "failed to load session dictionary");
+            PjsError::HttpError("failed to load dictionary".to_string())
+        })?;
 
     let Some(dict) = dict else {
         return Ok((StatusCode::NOT_FOUND, "dictionary not yet trained").into_response());
@@ -81,8 +84,8 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{
-        compression::zstd::{MAX_DICT_SIZE, N_TRAIN, ZstdDictCompressor},
-        domain::ports::dictionary_store::NoopDictionaryStore,
+        compression::zstd::{MAX_DICT_SIZE, N_TRAIN, ZstdDictCompressor, ZstdDictionary},
+        domain::ports::dictionary_store::{DictionaryFuture, DictionaryStore, NoopDictionaryStore},
         domain::{
             aggregates::StreamSession,
             entities::Stream,
@@ -295,6 +298,27 @@ mod tests {
         }
     }
 
+    /// [`DictionaryStore`] whose `get_dictionary` always fails with a
+    /// sentinel-bearing error, used to verify the 500 response body never
+    /// leaks the underlying error's `Display` text.
+    struct FailingDictionaryStore;
+    impl DictionaryStore for FailingDictionaryStore {
+        fn get_dictionary<'a>(
+            &'a self,
+            _: SessionId,
+        ) -> DictionaryFuture<'a, Option<Arc<ZstdDictionary>>> {
+            Box::pin(async {
+                Err(crate::Error::other(
+                    "SENTINEL: /var/lib/pjs/secrets.db unreachable",
+                ))
+            })
+        }
+
+        fn train_if_ready<'a>(&'a self, _: SessionId, _: Vec<u8>) -> DictionaryFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
     fn build_router(
         dict_store: Arc<dyn crate::domain::ports::dictionary_store::DictionaryStore>,
     ) -> Router {
@@ -366,5 +390,24 @@ mod tests {
             .unwrap();
         let resp = router.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_endpoint_store_error_does_not_leak_details() {
+        let router = build_router(Arc::new(FailingDictionaryStore));
+        let sid = SessionId::new();
+        let req = Request::builder()
+            .uri(format!("/pjs/sessions/{sid}/dictionary"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body_text = String::from_utf8_lossy(&body);
+        assert!(
+            !body_text.contains("SENTINEL"),
+            "response body leaked internal error details: {body_text}"
+        );
     }
 }
