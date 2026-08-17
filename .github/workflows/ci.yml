@@ -53,6 +53,7 @@ jobs:
               - 'crates/pjs-core/**'
               - 'crates/pjs-domain/**'
               - 'crates/pjs-wasm/**'
+              - 'crates/pjs-demo/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -394,12 +395,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
 
+      # pjs-demo excluded: 3000+ LOC of demo server binaries with zero tests
+      # (already listed under codecov.yml's ignore:, so this doesn't change
+      # what's reported); skipping its LLVM-instrumented compile here saves
+      # build time. See #318.
       - name: Generate workspace coverage
         env:
           RUSTC_WRAPPER: sccache
           SCCACHE_GHA_ENABLED: "true"
         run: |
           cargo llvm-cov nextest --all-features --all-targets --workspace \
+            --exclude pjs-demo \
             --lcov --output-path lcov.info \
             --status-level fail --final-status-level skip
 

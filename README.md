@@ -205,9 +205,9 @@ cargo nextest run --workspace
 # Run benchmarks
 cargo bench -p pjs-bench
 
-# Run demo servers
-cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin interactive-demo-server --features "simd-auto,schema-validation,compression,http-server,websocket-server"
-cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin simple-demo-server --features "simd-auto,http-server"
+# Run demo servers (feature names are forwarded to pjson-rs, hence the prefix)
+cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin interactive-demo-server --features "pjson-rs/simd-auto,pjson-rs/schema-validation,pjson-rs/compression,pjson-rs/http-server,pjson-rs/websocket-server"
+cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin simple-demo-server --features "pjson-rs/simd-auto,pjson-rs/http-server"
 ```
 
 ### Feature Flags

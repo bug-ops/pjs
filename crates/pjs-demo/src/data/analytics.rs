@@ -1,7 +1,7 @@
 //! Analytics dashboard dataset generation
 
 use super::DatasetSize;
-use rand::Rng;
+use rand::RngExt;
 use serde_json::{Value, json};
 
 /// Generate analytics dashboard data
