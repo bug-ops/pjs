@@ -6,12 +6,12 @@
 use axum::{
     Router,
     extract::Query,
+    http::StatusCode,
     response::{Html, Json},
     routing::get,
 };
 use clap::Parser;
-// TODO: Re-enable PriorityStreamer usage after fixing infrastructure compilation
-// use pjson_rs::PriorityStreamer;
+use pjson_rs::{PriorityStreamer, stream::PriorityStreamFrame};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, time::Duration};
@@ -99,30 +99,40 @@ async fn traditional_endpoint(Query(params): Query<DemoRequest>) -> Json<Value> 
 }
 
 /// PJS optimized endpoint
-async fn pjs_endpoint(Query(params): Query<DemoRequest>) -> Json<Value> {
-    let _size = params.size.as_deref().unwrap_or("medium");
+async fn pjs_endpoint(Query(params): Query<DemoRequest>) -> Result<Json<Value>, StatusCode> {
+    let size = params.size.as_deref().unwrap_or("medium");
     let latency = params.latency.unwrap_or(100);
 
     // PJS: Minimal latency for skeleton
     sleep(Duration::from_millis(latency / 10)).await;
 
-    // Generate skeleton first
-    let skeleton = json!({
-        "store": {
-            "name": "PJS Demo Store",
-            "status": "loading...",
-            "version": "1.0.0"
-        },
-        "products": [],
-        "summary": null,
-        "pjs_info": {
-            "skeleton": true,
-            "priority": 100,
-            "approach": "pjs_optimized"
-        }
-    });
+    // Generate the real skeleton-first frame via PriorityStreamer
+    let data = generate_demo_data(size);
+    let mut plan = PriorityStreamer::new()
+        .analyze(&data)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Json(skeleton)
+    let Some(PriorityStreamFrame::Skeleton {
+        data: mut skeleton,
+        priority,
+        ..
+    }) = plan.next_frame()
+    else {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+
+    if let Value::Object(ref mut map) = skeleton {
+        map.insert(
+            "pjs_info".to_string(),
+            json!({
+                "skeleton": true,
+                "priority": priority.value(),
+                "approach": "pjs_optimized"
+            }),
+        );
+    }
+
+    Ok(Json(skeleton))
 }
 
 /// Performance comparison endpoint
@@ -131,8 +141,7 @@ async fn performance_comparison(Query(params): Query<DemoRequest>) -> Json<Compa
     let latency = params.latency.unwrap_or(100);
 
     let data = generate_demo_data(size);
-    // TODO: Handle unwrap() - add proper error handling for JSON serialization
-    let data_size = serde_json::to_string(&data).unwrap().len();
+    let data_size = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(0);
 
     // Simulate traditional approach
     let traditional_start = std::time::Instant::now();
@@ -367,7 +376,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📱 Demo: http://127.0.0.1:{}/ ", args.port);
     println!();
     println!("💡 This is a minimal working demo showcasing PJS benefits");
-    println!("   TODO: Complex features will be added after fixing technical debt");
     println!();
 
     info!("Starting simple demo server on {}", addr);

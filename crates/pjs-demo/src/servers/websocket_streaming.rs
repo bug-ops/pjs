@@ -33,14 +33,13 @@ use tracing::{error, info, warn};
 pub struct AppState {
     active_sessions: Arc<Mutex<HashMap<SessionId, SessionInfo>>>,
     compressor: Arc<SchemaCompressor>,
+    server_started_at: Instant,
 }
 
 /// Information about active streaming session
 #[derive(Debug, Clone)]
 struct SessionInfo {
-    #[allow(dead_code)] // TODO: Use in session management
-    session_id: SessionId,
-    #[allow(dead_code)] // TODO: Use for session analytics
+    /// When this session was created, used to report session age in `/metrics`.
     started_at: Instant,
     /// Whether a WebSocket connection has already claimed this session.
     ///
@@ -115,6 +114,7 @@ impl AppState {
         Self {
             active_sessions: Arc::new(Mutex::new(HashMap::new())),
             compressor: Arc::new(SchemaCompressor::new()),
+            server_started_at: Instant::now(),
         }
     }
 
@@ -124,7 +124,6 @@ impl AppState {
         sessions.insert(
             session_id,
             SessionInfo {
-                session_id,
                 started_at: Instant::now(),
                 bound: false,
                 frame_count: 0,
@@ -277,7 +276,7 @@ async fn handle_websocket(socket: WebSocket, state: AppState, session_id: Sessio
             match msg {
                 Ok(Message::Text(text)) => {
                     info!("Received message: {}", text);
-                    // TODO: Handle client commands (pause, resume, config changes)
+                    // TODO(#406): Handle client commands (pause, resume, config changes)
                 }
                 Ok(Message::Binary(_)) => {
                     warn!("Received unexpected binary message");
@@ -482,12 +481,22 @@ async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
     let session_count = sessions.len();
     let total_frames: usize = sessions.values().map(|s| s.frame_count).sum();
     let total_bytes: u64 = sessions.values().map(|s| s.total_bytes).sum();
+    let avg_session_age_seconds = if session_count > 0 {
+        sessions
+            .values()
+            .map(|s| s.started_at.elapsed().as_secs_f64())
+            .sum::<f64>()
+            / session_count as f64
+    } else {
+        0.0
+    };
 
     Json(serde_json::json!({
         "active_sessions": session_count,
         "total_frames_sent": total_frames,
         "total_bytes_sent": total_bytes,
-        "server_uptime_seconds": 0, // TODO: Track actual uptime
+        "average_session_age_seconds": avg_session_age_seconds,
+        "server_uptime_seconds": state.server_started_at.elapsed().as_secs(),
         "timestamp": chrono::Utc::now()
     }))
 }

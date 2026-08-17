@@ -209,6 +209,7 @@
             
             <div class="control-group">
                 <label>&nbsp;</label>
+                <!-- TODO(#409): no server serving this page implements /compare; clicking 404s -->
                 <button onclick="runComparison()">Run Comparison</button>
             </div>
         </div>
@@ -369,11 +370,6 @@
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
-        
-        // Run initial comparison
-        window.onload = () => {
-            setTimeout(runComparison, 500);
-        };
     </script>
 </body>
 </html>

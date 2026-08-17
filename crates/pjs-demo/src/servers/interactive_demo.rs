@@ -43,7 +43,6 @@ struct DemoRequest {
     dataset_type: Option<String>,
     dataset_size: Option<String>,
     network_type: Option<String>,
-    #[allow(dead_code)] // TODO: Implement streaming toggle
     enable_streaming: Option<bool>,
 }
 
@@ -142,19 +141,24 @@ async fn pjs_streaming_endpoint(
         .parse::<NetworkType>()
         .unwrap_or(NetworkType::Wifi);
 
-    // Check if client wants streaming
-    let wants_streaming = headers
-        .get("Accept")
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(|accept| {
-            accept.contains("text/event-stream") || accept.contains("application/x-pjs-stream")
-        });
+    // `enable_streaming`, when explicitly set, overrides Accept-header sniffing in
+    // either direction; when absent, fall back to the header as before.
+    let wants_streaming = params.enable_streaming.unwrap_or_else(|| {
+        headers
+            .get("Accept")
+            .and_then(|h| h.to_str().ok())
+            .is_some_and(|accept| {
+                accept.contains("text/event-stream") || accept.contains("application/x-pjs-stream")
+            })
+    });
 
     if wants_streaming {
         // Minimal network latency for skeleton
         simulate_network_latency(NetworkType::Fiber).await;
 
-        // Generate skeleton immediately
+        // NOTE: this returns only the skeleton frame — no SSE/chunked follow-up
+        // frames are sent yet (SSE endpoint tracked as #163). `X-PJS-Skeleton`
+        // signals this so clients don't mistake it for the full payload.
         let skeleton = generate_skeleton(dataset_type);
 
         let response = axum::response::Response::builder()
@@ -335,7 +339,7 @@ async fn api_info() -> Json<Value> {
             "dataset_type": ["ecommerce", "social", "analytics", "realtime"],
             "dataset_size": ["small", "medium", "large", "huge"],
             "network_type": ["fiber", "cable", "wifi", "4g", "3g", "satellite"],
-            "enable_streaming": "boolean - enable progressive streaming"
+            "enable_streaming": "boolean - request the skeleton-only PJS response on /pjs-streaming (full SSE/chunked delivery not yet implemented, see #163)"
         },
         "features": [
             "Multiple dataset types with realistic data",
