@@ -39,6 +39,7 @@ pub struct PjsWebSocketClient {
     sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
     message_tx: ByteBoundedSender<String>,
     message_rx: Arc<RwLock<Option<mpsc::Receiver<Envelope<String>>>>>,
+    write_timeout: Duration,
 }
 
 /// Client-side stream session
@@ -71,7 +72,43 @@ impl PjsWebSocketClient {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             message_tx,
             message_rx: Arc::new(RwLock::new(Some(message_rx))),
+            write_timeout: super::WRITE_TIMEOUT,
         })
+    }
+
+    /// Overrides the deadline for a single outbound WebSocket sink write,
+    /// used by the `send_task` spawned in [`Self::connect`].
+    ///
+    /// Defaults to `infrastructure::websocket::WRITE_TIMEOUT` (10s) — see
+    /// its doc for the rationale and the tradeoff it implies for large
+    /// frames sent to slow clients. Pair a shorter value with a
+    /// resource-constrained deployment where freeing a wedged send task
+    /// quickly matters more than absorbing network jitter (mirroring
+    /// `RateLimitConfig::low_resource`'s tightened `write_timeout` on the
+    /// server side); pair a longer value with a deployment that expects
+    /// large payloads over slow or high-latency uplinks and would
+    /// otherwise see legitimate writes misclassified as stalled.
+    ///
+    /// `write_timeout` is not validated: [`Duration::ZERO`] leaves at most
+    /// one poll of the underlying write before it is treated as a timeout,
+    /// and an arbitrarily large value (including [`Duration::MAX`]) is
+    /// accepted as-is and does not panic, since `tokio::time::timeout`
+    /// clamps internally.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::infrastructure::websocket::PjsWebSocketClient;
+    /// use std::time::Duration;
+    ///
+    /// let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
+    ///     .unwrap()
+    ///     .with_write_timeout(Duration::from_secs(3));
+    /// ```
+    #[must_use]
+    pub fn with_write_timeout(mut self, write_timeout: Duration) -> Self {
+        self.write_timeout = write_timeout;
+        self
     }
 
     /// Connect to WebSocket server and start message handling
@@ -101,13 +138,14 @@ impl PjsWebSocketClient {
         // (rather than `into_inner`) keeps the byte budget charged until
         // the write actually completes, not just until the item leaves
         // the channel.
+        let write_timeout = self.write_timeout;
         let send_task = tokio::spawn(async move {
             while let Some(envelope) = message_rx.recv().await {
                 let (json_str, _budget_permit) = envelope.split();
                 if let Err(e) = super::send_with_write_timeout(
                     &mut write,
                     Message::Text(json_str.into()),
-                    super::WRITE_TIMEOUT,
+                    write_timeout,
                 )
                 .await
                 {
@@ -438,6 +476,15 @@ mod tests {
     async fn test_client_creation() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
         assert_eq!(client.url.as_str(), "ws://localhost:3001/ws");
+        assert_eq!(client.write_timeout, super::super::WRITE_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn test_with_write_timeout_overrides_default() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
+            .unwrap()
+            .with_write_timeout(Duration::from_secs(3));
+        assert_eq!(client.write_timeout, Duration::from_secs(3));
     }
 
     #[tokio::test]

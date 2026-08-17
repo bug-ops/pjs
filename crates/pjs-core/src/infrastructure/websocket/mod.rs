@@ -56,6 +56,12 @@ pub use server::*;
 /// bandwidth-constrained clients should raise the value passed to
 /// [`send_with_write_timeout`] accordingly (the server threads its value
 /// through `RateLimitConfig::write_timeout`).
+///
+/// Shares its 10s default with `RateLimitConfig::write_timeout`, but the
+/// two are independent constants gated behind different features
+/// (`http-server` vs. none) and can't easily share a single definition —
+/// an intentional change to one's default should be mirrored in the other
+/// unless a divergence is deliberate.
 pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Writes `message` to `sink`, aborting the write if it does not complete
@@ -66,9 +72,10 @@ pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// timeout is treated the same as a genuine send error — both mean the
 /// caller should stop and close the connection. Taking `timeout` as a
 /// parameter (rather than hardcoding [`WRITE_TIMEOUT`]) lets callers
-/// configure it (see `RateLimitConfig::write_timeout`) and lets tests
-/// exercise a real stall deterministically with a short deadline instead
-/// of waiting out the production value.
+/// configure it (see `RateLimitConfig::write_timeout` on the server side,
+/// and `PjsWebSocketClient::with_write_timeout` on the client side) and
+/// lets tests exercise a real stall deterministically with a short
+/// deadline instead of waiting out the production value.
 pub(crate) async fn send_with_write_timeout<S, M>(
     sink: &mut S,
     message: M,

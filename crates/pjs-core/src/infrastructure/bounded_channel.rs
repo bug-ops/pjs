@@ -9,10 +9,16 @@
 //! [`byte_bounded_channel`] layers an additional byte budget on top of a
 //! normal bounded channel using a [`Semaphore`]: the sender acquires
 //! `payload_len` permits before pushing, and the permit travels with the
-//! item in an [`Envelope`] so it is released back to the budget as soon as
-//! the item is received (or otherwise dropped) — bounding worst-case
-//! queued memory to `max_queued_bytes` regardless of individual message
-//! size or how many items that adds up to.
+//! item in an [`Envelope`]. The permit is released back to the budget when
+//! the [`Envelope`] (or, if detached via [`Envelope::split`], the returned
+//! [`BudgetPermit`]) is dropped — not simply when the item leaves the
+//! channel's internal queue. That drop normally follows shortly after
+//! receipt, but a receiver can hold the bytes charged for longer, either
+//! by keeping the `Envelope` alive past receipt or by using `split` to
+//! detach the payload while keeping the permit held separately (e.g. for
+//! the duration of a socket write) — bounding worst-case queued memory to
+//! `max_queued_bytes` regardless of individual message size or how many
+//! items that adds up to.
 
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -142,6 +148,17 @@ impl<T> Clone for ByteBoundedSender<T> {
 /// Converts `payload_len` into a permit count, clamping to `u32::MAX` and
 /// flooring at 1 so a zero-length payload still consumes (and later
 /// releases) a slot rather than bypassing the budget entirely.
+///
+/// The `u32::MAX` clamp only matters when `max_queued_bytes` itself
+/// exceeds `u32::MAX`: `ByteBoundedSender::send`/`try_send` already reject
+/// any `payload_len` greater than `max_queued_bytes` upfront, so a
+/// four-gigabyte-or-larger single payload is unreachable unless the
+/// channel was configured with a multi-gigabyte budget in the first
+/// place. In that configuration, a payload above 4 GiB would be silently
+/// under-charged relative to its true size rather than rejected — this
+/// channel is sized for message-scale payloads (see
+/// [`byte_bounded_channel`]'s doc), not multi-gigabyte budgets, so the
+/// clamp is accepted as a known limitation rather than handled explicitly.
 fn permits_for(payload_len: usize) -> u32 {
     u32::try_from(payload_len.max(1)).unwrap_or(u32::MAX)
 }
@@ -229,6 +246,13 @@ impl<T> ByteBoundedSender<T> {
 /// `payload_len` across all currently-queued items, so worst-case queued
 /// memory stays a predictable constant regardless of individual message
 /// size.
+///
+/// # Panics
+///
+/// Panics if `max_queued_bytes` exceeds [`Semaphore::MAX_PERMITS`]
+/// (`usize::MAX >> 3`) — [`Semaphore::new`]'s own limit. In practice this
+/// requires a caller-chosen `max_queued_bytes` in the exabyte range, far
+/// beyond any realistic byte budget for this channel.
 ///
 /// # Examples
 ///
