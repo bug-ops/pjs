@@ -68,7 +68,11 @@ impl AlignedAllocator {
     ///
     /// `ptr` must have been returned by [`AlignedAllocator::alloc_aligned`]
     /// with `old_layout`. After this call, `ptr` is no longer valid —
-    /// use the returned pointer instead.
+    /// use the returned pointer instead. `new_size` must be greater than
+    /// zero, and, rounded up to the nearest multiple of `old_layout`'s
+    /// alignment, must not overflow `isize::MAX` — these are preconditions
+    /// of [`std::alloc::realloc`] that this function does not itself
+    /// validate; callers must check them.
     pub unsafe fn realloc_aligned(
         &self,
         ptr: NonNull<u8>,
