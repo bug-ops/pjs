@@ -312,6 +312,55 @@ jobs:
           RUSTDOCFLAGS: "--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links"
         run: cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain
 
+  # crates/pjs-wasm/tests/{priority_parity,streaming_comprehensive}.rs use
+  # plain #[test], not #[wasm_bindgen_test] (intentional, see their own doc
+  # comments), so they run as native host-target tests, not through
+  # wasm-pack/browser. They are excluded from the `build` job's nextest
+  # archive along with the rest of pjs-wasm (see #344) and are not
+  # `#[wasm_bindgen_test]`, so `wasm-build`'s wasm-pack tiers never discover
+  # them either. This job is their only native runner; unlike Tier 3/4 below,
+  # it does not depend on wasm-build. See #327.
+  wasm-native-tests:
+    name: WASM Crate Native Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [changes, quality]
+    if: |
+      needs.changes.outputs.wasm == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: taiki-e/install-action@v2.85.10
+        with:
+          tool: nextest
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Share the cache key with the system-allocator build on ubuntu so
+          # the compiler cache is warm when this job runs.
+          shared-key: "build-ubuntu-latest-system"
+          save-if: false
+          cache-on-failure: true
+          cache-directories: |
+            ~/.cargo/registry
+            ~/.cargo/git
+
+      - name: Run pjs-wasm native tests
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
+        run: cargo nextest run -p pjs-wasm --tests --no-fail-fast
+
+      - name: Print sccache stats
+        run: sccache --show-stats
+
   # Coverage runs on ubuntu only; does not wait for the cross-platform matrix.
   # Skipped when only JS files changed.
   coverage:
@@ -662,6 +711,7 @@ jobs:
       - test
       - doctest
       - docs
+      - wasm-native-tests
       - coverage
       - wasm-build
       - wasm-bundle-size
@@ -687,6 +737,7 @@ jobs:
           check test                      "${{ needs.test.result }}"
           check doctest                   "${{ needs.doctest.result }}"
           check docs                      "${{ needs.docs.result }}"
+          check wasm-native-tests         "${{ needs.wasm-native-tests.result }}"
           check coverage                  "${{ needs.coverage.result }}"
           check wasm-build                "${{ needs.wasm-build.result }}"
           check wasm-bundle-size          "${{ needs.wasm-bundle-size.result }}"
