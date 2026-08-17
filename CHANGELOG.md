@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING** `Priority::unwrap_or` (public on `pjson-rs`/`pjson-rs-domain`). It silently discarded its `default` argument and always returned the wrapped value, making it dead weight that misled callers into believing a fallback was applied; `Priority::value()` already returns the same result unconditionally. Pre-1.0 breaking change; no deprecation cycle (#332)
 - **BREAKING** `DomainEvent::event_id()` (public on `pjson-rs`/`pjson-rs-domain`). It derived identity from a content hash, which is exactly the bug behind #328's silent event-log collisions; there is no drop-in replacement because identity is no longer a property of `DomainEvent` itself — see the `Fixed` entry above for where identity is now assigned. Pre-1.0 breaking change; no deprecation cycle (#328)
 
 ### Changed
