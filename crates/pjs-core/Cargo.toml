@@ -59,7 +59,6 @@ tokio-tungstenite = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
 tracing = { workspace = true }
-typed-arena = { workspace = true }
 url = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 zstd = { workspace = true, optional = true }

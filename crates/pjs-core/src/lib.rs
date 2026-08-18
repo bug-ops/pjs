@@ -22,7 +22,6 @@ pub mod error;
 pub mod frame;
 pub mod global_alloc;
 pub mod infrastructure;
-pub mod memory;
 pub mod parser;
 pub mod security;
 pub mod semantic;
@@ -95,7 +94,6 @@ pub use error::{Error, Result};
 pub use frame::{Frame, FrameFlags, FrameHeader};
 #[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
 pub use infrastructure::websocket::SecureWebSocketHandler;
-pub use memory::{CombinedArenaStats, JsonArena};
 pub use parser::{
     LazyParser, ParseConfig, ParseStats, Parser, SimpleParser, SonicParser, ZeroCopyParser,
 };
