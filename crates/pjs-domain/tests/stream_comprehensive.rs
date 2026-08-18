@@ -222,6 +222,23 @@ mod frame_creation_tests {
         assert!(result.is_err());
     }
 
+    /// Regression for #506: `finalize_patch_frame` is `pub` and must not let
+    /// a caller mint a patch frame (advancing `next_sequence`/`stats`) on a
+    /// stream that never entered `Streaming`.
+    #[test]
+    fn test_finalize_patch_frame_without_streaming() {
+        use pjson_rs_domain::entities::frame::FramePatch;
+        use pjson_rs_domain::value_objects::JsonPath;
+
+        let session_id = SessionId::new();
+        let source_data = JsonData::Null;
+        let mut stream = Stream::new(session_id, source_data, StreamConfig::default());
+
+        let patch = FramePatch::set(JsonPath::root(), JsonData::Bool(true));
+        let result = stream.finalize_patch_frame(Priority::HIGH, vec![patch]);
+        assert!(result.is_err());
+    }
+
     #[test]
     fn test_create_completion_frame() {
         let session_id = SessionId::new();

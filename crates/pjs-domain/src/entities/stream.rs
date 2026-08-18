@@ -377,6 +377,12 @@ impl Stream {
     /// [`Self::extract_prioritized_patches`] call and this one, this fails
     /// cleanly instead of committing frames for a stream that can no longer
     /// accept them.
+    ///
+    /// Not strictly all-or-nothing: chunks are finalized one at a time via
+    /// [`Self::finalize_patch_frame`], so a construction failure partway
+    /// through would leave earlier chunks already committed. Currently
+    /// unobservable — [`Frame::patch`] only errors on an empty patch vector,
+    /// and chunking never produces an empty chunk here.
     pub fn commit_patch_frames(
         &mut self,
         patches: Vec<(FramePatch, Priority)>,
@@ -388,13 +394,59 @@ impl Stream {
             ));
         }
 
-        let frames = self.batch_patches_into_frames(patches, max_frames)?;
+        Self::chunk_patches_for_commit(patches, max_frames)
+            .into_iter()
+            .map(|(priority, frame_patches)| self.finalize_patch_frame(priority, frame_patches))
+            .collect()
+    }
 
-        for frame in &frames {
-            self.record_frame_created(frame);
+    /// Build and commit one patch frame from an already-chunked group of
+    /// patches (see [`Self::chunk_patches_for_commit`]).
+    ///
+    /// This is the only place patch-frame `next_sequence`/`stats` bookkeeping
+    /// happens: assigns the next sequence number, constructs the [`Frame`],
+    /// and records it. Callers that decide
+    /// *which* chunked candidates survive before committing (e.g. a
+    /// cross-stream priority truncation across multiple streams) should call
+    /// this only for the surviving subset, so discarded candidates never
+    /// consume a sequence number or inflate stats.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs_domain::entities::Stream;
+    /// use pjson_rs_domain::entities::frame::FramePatch;
+    /// use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority, SessionId};
+    ///
+    /// let mut stream = Stream::new(
+    ///     SessionId::new(),
+    ///     JsonData::Object(Default::default()),
+    ///     Default::default(),
+    /// );
+    /// stream.start_streaming().unwrap();
+    ///
+    /// let patch = FramePatch::set(JsonPath::root(), JsonData::Bool(true));
+    /// let frame = stream
+    ///     .finalize_patch_frame(Priority::HIGH, vec![patch])
+    ///     .unwrap();
+    ///
+    /// assert_eq!(frame.sequence(), 1);
+    /// assert_eq!(stream.stats().total_frames, 1);
+    /// ```
+    pub fn finalize_patch_frame(
+        &mut self,
+        priority: Priority,
+        frame_patches: Vec<FramePatch>,
+    ) -> DomainResult<Frame> {
+        if !matches!(self.state, StreamState::Streaming) {
+            return Err(DomainError::InvalidStreamState(
+                "Stream must be in streaming state to create frames".to_string(),
+            ));
         }
 
-        Ok(frames)
+        let frame = Frame::patch(self.id, self.next_sequence, priority, frame_patches)?;
+        self.record_frame_created(&frame);
+        Ok(frame)
     }
 
     /// Create completion frame
@@ -539,8 +591,8 @@ impl Stream {
     /// value (primitives and arrays — objects are traversed without emitting
     /// a patch, since their structure is already conveyed by the skeleton
     /// frame). Each patch is paired with a computed priority so that
-    /// `batch_patches_into_frames` can group chunks by maximum priority.
-    /// Patches whose priority falls below `threshold` are dropped.
+    /// [`Self::chunk_patches_for_commit`] can group chunks by maximum
+    /// priority. Patches whose priority falls below `threshold` are dropped.
     fn extract_patches(
         &self,
         data: &JsonData,
@@ -599,39 +651,81 @@ impl Stream {
         crate::services::compute_priority(&cfg, path, value)
     }
 
-    /// Private helper: Batch patches into frames.
+    /// Group prioritized patches into per-frame chunks without constructing
+    /// any [`Frame`] or mutating stream state.
     ///
-    /// Each frame's priority is the maximum priority of the patches in
-    /// its chunk, so per-frame ordering downstream reflects the most
-    /// important content the frame carries.
-    fn batch_patches_into_frames(
-        &mut self,
-        patches: Vec<(crate::entities::frame::FramePatch, Priority)>,
+    /// Each returned chunk's priority is the maximum priority of the patches
+    /// it contains, so per-frame ordering downstream reflects the most
+    /// important content the frame will carry. Pure and side-effect-free so a
+    /// caller (e.g. a cross-stream priority batch) can chunk candidates from
+    /// several streams, decide which survive truncation, and only then
+    /// commit the survivors via [`Self::finalize_patch_frame`] — see that
+    /// method's docs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs_domain::entities::Stream;
+    /// use pjson_rs_domain::entities::frame::FramePatch;
+    /// use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority, SessionId};
+    ///
+    /// let mut stream = Stream::new(
+    ///     SessionId::new(),
+    ///     JsonData::Object(Default::default()),
+    ///     Default::default(),
+    /// );
+    /// stream.start_streaming().unwrap();
+    ///
+    /// let patches = vec![
+    ///     (
+    ///         FramePatch::set(JsonPath::root(), JsonData::Bool(true)),
+    ///         Priority::LOW,
+    ///     ),
+    ///     (
+    ///         FramePatch::set(JsonPath::root(), JsonData::Bool(false)),
+    ///         Priority::HIGH,
+    ///     ),
+    /// ];
+    ///
+    /// // Chunk without mutating the stream — a caller can inspect priorities
+    /// // and pick survivors before any sequence number is spent.
+    /// let mut chunks = Stream::chunk_patches_for_commit(patches, 2);
+    /// assert_eq!(chunks.len(), 2);
+    /// chunks.sort_by_key(|(priority, _)| std::cmp::Reverse(*priority));
+    ///
+    /// // Only commit the highest-priority chunk.
+    /// let (priority, frame_patches) = chunks.remove(0);
+    /// let frame = stream
+    ///     .finalize_patch_frame(priority, frame_patches)
+    ///     .unwrap();
+    /// assert_eq!(frame.priority(), Priority::HIGH);
+    /// assert_eq!(stream.stats().total_frames, 1);
+    /// ```
+    pub fn chunk_patches_for_commit(
+        patches: Vec<(FramePatch, Priority)>,
         max_frames: usize,
-    ) -> DomainResult<Vec<Frame>> {
+    ) -> Vec<(Priority, Vec<FramePatch>)> {
         if patches.is_empty() || max_frames == 0 {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
-        let mut frames = Vec::new();
         let chunk_size = patches.len().div_ceil(max_frames).max(1);
 
-        for chunk in patches.chunks(chunk_size) {
-            let priority = chunk
-                .iter()
-                .map(|(_, p)| *p)
-                .max()
-                .unwrap_or(Priority::MEDIUM);
+        patches
+            .chunks(chunk_size)
+            .map(|chunk| {
+                let priority = chunk
+                    .iter()
+                    .map(|(_, p)| *p)
+                    .max()
+                    .unwrap_or(Priority::MEDIUM);
 
-            let frame_patches: Vec<crate::entities::frame::FramePatch> =
-                chunk.iter().map(|(patch, _)| patch.clone()).collect();
+                let frame_patches: Vec<FramePatch> =
+                    chunk.iter().map(|(patch, _)| patch.clone()).collect();
 
-            let frame = Frame::patch(self.id, self.next_sequence, priority, frame_patches)?;
-
-            frames.push(frame);
-        }
-
-        Ok(frames)
+                (priority, frame_patches)
+            })
+            .collect()
     }
 }
 

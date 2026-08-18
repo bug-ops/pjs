@@ -87,6 +87,21 @@ fn json_int(key: &str, value: i64) -> JsonData {
     json_data_object(&[(key, JsonData::Integer(value))])
 }
 
+/// Session config whose default stream config carries the given per-field
+/// `priority_rules` overrides, so patch priority is fully deterministic
+/// regardless of `JsonData::Object`'s `HashMap`-backed (unordered) field
+/// iteration.
+fn config_with_priority_rules(rules: HashMap<String, Priority>) -> SessionConfig {
+    let default_stream_config = EntityStreamConfig {
+        priority_rules: rules,
+        ..EntityStreamConfig::default()
+    };
+    SessionConfig {
+        default_stream_config,
+        ..default_config()
+    }
+}
+
 // ============================================================================
 // Session Creation and Initialization
 // ============================================================================
@@ -945,13 +960,28 @@ fn test_create_priority_frames_updates_total_bytes_excludes_discarded_frames() {
     let expected_bytes: u64 = frames.iter().map(|f| f.estimated_size() as u64).sum();
     assert_eq!(session.stats().total_bytes, expected_bytes);
 
+    // Regression for #506: child stream stats must only reflect frames that
+    // actually survived truncation, not every frame the stream built —
+    // otherwise per-stream stats and `next_sequence` desync from what the
+    // caller actually received.
     let total_child_bytes: u64 = stream_ids
         .iter()
         .map(|id| session.stream(*id).unwrap().stats().total_bytes)
         .sum();
-    assert!(
-        session.stats().total_bytes < total_child_bytes,
-        "session total_bytes must exclude frames discarded by batch_size truncation"
+    assert_eq!(
+        session.stats().total_bytes,
+        total_child_bytes,
+        "child stream stats must exclude frames discarded by batch_size truncation, matching session-level total_bytes"
+    );
+
+    let total_child_frames: u64 = stream_ids
+        .iter()
+        .map(|id| session.stream(*id).unwrap().stats().total_frames)
+        .sum();
+    assert_eq!(
+        total_child_frames,
+        frames.len() as u64,
+        "child stream total_frames must sum to exactly the frames actually returned, not the 6 built"
     );
 }
 
@@ -981,6 +1011,227 @@ fn test_create_priority_frames_skips_preparing_stream_without_erroring() {
     );
     assert!(frames.iter().all(|f| f.stream_id() == streaming_id));
     assert_eq!(session.stats().total_frames, frames.len() as u64);
+}
+
+/// Regression test for #506: a single `commit_patch_frames` call producing
+/// multiple frames for the *same* stream (patch count exceeding `max_frames`,
+/// forcing more than one chunk) must assign each frame a distinct, strictly
+/// increasing sequence number. Before the fix, every frame built by one call
+/// read `next_sequence` before any of them incremented it, so they all
+/// collided on the same value.
+#[test]
+fn test_create_stream_patch_frames_multiple_frames_have_unique_increasing_sequences() {
+    let mut session = StreamSession::new(default_config());
+    session.activate().unwrap();
+
+    let payload = json_data_object(&[
+        ("f1", JsonData::String("value-1".to_string())),
+        ("f2", JsonData::String("value-2".to_string())),
+        ("f3", JsonData::String("value-3".to_string())),
+        ("f4", JsonData::String("value-4".to_string())),
+        ("f5", JsonData::String("value-5".to_string())),
+        ("f6", JsonData::String("value-6".to_string())),
+    ]);
+    let stream_id = session.create_stream(payload).unwrap();
+    session.start_stream(stream_id).unwrap();
+
+    // 6 patches, max_frames = 2 => chunk_size = ceil(6/2) = 3 => 2 frames.
+    let frames = session
+        .create_stream_patch_frames(stream_id, Priority::BACKGROUND, 2)
+        .unwrap();
+
+    assert_eq!(frames.len(), 2, "setup must produce 2 frames from one call");
+    let mut sequences: Vec<u64> = frames.iter().map(|f| f.sequence()).collect();
+    let unique_count = {
+        let mut s = sequences.clone();
+        s.sort_unstable();
+        s.dedup();
+        s.len()
+    };
+    assert_eq!(
+        unique_count,
+        sequences.len(),
+        "frames from one call must not share sequence numbers: {sequences:?}"
+    );
+    sequences.sort_unstable();
+    assert_eq!(
+        sequences,
+        vec![1, 2],
+        "sequence numbers must be consecutive starting at 1"
+    );
+}
+
+/// Regression test for #506: when a truncating `create_priority_frames` pass
+/// keeps only some of a stream's built candidates (here, 1 of 3 for the
+/// lower-priority stream, all 3 for the higher-priority one), each stream's
+/// kept frames must carry strictly consecutive sequence numbers with no
+/// gaps, and a later call on the same stream must continue from the count of
+/// frames actually kept — not the count built and discarded.
+#[test]
+fn test_create_priority_frames_next_sequence_continues_from_kept_count() {
+    let mut rules = HashMap::new();
+    rules.insert("hi_1".to_string(), Priority::new(90).unwrap());
+    rules.insert("hi_2".to_string(), Priority::new(90).unwrap());
+    rules.insert("hi_3".to_string(), Priority::new(90).unwrap());
+    rules.insert("lo_1".to_string(), Priority::new(15).unwrap());
+    rules.insert("lo_2".to_string(), Priority::new(15).unwrap());
+    rules.insert("lo_3".to_string(), Priority::new(15).unwrap());
+    let mut session = StreamSession::new(config_with_priority_rules(rules));
+    session.activate().unwrap();
+
+    let hi_payload = json_data_object(&[
+        ("hi_1", JsonData::String("a".to_string())),
+        ("hi_2", JsonData::String("b".to_string())),
+        ("hi_3", JsonData::String("c".to_string())),
+    ]);
+    let hi_id = session.create_stream(hi_payload).unwrap();
+    session.start_stream(hi_id).unwrap();
+
+    let lo_payload = json_data_object(&[
+        ("lo_1", JsonData::String("a".to_string())),
+        ("lo_2", JsonData::String("b".to_string())),
+        ("lo_3", JsonData::String("c".to_string())),
+    ]);
+    let lo_id = session.create_stream(lo_payload).unwrap();
+    session.start_stream(lo_id).unwrap();
+
+    // Each stream has 3 patches, hardcoded per-stream max_frames = 5 inside
+    // `commit_priority_frames` => chunk_size = 1 => 3 candidate frames per
+    // stream, all sharing that stream's override priority. batch_size = 4
+    // keeps all 3 hi-priority candidates plus exactly 1 lo-priority one.
+    let frames = session
+        .create_priority_frames(Priority::BACKGROUND, 4)
+        .unwrap();
+    assert_eq!(frames.len(), 4);
+
+    let hi_frames: Vec<u64> = {
+        let mut v: Vec<u64> = frames
+            .iter()
+            .filter(|f| f.stream_id() == hi_id)
+            .map(|f| f.sequence())
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    let lo_frames: Vec<u64> = {
+        let mut v: Vec<u64> = frames
+            .iter()
+            .filter(|f| f.stream_id() == lo_id)
+            .map(|f| f.sequence())
+            .collect();
+        v.sort_unstable();
+        v
+    };
+
+    assert_eq!(
+        hi_frames,
+        vec![1, 2, 3],
+        "the fully-kept hi-priority stream must have consecutive sequences 1..=3"
+    );
+    assert_eq!(
+        lo_frames.len(),
+        1,
+        "exactly 1 of the lo-priority stream's 3 candidates must survive truncation"
+    );
+    assert_eq!(
+        lo_frames[0], 1,
+        "the lo-priority stream's single kept frame must be sequence 1 (its first ever frame)"
+    );
+
+    assert_eq!(session.stream(hi_id).unwrap().stats().total_frames, 3);
+    assert_eq!(session.stream(lo_id).unwrap().stats().total_frames, 1);
+
+    // A further call on the lo-priority stream must continue from the count
+    // actually kept (1), not the count built and discarded (3): the bug
+    // would have advanced `next_sequence` to 4 (1 kept + 3 built-but-dropped
+    // candidates from this same stream in the earlier call), so the next
+    // frame would start at 4 instead of 2.
+    let next_frame = session
+        .create_stream_patch_frames(lo_id, Priority::BACKGROUND, 16)
+        .unwrap();
+    let min_next_sequence = next_frame.iter().map(|f| f.sequence()).min().unwrap();
+    assert_eq!(
+        min_next_sequence,
+        2,
+        "next_sequence must continue from the 1 frame actually kept, not the 3 built, got {:?}",
+        next_frame.iter().map(|f| f.sequence()).collect::<Vec<_>>()
+    );
+}
+
+/// Edge case regression for #506: a stream whose *every* candidate is
+/// discarded by truncation must have its stats and `next_sequence` left
+/// byte-for-byte unchanged by the call that discarded them.
+#[test]
+fn test_create_priority_frames_fully_discarded_stream_stats_unchanged() {
+    let mut rules = HashMap::new();
+    rules.insert("hi_1".to_string(), Priority::new(90).unwrap());
+    rules.insert("hi_2".to_string(), Priority::new(90).unwrap());
+    rules.insert("hi_3".to_string(), Priority::new(90).unwrap());
+    rules.insert("lo_1".to_string(), Priority::new(15).unwrap());
+    rules.insert("lo_2".to_string(), Priority::new(15).unwrap());
+    rules.insert("lo_3".to_string(), Priority::new(15).unwrap());
+    rules.insert("warmup".to_string(), Priority::new(15).unwrap());
+    let mut session = StreamSession::new(config_with_priority_rules(rules));
+    session.activate().unwrap();
+
+    let hi_payload = json_data_object(&[
+        ("hi_1", JsonData::String("a".to_string())),
+        ("hi_2", JsonData::String("b".to_string())),
+        ("hi_3", JsonData::String("c".to_string())),
+    ]);
+    let hi_id = session.create_stream(hi_payload).unwrap();
+    session.start_stream(hi_id).unwrap();
+
+    let lo_payload = json_data_object(&[
+        ("lo_1", JsonData::String("a".to_string())),
+        ("lo_2", JsonData::String("b".to_string())),
+        ("lo_3", JsonData::String("c".to_string())),
+        ("warmup", JsonData::String("pre-existing".to_string())),
+    ]);
+    let lo_id = session.create_stream(lo_payload).unwrap();
+    session.start_stream(lo_id).unwrap();
+
+    // Commit a single warm-up frame on the lo-priority stream directly, so
+    // "unchanged by the batch call" is a non-trivial claim (not just "still
+    // zero").
+    let warmup_frames = session
+        .create_stream_patch_frames(lo_id, Priority::new(15).unwrap(), 1)
+        .unwrap();
+    assert_eq!(warmup_frames.len(), 1);
+    let stats_before = session.stream(lo_id).unwrap().stats().clone();
+    assert_eq!(stats_before.total_frames, 1);
+
+    // Extraction re-reads `source_data` rather than consuming it, so this
+    // call re-extracts all 4 lo-stream patches (lo_1..lo_3 plus warmup, all
+    // priority 15) as candidates, alongside the hi stream's 3 candidates
+    // (priority 90). batch_size = 3 keeps only the hi stream's frames,
+    // discarding all 4 lo candidates.
+    let frames = session
+        .create_priority_frames(Priority::BACKGROUND, 3)
+        .unwrap();
+    assert_eq!(frames.len(), 3);
+    assert!(frames.iter().all(|f| f.stream_id() == hi_id));
+
+    let stats_after = session.stream(lo_id).unwrap().stats().clone();
+    assert_eq!(
+        stats_after.total_frames, stats_before.total_frames,
+        "fully-discarded stream's total_frames must be unchanged"
+    );
+    assert_eq!(
+        stats_after.total_bytes, stats_before.total_bytes,
+        "fully-discarded stream's total_bytes must be unchanged"
+    );
+
+    // next_sequence must still continue from the 1 warm-up frame, not from
+    // 1 + 3 discarded candidates.
+    let post_frame = session
+        .create_stream_patch_frames(lo_id, Priority::new(15).unwrap(), 16)
+        .unwrap();
+    assert!(
+        post_frame.iter().any(|f| f.sequence() == 2),
+        "next committed frame on the fully-discarded stream must reuse sequence 2, got {:?}",
+        post_frame.iter().map(|f| f.sequence()).collect::<Vec<_>>()
+    );
 }
 
 // ============================================================================
