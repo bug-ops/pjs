@@ -3,6 +3,7 @@
 use crate::{
     application::{ApplicationError, ApplicationResult, handlers::QueryHandlerGat, queries::*},
     domain::{
+        SessionState,
         entities::Stream,
         ports::{
             FrameStoreGat, Pagination, SessionQueryCriteria, SortOrder as RepoSortOrder,
@@ -157,13 +158,8 @@ where
             // is unchanged. An explicit `filters.state` opts out of that
             // default and matches only the requested state(s), expired or not.
             let (states, exclude_expired) = match query.filters.state {
-                Some(state) => (Some(vec![state]), false),
-                None => (
-                    Some(vec![
-                        crate::domain::SessionState::Active.as_str().to_string(),
-                    ]),
-                    true,
-                ),
+                Some(state) => (Some(vec![state.as_str().to_string()]), false),
+                None => (Some(vec![SessionState::Active.as_str().to_string()]), true),
             };
 
             let criteria = SessionQueryCriteria {
@@ -1643,7 +1639,7 @@ mod tests {
 
         let query = SearchSessionsQuery {
             filters: SessionFilters {
-                state: Some("active".to_owned()),
+                state: Some(SessionState::Active),
                 ..Default::default()
             },
             sort_by: None,
@@ -1923,21 +1919,25 @@ mod tests {
 
     /// Locks in the exact-match state filter semantics that replaced the old
     /// in-process substring match (see `matches_filters`, removed in #391).
-    /// Under the old behavior a partial word like "complet" would still have
-    /// matched a "Completed" session; the new criteria-based path requires an
-    /// exact (case-insensitive) match, consistent with `GetActiveSessionsQuery`.
+    /// `SessionFilters::state` is now typed as `SessionState` (#414), so a
+    /// partial word like "complet" is rejected at compile time rather than
+    /// silently substring-matching a "Completed" session; only a fellow
+    /// non-matching variant can be exercised as the negative case here.
+    /// The HTTP-boundary rejection of an actual malformed/partial `state`
+    /// string (e.g. `?state=complet`) is covered separately by
+    /// `axum_adapter::tests::search_sessions_route_rejects_unknown_state`.
     #[tokio::test]
-    async fn test_search_sessions_state_filter_is_exact_not_substring() {
+    async fn test_search_sessions_state_filter_matches_only_specified_variant() {
         let repository = Arc::new(MockRepository::new());
         let mut session = make_session(None);
         session.close().unwrap(); // Active -> Completed
         repository.add_session(session);
         let handler = SessionQueryHandler::new(repository);
 
-        // Partial word: would have matched under the old substring semantics.
-        let partial_query = SearchSessionsQuery {
+        // Non-matching variant: must not match the Completed session.
+        let non_matching_query = SearchSessionsQuery {
             filters: SessionFilters {
-                state: Some("complet".to_owned()),
+                state: Some(SessionState::Failed),
                 ..Default::default()
             },
             sort_by: None,
@@ -1945,14 +1945,14 @@ mod tests {
             limit: None,
             offset: None,
         };
-        let result = QueryHandlerGat::handle(&handler, partial_query).await;
+        let result = QueryHandlerGat::handle(&handler, non_matching_query).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().sessions.len(), 0);
 
-        // Full word, case-insensitive: still matches.
+        // Matching variant: matches exactly.
         let exact_query = SearchSessionsQuery {
             filters: SessionFilters {
-                state: Some("COMPLETED".to_owned()),
+                state: Some(SessionState::Completed),
                 ..Default::default()
             },
             sort_by: None,

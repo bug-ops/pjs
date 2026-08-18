@@ -23,7 +23,7 @@ use crate::{
     },
     infrastructure::http::axum_adapter::{
         CreateSessionRequest, CreateSessionResponse, PaginationParams, PjsAppState, PjsError,
-        SearchSessionsParams, SessionHealthResponse, parse_session_id,
+        SearchSessionsParams, SessionHealthResponse, parse_session_id, parse_session_state,
     },
 };
 
@@ -170,9 +170,10 @@ where
         "descending" | "desc" => Some(SortOrder::Descending),
         _ => None,
     });
+    let session_state = params.state.map(parse_session_state).transpose()?;
     let query = SearchSessionsQuery {
         filters: SessionFilters {
-            state: params.state,
+            state: session_state,
             created_after: None,
             created_before: None,
             client_info: None,

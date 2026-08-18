@@ -25,6 +25,7 @@ use crate::{
         query_handlers::{SessionQueryHandler, StreamQueryHandler, SystemQueryHandler},
     },
     domain::{
+        SessionState,
         aggregates::stream_session::SessionHealth,
         entities::Frame,
         ports::{
@@ -705,6 +706,21 @@ pub(crate) fn parse_session_and_stream_id(
     Ok((session_id, stream_id))
 }
 
+/// Parse a raw `state` query-string value into a [`SessionState`], mapping failure to
+/// [`PjsError::InvalidSessionState`].
+///
+/// Kept as a raw `String` on [`SearchSessionsParams`] (rather than typing the field itself
+/// as `SessionState`) so a bad value is rejected here, inside the handler, with the API's
+/// standard JSON error envelope — not by axum's `Query` extractor, which fails before the
+/// handler runs and responds with a plain-text body inconsistent with every other 4xx this
+/// API returns. Accepts only the exact spellings [`SessionState`] serializes as (e.g.
+/// `"Active"`), matching [`SessionState::as_str`] — lowercase or mixed-case input is
+/// rejected, unlike the pre-#414 substring/case-insensitive repository match.
+pub(crate) fn parse_session_state(raw: String) -> Result<SessionState, PjsError> {
+    serde_json::from_value(serde_json::Value::String(raw.clone()))
+        .map_err(|_| PjsError::InvalidSessionState(raw))
+}
+
 /// Pagination parameters
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
@@ -718,6 +734,12 @@ pub struct PaginationParams {
 #[derive(Debug, Deserialize)]
 pub struct SearchSessionsParams {
     /// Match sessions whose state equals this value.
+    ///
+    /// Must be one of [`SessionState`]'s exact serialized spellings, case-sensitive —
+    /// `Initializing`, `Active`, `Closing`, `Completed`, or `Failed` — or the request is
+    /// rejected with `400`. Parsed via an internal helper rather than typed directly, so
+    /// the rejection goes through the API's standard JSON error envelope instead of axum's
+    /// raw `Query`-extractor rejection body.
     pub state: Option<String>,
     /// Field name to sort by; ignored if not in the allowed sort field list.
     pub sort_by: Option<String>,
@@ -767,6 +789,10 @@ pub enum PjsError {
     #[error("Invalid priority: {0}")]
     InvalidPriority(String),
 
+    /// Provided session state filter does not match any `SessionState` variant.
+    #[error("Invalid session state: {0}")]
+    InvalidSessionState(String),
+
     /// Generic HTTP-layer error not covered by other variants.
     ///
     /// # Invariant
@@ -814,6 +840,7 @@ impl IntoResponse for PjsError {
             PjsError::InvalidSessionId(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::InvalidStreamId(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::InvalidPriority(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            PjsError::InvalidSessionState(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::HttpError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
@@ -1326,6 +1353,87 @@ mod tests {
 
         let resp = router.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// #414: an exact, correctly-cased `state` value is accepted end-to-end through the
+    /// real router — the `Query<SearchSessionsParams>` extractor plus `parse_session_state`
+    /// inside `search_sessions` must not reject a value matching `SessionState::as_str()`.
+    #[tokio::test]
+    async fn search_sessions_route_accepts_valid_state() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/pjs/sessions/search?state=Active")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// #414: an unrecognized `state` value must be rejected with a `400` carrying the
+    /// API's standard `{"error": ...}` JSON envelope (via `PjsError::InvalidSessionState`),
+    /// not axum's raw `Query`-extractor rejection body — see impl-critic gap S2. Also
+    /// exercises the case-sensitivity break called out in the CHANGELOG: `"active"`
+    /// (lowercase) previously matched via the repository's case-insensitive comparison
+    /// and now must be rejected, since `SessionState` only deserializes its exact
+    /// spellings (e.g. `"Active"`).
+    #[tokio::test]
+    async fn search_sessions_route_rejects_unknown_state() {
+        use axum::body::to_bytes;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/pjs/sessions/search?state=active")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            content_type.starts_with("application/json"),
+            "rejection must use the API's JSON envelope, got content-type: {content_type}"
+        );
+
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json.get("error").is_some_and(|e| e.is_string()),
+            "body must match the standard {{\"error\": ...}} envelope, got: {json}"
+        );
     }
 
     /// End-to-end HTTP smoke test for the frame-generation route added in issue #230.

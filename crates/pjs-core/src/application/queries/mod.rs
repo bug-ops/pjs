@@ -2,6 +2,7 @@
 
 use crate::application::dto::{PriorityDto, SessionIdDto, StreamIdDto};
 use crate::domain::{
+    SessionState,
     aggregates::{
         StreamSession,
         stream_session::{SessionHealth, SessionStats},
@@ -99,8 +100,11 @@ pub struct SearchSessionsQuery {
 /// Session filtering criteria
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionFilters {
-    /// Match sessions whose state equals this value.
-    pub state: Option<String>,
+    /// Match sessions whose state equals this value exactly (case-sensitive, no
+    /// substring matching — e.g. `SessionState::Active`, not `"active"` or `"activ"`).
+    /// Accepted spellings are exactly [`SessionState`]'s serialized variant names:
+    /// `Initializing`, `Active`, `Closing`, `Completed`, `Failed`.
+    pub state: Option<SessionState>,
     /// Match sessions created at or after this timestamp.
     pub created_after: Option<DateTime<Utc>>,
     /// Match sessions created at or before this timestamp.

@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `pjs-demo`'s `interactive-demo-server` `/pjs-streaming` endpoint's `enable_streaming` query parameter is now wired up and authoritative when explicitly set (overriding `Accept`-header sniffing in either direction), instead of being an inert, dead-code field; both this endpoint and `/api/info` now document that it only requests the skeleton-only response — full SSE/chunked delivery is tracked separately (#163) (#399)
+- **BREAKING** `SearchSessionsQuery.filters.state` (`application::queries::SessionFilters::state`) is now typed as the domain `SessionState` enum instead of an unvalidated `String` — a typo like `state: "activ"` previously matched zero sessions silently instead of being rejected. The HTTP `GET /pjs/sessions/search?state=` query parameter now requires one of `SessionState`'s exact serialized spellings (`Initializing`, `Active`, `Closing`, `Completed`, `Failed`) and rejects anything else with `400` and the API's standard `{"error": ...}` JSON body — **this includes previously-working lowercase or mixed-case values** (e.g. `?state=active`, `?state=COMPLETED`), which matched case-insensitively under the old string-based repository comparison and now fail. `?state=` (present but empty) also now rejects with `400` instead of silently matching zero sessions (#414)
 
 ### Removed
 
