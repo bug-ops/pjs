@@ -50,6 +50,48 @@ impl SecurityValidator {
         Ok(())
     }
 
+    /// Validate JSON nesting depth by scanning raw bytes ahead of parsing.
+    ///
+    /// Tracks in-string state (a `"` toggles it, a `\` escapes the following
+    /// byte) so that `{`/`}`/`[`/`]` bytes inside string literals are never
+    /// mistaken for structural delimiters — matching the JSON grammar's own
+    /// definition of nesting. Intended as a cheap pre-parse guard shared by
+    /// every JSON entry point, so a parser backend without its own recursion
+    /// limit (e.g. sonic-rs) cannot be driven into unbounded recursion by a
+    /// payload whose *reported* depth was deflated via crafted string content.
+    pub fn validate_json_depth_bytes(&self, input: &[u8]) -> Result<()> {
+        let mut depth: usize = 0;
+        let mut max_depth: usize = 0;
+        let mut in_string = false;
+        let mut escaped = false;
+
+        for &byte in input {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match byte {
+                b'"' => in_string = true,
+                b'{' | b'[' => {
+                    depth += 1;
+                    max_depth = max_depth.max(depth);
+                    self.validate_json_depth(max_depth)?;
+                }
+                b'}' | b']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
     /// Validate array length
     pub fn validate_array_length(&self, length: usize) -> Result<()> {
         if length > self.config.json.max_array_length {
@@ -209,6 +251,106 @@ mod tests {
         assert!(validator.validate_input_size(1024).is_ok());
         assert!(validator.validate_json_depth(10).is_ok());
         assert!(validator.validate_session_id("valid-session-123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_json_depth_bytes_ignores_delimiters_in_strings() {
+        let validator = SecurityValidator::new(SecurityConfig {
+            json: crate::config::security::JsonLimits {
+                max_depth: 3,
+                ..SecurityConfig::default().json
+            },
+            ..SecurityConfig::default()
+        });
+
+        // Real structural depth is 1, but the string content is packed with
+        // brace/bracket bytes that a naive counter would misread as nesting.
+        let json = br#"["{[{[{[{[{[", "}}}}}}}}}}"]"#;
+        assert!(validator.validate_json_depth_bytes(json).is_ok());
+    }
+
+    #[test]
+    fn test_validate_json_depth_bytes_respects_escaped_quotes() {
+        let validator = SecurityValidator::default();
+
+        // `\"` must not toggle out of string state; if it did, the `]`
+        // right after would be seen as a real structural close.
+        let json = br#"["a\"]", [1, 2, 3]]"#;
+        assert!(validator.validate_json_depth_bytes(json).is_ok());
+    }
+
+    #[test]
+    fn test_validate_json_depth_bytes_rejects_real_nesting() {
+        let validator = SecurityValidator::new(SecurityConfig {
+            json: crate::config::security::JsonLimits {
+                max_depth: 3,
+                ..SecurityConfig::default().json
+            },
+            ..SecurityConfig::default()
+        });
+
+        let json = b"[[[[1]]]]"; // 4 levels deep, exceeds limit of 3
+        assert!(validator.validate_json_depth_bytes(json).is_err());
+    }
+
+    #[test]
+    fn test_validate_json_depth_bytes_exactly_at_limit_is_ok() {
+        let validator = SecurityValidator::new(SecurityConfig {
+            json: crate::config::security::JsonLimits {
+                max_depth: 3,
+                ..SecurityConfig::default().json
+            },
+            ..SecurityConfig::default()
+        });
+
+        let json = b"[[[1]]]"; // exactly 3 levels deep
+        assert!(validator.validate_json_depth_bytes(json).is_ok());
+
+        let json_over = b"[[[[1]]]]"; // 4 levels: one over the limit
+        assert!(validator.validate_json_depth_bytes(json_over).is_err());
+    }
+
+    #[test]
+    fn test_validate_json_depth_bytes_trailing_lone_backslash_does_not_panic() {
+        let validator = SecurityValidator::default();
+
+        // Malformed/truncated input ending mid-escape must not panic; the
+        // real JSON parser rejects it as a syntax error downstream.
+        let json = br#"["abc\"#;
+        assert!(validator.validate_json_depth_bytes(json).is_ok());
+    }
+
+    #[test]
+    fn test_validate_json_depth_bytes_unterminated_string_does_not_panic() {
+        let validator = SecurityValidator::default();
+
+        // An opening quote with no matching close: everything after it is
+        // treated as string content through EOF, so no depth is counted for
+        // the remainder. The real parser rejects this as a syntax error.
+        let json = br#"["abc"#;
+        assert!(validator.validate_json_depth_bytes(json).is_ok());
+    }
+
+    #[test]
+    fn test_validate_json_depth_bytes_consecutive_backslashes_toggle_correctly() {
+        let validator = SecurityValidator::new(SecurityConfig {
+            json: crate::config::security::JsonLimits {
+                max_depth: 2,
+                ..SecurityConfig::default().json
+            },
+            ..SecurityConfig::default()
+        });
+
+        // `\\` is an escaped backslash, not an escape of the following `"`,
+        // so the string ends right after it and `,[1,2,3]]` is real
+        // structure: 2 levels deep, within the limit.
+        let json = br#"["a\\",[1,2,3]]"#;
+        assert!(validator.validate_json_depth_bytes(json).is_ok());
+
+        // Same shape but one level deeper must now be rejected — proves the
+        // even/odd backslash run is being tracked, not just tolerated.
+        let json_over = br#"[["a\\",[1,2,3]]]"#;
+        assert!(validator.validate_json_depth_bytes(json_over).is_err());
     }
 
     #[test]

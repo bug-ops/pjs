@@ -233,6 +233,49 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// Builds the #456 depth-counter bypass payload: `depth` levels of
+    /// genuine nesting, each preceded by a `"]"` string so a naive
+    /// brace/bracket counter never reports more than depth 1.
+    fn build_depth_bypass_payload(depth: usize) -> String {
+        let mut json = String::new();
+        for _ in 0..depth {
+            json.push_str("[\"]\",");
+        }
+        json.push('1');
+        for _ in 0..depth {
+            json.push(']');
+        }
+        json
+    }
+
+    #[test]
+    fn test_depth_bypass_rejected_on_primary_entry_point() {
+        // Regression for #456: a string-literal depth-counter bypass must be
+        // rejected by `Parser::parse` itself, regardless of whether the
+        // sonic-rs backend is active or the run falls back to `SimpleParser`
+        // (`Parser::new()`'s backend choice is a build-time cfg, so this
+        // exercises both branches explicitly rather than relying on it).
+        let payload = build_depth_bypass_payload(70);
+
+        let sonic_backed = Parser {
+            sonic: SonicParser::new(),
+            simple: SimpleParser::new(),
+            use_sonic: true,
+        };
+        let result = sonic_backed.parse(payload.as_bytes());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("depth"));
+
+        let simple_backed = Parser {
+            sonic: SonicParser::new(),
+            simple: SimpleParser::new(),
+            use_sonic: false,
+        };
+        let result = simple_backed.parse(payload.as_bytes());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("depth"));
+    }
+
     #[test]
     fn test_custom_config() {
         let config = ParseConfig {
