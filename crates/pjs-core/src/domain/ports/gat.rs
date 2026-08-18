@@ -12,9 +12,9 @@
 use crate::domain::{
     DomainResult,
     aggregates::StreamSession,
-    entities::{Frame, Stream},
+    entities::{Frame, Stream, stream::StreamConfig},
     events::DomainEvent,
-    value_objects::{JsonPath, Priority, SessionId, StreamId},
+    value_objects::{JsonData, JsonPath, Priority, SessionId, StreamId},
 };
 use crate::gat_port;
 use chrono::{DateTime, Utc};
@@ -82,8 +82,109 @@ gat_port! {
         /// Find session by ID
         async fn find_session(&self, session_id: SessionId) -> Option<StreamSession>;
 
-        /// Save session (insert or update)
+        /// Save session (insert or update).
+        ///
+        /// This is a blind overwrite of the entire stored session, not a
+        /// compare-and-swap — the caller is expected to hold the only
+        /// reference to `session_id` for the duration of its own
+        /// find-mutate-save cycle. Do not call this concurrently with any of
+        /// the `*_atomic` methods (`create_stream_atomic`,
+        /// `start_stream_atomic`, `complete_stream_atomic`,
+        /// `create_stream_patch_frames_atomic`, `close_session_atomic`) for
+        /// the same `session_id`: those methods hold a per-session lock for
+        /// their own mutation, but `save_session` does not participate in
+        /// that lock, so a `save_session` call landing between one of their
+        /// reads and writes can silently overwrite their update (the exact
+        /// class of bug fixed in #457). `BatchGenerateFramesCommand` is the
+        /// one command handler still on the `find_session` + mutate +
+        /// `save_session` path rather than an atomic method.
         async fn save_session(&self, session: StreamSession) -> ();
+
+        /// Atomically create a stream (and apply `config`, if given) within
+        /// `session_id`, returning its ID and every event currently pending
+        /// on the session.
+        ///
+        /// Unlike a `find_session` + mutate + `save_session` cycle, implementations
+        /// must apply `StreamSession::create_stream_with_config` as a single atomic
+        /// read-modify-write against the stored session, so that a concurrent
+        /// mutation of the *same* session (e.g. a `complete_stream_atomic` call
+        /// for a different stream) cannot race and silently drop this call's
+        /// update to `SessionStats` (see issue #457). The returned events are
+        /// *all* events pending on the session at the moment this call drains
+        /// them, not only the ones this call produced — see
+        /// [`Self::complete_stream_atomic`]'s doc for why. Returns
+        /// `DomainError::SessionNotFound` if `session_id` does not exist, or
+        /// whatever error `StreamSession::create_stream_with_config` returns.
+        async fn create_stream_atomic(
+            &self,
+            session_id: SessionId,
+            source_data: JsonData,
+            config: Option<StreamConfig>
+        ) -> (StreamId, Vec<DomainEvent>);
+
+        /// Atomically start `stream_id` within `session_id`, returning every
+        /// event currently pending on the session.
+        ///
+        /// Same atomicity contract as [`Self::create_stream_atomic`], applying
+        /// `StreamSession::start_stream` instead. Returns
+        /// `DomainError::SessionNotFound` if `session_id` does not exist, or
+        /// whatever error `StreamSession::start_stream` returns.
+        async fn start_stream_atomic(
+            &self,
+            session_id: SessionId,
+            stream_id: StreamId
+        ) -> Vec<DomainEvent>;
+
+        /// Atomically complete `stream_id` within `session_id`, returning
+        /// every event currently pending on the session.
+        ///
+        /// Unlike a `find_session` + mutate + `save_session` cycle, implementations
+        /// must apply `StreamSession::complete_stream` as a single atomic
+        /// read-modify-write against the stored session, so that concurrent
+        /// completions for the *same* session cannot race and silently drop
+        /// one call's update to `SessionStats` (see issue #457). The returned
+        /// `Vec<DomainEvent>` is *all* events pending on the session at the
+        /// moment this call drains them (mirroring `save_and_publish`'s
+        /// existing save-then-drain behavior for the generic command path),
+        /// not only the `StreamCompleted` event this specific call produced —
+        /// under concurrent callers on the same session, one caller's drain
+        /// can carry events another caller's mutation added moments earlier.
+        /// Returns `DomainError::SessionNotFound` if `session_id` does not
+        /// exist, or whatever error `StreamSession::complete_stream` returns
+        /// (e.g. the stream does not exist or is not in a completable state).
+        async fn complete_stream_atomic(
+            &self,
+            session_id: SessionId,
+            stream_id: StreamId
+        ) -> Vec<DomainEvent>;
+
+        /// Atomically generate patch frames for `stream_id` within
+        /// `session_id`, returning the frames and every event currently
+        /// pending on the session.
+        ///
+        /// Same atomicity contract as [`Self::create_stream_atomic`], applying
+        /// `StreamSession::create_stream_patch_frames` instead. Returns
+        /// `DomainError::SessionNotFound` if `session_id` does not exist, or
+        /// whatever error `StreamSession::create_stream_patch_frames` returns.
+        async fn create_stream_patch_frames_atomic(
+            &self,
+            session_id: SessionId,
+            stream_id: StreamId,
+            priority_threshold: Priority,
+            max_frames: usize
+        ) -> (Vec<Frame>, Vec<DomainEvent>);
+
+        /// Atomically close `session_id`, returning every event currently
+        /// pending on the session.
+        ///
+        /// Same atomicity contract as [`Self::create_stream_atomic`], applying
+        /// `StreamSession::close` instead. Returns
+        /// `DomainError::SessionNotFound` if `session_id` does not exist, or
+        /// whatever error `StreamSession::close` returns.
+        async fn close_session_atomic(
+            &self,
+            session_id: SessionId
+        ) -> Vec<DomainEvent>;
 
         /// Remove session
         async fn remove_session(&self, session_id: SessionId) -> ();

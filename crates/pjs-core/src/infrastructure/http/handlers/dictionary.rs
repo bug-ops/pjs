@@ -119,6 +119,40 @@ mod tests {
             = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
         where
             Self: 'a;
+        type CreateStreamAtomicFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<(StreamId, Vec<DomainEvent>)>>
+            + Send
+            + 'a
+        where
+            Self: 'a;
+        type StartStreamAtomicFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<Vec<DomainEvent>>>
+            + Send
+            + 'a
+        where
+            Self: 'a;
+        type CompleteStreamAtomicFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<Vec<DomainEvent>>>
+            + Send
+            + 'a
+        where
+            Self: 'a;
+        type CreateStreamPatchFramesAtomicFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<(
+                    Vec<crate::domain::entities::Frame>,
+                    Vec<DomainEvent>,
+                )>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+        type CloseSessionAtomicFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<Vec<DomainEvent>>>
+            + Send
+            + 'a
+        where
+            Self: 'a;
         type RemoveSessionFuture<'a>
             = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
         where
@@ -153,6 +187,79 @@ mod tests {
             async move {
                 self.0.lock().insert(s.id(), s);
                 Ok(())
+            }
+        }
+        fn create_stream_atomic(
+            &self,
+            sid: SessionId,
+            source_data: crate::domain::value_objects::JsonData,
+            config: Option<crate::domain::entities::stream::StreamConfig>,
+        ) -> Self::CreateStreamAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.0.lock();
+                let session = sessions.get_mut(&sid).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!("Session {sid} not found"))
+                })?;
+                let stream_id = session.create_stream_with_config(source_data, config)?;
+                Ok((stream_id, session.take_events().into_iter().collect()))
+            }
+        }
+        fn start_stream_atomic(
+            &self,
+            sid: SessionId,
+            stream_id: StreamId,
+        ) -> Self::StartStreamAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.0.lock();
+                let session = sessions.get_mut(&sid).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!("Session {sid} not found"))
+                })?;
+                session.start_stream(stream_id)?;
+                Ok(session.take_events().into_iter().collect())
+            }
+        }
+        fn complete_stream_atomic(
+            &self,
+            sid: SessionId,
+            stream_id: StreamId,
+        ) -> Self::CompleteStreamAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.0.lock();
+                let session = sessions.get_mut(&sid).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!("Session {sid} not found"))
+                })?;
+                session.complete_stream(stream_id)?;
+                Ok(session.take_events().into_iter().collect())
+            }
+        }
+        fn create_stream_patch_frames_atomic(
+            &self,
+            sid: SessionId,
+            stream_id: StreamId,
+            priority_threshold: crate::domain::value_objects::Priority,
+            max_frames: usize,
+        ) -> Self::CreateStreamPatchFramesAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.0.lock();
+                let session = sessions.get_mut(&sid).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!("Session {sid} not found"))
+                })?;
+                let frames = session.create_stream_patch_frames(
+                    stream_id,
+                    priority_threshold,
+                    max_frames,
+                )?;
+                Ok((frames, session.take_events().into_iter().collect()))
+            }
+        }
+        fn close_session_atomic(&self, sid: SessionId) -> Self::CloseSessionAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.0.lock();
+                let session = sessions.get_mut(&sid).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!("Session {sid} not found"))
+                })?;
+                session.close()?;
+                Ok(session.take_events().into_iter().collect())
             }
         }
         fn remove_session(&self, sid: SessionId) -> Self::RemoveSessionFuture<'_> {

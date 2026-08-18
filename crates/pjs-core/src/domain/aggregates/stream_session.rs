@@ -2,7 +2,7 @@
 
 use crate::domain::{
     DomainError, DomainResult,
-    entities::{Frame, Stream, stream::StreamConfig},
+    entities::{Frame, Stream, frame::FramePatch, stream::StreamConfig},
     events::{DomainEvent, SessionState},
     ports::{SystemTimeProvider, TimeProvider},
     value_objects::{JsonData, Priority, SessionId, StreamId},
@@ -126,8 +126,21 @@ pub struct SessionStats {
     /// [`StreamSession::fail_stream`]). Each sample is a stream's
     /// `completed_at - created_at`, so it includes time spent queued/preparing
     /// before [`StreamSession::start_stream`], not just time spent actively
-    /// streaming.
+    /// streaming. Computed via Welford's running-mean formula, so a single
+    /// slow or fast outlier from long ago carries the same weight as one from
+    /// a moment ago — it never decays. For a recency-sensitive signal (e.g.
+    /// health monitoring), use [`Self::recent_avg_duration_ms`] instead.
     pub average_stream_duration_ms: f64,
+    /// Recency-weighted mean of per-stream duration, in milliseconds, over
+    /// streams that completed successfully. Computed as a fixed-alpha
+    /// (0.5) exponential moving average — `recent = 0.5 * duration + 0.5 *
+    /// recent` — seeded with the first observed duration, so recent samples
+    /// dominate and old ones decay away. This is what
+    /// [`SessionHealthSnapshot`](crate::domain::ports::SessionHealthSnapshot)'s
+    /// `recent_avg_duration_ms` metric reports; use
+    /// [`Self::average_stream_duration_ms`] for the true lifetime average
+    /// instead.
+    pub recent_avg_duration_ms: f64,
 }
 
 /// StreamSession aggregate root - manages multiple prioritized streams
@@ -354,13 +367,54 @@ impl StreamSession {
         priority_threshold: Priority,
         max_frames: usize,
     ) -> DomainResult<Vec<Frame>> {
+        let patches = self.extract_prioritized_patches_for_stream(stream_id, priority_threshold)?;
+        self.commit_patch_frames_for_stream(stream_id, patches, max_frames)
+    }
+
+    /// Compute prioritized patches for `stream_id` without mutating any
+    /// state — the expensive half of [`Self::create_stream_patch_frames`].
+    /// See [`Stream::extract_prioritized_patches`] for why this is safe to
+    /// call without holding any lock a caller might otherwise need around
+    /// the mutating half, [`Self::commit_patch_frames_for_stream`].
+    pub fn extract_prioritized_patches_for_stream(
+        &self,
+        stream_id: StreamId,
+        priority_threshold: Priority,
+    ) -> DomainResult<Vec<(FramePatch, Priority)>> {
+        let stream = self
+            .streams
+            .get(&stream_id)
+            .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
+
+        stream.extract_prioritized_patches(priority_threshold)
+    }
+
+    /// Commit already-extracted prioritized patches (from
+    /// [`Self::extract_prioritized_patches_for_stream`]) into frames for
+    /// `stream_id` — the cheap, `O(max_frames)` half of
+    /// [`Self::create_stream_patch_frames`], updating session-level
+    /// statistics and raising [`DomainEvent::FramesBatched`] exactly as that
+    /// method does.
+    ///
+    /// `stats.total_bytes` is taken as a before/after delta of the child
+    /// [`Stream`]'s own `total_bytes` counter — which
+    /// [`Stream::commit_patch_frames`] already computes internally via
+    /// [`Frame::estimated_size`] for every frame it returns — rather than
+    /// re-summing `estimated_size()` here, avoiding a second full JSON
+    /// serialization pass per frame.
+    pub fn commit_patch_frames_for_stream(
+        &mut self,
+        stream_id: StreamId,
+        patches: Vec<(FramePatch, Priority)>,
+        max_frames: usize,
+    ) -> DomainResult<Vec<Frame>> {
         let stream = self
             .streams
             .get_mut(&stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
 
         let bytes_before = stream.stats().total_bytes;
-        let frames = stream.create_patch_frames(priority_threshold, max_frames)?;
+        let frames = stream.commit_patch_frames(patches, max_frames)?;
         let bytes_after = stream.stats().total_bytes;
 
         self.stats.total_frames += frames.len() as u64;
@@ -438,6 +492,42 @@ impl StreamSession {
         Ok(stream_id)
     }
 
+    /// Create a stream and, if provided, apply a custom [`StreamConfig`] to
+    /// it — as a single atomic domain operation.
+    ///
+    /// Equivalent to calling [`Self::create_stream`] followed by
+    /// [`Self::update_stream_config`], but combined so a repository-level
+    /// atomic update (which mutates the stored session in place and has no
+    /// transactional rollback) never has to reason about two independently
+    /// fallible calls. In practice the second call cannot fail here: a
+    /// freshly created stream is always in
+    /// [`StreamState::Preparing`](crate::domain::entities::stream::StreamState::Preparing),
+    /// which [`Stream::is_active`](crate::domain::entities::Stream::is_active)
+    /// treats as active — the only condition `update_stream_config` checks —
+    /// and nothing else can run between the two calls within one `&mut self`
+    /// invocation.
+    pub fn create_stream_with_config(
+        &mut self,
+        source_data: JsonData,
+        config: Option<StreamConfig>,
+    ) -> DomainResult<StreamId> {
+        let stream_id = self.create_stream(source_data)?;
+        if let Some(config) = config {
+            let result = self.update_stream_config(stream_id, config);
+            debug_assert!(
+                result.is_ok(),
+                "update_stream_config failed immediately after create_stream: a freshly \
+                 created stream is always Preparing, which is_active() treats as active — \
+                 the only condition update_stream_config checks. If this fires, that \
+                 invariant broke, and callers relying on this method's atomicity (e.g. a \
+                 repository committing the mutation in place with no rollback) may now be \
+                 left with a created-but-unconfigured stream on error."
+            );
+            result?;
+        }
+        Ok(stream_id)
+    }
+
     /// Start streaming for a specific stream
     pub fn start_stream(&mut self, stream_id: StreamId) -> DomainResult<()> {
         let stream = self
@@ -478,6 +568,18 @@ impl StreamSession {
             self.stats.average_stream_duration_ms += (duration_ms
                 - self.stats.average_stream_duration_ms)
                 / self.stats.completed_streams as f64;
+
+            // Fixed-alpha (0.5) EMA for the recency-sensitive companion metric
+            // (see #458). Seeded with the first observed duration rather than
+            // blended against a zeroed default, matching the lifetime mean's
+            // own first-sample behavior above.
+            const RECENT_AVG_ALPHA: f64 = 0.5;
+            self.stats.recent_avg_duration_ms = if self.stats.completed_streams == 1 {
+                duration_ms
+            } else {
+                RECENT_AVG_ALPHA * duration_ms
+                    + (1.0 - RECENT_AVG_ALPHA) * self.stats.recent_avg_duration_ms
+            };
         }
 
         self.update_timestamp();
@@ -782,6 +884,44 @@ mod tests {
     }
 
     #[test]
+    fn test_create_stream_with_config_none_behaves_like_create_stream() {
+        let mut session = StreamSession::new(SessionConfig::default());
+        assert!(session.activate().is_ok());
+
+        let stream_id = session
+            .create_stream_with_config(JsonData::String("test".to_string()), None)
+            .unwrap();
+
+        assert_eq!(session.streams().len(), 1);
+        assert_eq!(session.stats().total_streams, 1);
+        assert_eq!(session.stats().active_streams, 1);
+        assert!(session.stream(stream_id).is_some());
+    }
+
+    #[test]
+    fn test_create_stream_with_config_applies_custom_config() {
+        let mut session = StreamSession::new(SessionConfig::default());
+        assert!(session.activate().is_ok());
+
+        let custom_config = StreamConfig {
+            max_frame_size: 1234,
+            ..StreamConfig::default()
+        };
+
+        let stream_id = session
+            .create_stream_with_config(
+                JsonData::String("test".to_string()),
+                Some(custom_config.clone()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            session.stream(stream_id).unwrap().config().max_frame_size,
+            custom_config.max_frame_size
+        );
+    }
+
+    #[test]
     fn test_average_stream_duration_single_stream_equals_its_duration() {
         let mut session = StreamSession::new(SessionConfig::default());
         assert!(session.activate().is_ok());
@@ -849,6 +989,74 @@ mod tests {
     }
 
     #[test]
+    fn test_recent_avg_duration_seeded_with_first_sample() {
+        let mut session = StreamSession::new(SessionConfig::default());
+        assert!(session.activate().is_ok());
+
+        let stream_id = session
+            .create_stream(JsonData::String("test".to_string()))
+            .unwrap();
+        assert!(session.start_stream(stream_id).is_ok());
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        assert!(session.complete_stream(stream_id).is_ok());
+
+        let d1_ms = session
+            .stream(stream_id)
+            .unwrap()
+            .duration()
+            .unwrap()
+            .num_milliseconds() as f64;
+
+        // The first sample seeds the EMA directly, mirroring the lifetime
+        // mean's own first-sample behavior — the two fields agree until a
+        // second sample arrives.
+        assert_eq!(session.stats().recent_avg_duration_ms, d1_ms);
+        assert_eq!(
+            session.stats().recent_avg_duration_ms,
+            session.stats().average_stream_duration_ms
+        );
+    }
+
+    #[test]
+    fn test_recent_avg_duration_applies_fixed_alpha_ema_and_diverges_from_lifetime_mean() {
+        let mut session = StreamSession::new(SessionConfig::default());
+        assert!(session.activate().is_ok());
+
+        // Deliberately non-uniform sleeps so the fixed-alpha EMA (which
+        // decays older samples) and the lifetime arithmetic mean (which
+        // never decays) diverge.
+        let mut durations_ms = Vec::new();
+        for sleep_ms in [15, 60, 15] {
+            let stream_id = session
+                .create_stream(JsonData::String("test".to_string()))
+                .unwrap();
+            assert!(session.start_stream(stream_id).is_ok());
+            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+            assert!(session.complete_stream(stream_id).is_ok());
+            durations_ms.push(
+                session
+                    .stream(stream_id)
+                    .unwrap()
+                    .duration()
+                    .unwrap()
+                    .num_milliseconds() as f64,
+            );
+        }
+
+        const ALPHA: f64 = 0.5;
+        let mut expected_ema = durations_ms[0];
+        for &d in &durations_ms[1..] {
+            expected_ema = ALPHA * d + (1.0 - ALPHA) * expected_ema;
+        }
+
+        assert_eq!(session.stats().recent_avg_duration_ms, expected_ema);
+        assert_ne!(
+            session.stats().recent_avg_duration_ms,
+            session.stats().average_stream_duration_ms
+        );
+    }
+
+    #[test]
     fn test_create_stream_patch_frames_tracks_total_bytes() {
         let mut session = StreamSession::new(SessionConfig::default());
         assert!(session.activate().is_ok());
@@ -885,6 +1093,70 @@ mod tests {
             .expect("frame generation must succeed");
 
         assert!(session.stats().total_bytes > small_session.stats().total_bytes);
+    }
+
+    #[test]
+    fn test_extract_then_commit_patch_frames_matches_combined_call() {
+        // The split API (extract_prioritized_patches_for_stream +
+        // commit_patch_frames_for_stream) must produce identical results to
+        // the combined create_stream_patch_frames it's built from, since a
+        // repository holding a per-session lock relies on this equivalence
+        // to narrow its critical section (#457 follow-up).
+        let source_data: JsonData = serde_json::json!({
+            "id": "abc-123",
+            "name": "Alice",
+            "items": [1, 2, 3]
+        })
+        .into();
+
+        let mut combined = StreamSession::new(SessionConfig::default());
+        combined.activate().unwrap();
+        let combined_stream_id = combined.create_stream(source_data.clone()).unwrap();
+        combined.start_stream(combined_stream_id).unwrap();
+        let combined_frames = combined
+            .create_stream_patch_frames(combined_stream_id, Priority::BACKGROUND, 16)
+            .unwrap();
+
+        let mut split = StreamSession::new(SessionConfig::default());
+        split.activate().unwrap();
+        let split_stream_id = split.create_stream(source_data).unwrap();
+        split.start_stream(split_stream_id).unwrap();
+        let patches = split
+            .extract_prioritized_patches_for_stream(split_stream_id, Priority::BACKGROUND)
+            .unwrap();
+        let split_frames = split
+            .commit_patch_frames_for_stream(split_stream_id, patches, 16)
+            .unwrap();
+
+        assert_eq!(combined_frames.len(), split_frames.len());
+        assert_eq!(combined.stats().total_frames, split.stats().total_frames);
+        assert_eq!(combined.stats().total_bytes, split.stats().total_bytes);
+    }
+
+    #[test]
+    fn test_commit_patch_frames_for_stream_rejects_stream_completed_since_extraction() {
+        // Guards the safety argument for narrowing create_stream_patch_frames_atomic's
+        // critical section: if the target stream stops being Streaming between
+        // an earlier extract_prioritized_patches_for_stream call (run outside
+        // any lock) and the commit, the commit must fail cleanly instead of
+        // silently mutating a stream that can no longer accept frames.
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let stream_id = session
+            .create_stream(JsonData::String("test".to_string()))
+            .unwrap();
+        session.start_stream(stream_id).unwrap();
+
+        let patches = session
+            .extract_prioritized_patches_for_stream(stream_id, Priority::BACKGROUND)
+            .unwrap();
+
+        // Simulates a concurrent CompleteStreamCommand landing between the
+        // extraction above and the commit below.
+        session.complete_stream(stream_id).unwrap();
+
+        let result = session.commit_patch_frames_for_stream(stream_id, patches, 16);
+        assert!(matches!(result, Err(DomainError::InvalidStreamState(_))));
     }
 
     #[test]
