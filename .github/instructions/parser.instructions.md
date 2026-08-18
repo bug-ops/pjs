@@ -20,7 +20,7 @@ cargo bench -p pjs-bench -- --baseline before
 
 ## Zero-Copy Operations
 
-- Use `JsonArena` for arena allocation
+- Use `parser::buffer_pool::{AlignedBuffer, BufferPool}` for reusable, aligned scratch buffers
 - Bounded memory usage prevents DoS attacks
 - Depth tracking prevents stack overflow in nested JSON
 
@@ -33,7 +33,7 @@ cargo bench -p pjs-bench -- --baseline before
 
 - All `unsafe` blocks require `#![deny(unsafe_op_in_unsafe_fn)]` compliance
 - 100% test coverage for any unsafe code
-- Bounded arena allocations to prevent DoS
+- Bounded buffer-pool allocations to prevent DoS
 
 ## Security Requirements
 

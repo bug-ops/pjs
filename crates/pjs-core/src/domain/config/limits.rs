@@ -50,6 +50,25 @@ pub const ALLOWED_SORT_FIELDS: &[&str] =
 /// (10_000 frames × ~few-KB each ≈ tens of MB per very-long-lived stream).
 pub const DEFAULT_FRAME_HISTORY_PER_STREAM: usize = 10_000;
 
+/// Maximum number of frames a single `GenerateFramesCommand` may request.
+///
+/// Enforced by `CommandValidator::validate_generate_frames` at the
+/// application boundary. Well under [`DEFAULT_FRAME_HISTORY_PER_STREAM`], so
+/// a single request can never itself evict a stream's frame history.
+pub const MAX_FRAMES_PER_REQUEST: usize = 1_000;
+
+/// Maximum allowed `SessionConfig::session_timeout_seconds` (7 days).
+///
+/// Enforced by `CommandValidator::validate_create_session` at the
+/// application boundary, before `StreamSession::new` computes
+/// `now + chrono::Duration::seconds(session_timeout_seconds as i64)`. Any
+/// `u64` value here fits well within `chrono::Duration::seconds`'s valid
+/// range, so that addition can neither panic nor wrap into a negative
+/// (already-expired) duration. The 7-day ceiling itself is an operational
+/// choice, not a correctness requirement — sessions are not meant to be
+/// long-lived resources.
+pub const MAX_SESSION_TIMEOUT_SECONDS: u64 = 604_800;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +98,22 @@ mod tests {
         // Industry standard range: 100-1000
         const { assert!(MAX_PAGINATION_LIMIT >= 100) };
         const { assert!(MAX_PAGINATION_LIMIT <= 10_000) };
+    }
+
+    #[test]
+    fn test_max_frames_per_request_value() {
+        assert_eq!(MAX_FRAMES_PER_REQUEST, 1_000);
+        const { assert!(MAX_FRAMES_PER_REQUEST > 0) };
+        const { assert!(MAX_FRAMES_PER_REQUEST <= DEFAULT_FRAME_HISTORY_PER_STREAM) };
+    }
+
+    #[test]
+    fn test_max_session_timeout_seconds_fits_chrono_duration() {
+        assert_eq!(MAX_SESSION_TIMEOUT_SECONDS, 604_800);
+        // Must cast to i64 without overflow or sign flip, matching the
+        // `chrono::Duration::seconds(config.session_timeout_seconds as i64)`
+        // call in `StreamSession::with_time_provider`.
+        const { assert!(MAX_SESSION_TIMEOUT_SECONDS <= i64::MAX as u64) };
+        const { assert!((MAX_SESSION_TIMEOUT_SECONDS as i64) > 0) };
     }
 }

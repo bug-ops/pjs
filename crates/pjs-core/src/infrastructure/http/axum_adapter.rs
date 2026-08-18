@@ -311,6 +311,10 @@ where
 }
 
 /// Request to create a new streaming session
+///
+/// `max_concurrent_streams: 0`, `timeout_seconds: 0`, or a `timeout_seconds`
+/// above [`crate::domain::config::limits::MAX_SESSION_TIMEOUT_SECONDS`] (7
+/// days) are rejected with `400 Bad Request` before the session is created.
 #[derive(Debug, Deserialize)]
 pub struct CreateSessionRequest {
     /// Maximum number of streams the session is allowed to host concurrently.
@@ -334,6 +338,9 @@ pub struct CreateSessionResponse {
 #[derive(Debug, Deserialize)]
 pub struct StartStreamRequest {
     /// JSON payload to be decomposed into priority frames.
+    ///
+    /// A `null` payload is rejected with `400 Bad Request` before the
+    /// session is looked up.
     pub data: JsonValue,
     /// Minimum frame priority to emit; lower-priority frames are dropped.
     pub priority_threshold: Option<u8>,
@@ -359,6 +366,10 @@ pub struct StreamParams {
 /// - `priority_threshold` defaults to [`crate::domain::value_objects::Priority::BACKGROUND`] (10) — accepts every frame.
 /// - `max_frames` defaults to 16 — bounded so a single request cannot emit an
 ///   unbounded number of frames.
+///
+/// An explicit `max_frames` of `0` or above
+/// [`crate::domain::config::limits::MAX_FRAMES_PER_REQUEST`] (1000) is
+/// rejected with `400 Bad Request`.
 #[derive(Debug, Default, Deserialize)]
 pub struct GenerateFramesRequest {
     /// Minimum frame priority to emit; lower-priority frames are dropped.

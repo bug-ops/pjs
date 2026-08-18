@@ -7,6 +7,7 @@ use crate::{
     },
     domain::{
         aggregates::StreamSession,
+        config::limits::{MAX_FRAMES_PER_REQUEST, MAX_SESSION_TIMEOUT_SECONDS},
         entities::Frame,
         ports::{
             DictionaryStore, EventPublisherGat, FrameStoreGat, NoopDictionaryStore,
@@ -202,6 +203,9 @@ where
 
     fn handle(&self, command: CreateSessionCommand) -> Self::HandleFuture<'_> {
         async move {
+            CommandValidator::validate_create_session(&command)
+                .map_err(|errors| ApplicationError::Validation(errors.join("; ")))?;
+
             // Create new session
             let mut session = StreamSession::new(command.config);
 
@@ -250,6 +254,9 @@ where
 
     fn handle(&self, command: CreateStreamCommand) -> Self::HandleFuture<'_> {
         async move {
+            CommandValidator::validate_create_stream(&command)
+                .map_err(|errors| ApplicationError::Validation(errors.join("; ")))?;
+
             let mut session = self.load_session(command.session_id.into()).await?;
 
             // Convert at application boundary (DTO -> Domain)
@@ -343,6 +350,9 @@ where
 
     fn handle(&self, command: GenerateFramesCommand) -> Self::HandleFuture<'_> {
         async move {
+            CommandValidator::validate_generate_frames(&command)
+                .map_err(|errors| ApplicationError::Validation(errors.join("; ")))?;
+
             let mut session = self.load_session(command.session_id.into()).await?;
 
             // Generate frames through the aggregate root so session-level
@@ -456,7 +466,15 @@ where
     }
 }
 
-/// Validation helper for commands
+/// Validates commands at the application boundary, before they reach the
+/// domain layer.
+///
+/// Invoked as the first statement of [`CommandHandlerGat::handle`] for
+/// [`CreateSessionCommand`], [`CreateStreamCommand`], and
+/// [`GenerateFramesCommand`] on [`SessionCommandHandler`] — ahead of any
+/// session lookup, so a malformed request fails with
+/// [`ApplicationError::Validation`] (HTTP 400) instead of a later domain
+/// error or a misleading 404/500.
 pub struct CommandValidator;
 
 impl CommandValidator {
@@ -470,6 +488,12 @@ impl CommandValidator {
 
         if command.config.session_timeout_seconds == 0 {
             errors.push("session_timeout_seconds must be greater than 0".to_string());
+        }
+
+        if command.config.session_timeout_seconds > MAX_SESSION_TIMEOUT_SECONDS {
+            errors.push(format!(
+                "session_timeout_seconds cannot exceed {MAX_SESSION_TIMEOUT_SECONDS}"
+            ));
         }
 
         if errors.is_empty() {
@@ -502,8 +526,8 @@ impl CommandValidator {
             errors.push("max_frames must be greater than 0".to_string());
         }
 
-        if command.max_frames > 1000 {
-            errors.push("max_frames cannot exceed 1000".to_string());
+        if command.max_frames > MAX_FRAMES_PER_REQUEST {
+            errors.push(format!("max_frames cannot exceed {MAX_FRAMES_PER_REQUEST}"));
         }
 
         if errors.is_empty() {
@@ -1216,5 +1240,157 @@ mod tests {
             "every frame returned by the command must be persisted",
         );
         assert_eq!(page.total_matching, frames.len());
+    }
+
+    #[tokio::test]
+    async fn test_create_session_rejects_zero_max_concurrent_streams() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let config = SessionConfig {
+            max_concurrent_streams: 0,
+            ..Default::default()
+        };
+
+        let result = handler
+            .handle(CreateSessionCommand {
+                config,
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_session_rejects_zero_session_timeout() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let config = SessionConfig {
+            session_timeout_seconds: 0,
+            ..Default::default()
+        };
+
+        let result = handler
+            .handle(CreateSessionCommand {
+                config,
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_rejects_null_source_data_before_session_lookup() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        // A nonexistent session id proves validation runs before load_session
+        // — otherwise this would fail with `ApplicationError::NotFound`.
+        let result = handler
+            .handle(CreateStreamCommand {
+                session_id: SessionId::new().into(),
+                source_data: serde_json::Value::Null,
+                config: None,
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_generate_frames_rejects_zero_max_frames() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let result = handler
+            .handle(GenerateFramesCommand {
+                session_id: SessionId::new().into(),
+                stream_id: StreamId::new().into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: 0,
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_generate_frames_rejects_max_frames_over_limit() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let result = handler
+            .handle(GenerateFramesCommand {
+                session_id: SessionId::new().into(),
+                stream_id: StreamId::new().into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: MAX_FRAMES_PER_REQUEST + 1,
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_session_rejects_session_timeout_that_would_panic_chrono() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        // Reproduces the S1 panic: `session_timeout_seconds as i64` overflowed
+        // `chrono::Duration::seconds`'s valid range and panicked inside
+        // `StreamSession::with_time_provider` before this bound existed.
+        let config = SessionConfig {
+            session_timeout_seconds: 9_223_372_036_854_776,
+            ..Default::default()
+        };
+
+        let result = handler
+            .handle(CreateSessionCommand {
+                config,
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_session_rejects_session_timeout_that_would_wrap_negative() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        // Reproduces the S1 silent-wraparound case: `u64::MAX as i64` is -1,
+        // which previously created a session already expired on arrival.
+        let config = SessionConfig {
+            session_timeout_seconds: u64::MAX,
+            ..Default::default()
+        };
+
+        let result = handler
+            .handle(CreateSessionCommand {
+                config,
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApplicationError::Validation(_))));
     }
 }
