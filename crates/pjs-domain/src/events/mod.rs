@@ -510,7 +510,15 @@ impl DomainEvent {
             Self::StreamPaused { stream_id, .. } => Some(*stream_id),
             Self::StreamResumed { stream_id, .. } => Some(*stream_id),
             Self::BackpressureReceived { stream_id, .. } => *stream_id,
-            _ => None,
+            Self::SessionActivated { .. }
+            | Self::SessionClosed { .. }
+            | Self::SessionExpired { .. }
+            | Self::SessionTimedOut { .. }
+            | Self::SessionTimeoutExtended { .. }
+            | Self::FramesBatched { .. }
+            | Self::PriorityThresholdAdjusted { .. }
+            | Self::PerformanceMetricsRecorded { .. }
+            | Self::CreditsUpdated { .. } => None,
         }
     }
 
