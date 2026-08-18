@@ -4,9 +4,19 @@
 //!
 //! # Concurrency Model
 //!
-//! These repositories use [`InMemoryStore`](super::InMemoryStore) which is backed by `DashMap` for
-//! lock-free concurrent access. See `generic_store.rs` for detailed consistency
-//! guarantees.
+//! These repositories store their primary data in [`InMemoryStore`](super::InMemoryStore),
+//! accessed through the [`SessionStore`] and [`StreamStore`] type aliases
+//! (`InMemoryStore<SessionId, StreamSession>` and `InMemoryStore<StreamId, Stream>`
+//! respectively). `InMemoryStore` is backed by `DashMap` for lock-free concurrent
+//! access. See `generic_store.rs` for detailed consistency guarantees.
+//!
+//! `GatInMemoryStreamRepository` additionally holds `stats_cache`, a separate raw
+//! `DashMap<SessionId, CachedSessionStats>` TTL cache for aggregated session
+//! statistics. It is not part of `InMemoryStore` and is not a substitute for it:
+//! it relies on `DashMap`'s `entry().and_modify().or_insert_with()` upsert.
+//! `InMemoryStore` exposes atomic read-modify-write via `update_with`, but no
+//! insert-if-absent variant, so `stats_cache` stays a plain `DashMap` rather than
+//! adding an upsert method to `InMemoryStore` for this one caller.
 //!
 //! # Iteration Consistency
 //!
