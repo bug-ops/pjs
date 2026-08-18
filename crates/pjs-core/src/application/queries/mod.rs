@@ -123,12 +123,18 @@ pub struct SessionFilters {
 pub use crate::domain::ports::SessionSortField;
 
 /// Sort order
+///
+/// Deserializes from its canonical `snake_case` spelling (`ascending`/`descending`) plus
+/// the short `asc`/`desc` aliases accepted by the HTTP `sort_order` query parameter; only
+/// deserialization accepts the aliases — serialized output is always the canonical form.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
     /// Ascending order (smallest first).
+    #[serde(alias = "asc")]
     Ascending,
     /// Descending order (largest first).
+    #[serde(alias = "desc")]
     Descending,
 }
 

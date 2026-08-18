@@ -13,7 +13,7 @@ use crate::{
         queries::{
             GetActiveSessionsQuery, GetSessionHealthQuery, GetSessionQuery, GetSessionStatsQuery,
             SearchSessionsQuery, SessionFilters, SessionResponse, SessionStatsResponse,
-            SessionsResponse, SortOrder,
+            SessionsResponse,
         },
     },
     domain::{
@@ -24,7 +24,7 @@ use crate::{
     infrastructure::http::axum_adapter::{
         CreateSessionRequest, CreateSessionResponse, PaginationParams, PjsAppState, PjsError,
         SearchSessionsParams, SessionHealthResponse, parse_session_id, parse_session_state,
-        parse_sort_field,
+        parse_sort_field, parse_sort_order,
     },
 };
 
@@ -160,11 +160,7 @@ where
     S: StreamStoreGat + Send + Sync + 'static,
 {
     let sort_by = params.sort_by.map(parse_sort_field).transpose()?;
-    let sort_order = params.sort_order.as_deref().and_then(|s| match s {
-        "ascending" | "asc" => Some(SortOrder::Ascending),
-        "descending" | "desc" => Some(SortOrder::Descending),
-        _ => None,
-    });
+    let sort_order = params.sort_order.map(parse_sort_order).transpose()?;
     let session_state = params.state.map(parse_session_state).transpose()?;
     let query = SearchSessionsQuery {
         filters: SessionFilters {
