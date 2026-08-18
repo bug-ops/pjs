@@ -3,7 +3,6 @@
 //! Simplified version that focuses on the core parsing capabilities
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use pjson_rs::Parser;
 use serde_json::Value;
 use std::hint::black_box;
 use std::time::Duration;
@@ -130,40 +129,6 @@ fn benchmark_sonic_rs(c: &mut Criterion) {
     group.finish();
 }
 
-fn benchmark_pjs_parser(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pjs_parser");
-
-    // Small JSON
-    group.throughput(Throughput::Bytes(SMALL_JSON.len() as u64));
-    group.bench_function("small", |b| {
-        b.iter(|| {
-            let parser = Parser::new();
-            let _ = parser.parse(black_box(SMALL_JSON.as_bytes())).unwrap();
-        })
-    });
-
-    // Medium JSON
-    group.throughput(Throughput::Bytes(MEDIUM_JSON.len() as u64));
-    group.bench_function("medium", |b| {
-        b.iter(|| {
-            let parser = Parser::new();
-            let _ = parser.parse(black_box(MEDIUM_JSON.as_bytes())).unwrap();
-        })
-    });
-
-    // Large JSON
-    let large_json = generate_large_json();
-    group.throughput(Throughput::Bytes(large_json.len() as u64));
-    group.bench_function("large", |b| {
-        b.iter(|| {
-            let parser = Parser::new();
-            let _ = parser.parse(black_box(large_json.as_bytes())).unwrap();
-        })
-    });
-
-    group.finish();
-}
-
 fn benchmark_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("parsing_comparison");
     group.measurement_time(Duration::from_secs(10));
@@ -187,14 +152,6 @@ fn benchmark_comparison(c: &mut Criterion) {
         })
     });
 
-    // PJS Parser
-    group.bench_function("pjs_parser", |b| {
-        b.iter(|| {
-            let parser = Parser::new();
-            let _ = parser.parse(black_box(large_json.as_bytes())).unwrap();
-        })
-    });
-
     group.finish();
 }
 
@@ -202,7 +159,6 @@ criterion_group!(
     benches,
     benchmark_serde_json,
     benchmark_sonic_rs,
-    benchmark_pjs_parser,
     benchmark_comparison
 );
 

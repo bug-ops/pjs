@@ -1,8 +1,8 @@
 //! # PJS Core
 //!
 //! Core types and protocols for the Priority JSON Streaming Protocol.
-//! This crate provides high-performance JSON parsing with SIMD optimizations,
-//! zero-copy operations, and semantic type hints for automatic optimization.
+//! This crate provides zero-copy JSON parsing, priority-based streaming,
+//! and schema-aware compression.
 
 #![feature(impl_trait_in_assoc_type)]
 #![cfg_attr(feature = "metrics", feature(once_cell_try))]
@@ -19,12 +19,10 @@ pub mod compression;
 pub mod config;
 pub mod domain;
 pub mod error;
-pub mod frame;
 pub mod global_alloc;
 pub mod infrastructure;
 pub mod parser;
 pub mod security;
-pub mod semantic;
 pub mod stream;
 
 // Global allocator diagnostics
@@ -91,18 +89,14 @@ pub use compression::{
 
 // Streaming exports
 pub use error::{Error, Result};
-pub use frame::{Frame, FrameFlags, FrameHeader};
 #[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
 pub use infrastructure::websocket::SecureWebSocketHandler;
-pub use parser::{
-    LazyParser, ParseConfig, ParseStats, Parser, SimpleParser, SonicParser, ZeroCopyParser,
-};
+pub use parser::{LazyParser, ZeroCopyParser};
 pub use security::{
     CompressionBombConfig, CompressionBombDetector, CompressionBombProtector,
     CompressionStats as BombCompressionStats, DepthTracker, RateLimitConfig, RateLimitError,
     RateLimitGuard, RateLimitStats, SecurityValidator, WebSocketRateLimiter,
 };
-pub use semantic::{SemanticMeta, SemanticType};
 pub use stream::{
     CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
     JsonReconstructor, PriorityStreamer, ProcessResult, StreamConfig, StreamFrame, StreamProcessor,
@@ -113,10 +107,10 @@ pub use stream::{
 pub mod prelude {
     pub use super::{
         ApplicationError, ApplicationResult, DomainError, DomainEvent, DomainFrame, DomainResult,
-        Error, Frame, FrameFlags, FrameHeader, JsonData, JsonPath, JsonReconstructor, PathSegment,
-        Priority, PriorityDistribution, PriorityPercentages, ProcessResult, Result, Schema,
-        SchemaId, SchemaRepository, SchemaType, SchemaValidationError, SemanticMeta, SemanticType,
-        SessionId, Stream, StreamId, StreamProcessor, StreamSession, ValidationService,
+        Error, JsonData, JsonPath, JsonReconstructor, PathSegment, Priority, PriorityDistribution,
+        PriorityPercentages, ProcessResult, Result, Schema, SchemaId, SchemaRepository, SchemaType,
+        SchemaValidationError, SessionId, Stream, StreamId, StreamProcessor, StreamSession,
+        ValidationService,
     };
 }
 

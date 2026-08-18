@@ -74,8 +74,8 @@ mod private {
 /// PartialParseResult { value: JsonData::Null, consumed: 0, is_complete: false, ... }
 /// ```
 ///
-/// The [`crate::parser::Parser::parse_partial`] wrapper translates `consumed == 0`
-/// into `Ok(None)` for the streaming caller.
+/// Callers translate `consumed == 0` into a "no complete prefix yet" signal
+/// (e.g. `Ok(None)`) for the streaming caller.
 pub trait PartialJsonParser: private::Sealed {
     /// Parse the largest valid JSON prefix from `input`.
     ///

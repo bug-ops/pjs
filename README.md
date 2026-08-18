@@ -21,7 +21,7 @@ High-performance Rust library for priority-based JSON streaming with SIMD accele
 - **Memory Efficient** - Optimized progressive loading, bounded memory usage, zero-copy operations
 - **WebAssembly** - Browser and Node.js support with compact bundle (~70KB gzipped)
 - **Secure** - Defense-in-depth decompression protection, DoS prevention, input validation
-- **Schema Aware** - Automatic compression and semantic analysis
+- **Schema Aware** - Automatic compression based on schema analysis
 - **Production Ready** - Clean Architecture, comprehensive test suite, Prometheus metrics
 
 ## Performance
@@ -217,7 +217,7 @@ cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin simple-demo-server --
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `simd-auto` | Enable the sonic-rs SIMD parser backend, which dispatches at runtime to the best available instruction set (AVX-512/AVX2/SSE4.2/NEON) for the host CPU | ✅ Yes |
+| `simd-auto` | Currently a no-op (the SIMD-dispatching parser it used to gate was removed in #486/#488); kept default-on for compatibility. `sonic-rs`, used unconditionally elsewhere in the crate (e.g. SSE serialization), already dispatches at runtime to the best available instruction set (AVX-512/AVX2/SSE4.2/NEON) regardless of this feature | ✅ Yes |
 | `simd-avx512` | x86_64-only. Additionally forwards to `sonic-rs/avx512`; requires `RUSTFLAGS="-C target-cpu=native"` (or explicit `-C target-feature=+avx512f`) to actually take effect | No |
 | `schema-validation` | Schema validation engine | ✅ Yes |
 | `compression` | zlib/gzip/brotli/zstd decompression with per-session dictionaries | ✅ Yes |
