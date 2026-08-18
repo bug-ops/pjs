@@ -14,21 +14,17 @@ pub use partial::{
 
 pub mod aligned_alloc;
 pub mod buffer_pool;
-pub mod scanner;
 pub mod simd;
 pub mod simple;
 pub mod sonic;
-pub mod value;
 pub mod zero_copy;
 
 pub use aligned_alloc::{AlignedAllocator, aligned_allocator};
 pub use buffer_pool::{
     BufferPool, BufferSize, PoolConfig, PooledBuffer, SimdType, global_buffer_pool,
 };
-pub use scanner::{JsonScanner, ScanResult, StringLocation};
 pub use simple::{ParseConfig, ParseStats, SimpleParser};
 pub use sonic::{SonicConfig, SonicParser};
-pub use value::{JsonValue, LazyArray, LazyObject};
 pub use zero_copy::{IncrementalParser, LazyJsonValue, LazyParser, MemoryUsage, ZeroCopyParser};
 
 use crate::{Result, SemanticMeta};
