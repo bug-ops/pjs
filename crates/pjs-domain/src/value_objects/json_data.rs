@@ -485,6 +485,40 @@ impl<'de> Deserialize<'de> for JsonData {
     }
 }
 
+/// Upper bound, in bytes of `Element`s, on the *element count* a single
+/// `size_hint()`-driven preallocation may claim before any element has
+/// actually been read from the input.
+///
+/// This bounds `capacity * size_of::<Element>()`, not the resulting
+/// allocation's actual byte size — a `HashMap::with_capacity` call fed this
+/// count can still allocate a larger backing table once load-factor and
+/// power-of-two bucket rounding are applied (e.g. ~2.65 MiB observed for a
+/// 1 MiB-worth-of-elements `HashMap<String, JsonData>` capacity), same as
+/// with `serde`'s own equivalent cap.
+///
+/// Loosely follows the cap `serde`'s own container `Deserialize` impls use
+/// via `serde::__private::size_hint::cautious` — that path is not stable
+/// public API, so an equivalent bound is reimplemented here. This
+/// implementation intentionally diverges for zero-sized `Element`s: `serde`
+/// returns 0 (no cap needed, a ZST allocates no memory regardless of count),
+/// while this returns `MAX_PREALLOC_BYTES` (harmless for the `Element`
+/// types actually used by this module's visitors, both well over one byte).
+const MAX_PREALLOC_BYTES: usize = 1024 * 1024;
+
+/// Caps a deserializer-supplied `size_hint()` so a preallocation can never
+/// claim more than [`MAX_PREALLOC_BYTES`] worth of `Element`s.
+///
+/// For length-prefixed self-describing formats (MessagePack, CBOR, etc.)
+/// `size_hint()` reflects a value read directly from untrusted input before
+/// any element is validated; using it unbounded lets a few bytes of input
+/// claim an arbitrarily large allocation (CWE-789).
+fn cautious_capacity<Element>(hint: Option<usize>) -> usize {
+    match hint {
+        Some(hint) => hint.min(MAX_PREALLOC_BYTES / size_of::<Element>().max(1)),
+        None => 0,
+    }
+}
+
 struct JsonDataVisitor;
 
 impl<'de> Visitor<'de> for JsonDataVisitor {
@@ -548,7 +582,7 @@ impl<'de> Visitor<'de> for JsonDataVisitor {
     where
         A: SeqAccess<'de>,
     {
-        let mut vec = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        let mut vec = Vec::with_capacity(cautious_capacity::<JsonData>(seq.size_hint()));
         while let Some(elem) = seq.next_element()? {
             vec.push(elem);
         }
@@ -559,7 +593,8 @@ impl<'de> Visitor<'de> for JsonDataVisitor {
     where
         A: MapAccess<'de>,
     {
-        let mut obj = HashMap::with_capacity(map.size_hint().unwrap_or(0));
+        let mut obj =
+            HashMap::with_capacity(cautious_capacity::<(String, JsonData)>(map.size_hint()));
         while let Some((key, value)) = map.next_entry()? {
             obj.insert(key, value);
         }
@@ -693,5 +728,191 @@ mod tests {
         let json = serde_json::to_string(&data).unwrap();
         let back: JsonData = serde_json::from_str(&json).unwrap();
         assert_eq!(data, back);
+    }
+
+    #[test]
+    fn test_cautious_capacity_bounds_hostile_size_hint() {
+        // A malicious length-prefixed payload can claim any hint up to
+        // usize::MAX; the capped capacity must stay far below that,
+        // regardless of what the untrusted hint claims.
+        let capped = cautious_capacity::<JsonData>(Some(usize::MAX));
+        assert!(capped * size_of::<JsonData>() <= MAX_PREALLOC_BYTES);
+
+        let capped_pair = cautious_capacity::<(String, JsonData)>(Some(usize::MAX));
+        assert!(capped_pair * size_of::<(String, JsonData)>() <= MAX_PREALLOC_BYTES);
+
+        // A small, honest hint is never inflated beyond what was asked for.
+        assert_eq!(cautious_capacity::<JsonData>(Some(3)), 3);
+        assert_eq!(cautious_capacity::<JsonData>(None), 0);
+    }
+
+    #[test]
+    fn test_cautious_capacity_bounds_mid_range_hostile_size_hint() {
+        // usize::MAX overflows `capacity * size_of::<Element>()` and would
+        // panic with "capacity overflow" even without a cap, which doesn't
+        // exercise the actually-dangerous band: a hint large enough to
+        // succeed uncapped (100_000_000 elements * 56 bytes ~= 5.6 GB for
+        // `JsonData`) but far more than any legitimate payload needs.
+        let hint = 100_000_000;
+        let capped = cautious_capacity::<JsonData>(Some(hint));
+        assert!(capped < hint);
+        assert!(capped * size_of::<JsonData>() <= MAX_PREALLOC_BYTES);
+    }
+
+    /// Minimal hand-rolled `SeqAccess` that reports a hostile `size_hint()`
+    /// (`usize::MAX`) while only ever yielding `remaining` real elements —
+    /// simulates a length-prefixed format (MessagePack/CBOR) lying about
+    /// how many elements follow.
+    struct HostileSeqAccess {
+        remaining: usize,
+    }
+
+    impl<'de> SeqAccess<'de> for HostileSeqAccess {
+        type Error = serde_json::Error;
+
+        fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+        where
+            T: serde::de::DeserializeSeed<'de>,
+        {
+            if self.remaining == 0 {
+                return Ok(None);
+            }
+            self.remaining -= 1;
+            seed.deserialize(serde_json::Value::Null).map(Some)
+        }
+
+        fn size_hint(&self) -> Option<usize> {
+            Some(usize::MAX)
+        }
+    }
+
+    struct HostileSeqDeserializer;
+
+    impl<'de> Deserializer<'de> for HostileSeqDeserializer {
+        type Error = serde_json::Error;
+
+        fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+        where
+            V: Visitor<'de>,
+        {
+            visitor.visit_seq(HostileSeqAccess { remaining: 3 })
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple
+            tuple_struct map struct enum identifier ignored_any
+        }
+    }
+
+    #[test]
+    fn test_visit_seq_ignores_hostile_size_hint() {
+        // If size_hint() were trusted directly, `Vec::with_capacity` would
+        // panic with "capacity overflow" (usize::MAX * size_of::<JsonData>()
+        // overflows) before reaching this assertion; see
+        // test_cautious_capacity_bounds_mid_range_hostile_size_hint for a
+        // hint that stays within range and would actually allocate.
+        let result: JsonData = JsonData::deserialize(HostileSeqDeserializer).unwrap();
+        assert_eq!(
+            result,
+            JsonData::Array(vec![JsonData::Null, JsonData::Null, JsonData::Null])
+        );
+    }
+
+    /// Minimal hand-rolled `MapAccess` counterpart to [`HostileSeqAccess`].
+    struct HostileMapAccess {
+        remaining: usize,
+    }
+
+    impl<'de> MapAccess<'de> for HostileMapAccess {
+        type Error = serde_json::Error;
+
+        fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
+        where
+            K: serde::de::DeserializeSeed<'de>,
+        {
+            if self.remaining == 0 {
+                return Ok(None);
+            }
+            self.remaining -= 1;
+            seed.deserialize(serde_json::Value::String(format!("k{}", self.remaining)))
+                .map(Some)
+        }
+
+        fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
+        where
+            V: serde::de::DeserializeSeed<'de>,
+        {
+            seed.deserialize(serde_json::Value::Null)
+        }
+
+        fn size_hint(&self) -> Option<usize> {
+            Some(usize::MAX)
+        }
+    }
+
+    struct HostileMapDeserializer;
+
+    impl<'de> Deserializer<'de> for HostileMapDeserializer {
+        type Error = serde_json::Error;
+
+        fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+        where
+            V: Visitor<'de>,
+        {
+            visitor.visit_map(HostileMapAccess { remaining: 2 })
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple
+            tuple_struct map struct enum identifier ignored_any
+        }
+    }
+
+    #[test]
+    fn test_visit_map_ignores_hostile_size_hint() {
+        let result: JsonData = JsonData::deserialize(HostileMapDeserializer).unwrap();
+        assert!(result.is_object());
+        assert_eq!(result.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_serde_json_to_value_roundtrip_primitives() {
+        let data = JsonData::string("hello");
+        let value = serde_json::to_value(&data).unwrap();
+        let back = JsonData::from(value);
+        assert_eq!(data, back);
+    }
+
+    #[test]
+    fn test_serde_json_to_value_roundtrip_complex() {
+        let data = JsonData::object(
+            [
+                ("name".to_string(), JsonData::string("John")),
+                ("age".to_string(), JsonData::integer(30)),
+                ("active".to_string(), JsonData::bool(true)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let value = serde_json::to_value(&data).unwrap();
+        let back = JsonData::from(value);
+        assert_eq!(data, back);
+    }
+
+    #[test]
+    fn test_non_finite_float_serializes_as_json_null() {
+        // JsonData::float() rejects NaN/infinite values, so this bypasses
+        // the validating constructor directly (only possible inside this
+        // crate) to exercise the Serialize impl's non-finite branch, which
+        // is the single canonical conversion path now that the divergent
+        // JsonAdapter::to_serde_value (NaN/Infinity -> 0) is removed.
+        for non_finite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let data = JsonData::Float(non_finite);
+            let value = serde_json::to_value(&data).unwrap();
+            assert_eq!(value, serde_json::Value::Null);
+        }
     }
 }
