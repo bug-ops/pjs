@@ -4,13 +4,14 @@
 //! without depending on external serialization libraries in the domain layer.
 
 use crate::{DomainError, DomainResult};
-use serde::{Deserialize, Serialize};
+use serde::de::{Deserialize, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor};
+use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use std::collections::HashMap;
 use std::fmt;
 
 /// Domain-specific representation of JSON-like data
 /// This replaces serde_json::Value to maintain Clean Architecture principles
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub enum JsonData {
     #[default]
@@ -411,6 +412,161 @@ impl From<serde_json::Value> for JsonData {
     }
 }
 
+/// Serializes [`JsonData`] as a plain JSON value rather than as a Rust enum
+/// (which would wrap every non-unit variant in a `{"VariantName": ...}`
+/// tag). This keeps the wire representation identical to what a client
+/// actually sent, and symmetric with the [`Deserialize`] impl below, which
+/// expects plain JSON on the way in.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs_domain::value_objects::JsonData;
+/// use std::collections::HashMap;
+///
+/// let data = JsonData::object(HashMap::from([
+///     ("a".to_string(), JsonData::integer(1)),
+/// ]));
+/// assert_eq!(serde_json::to_string(&data).unwrap(), r#"{"a":1}"#);
+/// ```
+impl Serialize for JsonData {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            JsonData::Null => serializer.serialize_unit(),
+            JsonData::Bool(b) => serializer.serialize_bool(*b),
+            JsonData::Integer(i) => serializer.serialize_i64(*i),
+            JsonData::Float(f) => serializer.serialize_f64(*f),
+            JsonData::String(s) => serializer.serialize_str(s),
+            JsonData::Array(arr) => {
+                let mut seq = serializer.serialize_seq(Some(arr.len()))?;
+                for item in arr {
+                    seq.serialize_element(item)?;
+                }
+                seq.end()
+            }
+            JsonData::Object(obj) => {
+                let mut map = serializer.serialize_map(Some(obj.len()))?;
+                for (key, value) in obj {
+                    map.serialize_entry(key, value)?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+/// Deserializes JSON input directly into [`JsonData`], skipping the
+/// intermediate `serde_json::Value` tree that `From<serde_json::Value>`
+/// would otherwise require building and then walking a second time.
+///
+/// The implementation drives a [`Visitor`] through
+/// [`Deserializer::deserialize_any`], so it works with any self-describing
+/// format (not just `serde_json`) and constructs each [`JsonData`] variant
+/// in a single pass over the input.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs_domain::value_objects::JsonData;
+///
+/// let data: JsonData = serde_json::from_str(r#"{"a": 1, "b": [true, null]}"#).unwrap();
+/// assert!(data.is_object());
+/// assert_eq!(data.get("a").and_then(JsonData::as_i64), Some(1));
+/// ```
+impl<'de> Deserialize<'de> for JsonData {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(JsonDataVisitor)
+    }
+}
+
+struct JsonDataVisitor;
+
+impl<'de> Visitor<'de> for JsonDataVisitor {
+    type Value = JsonData;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a valid JSON value")
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(JsonData::Null)
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(JsonData::Null)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+        Ok(JsonData::Bool(v))
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+        Ok(JsonData::Integer(v))
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+        match i64::try_from(v) {
+            Ok(i) => Ok(JsonData::Integer(i)),
+            Err(_) => Ok(JsonData::Float(v as f64)),
+        }
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+    where
+        E: DeError,
+    {
+        if v.is_nan() || v.is_infinite() {
+            return Err(E::custom(
+                "JSON does not support NaN or infinite float values (RFC 8259 §6)",
+            ));
+        }
+        Ok(JsonData::Float(v))
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+        Ok(JsonData::String(v.to_owned()))
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E> {
+        Ok(JsonData::String(v))
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut vec = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(elem) = seq.next_element()? {
+            vec.push(elem);
+        }
+        Ok(JsonData::Array(vec))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut obj = HashMap::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some((key, value)) = map.next_entry()? {
+            obj.insert(key, value);
+        }
+        Ok(JsonData::Object(obj))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,5 +644,54 @@ mod tests {
         let display = format!("{data}");
         assert!(display.contains("name"));
         assert!(display.contains("John"));
+    }
+
+    #[test]
+    fn test_deserialize_rejects_nan_float() {
+        use serde::de::IntoDeserializer;
+        let deserializer: serde::de::value::F64Deserializer<serde::de::value::Error> =
+            f64::NAN.into_deserializer();
+        let result: Result<JsonData, _> = JsonData::deserialize(deserializer);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rejects_infinite_float() {
+        use serde::de::IntoDeserializer;
+        let deserializer: serde::de::value::F64Deserializer<serde::de::value::Error> =
+            f64::INFINITY.into_deserializer();
+        let result: Result<JsonData, _> = JsonData::deserialize(deserializer);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_malformed_json_errors() {
+        let result: Result<JsonData, _> = serde_json::from_str("{not valid json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_large_u64_becomes_float() {
+        let data: JsonData = serde_json::from_str(&u64::MAX.to_string()).unwrap();
+        assert!(matches!(data, JsonData::Float(_)));
+    }
+
+    #[test]
+    fn test_deserialize_unicode_string_roundtrip() {
+        let original = JsonData::string("Hello, 世界 🦀");
+        let json = serde_json::to_string(&original).unwrap();
+        let back: JsonData = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, back);
+    }
+
+    #[test]
+    fn test_deserialize_deeply_nested_roundtrip() {
+        let mut data = JsonData::string("leaf");
+        for _ in 0..64 {
+            data = JsonData::array(vec![data]);
+        }
+        let json = serde_json::to_string(&data).unwrap();
+        let back: JsonData = serde_json::from_str(&json).unwrap();
+        assert_eq!(data, back);
     }
 }

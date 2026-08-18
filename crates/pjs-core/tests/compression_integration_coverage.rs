@@ -384,7 +384,6 @@ fn test_decompress_frame_with_none_strategy() {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -417,7 +416,6 @@ fn test_decompress_frame_with_dictionary_metadata() {
             strategy: CompressionStrategy::None,
             dictionary_map: dict_map,
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -449,7 +447,6 @@ fn test_decompress_frame_with_delta_bases_metadata() {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases,
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -478,7 +475,6 @@ fn test_decompress_multiple_frames_updates_stats() {
                 strategy: CompressionStrategy::None,
                 dictionary_map: HashMap::new(),
                 delta_bases: HashMap::new(),
-                priority_hints: HashMap::new(),
             },
         };
 
@@ -574,7 +570,6 @@ fn test_decompress_deeply_nested_structure() {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -743,7 +738,6 @@ fn test_decompression_stats_running_average() {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -768,7 +762,6 @@ fn test_decompression_stats_running_average() {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 

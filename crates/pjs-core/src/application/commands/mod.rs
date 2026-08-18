@@ -1,9 +1,11 @@
 //! Commands - Write operations that change system state
 
 use crate::application::dto::{PriorityDto, SessionIdDto, StreamIdDto};
-use crate::domain::{aggregates::stream_session::SessionConfig, entities::stream::StreamConfig};
+use crate::domain::{
+    aggregates::stream_session::SessionConfig, entities::stream::StreamConfig,
+    value_objects::JsonData,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 
 /// Create new streaming session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +26,7 @@ pub struct CreateStreamCommand {
     /// Identifier of the parent session.
     pub session_id: SessionIdDto,
     /// JSON payload that will be decomposed into priority frames.
-    pub source_data: JsonValue,
+    pub source_data: JsonData,
     /// Optional per-stream configuration overriding session defaults.
     pub config: Option<StreamConfig>,
 }

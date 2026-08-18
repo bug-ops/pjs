@@ -60,8 +60,6 @@ pub struct DecompressionMetadata {
     pub dictionary_map: HashMap<u16, String>,
     /// Delta base values for numeric decompression
     pub delta_bases: HashMap<String, f64>,
-    /// Priority-specific decompression hints
-    pub priority_hints: HashMap<u8, String>,
 }
 
 impl StreamingCompressor {
@@ -200,7 +198,6 @@ impl StreamingCompressor {
             strategy: compressed_data.strategy.clone(),
             dictionary_map,
             delta_bases,
-            priority_hints: HashMap::new(), // TODO(#448): Add priority-specific hints
         })
     }
 }
@@ -671,7 +668,6 @@ mod tests {
                 strategy: CompressionStrategy::None,
                 dictionary_map: HashMap::new(),
                 delta_bases: HashMap::new(),
-                priority_hints: HashMap::new(),
             },
         };
 
@@ -1151,7 +1147,6 @@ mod tests {
                 },
                 dictionary_map: HashMap::new(),
                 delta_bases: HashMap::new(),
-                priority_hints: HashMap::new(),
             },
         };
 
@@ -1257,7 +1252,6 @@ mod tests {
                 strategy: CompressionStrategy::None,
                 dictionary_map: HashMap::new(),
                 delta_bases: HashMap::new(),
-                priority_hints: HashMap::new(),
             },
         };
 
@@ -1478,7 +1472,6 @@ mod tests {
             strategy: CompressionStrategy::Dictionary { dictionary: dict },
             dictionary_map,
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         };
 
         let result = decompressor.decompress_data(&compressed_data, &metadata);
@@ -1511,7 +1504,6 @@ mod tests {
             strategy: CompressionStrategy::Delta { base_values: bases },
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         };
 
         let result = decompressor.decompress_data(&compressed_data, &metadata);
@@ -1534,7 +1526,6 @@ mod tests {
             strategy: CompressionStrategy::RunLength,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         };
 
         let result = decompressor.decompress_data(&compressed_data, &metadata);
@@ -1572,7 +1563,6 @@ mod tests {
             },
             dictionary_map,
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         };
 
         let result = decompressor.decompress_data(&compressed_data, &metadata);
@@ -1740,7 +1730,6 @@ mod tests {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         };
         metadata.dictionary_map.insert(0, "hello".to_string());
         metadata.dictionary_map.insert(1, "world".to_string());
@@ -1762,7 +1751,6 @@ mod tests {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         };
         metadata.delta_bases.insert("value1".to_string(), 100.0);
         metadata.delta_bases.insert("value2".to_string(), 200.0);

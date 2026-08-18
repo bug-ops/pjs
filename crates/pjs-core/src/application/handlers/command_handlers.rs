@@ -1,10 +1,7 @@
 //! Command handlers implementing business use cases
 
 use crate::{
-    application::{
-        ApplicationError, ApplicationResult, commands::*, dto::JsonDataDto,
-        handlers::CommandHandlerGat,
-    },
+    application::{ApplicationError, ApplicationResult, commands::*, handlers::CommandHandlerGat},
     domain::{
         aggregates::StreamSession,
         config::limits::{MAX_FRAMES_PER_REQUEST, MAX_SESSION_TIMEOUT_SECONDS},
@@ -13,7 +10,7 @@ use crate::{
             DictionaryStore, EventPublisherGat, FrameStoreGat, NoopDictionaryStore,
             StreamRepositoryGat,
         },
-        value_objects::{JsonData, SessionId, StreamId},
+        value_objects::{SessionId, StreamId},
     },
     infrastructure::adapters::InMemoryFrameStore,
 };
@@ -259,10 +256,8 @@ where
 
             let mut session = self.load_session(command.session_id.into()).await?;
 
-            // Convert at application boundary (DTO -> Domain)
-            let domain_data: JsonData = JsonDataDto::from(command.source_data).into();
             let stream_id = session
-                .create_stream(domain_data)
+                .create_stream(command.source_data)
                 .map_err(ApplicationError::Domain)?;
 
             // Update stream configuration if provided
@@ -792,7 +787,7 @@ mod tests {
         // Then create a stream
         let create_stream_cmd = CreateStreamCommand {
             session_id: session_id.into(),
-            source_data: serde_json::json!({"test": "data"}),
+            source_data: serde_json::json!({"test": "data"}).into(),
             config: None,
         };
 
@@ -824,7 +819,7 @@ mod tests {
         let stream_config = crate::domain::entities::stream::StreamConfig::default();
         let create_stream_cmd = CreateStreamCommand {
             session_id: session_id.into(),
-            source_data: serde_json::json!({"test": "data"}),
+            source_data: serde_json::json!({"test": "data"}).into(),
             config: Some(stream_config),
         };
 
@@ -841,7 +836,7 @@ mod tests {
         let non_existent_session_id = SessionId::new();
         let create_stream_cmd = CreateStreamCommand {
             session_id: non_existent_session_id.into(),
-            source_data: serde_json::json!({"test": "data"}),
+            source_data: serde_json::json!({"test": "data"}).into(),
             config: None,
         };
 
@@ -873,7 +868,7 @@ mod tests {
         let stream_id = handler
             .handle(CreateStreamCommand {
                 session_id: session_id.into(),
-                source_data: serde_json::json!({"test": "data"}),
+                source_data: serde_json::json!({"test": "data"}).into(),
                 config: None,
             })
             .await
@@ -928,7 +923,7 @@ mod tests {
         let stream_id = handler
             .handle(CreateStreamCommand {
                 session_id: session_id.into(),
-                source_data: serde_json::json!({"test": "data"}),
+                source_data: serde_json::json!({"test": "data"}).into(),
                 config: None,
             })
             .await
@@ -973,7 +968,7 @@ mod tests {
         let stream_id = handler
             .handle(CreateStreamCommand {
                 session_id: session_id.into(),
-                source_data: serde_json::json!({"test": "data"}),
+                source_data: serde_json::json!({"test": "data"}).into(),
                 config: None,
             })
             .await
@@ -1198,7 +1193,7 @@ mod tests {
         let stream_id = handler
             .handle(CreateStreamCommand {
                 session_id: session_id.into(),
-                source_data: serde_json::json!({"items": [1, 2, 3, 4]}),
+                source_data: serde_json::json!({"items": [1, 2, 3, 4]}).into(),
                 config: None,
             })
             .await
@@ -1299,7 +1294,7 @@ mod tests {
         let result = handler
             .handle(CreateStreamCommand {
                 session_id: SessionId::new().into(),
-                source_data: serde_json::Value::Null,
+                source_data: serde_json::Value::Null.into(),
                 config: None,
             })
             .await;

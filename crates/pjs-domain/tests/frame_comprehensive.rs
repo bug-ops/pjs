@@ -832,6 +832,28 @@ fn test_frame_roundtrip_all_patch_operations() {
 }
 
 #[test]
+fn test_frame_patch_payload_serializes_as_plain_json() {
+    let stream_id = StreamId::new();
+    let patch = FramePatch::set(JsonPath::new("$.a").unwrap(), JsonData::Integer(1));
+    let frame = Frame::patch(stream_id, 1, Priority::HIGH, vec![patch]).unwrap();
+
+    let payload_json = serde_json::to_value(frame.payload()).unwrap();
+
+    // Regression: JsonData must serialize as plain JSON (matching what a JS/WASM
+    // client actually receives), not as a tagged Rust enum like
+    // `{"Object": {"patches": {"Array": [...]}}}` — under that shape the JS
+    // client's `payload.patches` read silently returned `undefined`.
+    let patches = payload_json
+        .get("patches")
+        .and_then(|p| p.as_array())
+        .expect("payload.patches must be a plain JSON array");
+    assert_eq!(patches.len(), 1);
+    assert_eq!(patches[0]["path"], "$.a");
+    assert_eq!(patches[0]["operation"], "set");
+    assert_eq!(patches[0]["value"], 1);
+}
+
+#[test]
 fn test_frame_serialize_format_stable() {
     let stream_id = StreamId::new();
     let frame = Frame::skeleton(stream_id, 1, JsonData::Null);

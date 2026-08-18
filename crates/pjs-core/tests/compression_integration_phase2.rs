@@ -46,7 +46,6 @@ fn test_decompress_frame_with_dictionary_strategy() {
             },
             dictionary_map: dict_map,
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -78,7 +77,6 @@ fn test_decompress_frame_with_delta_strategy() {
             },
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -106,7 +104,6 @@ fn test_decompress_frame_with_runlength_strategy() {
             strategy: CompressionStrategy::RunLength,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -141,7 +138,6 @@ fn test_decompress_frame_with_hybrid_strategy() {
             },
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -177,7 +173,6 @@ fn test_decompress_delta_via_frame() {
             },
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -212,7 +207,6 @@ fn test_decompress_delta_missing_base_treated_as_regular_array() {
             },
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -245,7 +239,6 @@ fn test_decompress_delta_invalid_delta_value_error() {
             },
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -277,7 +270,6 @@ fn test_decompress_rle_malformed_rle_value_only() {
             strategy: CompressionStrategy::RunLength,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -305,7 +297,6 @@ fn test_decompress_rle_malformed_count_only() {
             strategy: CompressionStrategy::RunLength,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -333,7 +324,6 @@ fn test_decompress_rle_invalid_count_type() {
             strategy: CompressionStrategy::RunLength,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -361,7 +351,6 @@ fn test_decompress_rle_exceeds_max_count() {
             strategy: CompressionStrategy::RunLength,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -395,7 +384,6 @@ fn test_decompress_rle_total_size_exceeds_limit() {
             strategy: CompressionStrategy::RunLength,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -423,7 +411,6 @@ fn test_decompress_rle_zero_count() {
             strategy: CompressionStrategy::RunLength,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -575,7 +562,6 @@ fn test_decompressor_stats_increments() {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -607,7 +593,6 @@ fn test_decompressor_running_average() {
                 strategy: CompressionStrategy::None,
                 dictionary_map: HashMap::new(),
                 delta_bases: HashMap::new(),
-                priority_hints: HashMap::new(),
             },
         };
 
@@ -1324,7 +1309,6 @@ fn test_metadata_update_with_dictionary() {
             },
             dictionary_map: dict_map,
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -1361,7 +1345,6 @@ fn test_metadata_update_with_delta_bases() {
             },
             dictionary_map: HashMap::new(),
             delta_bases,
-            priority_hints: HashMap::new(),
         },
     };
 
@@ -1472,7 +1455,6 @@ fn test_decompress_frame_preserves_original_frame_data() {
             strategy: CompressionStrategy::None,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
-            priority_hints: HashMap::new(),
         },
     };
 
