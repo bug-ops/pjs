@@ -6,7 +6,7 @@ use crate::{
         SessionState,
         entities::Stream,
         ports::{
-            FrameStoreGat, Pagination, SessionQueryCriteria, SortOrder as RepoSortOrder,
+            FrameStoreGat, SessionPagination, SessionQueryCriteria, SortOrder as RepoSortOrder,
             StreamRepositoryGat, StreamStoreGat,
         },
     },
@@ -81,7 +81,7 @@ where
             let limit = query.limit.unwrap_or(MAX_PAGE_SIZE).min(MAX_PAGE_SIZE);
             let offset = query.offset.unwrap_or(0);
 
-            let pagination = Pagination {
+            let pagination = SessionPagination {
                 offset,
                 limit,
                 sort_by: None,
@@ -178,7 +178,7 @@ where
                 _ => RepoSortOrder::Ascending,
             };
 
-            let pagination = Pagination {
+            let pagination = SessionPagination {
                 offset,
                 limit,
                 sort_by,
@@ -1606,6 +1606,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_search_sessions_sort_by_updated_at_descending() {
+        use crate::domain::value_objects::JsonData;
+
+        let clock = std::sync::Arc::new(FixedTimeProvider::new());
+        let repository = Arc::new(MockRepository::new());
+
+        // Both sessions created back-to-back; only `touched`'s later mutation
+        // advances its `updated_at` past `untouched`'s.
+        let mut untouched =
+            StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        untouched.activate().unwrap();
+        let untouched_id = untouched.id();
+
+        let mut touched =
+            StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        touched.activate().unwrap();
+        touched
+            .create_stream(JsonData::from(serde_json::json!({"k": "v"})))
+            .unwrap();
+        let touched_id = touched.id();
+
+        assert!(touched.updated_at() > untouched.updated_at());
+
+        repository.add_session(untouched);
+        repository.add_session(touched);
+        let handler = SessionQueryHandler::new(repository);
+
+        let query = SearchSessionsQuery {
+            filters: SessionFilters::default(),
+            sort_by: Some(SessionSortField::UpdatedAt),
+            sort_order: Some(SortOrder::Descending),
+            limit: None,
+            offset: None,
+        };
+
+        let result = QueryHandlerGat::handle(&handler, query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        let ids: Vec<_> = response.sessions.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec![touched_id, untouched_id]);
+    }
+
+    #[tokio::test]
     async fn test_search_sessions_created_after_before_filter() {
         let clock = std::sync::Arc::new(FixedTimeProvider::new());
         let repository = Arc::new(MockRepository::new());
@@ -1797,10 +1840,10 @@ mod tests {
     }
 
     /// Regression test: `limit=0` and an offset beyond `MAX_PAGINATION_OFFSET`
-    /// must not surface `Pagination::validate()`'s `DomainError::InvalidInput`
+    /// must not surface `SessionPagination::validate()`'s `DomainError::InvalidInput`
     /// (which the HTTP layer maps to a 500). The handler must clamp both
     /// before they reach the repository. Uses the real
-    /// `GatInMemoryStreamRepository` so `Pagination::validate()` actually runs.
+    /// `GatInMemoryStreamRepository` so `SessionPagination::validate()` actually runs.
     #[tokio::test]
     async fn test_search_sessions_limit_zero_and_excessive_offset_do_not_error() {
         use crate::infrastructure::GatInMemoryStreamRepository;

@@ -12,7 +12,7 @@ use crate::domain::{
     entities::{Frame, stream::StreamConfig},
     events::DomainEvent,
     ports::{
-        Pagination, SessionHealthSnapshot, SessionQueryCriteria, SessionQueryResult,
+        SessionHealthSnapshot, SessionPagination, SessionQueryCriteria, SessionQueryResult,
         SessionSortField, SortOrder, StreamRepositoryGat,
     },
     value_objects::{JsonData, Priority, SessionId, StreamId},
@@ -285,7 +285,7 @@ impl StreamRepositoryGat for MockRepository {
     fn find_sessions_by_criteria(
         &self,
         criteria: SessionQueryCriteria,
-        pagination: Pagination,
+        pagination: SessionPagination,
     ) -> Self::FindSessionsByCriteriaFuture<'_> {
         async move {
             let mut sessions: Vec<_> = self

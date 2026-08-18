@@ -9,7 +9,7 @@ use pjson_rs::domain::{
     entities::Stream,
     events::DomainEvent,
     ports::{
-        EventPublisherGat, Pagination, PriorityDistribution, SessionHealthSnapshot,
+        EventPublisherGat, PriorityDistribution, SessionHealthSnapshot, SessionPagination,
         SessionQueryCriteria, SessionQueryResult, StreamFilter, StreamRepositoryGat,
         StreamStatistics, StreamStatus, StreamStoreGat,
     },
@@ -281,7 +281,7 @@ impl StreamRepositoryGat for MockRepository {
     fn find_sessions_by_criteria(
         &self,
         _criteria: SessionQueryCriteria,
-        pagination: Pagination,
+        pagination: SessionPagination,
     ) -> Self::FindSessionsByCriteriaFuture<'_> {
         async move {
             let sessions: Vec<_> = self.sessions.lock().values().cloned().collect();

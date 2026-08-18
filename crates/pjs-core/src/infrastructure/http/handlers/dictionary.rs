@@ -91,7 +91,7 @@ mod tests {
             entities::Stream,
             events::DomainEvent,
             ports::{
-                EventPublisherGat, Pagination, PriorityDistribution, SessionHealthSnapshot,
+                EventPublisherGat, PriorityDistribution, SessionHealthSnapshot, SessionPagination,
                 SessionQueryCriteria, SessionQueryResult, StreamFilter, StreamRepositoryGat,
                 StreamStatistics, StreamStatus, StreamStoreGat,
             },
@@ -301,7 +301,7 @@ mod tests {
         fn find_sessions_by_criteria(
             &self,
             _: SessionQueryCriteria,
-            p: Pagination,
+            p: SessionPagination,
         ) -> Self::FindSessionsByCriteriaFuture<'_> {
             async move {
                 let all: Vec<_> = self.0.lock().values().cloned().collect();

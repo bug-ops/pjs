@@ -24,9 +24,10 @@ pub use gat::{
 
 // Supporting types only (no async_trait traits)
 pub use repositories::{
-    CacheExtensions, CacheStatistics, FrameQueryResult, Pagination, PriorityDistribution,
-    SessionHealthSnapshot, SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder,
-    StreamFilter, StreamMetadata, StreamStatistics, StreamStatus,
+    CacheExtensions, CacheStatistics, FramePagination, FrameQueryResult, FrameSortField,
+    Pagination, PriorityDistribution, SessionHealthSnapshot, SessionPagination,
+    SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder, StreamFilter,
+    StreamMetadata, StreamStatistics, StreamStatus,
 };
 
 pub use writer::{
