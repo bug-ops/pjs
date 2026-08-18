@@ -10,7 +10,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use pjson_rs::{
     domain::{
         aggregates::{StreamSession, stream_session::SessionConfig},
-        ports::{Pagination, SessionQueryCriteria, StreamRepositoryGat},
+        ports::{SessionPagination, SessionQueryCriteria, StreamRepositoryGat},
         value_objects::SessionId,
     },
     infrastructure::adapters::GatInMemoryStreamRepository,
@@ -108,7 +108,7 @@ fn bench_find_sessions_by_criteria(c: &mut Criterion) {
             ..Default::default()
         };
 
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 0,
             limit: 100,
             ..Default::default()

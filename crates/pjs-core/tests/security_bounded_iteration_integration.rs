@@ -9,7 +9,7 @@ use pjson_rs::domain::{
     DomainError,
     config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET},
     ports::repositories::{
-        Pagination, SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder,
+        SessionPagination, SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder,
     },
 };
 use pjson_rs::infrastructure::adapters::{
@@ -23,7 +23,7 @@ mod entry_validation_tests {
 
     #[test]
     fn test_pagination_validation_rejects_zero_limit() {
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 0,
             limit: 0,
             sort_by: None,
@@ -38,7 +38,7 @@ mod entry_validation_tests {
 
     #[test]
     fn test_pagination_validation_rejects_excessive_limit() {
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 0,
             limit: MAX_PAGINATION_LIMIT + 1,
             sort_by: None,
@@ -51,7 +51,7 @@ mod entry_validation_tests {
 
     #[test]
     fn test_pagination_validation_rejects_excessive_offset() {
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: MAX_PAGINATION_OFFSET + 1,
             limit: 10,
             sort_by: None,
@@ -73,7 +73,7 @@ mod entry_validation_tests {
             SessionSortField::StreamCount,
             SessionSortField::TotalBytes,
         ] {
-            let pagination = Pagination {
+            let pagination = SessionPagination {
                 offset: 0,
                 limit: 10,
                 sort_by: Some(field),
@@ -234,7 +234,7 @@ mod end_to_end_security_tests {
         }
 
         // Step 2: Simulate user pagination input - should pass validation
-        let user_pagination = Pagination {
+        let user_pagination = SessionPagination {
             offset: 0,
             limit: 50, // Within limits, larger than dataset
             sort_by: Some(SessionSortField::CreatedAt),
@@ -278,7 +278,7 @@ mod end_to_end_security_tests {
         }
 
         // Request only 50 items
-        let user_pagination = Pagination {
+        let user_pagination = SessionPagination {
             offset: 0,
             limit: 50,
             sort_by: None,
@@ -307,7 +307,7 @@ mod end_to_end_security_tests {
         // "created_at; DELETE FROM sessions--" cannot be constructed at all.
 
         // Attempt resource exhaustion via huge offset
-        let dos_pagination = Pagination {
+        let dos_pagination = SessionPagination {
             offset: usize::MAX / 2,
             limit: 10,
             sort_by: None,

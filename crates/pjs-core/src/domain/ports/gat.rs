@@ -23,8 +23,9 @@ use std::time::Duration;
 
 // Re-export supporting types for convenience
 pub use super::repositories::{
-    CacheExtensions, CacheStatistics, FrameQueryResult, Pagination, PriorityDistribution,
-    SessionHealthSnapshot, SessionQueryCriteria, SessionQueryResult, SortOrder, StreamFilter,
+    CacheExtensions, CacheStatistics, FramePagination, FrameQueryResult, FrameSortField,
+    Pagination, PriorityDistribution, SessionHealthSnapshot, SessionPagination,
+    SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder, StreamFilter,
     StreamMetadata, StreamStatistics, StreamStatus,
 };
 pub use super::writer::{
@@ -217,7 +218,7 @@ gat_port! {
         async fn find_sessions_by_criteria(
             &self,
             criteria: SessionQueryCriteria,
-            pagination: Pagination
+            pagination: SessionPagination
         ) -> SessionQueryResult;
 
         /// Get session health snapshot
@@ -468,7 +469,7 @@ gat_port! {
             &self,
             stream_id: StreamId,
             priority_filter: Option<Priority>,
-            pagination: Pagination
+            pagination: FramePagination
         ) -> FrameQueryResult;
 
         /// Get frames by JSON path

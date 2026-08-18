@@ -368,7 +368,9 @@ mod tests {
     use crate::domain::{
         entities::Frame,
         events::DomainEvent,
-        ports::{Pagination, SessionHealthSnapshot, SessionQueryCriteria, SessionQueryResult},
+        ports::{
+            SessionHealthSnapshot, SessionPagination, SessionQueryCriteria, SessionQueryResult,
+        },
         value_objects::{JsonData, StreamId},
     };
     use chrono::Utc;
@@ -631,7 +633,7 @@ mod tests {
         fn find_sessions_by_criteria(
             &self,
             _criteria: SessionQueryCriteria,
-            pagination: Pagination,
+            pagination: SessionPagination,
         ) -> Self::FindSessionsByCriteriaFuture<'_> {
             async move {
                 let sessions = self.sessions.read().await;

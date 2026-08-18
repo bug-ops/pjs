@@ -13,7 +13,7 @@
 use chrono::Utc;
 use pjson_rs::domain::{
     ports::repositories::{
-        CacheStatistics, Pagination, SessionQueryCriteria, SessionSortField, SortOrder,
+        CacheStatistics, SessionPagination, SessionQueryCriteria, SessionSortField, SortOrder,
         StreamFilter, StreamMetadata, StreamStatus,
     },
     value_objects::Priority,
@@ -21,12 +21,12 @@ use pjson_rs::domain::{
 use std::collections::HashMap;
 
 // ============================================================================
-// Pagination Tests
+// SessionPagination Tests
 // ============================================================================
 
 #[test]
 fn test_pagination_default() {
-    let pagination = Pagination::default();
+    let pagination = SessionPagination::default();
     assert_eq!(pagination.offset, 0);
     assert_eq!(pagination.limit, 50);
     assert!(pagination.sort_by.is_none());
@@ -35,7 +35,7 @@ fn test_pagination_default() {
 
 #[test]
 fn test_pagination_custom() {
-    let pagination = Pagination {
+    let pagination = SessionPagination {
         offset: 10,
         limit: 100,
         sort_by: Some(SessionSortField::CreatedAt),
@@ -50,7 +50,7 @@ fn test_pagination_custom() {
 
 #[test]
 fn test_pagination_zero_offset() {
-    let pagination = Pagination {
+    let pagination = SessionPagination {
         offset: 0,
         limit: 10,
         sort_by: None,
@@ -62,7 +62,7 @@ fn test_pagination_zero_offset() {
 
 #[test]
 fn test_pagination_large_offset() {
-    let pagination = Pagination {
+    let pagination = SessionPagination {
         offset: usize::MAX,
         limit: 10,
         sort_by: None,
@@ -74,7 +74,7 @@ fn test_pagination_large_offset() {
 
 #[test]
 fn test_pagination_large_limit() {
-    let pagination = Pagination {
+    let pagination = SessionPagination {
         offset: 0,
         limit: usize::MAX,
         sort_by: None,
@@ -503,14 +503,14 @@ fn test_cache_statistics_debug() {
 
 #[test]
 fn test_pagination_boundary_values() {
-    let min_pagination = Pagination {
+    let min_pagination = SessionPagination {
         offset: 0,
         limit: 1,
         sort_by: None,
         sort_order: SortOrder::Ascending,
     };
 
-    let max_pagination = Pagination {
+    let max_pagination = SessionPagination {
         offset: usize::MAX - 1,
         limit: usize::MAX,
         sort_by: None,
@@ -586,9 +586,9 @@ fn test_cache_statistics_extreme_values() {
 
 #[test]
 fn test_pagination_type_safety() {
-    fn takes_pagination(_pagination: Pagination) {}
+    fn takes_pagination(_pagination: SessionPagination) {}
 
-    let p = Pagination::default();
+    let p = SessionPagination::default();
     takes_pagination(p);
 }
 
@@ -625,7 +625,7 @@ fn test_stream_metadata_type_safety() {
 
 #[test]
 fn test_pagination_with_sorting() {
-    let pagination = Pagination {
+    let pagination = SessionPagination {
         offset: 0,
         limit: 20,
         sort_by: Some(SessionSortField::CreatedAt),

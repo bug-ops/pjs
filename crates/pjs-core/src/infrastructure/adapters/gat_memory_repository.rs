@@ -59,7 +59,7 @@ use crate::domain::{
     },
     events::DomainEvent,
     ports::{
-        Pagination, PriorityDistribution, SessionHealthSnapshot, SessionQueryCriteria,
+        PriorityDistribution, SessionHealthSnapshot, SessionPagination, SessionQueryCriteria,
         SessionQueryResult, SessionSortField, SortOrder, StreamFilter, StreamRepositoryGat,
         StreamStatistics, StreamStatus, StreamStoreGat,
     },
@@ -585,7 +585,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
     fn find_sessions_by_criteria(
         &self,
         criteria: SessionQueryCriteria,
-        pagination: Pagination,
+        pagination: SessionPagination,
     ) -> Self::FindSessionsByCriteriaFuture<'_> {
         async move {
             // Validate inputs first
@@ -1061,7 +1061,7 @@ mod tests {
 
         // Empty criteria should return all sessions
         let criteria = SessionQueryCriteria::default();
-        let pagination = Pagination::default();
+        let pagination = SessionPagination::default();
 
         let result = repo
             .find_sessions_by_criteria(criteria, pagination)
@@ -1092,7 +1092,7 @@ mod tests {
             states: Some(vec!["Active".to_string()]),
             ..Default::default()
         };
-        let pagination = Pagination::default();
+        let pagination = SessionPagination::default();
 
         let result = repo
             .find_sessions_by_criteria(criteria, pagination)
@@ -1119,7 +1119,7 @@ mod tests {
             created_before: Some(now + Duration::hours(1)),
             ..Default::default()
         };
-        let pagination = Pagination::default();
+        let pagination = SessionPagination::default();
 
         let result = repo
             .find_sessions_by_criteria(criteria, pagination)
@@ -1134,7 +1134,7 @@ mod tests {
             ..Default::default()
         };
         let result_future = repo
-            .find_sessions_by_criteria(criteria_future, Pagination::default())
+            .find_sessions_by_criteria(criteria_future, SessionPagination::default())
             .await
             .unwrap();
 
@@ -1168,7 +1168,7 @@ mod tests {
             ..Default::default()
         };
         let result = repo
-            .find_sessions_by_criteria(criteria, Pagination::default())
+            .find_sessions_by_criteria(criteria, SessionPagination::default())
             .await
             .unwrap();
 
@@ -1181,7 +1181,7 @@ mod tests {
             ..Default::default()
         };
         let result_max = repo
-            .find_sessions_by_criteria(criteria_max, Pagination::default())
+            .find_sessions_by_criteria(criteria_max, SessionPagination::default())
             .await
             .unwrap();
 
@@ -1200,7 +1200,7 @@ mod tests {
         }
 
         // Test offset and limit
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 2,
             limit: 2,
             ..Default::default()
@@ -1243,7 +1243,7 @@ mod tests {
         repo.save_session(session2).await.unwrap();
 
         // Sort by stream_count descending
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             sort_by: Some(SessionSortField::StreamCount),
             sort_order: SortOrder::Descending,
             ..Default::default()
@@ -1258,6 +1258,193 @@ mod tests {
         assert_eq!(result.sessions[0].id(), session2_id); // Session with most streams first
     }
 
+    /// Deterministic clock for ordering assertions across `compare_by_field`
+    /// variants — `StreamSession::with_time_provider` stores the provider and
+    /// uses it for both `created_at` and `updated_at`, so sequential
+    /// `StreamSession::new` calls (real wall-clock, no guaranteed spacing)
+    /// would make `CreatedAt`/`UpdatedAt` ordering assertions flaky.
+    struct ManualTimeProvider {
+        now: std::sync::Mutex<chrono::DateTime<Utc>>,
+    }
+
+    impl ManualTimeProvider {
+        fn new(start: chrono::DateTime<Utc>) -> Self {
+            Self {
+                now: std::sync::Mutex::new(start),
+            }
+        }
+
+        fn advance(&self, duration: Duration) {
+            *self.now.lock().unwrap() += duration;
+        }
+    }
+
+    impl crate::domain::ports::TimeProvider for ManualTimeProvider {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            *self.now.lock().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compare_by_field_created_at_both_orders() {
+        let repo = GatInMemoryStreamRepository::new();
+        let clock = std::sync::Arc::new(ManualTimeProvider::new(
+            chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        ));
+
+        let mut earlier =
+            StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        earlier.activate().unwrap();
+        let earlier_id = earlier.id();
+        repo.save_session(earlier).await.unwrap();
+
+        clock.advance(Duration::seconds(10));
+        let mut later = StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        later.activate().unwrap();
+        let later_id = later.id();
+        repo.save_session(later).await.unwrap();
+
+        let ascending = repo
+            .find_sessions_by_criteria(
+                SessionQueryCriteria::default(),
+                SessionPagination {
+                    sort_by: Some(SessionSortField::CreatedAt),
+                    sort_order: SortOrder::Ascending,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(ascending.sessions[0].id(), earlier_id);
+        assert_eq!(ascending.sessions[1].id(), later_id);
+
+        let descending = repo
+            .find_sessions_by_criteria(
+                SessionQueryCriteria::default(),
+                SessionPagination {
+                    sort_by: Some(SessionSortField::CreatedAt),
+                    sort_order: SortOrder::Descending,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(descending.sessions[0].id(), later_id);
+        assert_eq!(descending.sessions[1].id(), earlier_id);
+    }
+
+    #[tokio::test]
+    async fn test_compare_by_field_updated_at_both_orders() {
+        let repo = GatInMemoryStreamRepository::new();
+        let clock = std::sync::Arc::new(ManualTimeProvider::new(
+            chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        ));
+
+        // Both sessions created at the same instant so only the later mutation
+        // of `touched` can distinguish `updated_at` ordering.
+        let mut untouched =
+            StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        untouched.activate().unwrap();
+        let untouched_id = untouched.id();
+        repo.save_session(untouched).await.unwrap();
+
+        let mut touched =
+            StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
+        touched.activate().unwrap();
+        let touched_id = touched.id();
+
+        clock.advance(Duration::seconds(10));
+        touched
+            .create_stream(JsonData::String("advance updated_at".to_string()))
+            .unwrap();
+        repo.save_session(touched).await.unwrap();
+
+        let ascending = repo
+            .find_sessions_by_criteria(
+                SessionQueryCriteria::default(),
+                SessionPagination {
+                    sort_by: Some(SessionSortField::UpdatedAt),
+                    sort_order: SortOrder::Ascending,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(ascending.sessions[0].id(), untouched_id);
+        assert_eq!(ascending.sessions[1].id(), touched_id);
+
+        let descending = repo
+            .find_sessions_by_criteria(
+                SessionQueryCriteria::default(),
+                SessionPagination {
+                    sort_by: Some(SessionSortField::UpdatedAt),
+                    sort_order: SortOrder::Descending,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(descending.sessions[0].id(), touched_id);
+        assert_eq!(descending.sessions[1].id(), untouched_id);
+    }
+
+    #[tokio::test]
+    async fn test_compare_by_field_total_bytes_both_orders() {
+        use crate::domain::value_objects::Priority;
+
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut heavy = StreamSession::new(SessionConfig::default());
+        heavy.activate().unwrap();
+        let heavy_stream = heavy
+            .create_stream(JsonData::String(
+                "hello world payload, quite a few bytes here".to_string(),
+            ))
+            .unwrap();
+        heavy.start_stream(heavy_stream).unwrap();
+        heavy
+            .create_stream_patch_frames(heavy_stream, Priority::LOW, 100)
+            .unwrap();
+        let heavy_id = heavy.id();
+
+        let mut empty = StreamSession::new(SessionConfig::default());
+        empty.activate().unwrap();
+        let empty_id = empty.id();
+
+        assert!(heavy.stats().total_bytes > empty.stats().total_bytes);
+
+        repo.save_session(heavy).await.unwrap();
+        repo.save_session(empty).await.unwrap();
+
+        let ascending = repo
+            .find_sessions_by_criteria(
+                SessionQueryCriteria::default(),
+                SessionPagination {
+                    sort_by: Some(SessionSortField::TotalBytes),
+                    sort_order: SortOrder::Ascending,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(ascending.sessions[0].id(), empty_id);
+        assert_eq!(ascending.sessions[1].id(), heavy_id);
+
+        let descending = repo
+            .find_sessions_by_criteria(
+                SessionQueryCriteria::default(),
+                SessionPagination {
+                    sort_by: Some(SessionSortField::TotalBytes),
+                    sort_order: SortOrder::Descending,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(descending.sessions[0].id(), heavy_id);
+        assert_eq!(descending.sessions[1].id(), empty_id);
+    }
+
     #[tokio::test]
     async fn test_find_sessions_validates_criteria() {
         let repo = GatInMemoryStreamRepository::new();
@@ -1269,7 +1456,7 @@ mod tests {
             ..Default::default()
         };
         let result = repo
-            .find_sessions_by_criteria(criteria, Pagination::default())
+            .find_sessions_by_criteria(criteria, SessionPagination::default())
             .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), DomainError::InvalidInput(_)));
@@ -1280,7 +1467,7 @@ mod tests {
         let repo = GatInMemoryStreamRepository::new();
 
         // Invalid pagination: limit = 0
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 0,
             limit: 0,
             sort_by: None,
@@ -1624,7 +1811,10 @@ mod tests {
         }
 
         let result = repo
-            .find_sessions_by_criteria(SessionQueryCriteria::default(), Pagination::default())
+            .find_sessions_by_criteria(
+                SessionQueryCriteria::default(),
+                SessionPagination::default(),
+            )
             .await
             .unwrap();
 

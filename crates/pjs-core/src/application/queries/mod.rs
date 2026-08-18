@@ -117,7 +117,7 @@ pub struct SessionFilters {
 
 /// Fields to sort sessions by.
 ///
-/// Re-exported from the domain layer: [`Pagination`](crate::domain::ports::Pagination)
+/// Re-exported from the domain layer: [`SessionPagination`](crate::domain::ports::SessionPagination)
 /// consumes the same type directly, so a query's `sort_by` needs no conversion
 /// before reaching the repository port.
 pub use crate::domain::ports::SessionSortField;

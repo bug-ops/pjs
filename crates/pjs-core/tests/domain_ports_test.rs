@@ -4,7 +4,7 @@
 //! that supporting types behave correctly.
 
 use pjson_rs::domain::ports::{
-    BackpressureStrategy, CacheStatistics, ConnectionMetrics, ConnectionState, Pagination,
+    BackpressureStrategy, CacheStatistics, ConnectionMetrics, ConnectionState, SessionPagination,
     SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder, StreamFilter,
     StreamMetadata, StreamStatistics, StreamStatus, SystemTimeProvider, TimeProvider, WriterConfig,
     WriterMetrics,
@@ -53,11 +53,11 @@ fn test_system_time_provider_debug() {
     assert!(debug_str.contains("SystemTimeProvider"));
 }
 
-// Pagination tests
+// SessionPagination tests
 
 #[test]
 fn test_pagination_default() {
-    let pagination = Pagination::default();
+    let pagination = SessionPagination::default();
     assert_eq!(pagination.offset, 0);
     assert_eq!(pagination.limit, 50);
     assert_eq!(pagination.sort_by, None);
@@ -66,7 +66,7 @@ fn test_pagination_default() {
 
 #[test]
 fn test_pagination_custom() {
-    let pagination = Pagination {
+    let pagination = SessionPagination {
         offset: 100,
         limit: 20,
         sort_by: Some(SessionSortField::CreatedAt),
@@ -81,7 +81,7 @@ fn test_pagination_custom() {
 
 #[test]
 fn test_pagination_clone() {
-    let pagination = Pagination {
+    let pagination = SessionPagination {
         offset: 50,
         limit: 25,
         sort_by: Some(SessionSortField::UpdatedAt),
@@ -95,7 +95,7 @@ fn test_pagination_clone() {
 
 #[test]
 fn test_pagination_debug() {
-    let pagination = Pagination::default();
+    let pagination = SessionPagination::default();
     let debug_str = format!("{:?}", pagination);
     assert!(debug_str.contains("Pagination"));
 }

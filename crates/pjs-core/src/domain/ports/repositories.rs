@@ -151,20 +151,61 @@ pub enum SessionSortField {
     TotalBytes,
 }
 
-/// Pagination parameters
+/// Fields by which frame query results can be sorted.
+///
+/// Mirrors [`SessionSortField`] but for the frame bounded context — grounded
+/// in [`Frame::sequence`] and [`Frame::priority`]. Unlike `SessionSortField`,
+/// this type has no `Serialize`/`Deserialize` derive yet, since no adapter
+/// currently surfaces frame sorting to an external caller (e.g. over HTTP);
+/// add one, matching `SessionSortField`'s `#[serde(rename_all = "snake_case")]`
+/// convention, when such an adapter is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameSortField {
+    /// Sort by frame sequence number.
+    Sequence,
+    /// Sort by frame priority.
+    Priority,
+}
+
+/// Pagination parameters, generic over the bounded context's sort-field vocabulary.
+///
+/// `S` fixes which fields `sort_by` may reference, so a `Pagination<S>` built for one
+/// bounded context (e.g. sorted by [`SessionSortField`]) can never be passed to a port
+/// expecting a different context's pagination (e.g. one expecting frame sorting) — the
+/// guarantee is enforced at the port signature, not at construction; `S` itself carries
+/// no bound, so `Pagination<S>` is constructible for any type. Use one of the
+/// context-specific aliases rather than this type directly:
+///
+/// - [`SessionPagination`] — paginating session queries, sorted by [`SessionSortField`].
+/// - [`FramePagination`] — paginating frame queries, sorted by [`FrameSortField`].
+///
+/// `sort_by` and `sort_order` carry no invariants of their own — only `offset`/`limit`
+/// are checked by [`Self::validate`] — so setting them after construction, as in the
+/// example below, is an intentional use of the type, not a workaround.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::domain::ports::{SessionPagination, SessionSortField, SortOrder};
+///
+/// let mut pagination = SessionPagination::new_validated(0, 50)?;
+/// pagination.sort_by = Some(SessionSortField::CreatedAt);
+/// pagination.sort_order = SortOrder::Descending;
+/// # Ok::<(), pjson_rs::domain::DomainError>(())
+/// ```
 #[derive(Debug, Clone)]
-pub struct Pagination {
+pub struct Pagination<S> {
     /// Number of items to skip before returning results.
     pub offset: usize,
     /// Maximum number of items to return.
     pub limit: usize,
     /// Optional field to sort by.
-    pub sort_by: Option<SessionSortField>,
+    pub sort_by: Option<S>,
     /// Sort direction applied to `sort_by`.
     pub sort_order: SortOrder,
 }
 
-impl Default for Pagination {
+impl<S> Default for Pagination<S> {
     fn default() -> Self {
         Self {
             offset: 0,
@@ -175,7 +216,7 @@ impl Default for Pagination {
     }
 }
 
-impl Pagination {
+impl<S> Pagination<S> {
     /// Validate pagination parameters against security limits
     ///
     /// # Errors
@@ -235,6 +276,12 @@ impl Pagination {
         Ok(pagination)
     }
 }
+
+/// [`Pagination`] instantiated for session queries, sorted by [`SessionSortField`].
+pub type SessionPagination = Pagination<SessionSortField>;
+
+/// [`Pagination`] instantiated for frame queries, sorted by [`FrameSortField`].
+pub type FramePagination = Pagination<FrameSortField>;
 
 /// Direction in which results are ordered.
 #[derive(Debug, Clone, PartialEq)]
@@ -585,7 +632,7 @@ mod tests {
     // Tests for Pagination
     #[test]
     fn test_pagination_default() {
-        let pagination = Pagination::default();
+        let pagination = SessionPagination::default();
         assert_eq!(pagination.offset, 0);
         assert_eq!(pagination.limit, 50);
         assert!(pagination.sort_by.is_none());
@@ -594,7 +641,7 @@ mod tests {
 
     #[test]
     fn test_pagination_custom() {
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 10,
             limit: 100,
             sort_by: Some(SessionSortField::CreatedAt),
@@ -608,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_pagination_debug() {
-        let pagination = Pagination::default();
+        let pagination = SessionPagination::default();
         let debug = format!("{:?}", pagination);
         assert!(debug.contains("Pagination"));
         assert!(debug.contains("offset: 0"));
@@ -617,7 +664,7 @@ mod tests {
 
     #[test]
     fn test_pagination_clone() {
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 5,
             limit: 25,
             sort_by: Some(SessionSortField::UpdatedAt),
@@ -633,7 +680,7 @@ mod tests {
     // Tests for Pagination validation
     #[test]
     fn test_pagination_validate_zero_limit_rejected() {
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 0,
             limit: 0,
             sort_by: None,
@@ -648,7 +695,7 @@ mod tests {
 
     #[test]
     fn test_pagination_validate_excessive_limit_rejected() {
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 0,
             limit: 10_000,
             sort_by: None,
@@ -662,7 +709,7 @@ mod tests {
 
     #[test]
     fn test_pagination_validate_excessive_offset_rejected() {
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: 2_000_000,
             limit: 10,
             sort_by: None,
@@ -678,7 +725,7 @@ mod tests {
     fn test_pagination_validate_extreme_offset_rejected() {
         // Test that extreme offset values (e.g., usize::MAX) are rejected.
         // With bounded limits, this is caught by the offset check rather than overflow.
-        let pagination = Pagination {
+        let pagination = SessionPagination {
             offset: usize::MAX,
             limit: 1,
             sort_by: None,
@@ -701,7 +748,7 @@ mod tests {
             SessionSortField::StreamCount,
             SessionSortField::TotalBytes,
         ] {
-            let pagination = Pagination {
+            let pagination = SessionPagination {
                 offset: 0,
                 limit: 10,
                 sort_by: Some(field),
@@ -748,7 +795,7 @@ mod tests {
 
     #[test]
     fn test_pagination_new_validated_success() {
-        let result = Pagination::new_validated(0, 50);
+        let result = SessionPagination::new_validated(0, 50);
         assert!(result.is_ok());
         let pagination = result.unwrap();
         assert_eq!(pagination.offset, 0);
@@ -757,8 +804,20 @@ mod tests {
 
     #[test]
     fn test_pagination_new_validated_failure() {
-        let result = Pagination::new_validated(0, 0);
+        let result = SessionPagination::new_validated(0, 0);
         assert!(result.is_err());
+    }
+
+    /// #491 decoupling regression: `FramePagination` must be constructible and
+    /// validated using only `FrameSortField` — this only compiles if the frame
+    /// bounded context no longer depends on `SessionSortField`.
+    #[test]
+    fn test_frame_pagination_decoupled_from_session_sort_field() {
+        let pagination = FramePagination {
+            sort_by: Some(FrameSortField::Sequence),
+            ..Default::default()
+        };
+        assert!(pagination.validate().is_ok());
     }
 
     // Tests for SortOrder
