@@ -1,5 +1,6 @@
 //! Axum HTTP server adapter for PJS streaming
 
+use crate::domain::value_objects::JsonData;
 use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
@@ -12,7 +13,6 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use std::{sync::Arc, time::Instant};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -341,7 +341,7 @@ pub struct StartStreamRequest {
     ///
     /// A `null` payload is rejected with `400 Bad Request` before the
     /// session is looked up.
-    pub data: JsonValue,
+    pub data: JsonData,
     /// Minimum frame priority to emit; lower-priority frames are dropped.
     pub priority_threshold: Option<u8>,
     /// Maximum number of frames to emit before the stream is closed.

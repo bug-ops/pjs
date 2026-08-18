@@ -30,10 +30,6 @@ use crate::{
 };
 
 /// Create a new stream within a session
-///
-/// TODO(#449): Optimize double JSON processing
-/// Current: serde_json::Value -> JsonDataDto -> JsonData
-/// Optimization: Direct JsonData deserialization or use sonic-rs
 pub(crate) async fn create_stream<R, P, S>(
     State(state): State<PjsAppState<R, P, S>>,
     AxumPath(session_id): AxumPath<String>,
