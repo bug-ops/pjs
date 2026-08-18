@@ -369,7 +369,7 @@ export class PJSClient extends EventEmitter {
               skeletonReceived = true;
             }
 
-            const skeletonResult = reconstructor.processSkeleton(frame as any);
+            const skeletonResult = reconstructor.processSkeleton(frame);
             result = skeletonResult.data;
 
             this.emit(PJSEvent.SkeletonReady, {
@@ -390,11 +390,11 @@ export class PJSClient extends EventEmitter {
               throw new PJSError(PJSErrorType.ProtocolError, 'Received patch frame before skeleton');
             }
 
-            reconstructor.applyPatch(frame as any);
+            reconstructor.applyPatch(frame);
             result = reconstructor.getCurrentState();
 
             // Emit one PatchApplied per frame (not per operation)
-            const patches = (frame as any).patches as any[];
+            const patches = frame.patches;
             if (patches.length > 0) {
               this.emit(PJSEvent.PatchApplied, {
                 patch: patches[0],
@@ -417,8 +417,8 @@ export class PJSClient extends EventEmitter {
             const totalTime = progressInfo.elapsedTime / 1000;
             stats.performance.framesPerSecond = stats.totalFrames / totalTime;
 
-            if ((frame as any).total_frames) {
-              progressInfo.totalFrames = (frame as any).total_frames;
+            if (frame.total_frames) {
+              progressInfo.totalFrames = frame.total_frames;
             }
             progressInfo.completionPercentage = 100;
 

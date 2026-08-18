@@ -29,7 +29,7 @@ export class FrameProcessor {
   /**
    * Validate a frame without mutating state. Returns errors if any.
    */
-  validateFrame(frame: any): { isValid: boolean; errors: string[] } {
+  validateFrame(frame: unknown): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
 
     if (!frame || typeof frame !== 'object') {
@@ -37,36 +37,38 @@ export class FrameProcessor {
       return { isValid: false, errors };
     }
 
-    if (!frame.type) {
+    const candidate = frame as Record<string, unknown>;
+
+    if (!candidate.type) {
       errors.push('Frame missing type field');
       return { isValid: false, errors };
     }
 
-    if (!Object.values(FrameType).includes(frame.type)) {
-      errors.push(`Invalid frame type: ${frame.type}`);
+    if (!Object.values(FrameType).includes(candidate.type as FrameType)) {
+      errors.push(`Invalid frame type: ${candidate.type}`);
       return { isValid: false, errors };
     }
 
-    if (typeof frame.priority !== 'number') {
+    if (typeof candidate.priority !== 'number') {
       errors.push('Frame missing numeric priority field');
-    } else if (frame.priority < 0 || frame.priority > 100) {
+    } else if (candidate.priority < 0 || candidate.priority > 100) {
       errors.push('Priority must be between 0 and 100');
     }
 
-    if (frame.type === FrameType.Skeleton) {
-      if (frame.data === undefined) {
+    if (candidate.type === FrameType.Skeleton) {
+      if (candidate.data === undefined) {
         errors.push('Skeleton frame must have data field');
       }
     }
 
-    if (frame.type === FrameType.Patch) {
-      if (!Array.isArray(frame.patches)) {
+    if (candidate.type === FrameType.Patch) {
+      if (!Array.isArray(candidate.patches)) {
         errors.push('Patch frame must have patches array');
-      } else if (frame.patches.length === 0) {
+      } else if (candidate.patches.length === 0) {
         errors.push('Patch frame must have at least one patch operation');
       } else {
-        for (let i = 0; i < frame.patches.length; i++) {
-          this.validatePatchOperations(frame.patches[i], i, errors);
+        for (let i = 0; i < candidate.patches.length; i++) {
+          this.validatePatchOperations(candidate.patches[i], i, errors);
         }
       }
     }
@@ -77,10 +79,12 @@ export class FrameProcessor {
   /**
    * Process a frame, enforcing protocol state machine and priority ordering.
    */
-  processFrame(frame: any): {
+  processFrame(frame: unknown): {
     accepted: boolean;
     error?: { type: PJSErrorType; message: string };
   } {
+    const candidate = frame as { type: FrameType; priority: number };
+
     if (this.streamComplete) {
       return {
         accepted: false,
@@ -91,7 +95,7 @@ export class FrameProcessor {
       };
     }
 
-    if (frame.type === FrameType.Patch && this.expectedFrameType === FrameType.Skeleton) {
+    if (candidate.type === FrameType.Patch && this.expectedFrameType === FrameType.Skeleton) {
       return {
         accepted: false,
         error: {
@@ -101,7 +105,7 @@ export class FrameProcessor {
       };
     }
 
-    if (frame.type === FrameType.Skeleton && this.expectedFrameType === FrameType.Patch) {
+    if (candidate.type === FrameType.Skeleton && this.expectedFrameType === FrameType.Patch) {
       return {
         accepted: false,
         error: {
@@ -111,13 +115,13 @@ export class FrameProcessor {
       };
     }
 
-    if (frame.type === FrameType.Patch) {
-      if (this.lastPatchPriority !== null && frame.priority > this.lastPatchPriority) {
+    if (candidate.type === FrameType.Patch) {
+      if (this.lastPatchPriority !== null && candidate.priority > this.lastPatchPriority) {
         return {
           accepted: false,
           error: {
             type: PJSErrorType.ProtocolViolation,
-            message: `Priority order violation: patch priority ${frame.priority} is higher than previous patch priority ${this.lastPatchPriority}`
+            message: `Priority order violation: patch priority ${candidate.priority} is higher than previous patch priority ${this.lastPatchPriority}`
           }
         };
       }
@@ -125,14 +129,14 @@ export class FrameProcessor {
 
     // Accept frame — update state
     this.framesProcessed++;
-    this.priorityDistribution[frame.priority] = (this.priorityDistribution[frame.priority] ?? 0) + 1;
+    this.priorityDistribution[candidate.priority] = (this.priorityDistribution[candidate.priority] ?? 0) + 1;
 
-    if (frame.type === FrameType.Skeleton) {
+    if (candidate.type === FrameType.Skeleton) {
       this.expectedFrameType = FrameType.Patch;
-    } else if (frame.type === FrameType.Patch) {
-      this.lastPatchPriority = frame.priority;
+    } else if (candidate.type === FrameType.Patch) {
+      this.lastPatchPriority = candidate.priority;
       this.patchesApplied++;
-    } else if (frame.type === FrameType.Complete) {
+    } else if (candidate.type === FrameType.Complete) {
       this.streamComplete = true;
     }
 
