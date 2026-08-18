@@ -21,21 +21,92 @@ pub enum StreamFormat {
     Binary,
 }
 
+/// Maximum number of comma-separated `Accept` entries considered during content
+/// negotiation.
+///
+/// Bounds iteration over untrusted input (project security invariant); entries
+/// beyond this count are ignored, not rejected.
+const MAX_ACCEPT_ENTRIES: usize = 16;
+
 impl StreamFormat {
-    /// Pick a streaming format based on the request's `Accept` header.
+    /// Picks a streaming format for the request's `Accept` header.
+    ///
+    /// Quality-value negotiation per RFC 9110 §12.5.1 over a small supported set
+    /// (`text/event-stream`, `application/x-ndjson`, `application/octet-stream`,
+    /// `application/json`), plus `*/*` and `application/*`, which vote for the default
+    /// ([`Self::Json`]) at their own `q` rather than matching a concrete format — this
+    /// is what lets a low-`q` explicit type lose to a high-`q` wildcard (and vice
+    /// versa), rather than the wildcard being excluded from the race entirely.
+    ///
+    /// - Entries are compared by their `q` parameter (RFC 9110 §12.4.2), defaulting to
+    ///   `1.0` when absent; the highest-`q` surviving entry wins, ties broken by first
+    ///   occurrence — not by media-range specificity, unlike full RFC 9110 conformance.
+    /// - `q=0` is an explicit rejection of that media range and drops the entry.
+    /// - A `q` parameter that fails to parse as a finite float in range also drops its
+    ///   entry (`nan`/`inf`/`-inf` all count as failing to parse here) — a malformed
+    ///   preference is treated as "no preference stated", not "highest preference".
+    /// - Media-range comparison is case-insensitive and exact (no substring
+    ///   matching): `application/x-ndjson-plus` does not match `application/x-ndjson`.
+    /// - At most `MAX_ACCEPT_ENTRIES` (16) comma-separated entries are considered;
+    ///   any beyond that bound are silently ignored.
+    /// - A missing header, an unparsable header value, or no entry surviving
+    ///   negotiation all fall back to [`Self::Json`].
     pub fn from_accept_header(headers: &HeaderMap) -> Self {
-        if let Some(accept) = headers.get(header::ACCEPT)
-            && let Ok(accept_str) = accept.to_str()
-        {
-            if accept_str.contains("text/event-stream") {
-                return Self::ServerSentEvents;
-            } else if accept_str.contains("application/x-ndjson") {
-                return Self::NdJson;
-            } else if accept_str.contains("application/octet-stream") {
-                return Self::Binary;
+        let Some(accept) = headers.get(header::ACCEPT) else {
+            return Self::Json;
+        };
+        let Ok(accept_str) = accept.to_str() else {
+            return Self::Json;
+        };
+
+        let mut best: Option<(Self, f32)> = None;
+        for entry in accept_str.split(',').take(MAX_ACCEPT_ENTRIES) {
+            let mut parts = entry.split(';');
+            let media_range = parts.next().unwrap_or("").trim();
+            if media_range.is_empty() {
+                continue;
+            }
+
+            let mut q = Some(1.0f32);
+            for param in parts {
+                let mut kv = param.splitn(2, '=');
+                let name = kv.next().unwrap_or("").trim();
+                if name.eq_ignore_ascii_case("q") {
+                    let value = kv.next().unwrap_or("").trim();
+                    q = value
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|v| v.is_finite())
+                        .map(|v| v.clamp(0.0, 1.0));
+                    break;
+                }
+            }
+            let Some(q) = q else { continue };
+            if q <= 0.0 {
+                continue;
+            }
+
+            let format = if media_range.eq_ignore_ascii_case("text/event-stream") {
+                Self::ServerSentEvents
+            } else if media_range.eq_ignore_ascii_case("application/x-ndjson") {
+                Self::NdJson
+            } else if media_range.eq_ignore_ascii_case("application/octet-stream") {
+                Self::Binary
+            } else if media_range.eq_ignore_ascii_case("application/json")
+                || media_range == "*/*"
+                || media_range.eq_ignore_ascii_case("application/*")
+            {
+                Self::Json
+            } else {
+                continue;
+            };
+
+            if best.is_none_or(|(_, best_q)| q > best_q) {
+                best = Some((format, q));
             }
         }
-        Self::Json
+
+        best.map_or(Self::Json, |(format, _)| format)
     }
 
     /// MIME type that corresponds to this streaming format.
@@ -171,6 +242,11 @@ where
     }
 
     /// Toggle gzip compression of each frame payload (requires the `compression` feature).
+    ///
+    /// This produces a raw gzip *payload* stream, not an HTTP `Content-Encoding: gzip`
+    /// body — [`create_streaming_response`] and
+    /// [`create_streaming_response_with_content_type`] never set that header, so a
+    /// compressed stream must not be handed to either without setting it first (#226).
     pub fn with_compression(mut self, enabled: bool) -> Self {
         self.compression = enabled;
         self
@@ -432,16 +508,21 @@ where
         .header(header::CONTENT_TYPE, format.content_type())
         .header(header::CACHE_CONTROL, "no-cache");
 
-    match format {
-        StreamFormat::ServerSentEvents => {
-            response = response
-                .header(header::CONNECTION, "keep-alive")
-                .header("X-Accel-Buffering", "no");
-        }
-        StreamFormat::NdJson => {
-            response = response.header("Transfer-Encoding", "chunked");
-        }
-        _ => {}
+    // No manual `Transfer-Encoding` or `Connection` here: the response body encoder
+    // (hyper) owns transfer framing and connection-management headers, and
+    // applications must not set either by hand. On HTTP/2 both are illegal and
+    // hyper logs a WARN per response when either is present (verified: hyper
+    // `proto/h2/mod.rs:50`) — real, current log spam in any HTTP/2 deployment of
+    // this route, since SSE (which previously set `Connection: keep-alive`) is a
+    // first-class negotiated format here. On HTTP/1.1 a manually-set
+    // `Transfer-Encoding` can also collide with body-length-derived framing in
+    // other code paths; that hazard is latent here (`Body::from_stream` reports
+    // `BodyLength::Unknown`, so nothing on this response path derives a
+    // `Content-Length` to collide with) but is not the reason for this rule — the
+    // encoder owning framing is. `X-Accel-Buffering` is a reverse-proxy hint, not a
+    // connection-management header, and is unaffected by either concern.
+    if let StreamFormat::ServerSentEvents = format {
+        response = response.header("X-Accel-Buffering", "no");
     }
 
     response
