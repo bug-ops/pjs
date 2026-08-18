@@ -1894,6 +1894,7 @@ dependencies = [
  "pjson-rs-domain",
  "rayon",
  "regex",
+ "rmp-serde",
  "serde",
  "serde_json",
  "sha2",
