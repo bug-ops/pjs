@@ -200,7 +200,7 @@ impl StreamingCompressor {
             strategy: compressed_data.strategy.clone(),
             dictionary_map,
             delta_bases,
-            priority_hints: HashMap::new(), // TODO: Add priority-specific hints
+            priority_hints: HashMap::new(), // TODO(#448): Add priority-specific hints
         })
     }
 }

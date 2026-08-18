@@ -287,14 +287,25 @@ impl ClientMetrics {
     }
 
     /// Recommended delay between frames given the current processing-time average.
+    ///
+    /// Clamped to [`MAX_ADAPTIVE_FRAME_DELAY`]: `average_processing_time_ms` is derived
+    /// from client-supplied `processing_time_ms` in [`Self::update_processing_time`],
+    /// which is unvalidated wire input (see `handle_frame_ack`). Without a ceiling, a
+    /// single malicious `FrameAck` could drive the `tokio::time::sleep` in
+    /// `AdaptiveStreamController::stream_frames` to an arbitrarily long duration and
+    /// stall that session's stream.
     pub fn recommended_frame_delay(&self) -> Duration {
         if self.is_client_slow() {
             Duration::from_millis((self.average_processing_time_ms * 0.5) as u64)
+                .min(MAX_ADAPTIVE_FRAME_DELAY)
         } else {
             Duration::from_millis(10) // Fast clients get minimal delay
         }
     }
 }
+
+/// Upper bound on the per-frame delay returned by [`ClientMetrics::recommended_frame_delay`].
+const MAX_ADAPTIVE_FRAME_DELAY: Duration = Duration::from_secs(1);
 
 /// WebSocket transport trait for different implementations (GAT-based)
 pub trait WebSocketTransport: Send + Sync {
@@ -415,8 +426,11 @@ impl AdaptiveStreamController {
         let plan = session.plan.clone();
 
         let task_session_id = session_id.clone();
+        let sessions_for_task = self.sessions.clone();
         let handle = tokio::spawn(async move {
-            if let Err(e) = Self::stream_frames(task_session_id, plan, frame_tx).await {
+            if let Err(e) =
+                Self::stream_frames(task_session_id, plan, frame_tx, sessions_for_task).await
+            {
                 error!("Error streaming frames: {}", e);
             }
         });
@@ -449,6 +463,7 @@ impl AdaptiveStreamController {
         session_id: String,
         plan: Vec<StreamFrame>, // Simplified for now
         frame_tx: broadcast::Sender<(String, WsMessage)>,
+        sessions: Arc<RwLock<HashMap<String, WebSocketStreamSession>>>,
     ) -> Result<(), PjsError> {
         let mut frames_data = Vec::new();
 
@@ -471,8 +486,13 @@ impl AdaptiveStreamController {
                 break;
             }
 
-            // TODO: Add adaptive delay based on client metrics
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            let delay = sessions
+                .read()
+                .await
+                .get(&session_id)
+                .map(|session| session.client_metrics.recommended_frame_delay())
+                .unwrap_or(Duration::from_millis(10));
+            tokio::time::sleep(delay).await;
         }
 
         // Send completion message with calculated checksum
@@ -747,6 +767,66 @@ mod tests {
         assert!((metrics.average_processing_time_ms - 130.0).abs() < 0.1);
 
         assert!(metrics.is_client_slow());
+    }
+
+    /// Regression test for a malicious `FrameAck` (see `handle_frame_ack`) reporting an
+    /// astronomical `processing_time_ms`: without the clamp in `recommended_frame_delay`,
+    /// this would drive its output — and thus the per-frame `sleep` in `stream_frames` —
+    /// to roughly 46 days for a single ack.
+    #[test]
+    fn test_recommended_frame_delay_clamps_extreme_processing_time() {
+        let mut metrics = ClientMetrics::default();
+        metrics.update_processing_time(100_000_000_000);
+
+        assert_eq!(
+            metrics.recommended_frame_delay(),
+            MAX_ADAPTIVE_FRAME_DELAY,
+            "delay must be clamped to MAX_ADAPTIVE_FRAME_DELAY, not scale unbounded with client-supplied input"
+        );
+    }
+
+    /// Exercises the actual per-frame delay read path in `stream_frames`, not just the
+    /// pure `recommended_frame_delay` function: a session whose `client_metrics` were
+    /// poisoned by a malicious ack must still complete its stream promptly instead of
+    /// stalling on an unbounded `tokio::time::sleep`.
+    #[tokio::test]
+    async fn test_stream_frames_completes_promptly_under_malicious_client_metrics() {
+        let controller = AdaptiveStreamController::new();
+        let session_id = controller
+            .create_session(json!({"test": "data"}), StreamOptions::default())
+            .await
+            .unwrap();
+
+        {
+            let mut sessions = controller.sessions.write().await;
+            sessions
+                .get_mut(&session_id)
+                .unwrap()
+                .client_metrics
+                .update_processing_time(100_000_000_000);
+        }
+
+        let mut frames_rx = controller.subscribe_frames();
+        controller.start_streaming(&session_id).await.unwrap();
+
+        let result = tokio::time::timeout(MAX_ADAPTIVE_FRAME_DELAY * 2, async {
+            loop {
+                match frames_rx
+                    .recv()
+                    .await
+                    .expect("channel must not close early")
+                {
+                    (sid, WsMessage::StreamComplete { .. }) if sid == session_id => break,
+                    _ => continue,
+                }
+            }
+        })
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "stream must complete within 2x MAX_ADAPTIVE_FRAME_DELAY, not stall on malicious client metrics"
+        );
     }
 
     #[test]
