@@ -205,7 +205,7 @@ impl AxumWebSocketTransport {
 
         // Spawn single task to handle both sending and receiving
         let transport_clone = self.clone();
-        let connection_id_clone = connection_id.clone();
+        let connection_id_clone = Arc::new(connection_id.clone());
         let guard_for_task = guard.clone();
         let websocket_task = {
             let mut frame_rx = frame_rx;
@@ -272,7 +272,7 @@ impl AxumWebSocketTransport {
                                     }
                                     match serde_json::from_str::<WsMessage>(&text) {
                                         Ok(ws_message) => {
-                                            if let Err(e) = transport_clone.handle_websocket_message(connection_id_clone.clone(), ws_message).await {
+                                            if let Err(e) = transport_clone.handle_websocket_message(Arc::clone(&connection_id_clone), ws_message).await {
                                                 error!("Failed to handle message: {}", e);
                                             }
                                         }
@@ -371,55 +371,27 @@ impl AxumWebSocketTransport {
         self.active_connections.read().await.len()
     }
 
-    /// Handle WebSocket message for a specific connection
+    /// Handle WebSocket message for a specific connection.
+    ///
+    /// Thin wrapper around [`WebSocketTransport::handle_message`] that
+    /// forwards the axum socket loop's already-shared `connection_id`; all
+    /// message handling, including `connection_sessions` tracking for
+    /// `StreamInit`, lives in `handle_message` itself. `connection_sessions`
+    /// entries are drained only by [`Self::handle_socket`]'s teardown,
+    /// keyed by the same connection id — nothing else in this type removes
+    /// them, so a caller that drives [`WebSocketTransport::handle_message`]
+    /// directly, bypassing `handle_socket`, leaves its sessions in that map
+    /// until the connection id happens to be reused or the process exits.
     async fn handle_websocket_message(
         &self,
-        connection_id: String,
+        connection_id: Arc<String>,
         message: WsMessage,
     ) -> PjsResult<()> {
         debug!(
             "Handling WebSocket message for connection {}: {:?}",
             connection_id, message
         );
-
-        match message {
-            WsMessage::FrameAck {
-                session_id,
-                frame_id,
-                processing_time_ms,
-            } => {
-                self.controller
-                    .handle_frame_ack(&session_id, frame_id, processing_time_ms)
-                    .await?;
-            }
-            WsMessage::StreamInit {
-                session_id: _,
-                data,
-                options,
-            } => {
-                let session_id = self.controller.create_session(data, options).await?;
-                self.controller.start_streaming(&session_id).await?;
-                self.connection_sessions
-                    .write()
-                    .await
-                    .entry(connection_id.clone())
-                    .or_default()
-                    .push(session_id);
-                info!(
-                    "Created new streaming session for connection {}",
-                    connection_id
-                );
-            }
-            WsMessage::Ping { timestamp: _ } => {
-                // Pong is handled automatically by the WebSocket implementation
-                debug!("Received ping from connection {}", connection_id);
-            }
-            _ => {
-                warn!("Unhandled message type from connection {}", connection_id);
-            }
-        }
-
-        Ok(())
+        self.handle_message(connection_id, message).await
     }
 }
 
@@ -540,17 +512,36 @@ impl WebSocketTransport for AxumWebSocketTransport {
         }
     }
 
+    /// The `StreamInit` arm records the created session under `connection`
+    /// in `connection_sessions` so [`Self::handle_socket`]'s teardown can
+    /// abort it on disconnect. Nothing else drains that map: a caller that
+    /// drives this method directly, bypassing `handle_socket` (e.g. a test,
+    /// or a future non-axum trait caller), leaves its session's entry there
+    /// indefinitely — [`WebSocketTransport::close_stream`] removes the
+    /// session from the controller but does not touch `connection_sessions`.
     fn handle_message(
         &self,
-        _connection: Arc<Self::Connection>,
+        connection: Arc<Self::Connection>,
         message: WsMessage,
     ) -> Self::HandleMessageFuture<'_> {
         async move {
             match message {
                 WsMessage::StreamInit { data, options, .. } => {
-                    info!("Initializing new stream");
                     let session_id = self.controller.create_session(data, options).await?;
+                    // Tracked before `start_streaming` so a session that was
+                    // successfully created is still reachable for cleanup
+                    // even if `start_streaming` itself returns an error.
+                    self.connection_sessions
+                        .write()
+                        .await
+                        .entry((*connection).clone())
+                        .or_default()
+                        .push(session_id.clone());
                     self.controller.start_streaming(&session_id).await?;
+                    info!(
+                        "Created new streaming session for connection {}",
+                        connection.as_ref()
+                    );
                 }
                 WsMessage::FrameAck {
                     session_id,
@@ -574,13 +565,25 @@ impl WebSocketTransport for AxumWebSocketTransport {
                     error,
                     code,
                 } => {
+                    // `session_id` and `error` are both arbitrary
+                    // client-supplied strings with no length validation on
+                    // this path — log only their lengths (plus the
+                    // connection id for correlation), never the values
+                    // themselves, at WARN (see #415 S1: unbounded WARN
+                    // amplification from a single rate-limited connection).
                     warn!(
-                        "Received error from client: session={:?}, error={}, code={}",
-                        session_id, error, code
+                        "Received error from client on connection {}: session_id_len={:?}, code={}, error_len={}",
+                        connection.as_ref(),
+                        session_id.as_deref().map(str::len),
+                        code,
+                        error.len()
                     );
                 }
                 _ => {
-                    warn!("Unhandled message type: {:?}", message);
+                    warn!(
+                        "Unhandled message type from connection {}",
+                        connection.as_ref()
+                    );
                 }
             }
             Ok(())
@@ -636,6 +639,37 @@ mod tests {
             .start_streaming(&session_id)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_handle_message_stream_init_tracks_connection_session() {
+        // Regression test for #415: `WebSocketTransport::handle_message`'s
+        // `StreamInit` arm used to create a session without recording it in
+        // `connection_sessions`, so a caller driving the transport through
+        // the trait directly (bypassing `handle_socket`) got a session that
+        // was never associated with its connection for cleanup. Assert the
+        // association exists after calling `handle_message` directly.
+        let transport = AxumWebSocketTransport::new();
+        let connection = Arc::new("conn-x".to_string());
+
+        transport
+            .handle_message(
+                connection.clone(),
+                WsMessage::StreamInit {
+                    session_id: "ignored-client-supplied-id".to_string(),
+                    data: json!({"test": "value"}),
+                    options: StreamOptions::default(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let sessions = transport.connection_sessions.read().await;
+        let tracked = sessions
+            .get(connection.as_ref())
+            .expect("connection_sessions must have an entry for this connection");
+        assert_eq!(tracked.len(), 1);
+        assert!(!tracked[0].is_empty());
     }
 
     #[tokio::test]
