@@ -711,6 +711,41 @@ mod tests {
         }
     }
 
+    /// #494: `SessionSortField` must round-trip through serde using its exact
+    /// `snake_case` spellings, matching what `parse_sort_field` in the HTTP
+    /// adapter deserializes from a raw query-string value.
+    #[test]
+    fn test_session_sort_field_serde_round_trip() {
+        for (field, expected) in [
+            (SessionSortField::CreatedAt, "created_at"),
+            (SessionSortField::UpdatedAt, "updated_at"),
+            (SessionSortField::StreamCount, "stream_count"),
+            (SessionSortField::TotalBytes, "total_bytes"),
+        ] {
+            let json = serde_json::to_value(field).unwrap();
+            assert_eq!(json, serde_json::Value::String(expected.to_string()));
+
+            let round_tripped: SessionSortField = serde_json::from_value(json).unwrap();
+            assert_eq!(round_tripped, field);
+        }
+    }
+
+    /// #494/#492: an unrecognized spelling must fail deserialization — this is the
+    /// domain-level guarantee `parse_sort_field` relies on to reject bad `sort_by`
+    /// query values with `400` instead of silently accepting them.
+    #[test]
+    fn test_session_sort_field_rejects_unknown_value() {
+        let result: Result<SessionSortField, _> =
+            serde_json::from_value(serde_json::Value::String("bogus".to_string()));
+        assert!(result.is_err());
+
+        // Missing-underscore spelling: never matched the old hand-rolled `match` either
+        // — it fell through to `_ => None` and was silently ignored, never accepted.
+        let result: Result<SessionSortField, _> =
+            serde_json::from_value(serde_json::Value::String("createdat".to_string()));
+        assert!(result.is_err());
+    }
+
     #[test]
     fn test_pagination_new_validated_success() {
         let result = Pagination::new_validated(0, 50);
