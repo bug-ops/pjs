@@ -12,7 +12,7 @@ mod schema;
 
 pub use backpressure::BackpressureSignal;
 pub use id::{Id, IdMarker, SessionId, SessionMarker, StreamId, StreamMarker};
-pub use json_data::JsonData;
+pub use json_data::{JsonData, MAX_DESERIALIZE_DEPTH};
 pub use json_path::{JsonPath, PathSegment};
 pub use priority::Priority;
 pub use schema::{Schema, SchemaId, SchemaType, SchemaValidationError, SchemaValidationResult};

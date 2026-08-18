@@ -4,7 +4,9 @@
 //! without depending on external serialization libraries in the domain layer.
 
 use crate::{DomainError, DomainResult};
-use serde::de::{Deserialize, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor};
+use serde::de::{
+    Deserialize, DeserializeSeed, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor,
+};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use std::collections::HashMap;
 use std::fmt;
@@ -481,7 +483,52 @@ impl<'de> Deserialize<'de> for JsonData {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(JsonDataVisitor)
+        deserializer.deserialize_any(JsonDataVisitor { depth: 0 })
+    }
+}
+
+/// Maximum container nesting depth accepted when deserializing [`JsonData`].
+///
+/// `JsonData::deserialize` drives a recursive [`Visitor`] through
+/// [`Deserializer::deserialize_any`], so nesting depth in the input maps
+/// one-to-one onto stack frames and onto retained per-level preallocations.
+/// Without a bound, a few bytes of nested container headers in a
+/// length-prefixed self-describing format (MessagePack, CBOR) exhaust the
+/// stack (CWE-674) and amplify retained allocation (CWE-789).
+///
+/// Set to 64, matching `pjson_rs::config::security::JsonLimits`' `max_depth`
+/// default. The constant cannot be shared, because the dependency direction
+/// is `pjs-core` -> `pjs-domain`, not the reverse; it is `pub` (re-exported at
+/// the crate root) so callers configuring their own limits can stay in sync
+/// with it rather than duplicating the value blindly.
+///
+/// Together with this crate's internal per-collection preallocation cap,
+/// this bounds worst-case retained allocation for one `JsonData::deserialize`
+/// call to, order of magnitude, `MAX_DESERIALIZE_DEPTH` times that cap —
+/// every nesting level can retain up to one level's preallocation while its
+/// children are still being read, and `HashMap`'s bucket-table overhead
+/// pushes the object case somewhat above that product. This bound is per
+/// `deserialize` call, not per process: a server accepting concurrent
+/// requests must still bound concurrency or request-body size on top of it.
+pub const MAX_DESERIALIZE_DEPTH: usize = 64;
+
+/// Carries the current nesting depth into a nested [`JsonData`] value.
+///
+/// `Deserialize::deserialize` takes no state, so a nested `next_element()`
+/// would restart the visitor at depth 0. `DeserializeSeed` is serde's
+/// supported way to thread state through a recursive descent.
+struct JsonDataSeed {
+    depth: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for JsonDataSeed {
+    type Value = JsonData;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(JsonDataVisitor { depth: self.depth })
     }
 }
 
@@ -519,7 +566,23 @@ fn cautious_capacity<Element>(hint: Option<usize>) -> usize {
     }
 }
 
-struct JsonDataVisitor;
+struct JsonDataVisitor {
+    depth: usize,
+}
+
+impl JsonDataVisitor {
+    /// Descends one container level, or rejects once the depth bound is hit.
+    fn enter<E: DeError>(&self) -> Result<JsonDataSeed, E> {
+        if self.depth >= MAX_DESERIALIZE_DEPTH {
+            return Err(E::custom(format_args!(
+                "JSON nesting depth exceeds maximum of {MAX_DESERIALIZE_DEPTH}"
+            )));
+        }
+        Ok(JsonDataSeed {
+            depth: self.depth + 1,
+        })
+    }
+}
 
 impl<'de> Visitor<'de> for JsonDataVisitor {
     type Value = JsonData;
@@ -536,6 +599,13 @@ impl<'de> Visitor<'de> for JsonDataVisitor {
         Ok(JsonData::Null)
     }
 
+    /// Forwards `self` unchanged, so `Option` wrapping does not consume a
+    /// depth level — correctly so, since `Some(x)` is not itself a container.
+    /// This does mean depth tracking does not cover *every* recursive call
+    /// into `deserialize_any`; it is safe only because none of `serde_json`,
+    /// `rmp-serde`, or common CBOR deserializers ever call `visit_some` from
+    /// `deserialize_any` (self-describing formats decode `Option` via
+    /// `visit_none`/direct value visits, not a wrapping `visit_some`).
     fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -582,8 +652,9 @@ impl<'de> Visitor<'de> for JsonDataVisitor {
     where
         A: SeqAccess<'de>,
     {
+        let seed = self.enter()?;
         let mut vec = Vec::with_capacity(cautious_capacity::<JsonData>(seq.size_hint()));
-        while let Some(elem) = seq.next_element()? {
+        while let Some(elem) = seq.next_element_seed(JsonDataSeed { depth: seed.depth })? {
             vec.push(elem);
         }
         Ok(JsonData::Array(vec))
@@ -593,9 +664,13 @@ impl<'de> Visitor<'de> for JsonDataVisitor {
     where
         A: MapAccess<'de>,
     {
+        let seed = self.enter()?;
         let mut obj =
             HashMap::with_capacity(cautious_capacity::<(String, JsonData)>(map.size_hint()));
-        while let Some((key, value)) = map.next_entry()? {
+        // next_entry() cannot carry a seed for the value, so key and value are
+        // read separately. Keys are String, not JsonData, so they do not recurse.
+        while let Some(key) = map.next_key::<String>()? {
+            let value = map.next_value_seed(JsonDataSeed { depth: seed.depth })?;
             obj.insert(key, value);
         }
         Ok(JsonData::Object(obj))
@@ -914,5 +989,81 @@ mod tests {
             let value = serde_json::to_value(&data).unwrap();
             assert_eq!(value, serde_json::Value::Null);
         }
+    }
+
+    /// `levels` nested MessagePack fixarray-of-1 headers wrapping a nil.
+    fn nested_msgpack(levels: usize) -> Vec<u8> {
+        let mut buf = vec![0x91u8; levels];
+        buf.push(0xc0);
+        buf
+    }
+
+    #[test]
+    fn test_deserialize_msgpack_at_max_depth_succeeds() {
+        let data: Result<JsonData, _> =
+            rmp_serde::from_slice(&nested_msgpack(MAX_DESERIALIZE_DEPTH));
+        assert!(data.is_ok(), "{:?}", data.err());
+    }
+
+    #[test]
+    fn test_deserialize_msgpack_beyond_max_depth_rejected() {
+        let err = rmp_serde::from_slice::<JsonData>(&nested_msgpack(MAX_DESERIALIZE_DEPTH + 1))
+            .unwrap_err()
+            .to_string();
+        // Assert on our message, not just is_err(), so the test cannot pass
+        // because rmp-serde rejected the input for an unrelated reason.
+        assert!(err.contains("nesting depth"), "{err}");
+    }
+
+    #[test]
+    fn test_deserialize_json_beyond_max_depth_rejected() {
+        let levels = MAX_DESERIALIZE_DEPTH + 1;
+        let json = format!("{}1{}", "[".repeat(levels), "]".repeat(levels));
+        let err = serde_json::from_str::<JsonData>(&json)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("nesting depth"), "{err}");
+    }
+
+    /// Without the depth guard this aborts the test process with a stack
+    /// overflow (verified). nextest runs each test in its own process, so the
+    /// abort is reported as a failure rather than taking down the suite.
+    ///
+    /// 2 MiB gives real margin over the 64 levels of rmp-serde + visitor
+    /// frames the guard actually needs (a 512 KiB stack was observed to work
+    /// on macOS/arm64 debug builds, but with well under 2x headroom over the
+    /// point it started overflowing — too tight to trust across a 3-OS CI
+    /// matrix, where MSVC debug frames in particular run larger). 2 MiB is
+    /// still far below the ~8 MiB platform default, so a regression that
+    /// removed the guard and let this 100 000-level payload recurse
+    /// unbounded would still overflow and fail the test.
+    #[test]
+    fn test_deserialize_extreme_nesting_does_not_overflow_stack() {
+        let payload = nested_msgpack(100_000);
+        let err = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                rmp_serde::from_slice::<JsonData>(&payload)
+                    .unwrap_err()
+                    .to_string()
+            })
+            .expect("thread spawn")
+            .join()
+            .expect("worker must return an error, not overflow the stack");
+        assert!(err.contains("nesting depth"), "{err}");
+    }
+
+    /// Nested array32 headers each claiming ~16.7M elements: the depth guard,
+    /// not the per-collection cap, is what stops this.
+    #[test]
+    fn test_deserialize_nested_large_size_hints_rejected_at_depth() {
+        let mut buf = Vec::new();
+        for _ in 0..200 {
+            buf.extend_from_slice(&[0xdd, 0x00, 0xff, 0xff, 0xff]);
+        }
+        let err = rmp_serde::from_slice::<JsonData>(&buf)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("nesting depth"), "{err}");
     }
 }
