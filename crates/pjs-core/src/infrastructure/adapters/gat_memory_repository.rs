@@ -20,15 +20,20 @@
 //!
 //! The `*_atomic` methods on [`StreamRepositoryGat`] (`create_stream_atomic`,
 //! `start_stream_atomic`, `complete_stream_atomic`,
-//! `create_stream_patch_frames_atomic`, `close_session_atomic`) are the one
-//! exception to "lock-free": each holds `update_with`'s per-key `DashMap`
+//! `create_stream_patch_frames_atomic`, `batch_generate_frames_atomic`,
+//! `close_session_atomic`) are the one exception to "lock-free": each holds
+//! `update_with`'s per-key `DashMap`
 //! shard write lock — which blocks every other session hashing to the same
 //! shard, not just the target session — for the duration of its mutation
-//! (see #457). That closure never `.await`s, so the hold is always brief and
-//! CPU-bound. `create_stream_patch_frames_atomic` narrows this further: it
-//! extracts patches (a traversal proportional to the source payload, not to
-//! `max_frames`) from a snapshot taken *before* acquiring the lock, so only
-//! the cheap, `max_frames`-bounded commit step actually runs under it.
+//! (see #457). That closure never `.await`s, so the hold is always CPU-bound,
+//! not I/O-bound. `create_stream_patch_frames_atomic` and
+//! `batch_generate_frames_atomic` narrow this further: both extract patches
+//! (a traversal proportional to the source payload, not to `max_frames`)
+//! from a snapshot taken *before* acquiring the lock — the latter doing so
+//! once per stream — but the commit step that still runs under the lock is
+//! itself proportional to the total patches extracted (it clones and
+//! re-chunks all of them into frames), not to `max_frames`/`batch_size` —
+//! see [`StreamSession::commit_priority_frames`]'s docs (#477).
 //!
 //! # Iteration Consistency
 //!
@@ -342,6 +347,11 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
     where
         Self: 'a;
 
+    type BatchGenerateFramesAtomicFuture<'a>
+        = impl Future<Output = DomainResult<(Vec<Frame>, Vec<DomainEvent>)>> + Send + 'a
+    where
+        Self: 'a;
+
     type CloseSessionAtomicFuture<'a>
         = impl Future<Output = DomainResult<Vec<DomainEvent>>> + Send + 'a
     where
@@ -477,6 +487,44 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
             let result = self.atomic_session_update(session_id, |session| {
                 let frames =
                     session.commit_patch_frames_for_stream(stream_id, patches, max_frames)?;
+                Ok((frames, session.take_events().into_iter().collect()))
+            });
+            if result.is_ok() {
+                self.invalidate_stats_cache(&session_id);
+            }
+            result
+        }
+    }
+
+    /// Atomically generate priority frames across every `Streaming` stream
+    /// in a session, holding the `DashMap` shard lock for `session_id` for
+    /// the full read-modify-write so a concurrent mutation of the same
+    /// session cannot lose an update (#457, #477). Extracts prioritized
+    /// patches for every stream outside any lock, then holds the `DashMap`
+    /// shard lock only for the commit step — same rationale and pattern as
+    /// [`Self::create_stream_patch_frames_atomic`], applied per stream
+    /// instead of to a single one. That commit step is proportional to the
+    /// total patches extracted across every `Streaming` stream, not to
+    /// `max_frames`/`batch_size` — see
+    /// [`StreamSession::commit_priority_frames`]'s docs. Streams that
+    /// transition out of `Streaming` between extraction and commit (e.g.
+    /// completed concurrently) are skipped rather than failing the whole
+    /// batch — see that same method's docs for why partial failure must not
+    /// propagate through this per-stream loop.
+    fn batch_generate_frames_atomic(
+        &self,
+        session_id: SessionId,
+        max_frames: usize,
+    ) -> Self::BatchGenerateFramesAtomicFuture<'_> {
+        async move {
+            let session = self.store.get(&session_id).ok_or_else(|| {
+                DomainError::SessionNotFound(format!("Session {session_id} not found"))
+            })?;
+            let extracted =
+                session.extract_prioritized_patches_for_active_streams(Priority::BACKGROUND);
+
+            let result = self.atomic_session_update(session_id, |session| {
+                let frames = session.commit_priority_frames(extracted, max_frames)?;
                 Ok((frames, session.take_events().into_iter().collect()))
             });
             if result.is_ok() {
@@ -1925,6 +1973,152 @@ mod tests {
         let session = repo.find_session(session_id).await.unwrap().unwrap();
         assert_eq!(session.stats().total_frames, frames.len() as u64);
         assert!(session.stats().total_bytes > 0);
+    }
+
+    // ===== batch_generate_frames_atomic tests (#477) =====
+
+    #[tokio::test]
+    async fn test_batch_generate_frames_atomic_returns_session_not_found() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let result = repo
+            .batch_generate_frames_atomic(SessionId::new(), 10)
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::SessionNotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_batch_generate_frames_atomic_generates_frames_and_updates_stats() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        let source_data: JsonData = serde_json::json!({
+            "id": "abc",
+            "items": [1, 2, 3, 4, 5]
+        })
+        .into();
+        let stream_id = session.create_stream(source_data).unwrap();
+        session.start_stream(stream_id).unwrap();
+        let _ = session.take_events();
+        repo.save_session(session).await.unwrap();
+
+        let (frames, events) = repo
+            .batch_generate_frames_atomic(session_id, 16)
+            .await
+            .unwrap();
+
+        assert!(!frames.is_empty());
+        assert_eq!(events.len(), 1); // FramesBatched
+
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        assert_eq!(session.stats().total_frames, frames.len() as u64);
+        assert!(session.stats().total_bytes > 0);
+    }
+
+    /// Regression test for #477: a `Preparing` stream (created but never
+    /// started) alongside a `Streaming` one must not abort the whole batch
+    /// through the atomic repository call — mirrors
+    /// `StreamSession::test_create_priority_frames_skips_preparing_stream_without_erroring`
+    /// at the repository layer, where the extraction happens on a pre-lock
+    /// snapshot and the commit happens inside `atomic_session_update`.
+    #[tokio::test]
+    async fn test_batch_generate_frames_atomic_skips_preparing_stream() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        let streaming_source: JsonData = serde_json::json!({"a": 1, "b": 2}).into();
+        let streaming_id = session.create_stream(streaming_source).unwrap();
+        session.start_stream(streaming_id).unwrap();
+        // Left in `Preparing` — never started.
+        let _preparing_id = session
+            .create_stream(serde_json::json!({"c": 3}).into())
+            .unwrap();
+        let _ = session.take_events();
+        repo.save_session(session).await.unwrap();
+
+        let (frames, events) = repo
+            .batch_generate_frames_atomic(session_id, 16)
+            .await
+            .unwrap();
+
+        assert!(!frames.is_empty());
+        assert!(frames.iter().all(|f| f.stream_id() == streaming_id));
+        assert_eq!(events.len(), 1); // FramesBatched
+
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        assert_eq!(session.stats().total_frames, frames.len() as u64);
+    }
+
+    // Same rationale as `test_complete_stream_atomic_concurrent_calls_lose_no_update`:
+    // a real multi-thread runtime plus a `Barrier` is required to force genuine
+    // concurrent entry into `update_with`, since a `current_thread` runtime would
+    // let a racy load-mutate-save implementation pass too.
+    //
+    // `create_priority_frames` is content-idempotent (see `SessionStats::total_bytes`
+    // doc): every call re-derives the same frames from `source_data` rather than
+    // consuming it, so each of the `N` concurrent calls below is guaranteed to
+    // return exactly `max_frames` frames regardless of ordering. What a
+    // load-mutate-save race would lose is the `SessionStats` bookkeeping
+    // (#457/#477) — so the invariant under test is that `total_frames` sums
+    // every call's contribution rather than dropping some of them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_batch_generate_frames_atomic_concurrent_calls_lose_no_update() {
+        use std::sync::Arc;
+
+        let repo = Arc::new(GatInMemoryStreamRepository::new());
+
+        const N: usize = 50;
+        const MAX_FRAMES: usize = 2;
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        let source_data: JsonData = serde_json::json!({
+            "id": "abc",
+            "name": "Alice",
+            "items": [1, 2, 3]
+        })
+        .into();
+        let stream_id = session.create_stream(source_data).unwrap();
+        session.start_stream(stream_id).unwrap();
+        let _ = session.take_events();
+        repo.save_session(session).await.unwrap();
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(N));
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                let repo = Arc::clone(&repo);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    repo.batch_generate_frames_atomic(session_id, MAX_FRAMES)
+                        .await
+                        .unwrap()
+                })
+            })
+            .collect();
+
+        let mut total_frames = 0usize;
+        let mut total_events = 0usize;
+        for handle in handles {
+            let (frames, events) = handle.await.unwrap();
+            assert_eq!(frames.len(), MAX_FRAMES);
+            total_frames += frames.len();
+            total_events += events.len();
+        }
+        assert_eq!(total_frames, N * MAX_FRAMES);
+        assert_eq!(total_events, N); // one FramesBatched per call
+
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        assert_eq!(session.stats().total_frames, (N * MAX_FRAMES) as u64);
     }
 
     #[tokio::test]

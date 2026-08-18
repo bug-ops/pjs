@@ -128,18 +128,6 @@ where
         }
     }
 
-    /// Load a session by id, mapping a missing session to `ApplicationError::NotFound`.
-    async fn load_session(&self, session_id: SessionId) -> ApplicationResult<StreamSession>
-    where
-        R: StreamRepositoryGat + Send + Sync,
-    {
-        self.repository
-            .find_session(session_id)
-            .await
-            .map_err(ApplicationError::Domain)?
-            .ok_or_else(|| ApplicationError::NotFound(format!("Session {session_id} not found")))
-    }
-
     /// Persist a mutated session and publish its accumulated domain events.
     ///
     /// Events are drained from `session` before the persisted clone is taken,
@@ -448,11 +436,28 @@ where
 
     fn handle(&self, command: BatchGenerateFramesCommand) -> Self::HandleFuture<'_> {
         async move {
-            let mut session = self.load_session(command.session_id.into()).await?;
+            // Atomic per-session read-modify-write (#457, #477): see
+            // GenerateFramesCommand for why events publish before any
+            // fallible step below. Trade-off here specifically: if
+            // `persist_frames_grouped_by_stream` fails partway through a
+            // multi-stream batch, `FramesBatched` and session stats are
+            // already committed while `GET .../frames` may return fewer
+            // frames than were reported — accepted as consistent with
+            // GenerateFramesCommand rather than left silently divergent.
+            let (frames, events) = self
+                .repository
+                .batch_generate_frames_atomic(command.session_id.into(), command.max_frames)
+                .await
+                .map_err(|e| match e {
+                    crate::domain::DomainError::SessionNotFound(_) => ApplicationError::NotFound(
+                        format!("Session {} not found", command.session_id),
+                    ),
+                    other => ApplicationError::Domain(other),
+                })?;
 
-            // Generate priority frames across all streams
-            let frames = session
-                .create_priority_frames(command.max_frames)
+            self.event_publisher
+                .publish_batch(events)
+                .await
                 .map_err(ApplicationError::Domain)?;
 
             // WebSocket frame production runs through a disjoint session model
@@ -470,8 +475,6 @@ where
             // Persist generated frames so GET /streams/{id}/frames can return them.
             // Frames may span multiple streams in a batch; group by stream_id.
             self.persist_frames_grouped_by_stream(&frames).await?;
-
-            self.save_and_publish(&mut session).await?;
 
             Ok(frames)
         }
@@ -591,274 +594,9 @@ impl CommandValidator {
 mod tests {
     use super::*;
     use crate::domain::{
-        aggregates::stream_session::SessionConfig,
-        events::DomainEvent,
-        ports::{
-            EventPublisherGat, Pagination, SessionHealthSnapshot, SessionQueryCriteria,
-            SessionQueryResult, StreamRepositoryGat,
-        },
+        aggregates::stream_session::SessionConfig, events::DomainEvent, ports::EventPublisherGat,
     };
-    use chrono::Utc;
-    use std::collections::HashMap;
-
-    // Mock implementations for testing
-    struct MockRepository {
-        sessions: parking_lot::Mutex<HashMap<SessionId, StreamSession>>,
-    }
-
-    impl MockRepository {
-        fn new() -> Self {
-            Self {
-                sessions: parking_lot::Mutex::new(HashMap::new()),
-            }
-        }
-    }
-
-    impl StreamRepositoryGat for MockRepository {
-        type FindSessionFuture<'a>
-            = impl std::future::Future<Output = crate::domain::DomainResult<Option<StreamSession>>>
-            + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type SaveSessionFuture<'a>
-            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
-        where
-            Self: 'a;
-
-        type CreateStreamAtomicFuture<'a>
-            = impl std::future::Future<
-                Output = crate::domain::DomainResult<(
-                    StreamId,
-                    Vec<crate::domain::events::DomainEvent>,
-                )>,
-            > + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type StartStreamAtomicFuture<'a>
-            = impl std::future::Future<
-                Output = crate::domain::DomainResult<Vec<crate::domain::events::DomainEvent>>,
-            > + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type CompleteStreamAtomicFuture<'a>
-            = impl std::future::Future<
-                Output = crate::domain::DomainResult<Vec<crate::domain::events::DomainEvent>>,
-            > + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type CreateStreamPatchFramesAtomicFuture<'a>
-            = impl std::future::Future<
-                Output = crate::domain::DomainResult<(
-                    Vec<Frame>,
-                    Vec<crate::domain::events::DomainEvent>,
-                )>,
-            > + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type CloseSessionAtomicFuture<'a>
-            = impl std::future::Future<
-                Output = crate::domain::DomainResult<Vec<crate::domain::events::DomainEvent>>,
-            > + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type RemoveSessionFuture<'a>
-            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
-        where
-            Self: 'a;
-
-        type FindActiveSessionsFuture<'a>
-            = impl std::future::Future<Output = crate::domain::DomainResult<Vec<StreamSession>>>
-            + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type FindSessionsByCriteriaFuture<'a>
-            = impl std::future::Future<Output = crate::domain::DomainResult<SessionQueryResult>>
-            + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type GetSessionHealthFuture<'a>
-            = impl std::future::Future<Output = crate::domain::DomainResult<SessionHealthSnapshot>>
-            + Send
-            + 'a
-        where
-            Self: 'a;
-
-        type SessionExistsFuture<'a>
-            = impl std::future::Future<Output = crate::domain::DomainResult<bool>> + Send + 'a
-        where
-            Self: 'a;
-
-        fn find_session(&self, session_id: SessionId) -> Self::FindSessionFuture<'_> {
-            async move { Ok(self.sessions.lock().get(&session_id).cloned()) }
-        }
-
-        fn save_session(&self, session: StreamSession) -> Self::SaveSessionFuture<'_> {
-            async move {
-                self.sessions.lock().insert(session.id(), session);
-                Ok(())
-            }
-        }
-
-        fn create_stream_atomic(
-            &self,
-            session_id: SessionId,
-            source_data: crate::domain::value_objects::JsonData,
-            config: Option<crate::domain::entities::stream::StreamConfig>,
-        ) -> Self::CreateStreamAtomicFuture<'_> {
-            async move {
-                let mut sessions = self.sessions.lock();
-                let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    crate::domain::DomainError::SessionNotFound(format!(
-                        "Session {session_id} not found"
-                    ))
-                })?;
-                let stream_id = session.create_stream_with_config(source_data, config)?;
-                Ok((stream_id, session.take_events().into_iter().collect()))
-            }
-        }
-
-        fn start_stream_atomic(
-            &self,
-            session_id: SessionId,
-            stream_id: StreamId,
-        ) -> Self::StartStreamAtomicFuture<'_> {
-            async move {
-                let mut sessions = self.sessions.lock();
-                let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    crate::domain::DomainError::SessionNotFound(format!(
-                        "Session {session_id} not found"
-                    ))
-                })?;
-                session.start_stream(stream_id)?;
-                Ok(session.take_events().into_iter().collect())
-            }
-        }
-
-        fn complete_stream_atomic(
-            &self,
-            session_id: SessionId,
-            stream_id: StreamId,
-        ) -> Self::CompleteStreamAtomicFuture<'_> {
-            async move {
-                let mut sessions = self.sessions.lock();
-                let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    crate::domain::DomainError::SessionNotFound(format!(
-                        "Session {session_id} not found"
-                    ))
-                })?;
-                session.complete_stream(stream_id)?;
-                Ok(session.take_events().into_iter().collect())
-            }
-        }
-
-        fn create_stream_patch_frames_atomic(
-            &self,
-            session_id: SessionId,
-            stream_id: StreamId,
-            priority_threshold: crate::domain::value_objects::Priority,
-            max_frames: usize,
-        ) -> Self::CreateStreamPatchFramesAtomicFuture<'_> {
-            async move {
-                let mut sessions = self.sessions.lock();
-                let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    crate::domain::DomainError::SessionNotFound(format!(
-                        "Session {session_id} not found"
-                    ))
-                })?;
-                let frames = session.create_stream_patch_frames(
-                    stream_id,
-                    priority_threshold,
-                    max_frames,
-                )?;
-                Ok((frames, session.take_events().into_iter().collect()))
-            }
-        }
-
-        fn close_session_atomic(
-            &self,
-            session_id: SessionId,
-        ) -> Self::CloseSessionAtomicFuture<'_> {
-            async move {
-                let mut sessions = self.sessions.lock();
-                let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    crate::domain::DomainError::SessionNotFound(format!(
-                        "Session {session_id} not found"
-                    ))
-                })?;
-                session.close()?;
-                Ok(session.take_events().into_iter().collect())
-            }
-        }
-
-        fn remove_session(&self, session_id: SessionId) -> Self::RemoveSessionFuture<'_> {
-            async move {
-                self.sessions.lock().remove(&session_id);
-                Ok(())
-            }
-        }
-
-        fn find_active_sessions(&self) -> Self::FindActiveSessionsFuture<'_> {
-            async move { Ok(self.sessions.lock().values().cloned().collect()) }
-        }
-
-        fn find_sessions_by_criteria(
-            &self,
-            _criteria: SessionQueryCriteria,
-            pagination: Pagination,
-        ) -> Self::FindSessionsByCriteriaFuture<'_> {
-            async move {
-                let sessions: Vec<_> = self.sessions.lock().values().cloned().collect();
-                let total_count = sessions.len();
-                let paginated: Vec<_> = sessions
-                    .into_iter()
-                    .skip(pagination.offset)
-                    .take(pagination.limit)
-                    .collect();
-                let has_more = pagination.offset + paginated.len() < total_count;
-                Ok(SessionQueryResult {
-                    sessions: paginated,
-                    total_count,
-                    has_more,
-                    query_duration_ms: 0,
-                    scan_limit_reached: false,
-                })
-            }
-        }
-
-        fn get_session_health(&self, session_id: SessionId) -> Self::GetSessionHealthFuture<'_> {
-            async move {
-                Ok(SessionHealthSnapshot {
-                    session_id,
-                    is_healthy: true,
-                    active_streams: 0,
-                    total_frames: 0,
-                    last_activity: Utc::now(),
-                    error_rate: 0.0,
-                    metrics: HashMap::new(),
-                })
-            }
-        }
-
-        fn session_exists(&self, session_id: SessionId) -> Self::SessionExistsFuture<'_> {
-            async move { Ok(self.sessions.lock().contains_key(&session_id)) }
-        }
-    }
+    use crate::test_support::MockRepository;
 
     struct MockEventPublisher;
 
@@ -1747,6 +1485,353 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(ApplicationError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_batch_generate_frames_persists_into_frame_store() {
+        use crate::domain::ports::FrameStoreGat;
+        use crate::infrastructure::adapters::InMemoryFrameStore;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let frame_store = Arc::new(InMemoryFrameStore::new());
+
+        let handler = SessionCommandHandler::with_stores(
+            repository.clone(),
+            event_publisher,
+            Arc::new(crate::domain::ports::NoopDictionaryStore),
+            frame_store.clone(),
+        );
+
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"items": [1, 2, 3, 4]}).into(),
+                config: None,
+            })
+            .await
+            .unwrap();
+
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
+
+        // BatchGenerateFrames must (a) route through the atomic repository
+        // call (#477) and (b) leave the frames in the frame store so the GET
+        // endpoint can find them.
+        let frames = handler
+            .handle(BatchGenerateFramesCommand {
+                session_id: session_id.into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: 8,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            !frames.is_empty(),
+            "command must produce at least one frame"
+        );
+
+        let page = frame_store
+            .get_frames(stream_id, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            page.frames.len(),
+            frames.len(),
+            "every frame returned by the command must be persisted",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_batch_generate_frames_session_not_found() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let result = handler
+            .handle(BatchGenerateFramesCommand {
+                session_id: SessionId::new().into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: 8,
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApplicationError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_batch_generate_frames_no_streaming_streams_returns_empty() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"a": 1}).into(),
+                config: None,
+            })
+            .await
+            .unwrap();
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
+        handler
+            .handle(CompleteStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+                checksum: None,
+            })
+            .await
+            .unwrap();
+
+        // No Streaming streams left — the command must succeed with an empty
+        // result, not error.
+        let frames = handler
+            .handle(BatchGenerateFramesCommand {
+                session_id: session_id.into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: 8,
+            })
+            .await
+            .unwrap();
+
+        assert!(frames.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_batch_generate_frames_max_frames_zero_returns_empty() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"a": 1}).into(),
+                config: None,
+            })
+            .await
+            .unwrap();
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
+
+        // `BatchGenerateFramesCommand::max_frames` is deliberately left
+        // unvalidated (#438) — zero is accepted and truncates to nothing
+        // rather than being rejected.
+        let frames = handler
+            .handle(BatchGenerateFramesCommand {
+                session_id: session_id.into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: 0,
+            })
+            .await
+            .unwrap();
+
+        assert!(frames.is_empty());
+    }
+
+    /// Regression test: a session already closed by the time
+    /// `BatchGenerateFramesCommand` reaches `batch_generate_frames_atomic`
+    /// must surface as `ApplicationError::Domain(InvalidSessionState)`, not
+    /// `NotFound` — the session still exists, it is just no longer active.
+    /// This is the same outcome a `CloseSessionCommand` racing ahead of a
+    /// concurrent `BatchGenerateFramesCommand` on the same session would
+    /// produce.
+    #[tokio::test]
+    async fn test_batch_generate_frames_closed_session_returns_domain_error() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        handler
+            .handle(CloseSessionCommand {
+                session_id: session_id.into(),
+            })
+            .await
+            .unwrap();
+
+        let result = handler
+            .handle(BatchGenerateFramesCommand {
+                session_id: session_id.into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: 8,
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(ApplicationError::Domain(
+                crate::domain::DomainError::InvalidSessionState(_)
+            ))
+        ));
+    }
+
+    /// Regression test for #477: `BatchGenerateFramesCommand` must not lose
+    /// `SessionStats` updates to a concurrent atomic command on the same
+    /// session, the way the old `find_session` + mutate + `save_session`
+    /// path could. Routing through `batch_generate_frames_atomic` means both
+    /// commands now share the same per-session lock as every other
+    /// `*_atomic` method.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_batch_generate_frames_concurrent_with_complete_stream_loses_no_update() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = Arc::new(SessionCommandHandler::new(repository, event_publisher));
+
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        // `frame_stream_id` stays active for the whole test so every
+        // concurrent batch call has data to draw from, regardless of
+        // ordering relative to `complete_stream_id`'s completion —
+        // `create_priority_frames` skips inactive streams, so completing the
+        // *only* stream mid-race would make batch calls racing after it
+        // legitimately (not due to a lost update) return zero frames.
+        let frame_stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"a": 1, "b": 2}).into(),
+                config: None,
+            })
+            .await
+            .unwrap();
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: frame_stream_id.into(),
+            })
+            .await
+            .unwrap();
+
+        let complete_stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"c": 3}).into(),
+                config: None,
+            })
+            .await
+            .unwrap();
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: complete_stream_id.into(),
+            })
+            .await
+            .unwrap();
+
+        const N: usize = 25;
+        let barrier = Arc::new(tokio::sync::Barrier::new(N + 1));
+
+        let mut handles = Vec::with_capacity(N + 1);
+        for _ in 0..N {
+            let handler = Arc::clone(&handler);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                handler
+                    .handle(BatchGenerateFramesCommand {
+                        session_id: session_id.into(),
+                        priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                        max_frames: 2,
+                    })
+                    .await
+                    .unwrap()
+            }));
+        }
+        {
+            let handler = Arc::clone(&handler);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                handler
+                    .handle(CompleteStreamCommand {
+                        session_id: session_id.into(),
+                        stream_id: complete_stream_id.into(),
+                        checksum: None,
+                    })
+                    .await
+                    .unwrap();
+                vec![]
+            }));
+        }
+
+        let mut total_frames = 0usize;
+        for handle in handles {
+            total_frames += handle.await.unwrap().len();
+        }
+        assert_eq!(total_frames, N * 2);
+
+        let session = handler
+            .repository
+            .find_session(session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.stats().total_frames, (N * 2) as u64);
+        assert_eq!(session.stats().completed_streams, 1);
     }
 
     #[tokio::test]

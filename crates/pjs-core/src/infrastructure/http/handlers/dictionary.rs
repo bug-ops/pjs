@@ -147,6 +147,16 @@ mod tests {
             + 'a
         where
             Self: 'a;
+        type BatchGenerateFramesAtomicFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<(
+                    Vec<crate::domain::entities::Frame>,
+                    Vec<DomainEvent>,
+                )>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
         type CloseSessionAtomicFuture<'a>
             = impl std::future::Future<Output = crate::domain::DomainResult<Vec<DomainEvent>>>
             + Send
@@ -249,6 +259,23 @@ mod tests {
                     priority_threshold,
                     max_frames,
                 )?;
+                Ok((frames, session.take_events().into_iter().collect()))
+            }
+        }
+        fn batch_generate_frames_atomic(
+            &self,
+            sid: SessionId,
+            max_frames: usize,
+        ) -> Self::BatchGenerateFramesAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.0.lock();
+                let session = sessions.get_mut(&sid).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!("Session {sid} not found"))
+                })?;
+                let extracted = session.extract_prioritized_patches_for_active_streams(
+                    crate::domain::value_objects::Priority::BACKGROUND,
+                );
+                let frames = session.commit_priority_frames(extracted, max_frames)?;
                 Ok((frames, session.take_events().into_iter().collect()))
             }
         }

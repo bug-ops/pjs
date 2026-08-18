@@ -90,14 +90,12 @@ gat_port! {
         /// find-mutate-save cycle. Do not call this concurrently with any of
         /// the `*_atomic` methods (`create_stream_atomic`,
         /// `start_stream_atomic`, `complete_stream_atomic`,
-        /// `create_stream_patch_frames_atomic`, `close_session_atomic`) for
-        /// the same `session_id`: those methods hold a per-session lock for
-        /// their own mutation, but `save_session` does not participate in
-        /// that lock, so a `save_session` call landing between one of their
-        /// reads and writes can silently overwrite their update (the exact
-        /// class of bug fixed in #457). `BatchGenerateFramesCommand` is the
-        /// one command handler still on the `find_session` + mutate +
-        /// `save_session` path rather than an atomic method.
+        /// `create_stream_patch_frames_atomic`, `batch_generate_frames_atomic`,
+        /// `close_session_atomic`) for the same `session_id`: those methods
+        /// hold a per-session lock for their own mutation, but `save_session`
+        /// does not participate in that lock, so a `save_session` call
+        /// landing between one of their reads and writes can silently
+        /// overwrite their update (the exact class of bug fixed in #457).
         async fn save_session(&self, session: StreamSession) -> ();
 
         /// Atomically create a stream (and apply `config`, if given) within
@@ -171,6 +169,29 @@ gat_port! {
             session_id: SessionId,
             stream_id: StreamId,
             priority_threshold: Priority,
+            max_frames: usize
+        ) -> (Vec<Frame>, Vec<DomainEvent>);
+
+        /// Atomically generate priority frames across every `Streaming`
+        /// stream in `session_id`, returning the frames and every event
+        /// currently pending on the session.
+        ///
+        /// Same atomicity contract as [`Self::create_stream_atomic`] for the
+        /// read-modify-write as a whole, but implementations should mirror
+        /// [`Self::create_stream_patch_frames_atomic`]'s extract-then-commit
+        /// split (via `StreamSession::extract_prioritized_patches_for_active_streams`
+        /// and `StreamSession::commit_priority_frames`) rather than holding
+        /// the lock for the full per-stream traversal: this method iterates
+        /// every `Streaming` stream in the session, so the CPU cost of a
+        /// naive single-phase implementation scales with stream count, not
+        /// just payload size. A stream that transitions out of `Streaming`
+        /// between extraction and commit is skipped rather than failing the
+        /// whole batch. Returns `DomainError::SessionNotFound` if
+        /// `session_id` does not exist, or whatever error
+        /// `StreamSession::commit_priority_frames` returns.
+        async fn batch_generate_frames_atomic(
+            &self,
+            session_id: SessionId,
             max_frames: usize
         ) -> (Vec<Frame>, Vec<DomainEvent>);
 
