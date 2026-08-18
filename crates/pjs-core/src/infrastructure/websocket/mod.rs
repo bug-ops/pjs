@@ -288,7 +288,7 @@ impl ClientMetrics {
 
     /// Recommended delay between frames given the current processing-time average.
     ///
-    /// Clamped to [`MAX_ADAPTIVE_FRAME_DELAY`]: `average_processing_time_ms` is derived
+    /// Clamped to `MAX_ADAPTIVE_FRAME_DELAY`: `average_processing_time_ms` is derived
     /// from client-supplied `processing_time_ms` in [`Self::update_processing_time`],
     /// which is unvalidated wire input (see `handle_frame_ack`). Without a ceiling, a
     /// single malicious `FrameAck` could drive the `tokio::time::sleep` in
