@@ -7,7 +7,6 @@ pub mod adapters;
 pub mod bounded_channel;
 #[cfg(feature = "http-server")]
 pub mod http;
-pub mod integration;
 pub mod repositories;
 pub mod schema_repository;
 #[cfg(feature = "http-server")]
