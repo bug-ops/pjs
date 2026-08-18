@@ -1,8 +1,7 @@
 //! Build script for pjs-core.
 //!
 //! Translates the `simd-auto`/`simd-avx512` Cargo features into a single
-//! `cfg(pjs_simd)` gate (read by `Parser::new()` in `src/parser/mod.rs` to
-//! select the sonic-rs SIMD backend over the portable serde fallback).
+//! `cfg(pjs_simd)` gate.
 //!
 //! A Cargo feature being enabled does not by itself mean rustc was invoked
 //! with the matching `-C target-feature`; sonic-rs's own SIMD codegen still
@@ -43,8 +42,10 @@ fn main() {
         if want_auto && !has("avx2") && !has("sse4.2") {
             println!(
                 "cargo::warning=feature `simd-auto` is enabled but no x86 SIMD target \
-                 features are exposed to rustc. Add RUSTFLAGS=\"-C target-cpu=native\" in \
-                 .cargo/config.toml so sonic-rs and SIMD hot paths activate."
+                 features are exposed to rustc. The `pjs_simd` cfg this enables currently \
+                 has no readers in pjs-core (its consumer was removed in #486/#488); \
+                 `sonic-rs`'s own runtime SIMD dispatch, used unconditionally elsewhere \
+                 in this crate, is unaffected either way."
             );
         }
     }

@@ -18,21 +18,9 @@ This suite compares PJS against major JSON parsing libraries to demonstrate the 
 
 ## Actual Performance Results 🚀
 
-### Raw Parsing Performance (vs sonic-rs SIMD library)
+### Raw Parsing Performance (serde_json vs sonic-rs)
 
-| JSON Size | PJS Parser | sonic-rs | Performance Gap | Status |
-|-----------|------------|----------|----------------|---------|
-| **Small (43B)** | 312ns (137 MiB/s) | 129ns (332 MiB/s) | 2.4x slower | Competitive |
-| **Medium (~351B)** | 590ns (598 MiB/s) | 434ns (808 MiB/s) | 1.4x slower | Very Good |
-| **Large (~357KB)** | 204μs (1.71 GiB/s) | 216μs (1.61 GiB/s) | **1.06x faster** | Excellent |
-
-### Performance vs Traditional JSON Libraries
-
-| JSON Size | PJS Parser | serde_json | PJS Advantage |
-|-----------|------------|------------|---------------|
-| **Small (43B)** | 312ns | 275ns | 0.87x (competitive) |
-| **Medium (~351B)** | 590ns | 1,662ns | **2.8x faster** |
-| **Large (~357KB)** | 204μs | 1,294μs | **6.3x faster** |
+> **Note:** the standalone "PJS Parser" benchmark group (`benchmark_pjs_parser`, plus the `pjs_parser` arm of `benchmark_comparison`) and the `pjson_rs::Parser` type it measured were removed as dead code in #486/#488 — the type had no production caller. The tables that used to compare a "PJS Parser" column against `serde_json`/`sonic-rs` here are removed along with it; `simple_throughput`'s `parsing_comparison` group still benchmarks `serde_json` against `sonic_rs` directly. Re-run `cargo bench -p pjs-bench --bench simple_throughput` for current numbers on your hardware.
 
 ### 🚀 Memory Usage Comparison (from memory_benchmarks)
 
@@ -64,8 +52,7 @@ Raw parsing speed comparison across different JSON sizes:
 
 **Measured Results:**
 
-- PJS **6.3x faster** than serde_json for large JSON (357KB)
-- PJS **1.06x faster** than sonic-rs for large data sets
+- See the note above — the dedicated "PJS Parser" comparison numbers were removed along with the dead parser they measured; `parsing_comparison` still benchmarks `serde_json` vs `sonic_rs` directly
 - PJS maintains **significant advantage** for streaming scenarios (5.3x faster progressive loading)
 
 ### 2. Memory Usage Benchmarks (`cargo bench --bench memory_benchmarks`)
@@ -102,15 +89,13 @@ Time-to-First-Meaningful-Paint (TTFMP) and perceived performance:
 
 Performance techniques used in PJS:
 
-- **Zero-copy** streaming with sonic-rs integration
-- **SIMD-accelerated** semantic analysis
+- **Zero-copy** streaming via `ZeroCopyParser`/`LazyParser`
 - **Adaptive processing** - disables heavy analysis for large JSON
 - **Incremental allocation** patterns for better memory usage
 
 **Implementation Benefits:**
 
-- **Hybrid architecture** - sonic-rs for speed, serde for compatibility
-- **Smart semantic detection** - only when beneficial
+- **Zero-copy parsing** - `ZeroCopyParser`/`LazyParser` avoid intermediate allocation
 - **Vectorized operations** for numeric arrays
 - **Cache-friendly** data structures
 

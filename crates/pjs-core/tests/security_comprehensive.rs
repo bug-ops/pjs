@@ -6,10 +6,7 @@
 //! - Memory safety validation
 //! - Input boundary testing
 
-use pjson_rs::{
-    DepthTracker, LazyParser, SecurityConfig, SecurityValidator, SimpleParser, SonicParser,
-    ZeroCopyParser,
-};
+use pjson_rs::{DepthTracker, LazyParser, SecurityConfig, SecurityValidator, ZeroCopyParser};
 
 /// Test suite for input size validation security
 #[cfg(test)]
@@ -136,27 +133,6 @@ mod depth_tests {
         let result = tracker.enter();
         assert!(result.is_ok(), "Should allow re-entry after exit");
     }
-
-    #[test]
-    fn test_nested_json_bombing() {
-        let parser = SimpleParser::new();
-
-        // Create deeply nested JSON that should be rejected
-        let mut nested_json = String::new();
-        for _ in 0..100 {
-            // 100 levels deep
-            nested_json.push_str("{\"a\":");
-        }
-        nested_json.push_str("\"value\"");
-        for _ in 0..100 {
-            nested_json.push('}');
-        }
-
-        let result = parser.parse(nested_json.as_bytes());
-        // Note: This test may pass or fail depending on serde_json internal limits
-        // The important thing is that it doesn't crash or cause stack overflow
-        println!("Nested JSON bombing result: {:?}", result.is_err());
-    }
 }
 
 /// Test suite for string length validation security
@@ -182,18 +158,6 @@ mod string_length_tests {
                 .validate_string_length(config.json.max_string_length + 1)
                 .is_err()
         );
-    }
-
-    #[test]
-    fn test_massive_string_attack() {
-        let parser = SimpleParser::new();
-
-        // Create JSON with massive string that should be rejected
-        let large_string = "a".repeat(100 * 1024 * 1024); // 100MB string
-        let json = format!(r#"{{"key": "{}"}}"#, large_string);
-
-        let result = parser.parse(json.as_bytes());
-        assert!(result.is_err(), "Massive string should be rejected");
     }
 }
 
@@ -221,19 +185,6 @@ mod array_length_tests {
                 .is_err()
         );
     }
-
-    #[test]
-    fn test_billion_element_attack() {
-        let parser = SimpleParser::new();
-
-        // Create JSON array with pattern that expands to massive size
-        // Note: We test the security validation, not actually creating billion elements
-        let json = format!("[{}]", "1,".repeat(1_000_000));
-
-        let result = parser.parse(json.as_bytes());
-        // This might succeed or fail based on memory, but shouldn't crash
-        println!("Billion element test result: {:?}", result.is_err());
-    }
 }
 
 /// Test suite for object key count validation security
@@ -259,27 +210,6 @@ mod object_key_tests {
                 .validate_object_keys(config.json.max_object_keys + 1)
                 .is_err()
         );
-    }
-
-    #[test]
-    fn test_massive_object_attack() {
-        let parser = SimpleParser::new();
-
-        // Create JSON object with many keys
-        let mut json = String::from("{");
-        for i in 0..10000 {
-            // 10k keys
-            if i > 0 {
-                json.push(',');
-            }
-            json.push_str(&format!(r#""key{}": {}"#, i, i));
-        }
-        json.push('}');
-
-        let result = parser.parse(json.as_bytes());
-        // Note: This test verifies we can handle large objects without crashing
-        // Actual rejection depends on memory limits and parser implementation
-        println!("Massive object attack result: {:?}", result.is_err());
     }
 }
 
@@ -417,30 +347,6 @@ mod integration_tests {
     use super::*;
 
     #[test]
-    fn test_simple_parser_security_integration() {
-        let _config = SecurityConfig::low_memory();
-        // For now, just test with default parser since we need to add security config method
-        let parser = SimpleParser::new();
-
-        // Test with valid small JSON
-        let small_json = br#"{"key": "value"}"#;
-        let result = parser.parse(small_json);
-        assert!(result.is_ok(), "Small JSON should be accepted");
-    }
-
-    #[test]
-    fn test_sonic_parser_security_integration() {
-        let _config = SecurityConfig::development();
-        // For now, just test with default parser since we need to add security config method
-        let parser = SonicParser::new();
-
-        // Test with valid small JSON
-        let small_json = br#"{"key": "value"}"#;
-        let result = parser.parse(small_json);
-        assert!(result.is_ok(), "Small JSON should be accepted");
-    }
-
-    #[test]
     fn test_zero_copy_parser_security() {
         let config = SecurityConfig::low_memory();
         let mut parser = ZeroCopyParser::with_security_config(config.clone());
@@ -449,39 +355,5 @@ mod integration_tests {
         let small_json = br#"{"key": "value"}"#;
         let result = parser.parse_lazy(small_json);
         assert!(result.is_ok(), "Small JSON should be accepted");
-    }
-}
-
-/// Performance security tests (prevent DoS through resource exhaustion)
-#[cfg(test)]
-mod performance_security_tests {
-    use super::*;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn test_parsing_time_bounds() {
-        let parser = SimpleParser::new();
-        let test_timeout = Duration::from_secs(1);
-
-        // Test with moderately complex JSON
-        let json = serde_json::json!({
-            "users": (0..1000).map(|i| serde_json::json!({
-                "id": i,
-                "name": format!("user_{}", i),
-                "data": vec![1, 2, 3, 4, 5]
-            })).collect::<Vec<_>>()
-        });
-
-        let json_str = serde_json::to_string(&json).unwrap();
-        let start = Instant::now();
-
-        let result = parser.parse(json_str.as_bytes());
-        let elapsed = start.elapsed();
-
-        assert!(result.is_ok(), "Moderate JSON should parse successfully");
-        assert!(
-            elapsed < test_timeout,
-            "Parsing should complete within timeout"
-        );
     }
 }
