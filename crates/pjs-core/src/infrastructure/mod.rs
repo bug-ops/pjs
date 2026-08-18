@@ -33,11 +33,6 @@ pub use http::{
     create_pjs_router_with_rate_limit_and_auth, create_pjs_router_with_rate_limit_and_config,
     create_streaming_response, create_streaming_response_with_content_type,
 };
-pub use integration::{
-    AdapterConfig, IntegrationError, IntegrationResult, ResponseBody, StreamingAdapter,
-    StreamingAdapterExt, StreamingFormat, UniversalAdapter, UniversalRequest, UniversalResponse,
-    streaming_helpers,
-};
 pub use schema_repository::SchemaRepository;
 #[cfg(feature = "http-server")]
 pub use websocket::{

@@ -152,9 +152,5 @@ name = "schema_validation_demo"
 required-features = ["schema-validation"]
 
 [[example]]
-name = "gat_performance_showcase"
-required-features = []
-
-[[example]]
 name = "object_pool_performance"
 required-features = []
