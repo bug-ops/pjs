@@ -13,9 +13,14 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tower::limit::GlobalConcurrencyLimitLayer;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
+    timeout::{ResponseBodyTimeoutLayer, TimeoutLayer},
     trace::TraceLayer,
 };
 
@@ -472,7 +477,7 @@ where
     S: StreamStoreGat + Send + Sync + 'static,
 {
     let all_routes = public_routes::<R, P, S>().merge(protected_routes::<R, P, S>());
-    apply_common_layers(all_routes, config)
+    apply_common_layers(all_routes, config, None)
 }
 
 /// Create PJS-enabled Axum router with rate limiting and the default CORS configuration.
@@ -511,6 +516,11 @@ where
 
 /// Create PJS-enabled Axum router with rate limiting and a custom [`HttpServerConfig`].
 ///
+/// `rate_limit_middleware` is threaded into the crate's common middleware stack:
+/// inside `security_middleware`/`CorsLayer`/`TraceLayer`, so a `429` still gets
+/// security headers, CORS headers, and shows up in traces, but outside the global
+/// concurrency limiter, so a `429` never consumes a permit.
+///
 /// # Errors
 ///
 /// Returns [`PjsError::HttpError`] if `config` contains invalid CORS origins.
@@ -523,10 +533,8 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let all_routes = public_routes::<R, P, S>()
-        .merge(protected_routes::<R, P, S>())
-        .layer(rate_limit_middleware);
-    apply_common_layers(all_routes, config)
+    let all_routes = public_routes::<R, P, S>().merge(protected_routes::<R, P, S>());
+    apply_common_layers(all_routes, config, Some(rate_limit_middleware))
 }
 
 /// Create PJS-enabled Axum router with API key authentication and a custom [`HttpServerConfig`].
@@ -566,23 +574,38 @@ where
     // merged separately so there is zero path-string comparison logic in the auth layer.
     let protected = protected_routes::<R, P, S>().layer(auth);
     let merged = public_routes::<R, P, S>().merge(protected);
-    apply_common_layers(merged, config)
+    apply_common_layers(merged, config, None)
 }
 
 /// Create PJS-enabled Axum router with both rate limiting and API key authentication.
 ///
-/// Layer ordering (Tower applies layers outer-to-inner):
+/// Layer ordering (axum's `Router::layer` makes the last `.layer()` call outermost):
 /// ```text
-/// rate_limit  ← outermost: wraps both public and protected sub-routers
-///   public_routes (no auth)
-///   protected_routes
-///     auth    ← inner: wraps only protected routes; unauthenticated requests are
-///               rejected before consuming rate-limit quota for protected paths
-///     handlers
+/// TraceLayer                  ← outermost: distributed tracing
+/// TimeoutLayer                ← whole-request timeout
+/// ResponseBodyTimeoutLayer    ← per-frame idle timeout on the response body
+/// CorsLayer                   ← CORS
+/// DefaultBodyLimit            ← body size guard
+/// security_middleware         ← security headers
+/// rate_limit                  ← rejects with 429 before a concurrency permit, but
+///                                after security/CORS/trace so 429s keep all three
+///   GlobalConcurrencyLimitLayer ← global in-flight request cap
+///     public_routes (no auth)
+///     protected_routes
+///       auth    ← innermost: wraps only protected routes
+///       handlers
 /// ```
 ///
 /// Rate limiting is applied to **both** the public and protected sub-routers (DoS
-/// protection for `/pjs/health` is still desirable).
+/// protection for `/pjs/health` is still desirable). Rate limit sits *outside* auth
+/// (auth is applied to the protected sub-router before this router ever reaches
+/// the common middleware stack, so it ends up innermost of everything) — every
+/// request, authenticated or not, consumes rate-limit quota before auth gets a
+/// chance to reject the unauthenticated ones. This is an intentional trade-off, not
+/// an oversight: it is what lets the same rate limiter also protect the
+/// unauthenticated `/pjs/health` route, at the cost of an unauthenticated flood
+/// being able to consume quota that would otherwise be available to legitimate
+/// authenticated clients.
 ///
 /// # Errors
 ///
@@ -598,13 +621,9 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    // Auth runs before rate limit on the protected sub-router so that unauthenticated
-    // traffic does not consume rate-limit quota and cannot starve legitimate clients.
     let protected = protected_routes::<R, P, S>().layer(auth);
-    let merged = public_routes::<R, P, S>()
-        .merge(protected)
-        .layer(rate_limit);
-    apply_common_layers(merged, config)
+    let merged = public_routes::<R, P, S>().merge(protected);
+    apply_common_layers(merged, config, Some(rate_limit))
 }
 
 // ── Route table helpers ────────────────────────────────────────────────────────────
@@ -684,18 +703,123 @@ where
     router
 }
 
+/// Global cap on concurrent in-flight requests, independent of
+/// [`RateLimitMiddleware`]'s per-client, per-window token bucket.
+///
+/// Enforced via [`GlobalConcurrencyLimitLayer`], not the plain (non-`Global`)
+/// `ConcurrencyLimitLayer`: axum's `Router::layer` applies a layer once per matched
+/// route in the routing table (`PathRouter::layer` calls `layer.clone()` per route),
+/// and `ConcurrencyLimitLayer::layer()` constructs a brand new `Semaphore` on every
+/// call — so using it here would silently produce one independent semaphore *per
+/// route* (an effective ceiling of `MAX_CONCURRENT_REQUESTS * route_count`, not a
+/// real global cap). `GlobalConcurrencyLimitLayer` holds a single `Arc<Semaphore>`
+/// in the layer itself and clones the `Arc` (not the semaphore) on each per-route
+/// application, so every route actually shares one pool.
+///
+/// This bounds handler *execution* concurrency only — not connections, sockets, or
+/// parsed-request memory. Axum's `Router::poll_ready` always returns `Ready`, and
+/// hyper's `TowerToHyperService` wraps every request in a fresh `Oneshot`, so hyper
+/// never observes tower-stack readiness and keeps accepting, reading, and parsing
+/// requests regardless of how many permits are free. A request over
+/// `MAX_CONCURRENT_REQUESTS` is already fully accepted/read/parsed by the time it
+/// reaches this layer; it then parks waiting for a permit inside its own
+/// per-request future, bounded only by the outer `TimeoutLayer` (`REQUEST_TIMEOUT`
+/// -> `408`) rather than being deferred at the connection level. For the streaming
+/// route (`GET .../frames/stream`), the permit is released as soon as the handler
+/// returns its `Response` — i.e. once the streaming body starts, not once it
+/// finishes — so this bounds concurrent *request handling*, not concurrent open
+/// streaming bodies; there is currently no mechanism here that bounds the latter
+/// (see [`RESPONSE_BODY_IDLE_TIMEOUT`]'s doc for why that gap remains open).
+const MAX_CONCURRENT_REQUESTS: usize = 512;
+
+/// Whole-request timeout: bounds the time from receiving a request to the handler
+/// producing a `Response` (headers + body constructor), after which the client gets
+/// `408 Request Timeout`.
+///
+/// [`TimeoutLayer`] times the `Service::call` future only — for the streaming route
+/// that future resolves as soon as `create_streaming_response` builds the chunked
+/// `Response`, before any frame is written, so this never cuts off an
+/// already-streaming connection. It exists to bound the (normally sub-second)
+/// query/domain-lookup phase common to every route, and — because it sits outer of
+/// [`MAX_CONCURRENT_REQUESTS`]'s layer in [`apply_common_layers`] — also bounds how
+/// long a request can queue waiting for a concurrency permit before failing with
+/// `408` instead of queueing indefinitely.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Idle timeout applied to every response body: [`TimeoutBody`]'s deadline resets
+/// each time the body is *polled* and yields a frame, so this bounds a stall on the
+/// *producer* side (a source that stops yielding frames), not total transfer time.
+///
+/// [`TimeoutBody`]: tower_http::timeout::TimeoutBody
+///
+/// This does **not** protect against a slow or non-reading *consumer* — the
+/// scenario the original #515 report was about. `TimeoutBody` only resets its clock
+/// when polled, and hyper stops polling a response body once its outbound buffer
+/// fills waiting on the client to read the socket, so a client that stops reading
+/// entirely is never caught by this layer; that requires connection/socket-level
+/// accounting in whatever owns the `TcpListener` and calls `axum::serve` (currently
+/// `pjs-demo`, not `pjs-core` — this crate only builds `Router`s), tracked as a
+/// follow-up rather than fixed here.
+///
+/// On the current streaming route (`GET .../frames/stream`, #511) this layer is
+/// close to a no-op even for the producer-stall case it does cover:
+/// `stream_stream_frames` fully materializes its frames into a `Vec` (bounded by
+/// `MAX_PAGINATION_LIMIT`) before streaming begins, and `BatchFrameStream` then
+/// iterates that already-in-memory `Vec` — there is no upstream source that can
+/// actually stall mid-stream on this route today. This layer still has value for
+/// any future or other route whose data source can genuinely stall while producing
+/// (e.g. a backpressured or slow upstream), and is retained as a defensible general
+/// mitigation rather than removed.
+const RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Apply the cross-cutting middleware stack shared by all router variants.
 ///
-/// Order (Tower applies outer-to-inner):
+/// `rate_limit` is optional because only the `*_with_rate_limit_*` router
+/// constructors have one to apply; `None` simply omits that layer from the stack.
+///
+/// Order — axum's `Router::layer` re-wraps whatever was built by earlier `.layer()`
+/// calls, so the **last** `.layer()` call ends up outermost (sees the request
+/// first, the response last):
 /// ```text
-/// security_middleware   ← security headers
-/// DefaultBodyLimit      ← body size guard
-/// CorsLayer             ← CORS (outside auth, so preflight is answered before auth)
-/// TraceLayer            ← distributed tracing
+/// TraceLayer                  ← distributed tracing (outermost)
+/// TimeoutLayer                ← whole-request timeout (pre-response phase only)
+/// ResponseBodyTimeoutLayer    ← per-frame idle timeout on the response body
+/// CorsLayer                   ← CORS (outside auth, so preflight is answered before auth)
+/// DefaultBodyLimit            ← body size guard
+/// security_middleware         ← security headers
+/// rate_limit                  ← per-client quota (only when `Some`)
+/// GlobalConcurrencyLimitLayer ← global in-flight request cap (innermost)
 /// ```
+///
+/// `rate_limit` sits *inside* `security_middleware`/`CorsLayer`/`TraceLayer` and
+/// *outside* `GlobalConcurrencyLimitLayer`, which is deliberate on both sides:
+/// - Inside security/CORS/trace: a `429` still gets security headers
+///   (`X-Content-Type-Options`, `X-Frame-Options`, CSP), a browser making a
+///   cross-origin request still gets a readable `429`+`Retry-After` instead of an
+///   opaque CORS network error, and rate-limit rejections still show up in request
+///   traces — losing any of these on a rejection path defeats the point of a DoS
+///   mitigation feature. An earlier revision of this function had `rate_limit`
+///   applied by the caller after this function returned (i.e. outermost of
+///   everything), which regressed exactly these three properties; that version is
+///   not what ships.
+/// - Outside the concurrency limiter: a request the rate limiter rejects with
+///   `429` never reaches (and never consumes) a `GlobalConcurrencyLimitLayer`
+///   permit, and `GlobalConcurrencyLimitLayer` being innermost overall means a
+///   request that *does* pass the rate limiter but then queues for a permit is
+///   still bounded by the outer `TimeoutLayer`'s 30s deadline, so a saturated pool
+///   degrades to `408`s instead of queueing forever.
+///
+/// Relative order between `ResponseBodyTimeoutLayer` and `TimeoutLayer` does not
+/// affect correctness despite `TimeoutLayer` requiring its inner response body to
+/// implement `Default`: axum's `Route` re-boxes every layer's output back into the
+/// canonical `axum::body::Body`-based `Response` (`Route::new`'s `MapIntoResponse`)
+/// before the next `.layer()` call ever sees it, so each `.layer()` call always
+/// observes a plain, `Default`-implementing `axum::body::Body`, regardless of what
+/// came before it in this list.
 fn apply_common_layers<R, P, S>(
     router: Router<PjsAppState<R, P, S>>,
     config: &HttpServerConfig,
+    rate_limit: Option<RateLimitMiddleware>,
 ) -> Result<Router<PjsAppState<R, P, S>>, PjsError>
 where
     R: StreamRepositoryGat + Send + Sync + 'static,
@@ -703,10 +827,20 @@ where
     S: StreamStoreGat + Send + Sync + 'static,
 {
     let cors = build_cors_layer(config)?;
+    let router = router.layer(GlobalConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS));
+    let router = match rate_limit {
+        Some(rate_limit) => router.layer(rate_limit),
+        None => router,
+    };
     Ok(router
         .layer(middleware::from_fn(security_middleware))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(cors)
+        .layer(ResponseBodyTimeoutLayer::new(RESPONSE_BODY_IDLE_TIMEOUT))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ))
         .layer(TraceLayer::new_for_http()))
 }
 
