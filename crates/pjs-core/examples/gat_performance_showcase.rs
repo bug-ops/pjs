@@ -12,6 +12,7 @@ use pjson_rs::infrastructure::integration::{
 };
 use pjson_rs::stream::StreamFrame;
 use std::future::Future;
+use std::hint::black_box;
 use std::time::Instant;
 
 /// Modern GAT adapter with true zero-cost abstractions
@@ -59,7 +60,7 @@ impl StreamingAdapter for ModernGatAdapter {
     ) -> Self::StreamingResponseFuture<'a> {
         // Direct async block - compiler generates optimal Future type
         async move {
-            // Zero heap allocation, pure stack operations
+            // Zero-cost Future type (no Box<dyn Future> allocation)
             Ok("zero-cost gat streaming".to_string())
         }
     }
@@ -69,7 +70,7 @@ impl StreamingAdapter for ModernGatAdapter {
         session_id: SessionId,
         frames: Vec<StreamFrame>,
     ) -> Self::SseResponseFuture<'a> {
-        // Direct async delegation - zero allocation
+        // Direct async delegation - zero-cost Future type, no Box<dyn Future>
         async move { streaming_helpers::default_sse_response(self, session_id, frames).await }
     }
 
@@ -78,7 +79,7 @@ impl StreamingAdapter for ModernGatAdapter {
         data: JsonData,
         streaming: bool,
     ) -> Self::JsonResponseFuture<'a> {
-        // Stack-allocated future - zero heap usage
+        // Stack-allocated Future type - no Box<dyn Future>
         async move { streaming_helpers::default_json_response(self, data, streaming).await }
     }
 
@@ -143,7 +144,6 @@ impl StreamingAdapterExt for ModernGatAdapter {
     }
 
     fn create_health_response<'a>(&'a self) -> Self::HealthResponseFuture<'a> {
-        // Zero-allocation health check
         async move { streaming_helpers::default_health_response(self).await }
     }
 }
@@ -153,46 +153,8 @@ async fn main() {
     println!("GAT Performance Showcase");
     println!("========================\n");
 
-    benchmark_response_creation().await;
     benchmark_memory_allocation().await;
     showcase_static_dispatch();
-}
-
-async fn benchmark_response_creation() {
-    println!("Response Creation Benchmark");
-    println!("---------------------------");
-
-    const ITERATIONS: usize = 50_000;
-
-    // Benchmark GAT streaming response
-    let gat_adapter = ModernGatAdapter;
-    let session_id = SessionId::new();
-    let frames = vec![];
-
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        let _ = gat_adapter
-            .create_streaming_response(session_id, frames.clone(), StreamingFormat::Json)
-            .await;
-    }
-    let streaming_duration = start.elapsed();
-
-    // Benchmark GAT health check
-    let start = Instant::now();
-    for _ in 0..ITERATIONS {
-        let _ = gat_adapter.create_health_response().await;
-    }
-    let health_duration = start.elapsed();
-
-    println!("GAT streaming: {:?}", streaming_duration);
-    println!("GAT health:    {:?}", health_duration);
-
-    let ns_per_stream = streaming_duration.as_nanos() / ITERATIONS as u128;
-    let ns_per_health = health_duration.as_nanos() / ITERATIONS as u128;
-    println!(
-        "Average: {} ns/streaming, {} ns/health\n",
-        ns_per_stream, ns_per_health
-    );
 }
 
 async fn benchmark_memory_allocation() {
@@ -201,18 +163,17 @@ async fn benchmark_memory_allocation() {
 
     const ITERATIONS: usize = 10_000;
 
-    // GAT with pooled objects
     let gat_adapter = ModernGatAdapter;
     let data = JsonData::String("performance test".to_string());
 
     let start = Instant::now();
     for _ in 0..ITERATIONS {
-        let _ = gat_adapter.create_json_response(data.clone(), false).await;
+        let result = gat_adapter.create_json_response(data.clone(), false).await;
+        black_box(&result);
     }
-    let pooled_duration = start.elapsed();
+    let duration = start.elapsed();
 
-    println!("GAT with pooled objects: {:?}", pooled_duration);
-    println!("  - Zero heap allocations for pooled responses");
+    println!("GAT JSON response creation: {:?}", duration);
     println!("  - Static dispatch eliminates virtual calls\n");
 }
 
@@ -223,14 +184,12 @@ fn showcase_static_dispatch() {
     println!("Modern Zero-Cost GATs characteristics:");
     println!("  - TRUE zero-cost abstractions with impl Trait");
     println!("  - Compile-time Future type generation");
-    println!("  - Pure stack allocation - no heap usage");
+    println!("  - Zero-cost Future types - no Box<dyn Future> allocation");
     println!("  - Complete inlining for hot paths");
     println!("  - Static dispatch eliminates vtables");
 
     println!("\nPerformance Benefits with nightly:");
-    println!("  - 40-60% faster trait dispatch vs async_trait");
-    println!("  - 50-70% faster response creation");
-    println!("  - Zero heap allocations for futures");
+    println!("  - No Box<dyn Future> allocations");
     println!("  - Optimal CPU cache utilization");
     println!("  - Aggressive compile-time optimizations");
 }

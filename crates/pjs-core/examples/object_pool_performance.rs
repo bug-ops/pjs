@@ -8,6 +8,7 @@ use pjson_rs::infrastructure::integration::object_pool::{
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::hint::black_box;
 use std::time::Instant;
 
 fn main() {
@@ -31,6 +32,7 @@ fn benchmark_hashmap_allocation() {
         let mut map = HashMap::<Cow<'static, str>, Cow<'static, str>>::with_capacity(8);
         map.insert(Cow::Borrowed("key1"), Cow::Borrowed("value1"));
         map.insert(Cow::Borrowed("key2"), Cow::Borrowed("value2"));
+        black_box(&map);
         // Drop happens automatically
     }
     let standard_duration = start.elapsed();
@@ -41,6 +43,7 @@ fn benchmark_hashmap_allocation() {
         let mut map = get_cow_hashmap();
         map.insert(Cow::Borrowed("key1"), Cow::Borrowed("value1"));
         map.insert(Cow::Borrowed("key2"), Cow::Borrowed("value2"));
+        black_box(&map);
         // Automatic return to pool on drop
     }
     let pooled_duration = start.elapsed();
@@ -48,8 +51,18 @@ fn benchmark_hashmap_allocation() {
     println!("Standard allocation: {:?}", standard_duration);
     println!("Pooled allocation:   {:?}", pooled_duration);
 
-    let improvement = standard_duration.as_nanos() as f64 / pooled_duration.as_nanos() as f64;
-    println!("Performance improvement: {:.2}x faster\n", improvement);
+    let (ratio, direction) = if standard_duration > pooled_duration {
+        (
+            standard_duration.as_nanos() as f64 / pooled_duration.as_nanos() as f64,
+            "faster",
+        )
+    } else {
+        (
+            pooled_duration.as_nanos() as f64 / standard_duration.as_nanos() as f64,
+            "slower",
+        )
+    };
+    println!("Pooled allocation is {:.2}x {}\n", ratio, direction);
 }
 
 fn benchmark_vec_allocation() {
@@ -63,6 +76,7 @@ fn benchmark_vec_allocation() {
     for _ in 0..ITERATIONS {
         let mut vec = Vec::<u8>::with_capacity(1024);
         vec.extend_from_slice(b"test data that we're writing to the vector");
+        black_box(&vec);
         // Drop happens automatically
     }
     let standard_duration = start.elapsed();
@@ -72,6 +86,7 @@ fn benchmark_vec_allocation() {
     for _ in 0..ITERATIONS {
         let mut vec = get_byte_vec();
         vec.extend_from_slice(b"test data that we're writing to the vector");
+        black_box(&vec);
         // Automatic return to pool on drop
     }
     let pooled_duration = start.elapsed();
@@ -79,8 +94,18 @@ fn benchmark_vec_allocation() {
     println!("Standard allocation: {:?}", standard_duration);
     println!("Pooled allocation:   {:?}", pooled_duration);
 
-    let improvement = standard_duration.as_nanos() as f64 / pooled_duration.as_nanos() as f64;
-    println!("Performance improvement: {:.2}x faster\n", improvement);
+    let (ratio, direction) = if standard_duration > pooled_duration {
+        (
+            standard_duration.as_nanos() as f64 / pooled_duration.as_nanos() as f64,
+            "faster",
+        )
+    } else {
+        (
+            pooled_duration.as_nanos() as f64 / standard_duration.as_nanos() as f64,
+            "slower",
+        )
+    };
+    println!("Pooled allocation is {:.2}x {}\n", ratio, direction);
 }
 
 fn print_pool_statistics() {
