@@ -12,8 +12,8 @@ use crate::{
         handlers::{CommandHandlerGat, QueryHandlerGat, query_handlers::SessionQueryHandler},
         queries::{
             GetActiveSessionsQuery, GetSessionHealthQuery, GetSessionQuery, GetSessionStatsQuery,
-            SearchSessionsQuery, SessionFilters, SessionResponse, SessionSortField,
-            SessionStatsResponse, SessionsResponse, SortOrder,
+            SearchSessionsQuery, SessionFilters, SessionResponse, SessionStatsResponse,
+            SessionsResponse, SortOrder,
         },
     },
     domain::{
@@ -24,6 +24,7 @@ use crate::{
     infrastructure::http::axum_adapter::{
         CreateSessionRequest, CreateSessionResponse, PaginationParams, PjsAppState, PjsError,
         SearchSessionsParams, SessionHealthResponse, parse_session_id, parse_session_state,
+        parse_sort_field,
     },
 };
 
@@ -158,13 +159,7 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
-    let sort_by = params.sort_by.as_deref().and_then(|s| match s {
-        "created_at" => Some(SessionSortField::CreatedAt),
-        "updated_at" => Some(SessionSortField::UpdatedAt),
-        "stream_count" => Some(SessionSortField::StreamCount),
-        "total_bytes" => Some(SessionSortField::TotalBytes),
-        _ => None,
-    });
+    let sort_by = params.sort_by.map(parse_sort_field).transpose()?;
     let sort_order = params.sort_order.as_deref().and_then(|s| match s {
         "ascending" | "asc" => Some(SortOrder::Ascending),
         "descending" | "desc" => Some(SortOrder::Descending),
