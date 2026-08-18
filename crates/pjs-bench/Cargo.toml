@@ -12,7 +12,6 @@ categories = { workspace = true }
 publish = { workspace = true }
 
 [dependencies]
-bytes = { workspace = true }
 chrono = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 pjson-rs = { workspace = true }
@@ -26,8 +25,6 @@ uuid = { workspace = true }
 dhat = { workspace = true }
 
 [features]
-default = ["streaming"]
-streaming = []
 dhat-heap = []
 
 [[bench]]
