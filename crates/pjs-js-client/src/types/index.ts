@@ -25,30 +25,46 @@ export enum Priority {
 export type JsonPath = string;
 
 /**
- * Frame types in PJS protocol
+ * Frame types in PJS protocol.
+ *
+ * Values match the wire representation of the Rust `FrameType` enum's
+ * derived `Serialize` impl (`crates/pjs-domain/src/entities/frame.rs`) —
+ * a bare capitalized variant name, since that enum has no `rename_all`.
+ * The HTTP transport (`transport/http.ts`) parses these values directly
+ * off the REST streaming routes.
  */
 export enum FrameType {
-  Skeleton = 'skeleton',
-  Patch = 'patch', 
-  Complete = 'complete'
+  Skeleton = 'Skeleton',
+  Patch = 'Patch',
+  Complete = 'Complete',
+  Error = 'Error'
 }
 
 /**
  * Base frame structure
  */
 export interface BaseFrame {
-  type: FrameType;
+  /** Field name matches the Rust `Frame`'s `frame_type` field (was `type`). */
+  frame_type: FrameType;
   priority: Priority;
+  /** Present on frames deserialized from the REST routes; absent on WASM-native frames. */
+  stream_id?: string;
+  /** Present on frames deserialized from the REST routes; absent on WASM-native frames. */
+  sequence?: number;
   timestamp?: number;
   metadata?: Record<string, unknown>;
 }
 
 /**
- * Skeleton frame - initial structure with empty/minimal values
+ * Skeleton frame - initial structure with empty/minimal values.
+ *
+ * `payload` carries the raw skeleton JSON structure directly, matching the
+ * Rust `Frame`'s `payload` field for a skeleton frame (`Frame::skeleton`'s
+ * `skeleton_data` argument, stored verbatim, not wrapped further).
  */
 export interface SkeletonFrame extends BaseFrame {
-  type: FrameType.Skeleton;
-  data: any; // JSON skeleton structure
+  frame_type: FrameType.Skeleton;
+  payload: any; // JSON skeleton structure
   complete: false;
 }
 
@@ -62,19 +78,34 @@ export interface PatchOperation {
 }
 
 /**
- * Patch frame - incremental updates to JSON structure
+ * Patch frame - incremental updates to JSON structure.
+ *
+ * `patches` lives under `payload`, matching the Rust `Frame`'s wire shape
+ * for a patch frame (`Frame::patch` builds `payload: {"patches": [...]}`),
+ * not as a top-level field.
  */
 export interface PatchFrame extends BaseFrame {
-  type: FrameType.Patch;
-  patches: PatchOperation[];
+  frame_type: FrameType.Patch;
+  payload: {
+    patches: PatchOperation[];
+  };
 }
 
 /**
- * Complete frame - signals end of streaming
+ * Complete frame - signals end of streaming.
+ *
+ * `checksum` lives under `payload`, matching the Rust `Frame`'s wire shape
+ * for a complete frame (`Frame::complete` builds `payload: {"checksum": ...}`
+ * or `payload: {}` when no checksum was supplied). `payload` itself is
+ * optional here only because WASM-native complete frames (`wasm-backend.ts`,
+ * `wasm-parser.ts`) carry no payload at all — a REST-sourced complete frame
+ * always has one, even if empty.
  */
 export interface CompleteFrame extends BaseFrame {
-  type: FrameType.Complete;
-  checksum?: string;
+  frame_type: FrameType.Complete;
+  payload?: {
+    checksum?: string;
+  };
   total_frames?: number;
 }
 

@@ -18,9 +18,9 @@ describe('FrameProcessor', () => {
   describe('Frame Validation', () => {
     test('should validate well-formed skeleton frame', () => {
       const frame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { user: { name: null, id: null } },
+        payload: { user: { name: null, id: null } },
         complete: false,
         timestamp: Date.now()
       };
@@ -33,15 +33,15 @@ describe('FrameProcessor', () => {
 
     test('should validate well-formed patch frame', () => {
       const frame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.user.name',
             value: 'John Doe',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -53,10 +53,10 @@ describe('FrameProcessor', () => {
 
     test('should validate well-formed complete frame', () => {
       const frame = {
-        type: FrameType.Complete,
+        frame_type: FrameType.Complete,
         priority: Priority.Background,
         timestamp: Date.now(),
-        checksum: 'sha256:abc123'
+        payload: { checksum: 'sha256:abc123' }
       };
 
       const result = processor.validateFrame(frame);
@@ -68,7 +68,7 @@ describe('FrameProcessor', () => {
     test('should reject frame with missing type', () => {
       const frame = {
         priority: Priority.High,
-        data: {}
+        payload: {}
       };
 
       const result = processor.validateFrame(frame as any);
@@ -79,9 +79,9 @@ describe('FrameProcessor', () => {
 
     test('should reject frame with invalid type', () => {
       const frame = {
-        type: 'invalid_type',
+        frame_type: 'invalid_type',
         priority: Priority.High,
-        data: {}
+        payload: {}
       };
 
       const result = processor.validateFrame(frame as any);
@@ -92,8 +92,8 @@ describe('FrameProcessor', () => {
 
     test('should reject frame with missing priority', () => {
       const frame = {
-        type: FrameType.Skeleton,
-        data: {}
+        frame_type: FrameType.Skeleton,
+        payload: {}
       };
 
       const result = processor.validateFrame(frame as any);
@@ -104,9 +104,9 @@ describe('FrameProcessor', () => {
 
     test('should reject frame with invalid priority range', () => {
       const frame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: 150, // Out of range
-        data: {}
+        payload: {}
       };
 
       const result = processor.validateFrame(frame as any);
@@ -115,21 +115,21 @@ describe('FrameProcessor', () => {
       expect(result.errors.some(e => e.includes('Priority must be'))).toBe(true);
     });
 
-    test('should reject skeleton frame without data', () => {
+    test('should reject skeleton frame without payload', () => {
       const frame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical
       };
 
       const result = processor.validateFrame(frame as any);
-      
+
       expect(result.isValid).toBe(false);
-      expect(result.errors.some(e => e.includes('data field'))).toBe(true);
+      expect(result.errors.some(e => e.includes('payload field'))).toBe(true);
     });
 
     test('should reject patch frame without patches', () => {
       const frame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High
       };
 
@@ -141,9 +141,9 @@ describe('FrameProcessor', () => {
 
     test('should reject patch frame with empty patches array', () => {
       const frame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: []
+        payload: { patches: [] }
       };
 
       const result = processor.validateFrame(frame as any);
@@ -154,28 +154,28 @@ describe('FrameProcessor', () => {
 
     test('should validate patch operations', () => {
       const validFrame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test',
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
       const invalidFrame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test',
             value: 'value',
             operation: 'invalid_op' as any
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -185,28 +185,28 @@ describe('FrameProcessor', () => {
 
     test('should validate JSON paths in patches', () => {
       const validFrame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.valid.path',
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
       const invalidFrame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: 'invalid.path', // Missing $.
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -221,9 +221,9 @@ describe('FrameProcessor', () => {
 
       // Process skeleton
       const skeleton = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };
@@ -234,15 +234,15 @@ describe('FrameProcessor', () => {
 
       // Process patch
       const patch = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test',
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -252,7 +252,7 @@ describe('FrameProcessor', () => {
 
       // Process complete
       const complete = {
-        type: FrameType.Complete,
+        frame_type: FrameType.Complete,
         priority: Priority.Background,
         timestamp: Date.now()
       };
@@ -265,15 +265,15 @@ describe('FrameProcessor', () => {
     test('should reject out-of-order frames', () => {
       // Try to process patch before skeleton
       const patch = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test',
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -286,9 +286,9 @@ describe('FrameProcessor', () => {
 
     test('should reject duplicate skeleton frames', () => {
       const skeleton = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };
@@ -306,15 +306,15 @@ describe('FrameProcessor', () => {
     test('should reject frames after completion', () => {
       // Process complete sequence
       const skeleton = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };
 
       const complete = {
-        type: FrameType.Complete,
+        frame_type: FrameType.Complete,
         priority: Priority.Background,
         timestamp: Date.now()
       };
@@ -324,15 +324,15 @@ describe('FrameProcessor', () => {
 
       // Try to process another frame
       const patch = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test',
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -348,9 +348,9 @@ describe('FrameProcessor', () => {
     test('should enforce non-increasing priority order', () => {
       // Initialize processor
       const skeleton = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };
@@ -359,15 +359,15 @@ describe('FrameProcessor', () => {
 
       // First patch with high priority
       const highPriorityPatch = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test1',
             value: 'value1',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -376,15 +376,15 @@ describe('FrameProcessor', () => {
 
       // Second patch with even higher priority (should be rejected)
       const higherPriorityPatch = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.Critical,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test2',
             value: 'value2',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -397,9 +397,9 @@ describe('FrameProcessor', () => {
 
     test('should allow same priority patches', () => {
       const skeleton = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };
@@ -407,28 +407,28 @@ describe('FrameProcessor', () => {
       processor.processFrame(skeleton);
 
       const patch1 = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test1',
             value: 'value1',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
       const patch2 = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High, // Same priority
-        patches: [
+        payload: { patches: [
           {
             path: '$.test2',
             value: 'value2',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -444,41 +444,41 @@ describe('FrameProcessor', () => {
     test('should track processing statistics', () => {
       // Process complete stream
       const skeleton = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };
 
       const patch1 = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test',
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
       const patch2 = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.Low,
-        patches: [
+        payload: { patches: [
           {
             path: '$.other',
             value: 'other',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
       const complete = {
-        type: FrameType.Complete,
+        frame_type: FrameType.Complete,
         priority: Priority.Background,
         timestamp: Date.now()
       };
@@ -501,9 +501,9 @@ describe('FrameProcessor', () => {
     test('should reset state correctly', () => {
       // Process some frames
       const skeleton = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };

@@ -201,17 +201,17 @@ describeWasmPkg('WasmBackend Integration Tests', () => {
       // Verify frames
       expect(frames.length).toBeGreaterThan(0);
 
-      const skeletonFrame = frames.find(f => f.type === FrameType.Skeleton);
+      const skeletonFrame = frames.find(f => f.frame_type === FrameType.Skeleton);
       expect(skeletonFrame).toBeDefined();
       expect(skeletonFrame?.priority).toBe(100);
-      expect(skeletonFrame?.data).toEqual({ id: 123, name: null, email: null, bio: null });
+      expect(skeletonFrame?.payload).toEqual({ id: 123, name: null, email: null, bio: null });
 
-      const patchFrame = frames.find(f => f.type === FrameType.Patch);
+      const patchFrame = frames.find(f => f.frame_type === FrameType.Patch);
       expect(patchFrame).toBeDefined();
       expect(patchFrame?.priority).toBe(80);
-      expect(patchFrame?.patches).toBeDefined();
+      expect(patchFrame?.payload).toBeDefined();
 
-      const completeFrame = frames.find(f => f.type === FrameType.Complete);
+      const completeFrame = frames.find(f => f.frame_type === FrameType.Complete);
       expect(completeFrame).toBeDefined();
     });
 
@@ -441,12 +441,12 @@ describeWasmPkg('WasmBackend Integration Tests', () => {
 
       await backend.startStream('test', options);
 
-      const skeleton = frames.find(f => f.type === FrameType.Skeleton);
+      const skeleton = frames.find(f => f.frame_type === FrameType.Skeleton);
       expect(skeleton).toBeDefined();
       expect(skeleton?.priority).toBe(100);
-      expect(skeleton?.data).toEqual({ id: 1 });
+      expect(skeleton?.payload).toEqual({ id: 1 });
       expect(skeleton?.metadata?.source).toBe('wasm');
-      expect(skeleton?.metadata?.sequence).toBe(0);
+      expect(skeleton?.sequence).toBe(0);
     });
 
     test('should convert WASM patch frame to PJS format', async () => {
@@ -488,11 +488,11 @@ describeWasmPkg('WasmBackend Integration Tests', () => {
 
       await backend.startStream('test', options);
 
-      const patch = frames.find(f => f.type === FrameType.Patch);
+      const patch = frames.find(f => f.frame_type === FrameType.Patch);
       expect(patch).toBeDefined();
       expect(patch?.priority).toBe(80);
-      expect(patch?.patches).toHaveLength(1);
-      expect(patch?.patches?.[0].path).toBe('$.name');
+      expect(patch?.payload.patches).toHaveLength(1);
+      expect(patch?.payload.patches[0].path).toBe('$.name');
       expect(patch?.metadata?.source).toBe('wasm');
     });
 

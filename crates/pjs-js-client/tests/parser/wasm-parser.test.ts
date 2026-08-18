@@ -84,7 +84,7 @@ describe('WasmParser (mocked pjs-wasm)', () => {
       JSON.stringify({ id: 1 }),
       {
         onFrame: (frame) => {
-          frameTypes.push(frame.type);
+          frameTypes.push(frame.frame_type);
         },
         onComplete: () => {
           completed = true;

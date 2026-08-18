@@ -61,7 +61,7 @@ describeWasmPkg('WasmParser Integration Tests', () => {
       jsonData,
       {
         onFrame: (frame) => {
-          frames.push(frame.type);
+          frames.push(frame.frame_type);
         },
         onComplete: (stats) => {
           completeStats = stats;

@@ -362,7 +362,7 @@ export class PJSClient extends EventEmitter {
             progressInfo.prioritiesReceived.push(frame.priority);
           }
 
-          if (frame.type === FrameType.Skeleton) {
+          if (frame.frame_type === FrameType.Skeleton) {
             if (!skeletonReceived) {
               stats.performance.timeToFirstFrame = progressInfo.elapsedTime;
               stats.performance.timeToSkeleton = progressInfo.elapsedTime;
@@ -385,7 +385,7 @@ export class PJSClient extends EventEmitter {
               });
             }
 
-          } else if (frame.type === FrameType.Patch) {
+          } else if (frame.frame_type === FrameType.Patch) {
             if (!result) {
               throw new PJSError(PJSErrorType.ProtocolError, 'Received patch frame before skeleton');
             }
@@ -394,7 +394,7 @@ export class PJSClient extends EventEmitter {
             result = reconstructor.getCurrentState();
 
             // Emit one PatchApplied per frame (not per operation)
-            const patches = frame.patches;
+            const patches = frame.payload.patches;
             if (patches.length > 0) {
               this.emit(PJSEvent.PatchApplied, {
                 patch: patches[0],
@@ -412,7 +412,7 @@ export class PJSClient extends EventEmitter {
               });
             }
 
-          } else if (frame.type === FrameType.Complete) {
+          } else if (frame.frame_type === FrameType.Complete) {
             stats.performance.timeToCompletion = progressInfo.elapsedTime;
             const totalTime = progressInfo.elapsedTime / 1000;
             stats.performance.framesPerSecond = stats.totalFrames / totalTime;
@@ -490,7 +490,7 @@ export class PJSClient extends EventEmitter {
     
     if (this.config.debug) {
       console.log('[PJS] Received frame:', {
-        type: frame.type,
+        frame_type: frame.frame_type,
         priority: frame.priority,
         timestamp: frame.timestamp
       });
