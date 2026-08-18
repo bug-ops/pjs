@@ -444,9 +444,18 @@ where
             // already committed while `GET .../frames` may return fewer
             // frames than were reported — accepted as consistent with
             // GenerateFramesCommand rather than left silently divergent.
+            let priority = command
+                .priority_threshold
+                .try_into()
+                .map_err(ApplicationError::Domain)?;
+
             let (frames, events) = self
                 .repository
-                .batch_generate_frames_atomic(command.session_id.into(), command.max_frames)
+                .batch_generate_frames_atomic(
+                    command.session_id.into(),
+                    priority,
+                    command.max_frames,
+                )
                 .await
                 .map_err(|e| match e {
                     crate::domain::DomainError::SessionNotFound(_) => ApplicationError::NotFound(
@@ -1627,6 +1636,63 @@ mod tests {
             .unwrap();
 
         assert!(frames.is_empty());
+    }
+
+    /// Regression test for #498: `BatchGenerateFramesCommand::priority_threshold`
+    /// must actually filter which patches are emitted, not be silently
+    /// replaced by a hardcoded `Priority::BACKGROUND` inside
+    /// `batch_generate_frames_atomic`. `"logs"` is heuristically classified
+    /// `BACKGROUND` (see `services::priority`), so a `HIGH` threshold must
+    /// drop it entirely.
+    #[tokio::test]
+    async fn test_batch_generate_frames_priority_threshold_filters_low_priority_patches() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let handler = SessionCommandHandler::new(repository, event_publisher);
+
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"logs": "background noise"}).into(),
+                config: None,
+            })
+            .await
+            .unwrap();
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
+
+        let frames = handler
+            .handle(BatchGenerateFramesCommand {
+                session_id: session_id.into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(
+                    crate::domain::value_objects::Priority::HIGH.value(),
+                )
+                .unwrap(),
+                max_frames: 8,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            frames.is_empty(),
+            "a HIGH priority_threshold must filter out the BACKGROUND-priority \
+             `logs` patch instead of falling back to Priority::BACKGROUND"
+        );
     }
 
     #[tokio::test]

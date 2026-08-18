@@ -177,6 +177,11 @@ gat_port! {
         /// stream in `session_id`, returning the frames and every event
         /// currently pending on the session.
         ///
+        /// `priority_threshold` is an inclusive minimum (`>=`): a patch is
+        /// emitted only if its computed [`Priority`] is greater than or
+        /// equal to it (e.g. `Priority::BACKGROUND`, the lowest defined
+        /// value, admits every patch).
+        ///
         /// Same atomicity contract as [`Self::create_stream_atomic`] for the
         /// read-modify-write as a whole, but implementations should mirror
         /// [`Self::create_stream_patch_frames_atomic`]'s extract-then-commit
@@ -193,6 +198,7 @@ gat_port! {
         async fn batch_generate_frames_atomic(
             &self,
             session_id: SessionId,
+            priority_threshold: Priority,
             max_frames: usize
         ) -> (Vec<Frame>, Vec<DomainEvent>);
 

@@ -460,7 +460,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
     /// shard lock for `session_id` for the full read-modify-write so a
     /// concurrent mutation of the same session cannot lose an update (#457).
     /// Extracts prioritized patches outside any lock, then holds the
-    /// `DashMap` shard lock only for the cheap `O(max_frames)` commit step.
+    /// `DashMap` shard lock only for the commit step.
     ///
     /// `extract_prioritized_patches_for_stream` traverses the stream's full
     /// `source_data` — proportional to payload size, not to `max_frames` —
@@ -470,6 +470,10 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
     /// so extracting from a snapshot taken here is safe; the commit step
     /// re-checks the stream is still `Streaming` in case a concurrent call
     /// completed or failed it in between (see `Stream::commit_patch_frames`).
+    /// That commit step is itself not `max_frames`-bounded either: it clones
+    /// every extracted patch while chunking it into frames, so the lock is
+    /// held proportional to the number of patches extracted, not to
+    /// `max_frames` — see `Stream::commit_patch_frames`'s docs.
     fn create_stream_patch_frames_atomic(
         &self,
         session_id: SessionId,
@@ -514,6 +518,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
     fn batch_generate_frames_atomic(
         &self,
         session_id: SessionId,
+        priority_threshold: Priority,
         max_frames: usize,
     ) -> Self::BatchGenerateFramesAtomicFuture<'_> {
         async move {
@@ -521,7 +526,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                 DomainError::SessionNotFound(format!("Session {session_id} not found"))
             })?;
             let extracted =
-                session.extract_prioritized_patches_for_active_streams(Priority::BACKGROUND);
+                session.extract_prioritized_patches_for_active_streams(priority_threshold);
 
             let result = self.atomic_session_update(session_id, |session| {
                 let frames = session.commit_priority_frames(extracted, max_frames)?;
@@ -2172,7 +2177,7 @@ mod tests {
         let repo = GatInMemoryStreamRepository::new();
 
         let result = repo
-            .batch_generate_frames_atomic(SessionId::new(), 10)
+            .batch_generate_frames_atomic(SessionId::new(), Priority::BACKGROUND, 10)
             .await;
 
         assert!(matches!(
@@ -2199,7 +2204,7 @@ mod tests {
         repo.save_session(session).await.unwrap();
 
         let (frames, events) = repo
-            .batch_generate_frames_atomic(session_id, 16)
+            .batch_generate_frames_atomic(session_id, Priority::BACKGROUND, 16)
             .await
             .unwrap();
 
@@ -2209,6 +2214,41 @@ mod tests {
         let session = repo.find_session(session_id).await.unwrap().unwrap();
         assert_eq!(session.stats().total_frames, frames.len() as u64);
         assert!(session.stats().total_bytes > 0);
+    }
+
+    /// Regression test for #498: `batch_generate_frames_atomic`'s
+    /// `priority_threshold` parameter must actually reach and filter
+    /// `StreamSession::extract_prioritized_patches_for_active_streams`, not
+    /// be silently replaced by a hardcoded `Priority::BACKGROUND` — every
+    /// other test in this module above passes `Priority::BACKGROUND`
+    /// itself, which would pass even with the parameter fully ignored. This
+    /// exercises the real `GatInMemoryStreamRepository` adapter, not the
+    /// `StreamRepositoryGat` test mocks. `"logs"` is heuristically
+    /// classified `BACKGROUND` (see `services::priority`), so a `HIGH`
+    /// threshold must drop it entirely.
+    #[tokio::test]
+    async fn test_batch_generate_frames_atomic_priority_threshold_filters_low_priority_patches() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        let source_data: JsonData = serde_json::json!({"logs": "background noise"}).into();
+        let stream_id = session.create_stream(source_data).unwrap();
+        session.start_stream(stream_id).unwrap();
+        let _ = session.take_events();
+        repo.save_session(session).await.unwrap();
+
+        let (frames, _events) = repo
+            .batch_generate_frames_atomic(session_id, Priority::HIGH, 16)
+            .await
+            .unwrap();
+
+        assert!(
+            frames.is_empty(),
+            "a HIGH priority_threshold must filter out the BACKGROUND-priority \
+             `logs` patch instead of falling back to Priority::BACKGROUND"
+        );
     }
 
     /// Regression test for #477: a `Preparing` stream (created but never
@@ -2235,7 +2275,7 @@ mod tests {
         repo.save_session(session).await.unwrap();
 
         let (frames, events) = repo
-            .batch_generate_frames_atomic(session_id, 16)
+            .batch_generate_frames_atomic(session_id, Priority::BACKGROUND, 16)
             .await
             .unwrap();
 
@@ -2289,7 +2329,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 tokio::spawn(async move {
                     barrier.wait().await;
-                    repo.batch_generate_frames_atomic(session_id, MAX_FRAMES)
+                    repo.batch_generate_frames_atomic(session_id, Priority::BACKGROUND, MAX_FRAMES)
                         .await
                         .unwrap()
                 })

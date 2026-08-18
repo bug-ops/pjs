@@ -246,6 +246,7 @@ impl StreamRepositoryGat for MockRepository {
     fn batch_generate_frames_atomic(
         &self,
         session_id: SessionId,
+        priority_threshold: Priority,
         max_frames: usize,
     ) -> Self::BatchGenerateFramesAtomicFuture<'_> {
         async move {
@@ -254,7 +255,7 @@ impl StreamRepositoryGat for MockRepository {
                 DomainError::SessionNotFound(format!("Session {session_id} not found"))
             })?;
             let extracted =
-                session.extract_prioritized_patches_for_active_streams(Priority::BACKGROUND);
+                session.extract_prioritized_patches_for_active_streams(priority_threshold);
             let frames = session.commit_priority_frames(extracted, max_frames)?;
             Ok((frames, session.take_events().into_iter().collect()))
         }

@@ -395,10 +395,15 @@ impl StreamSession {
 
     /// Commit already-extracted prioritized patches (from
     /// [`Self::extract_prioritized_patches_for_stream`]) into frames for
-    /// `stream_id` — the cheap, `O(max_frames)` half of
-    /// [`Self::create_stream_patch_frames`], updating session-level
-    /// statistics and raising [`DomainEvent::FramesBatched`] exactly as that
-    /// method does.
+    /// `stream_id` — the other half of [`Self::create_stream_patch_frames`],
+    /// updating session-level statistics and raising
+    /// [`DomainEvent::FramesBatched`] exactly as that method does.
+    ///
+    /// Despite running under a repository's per-session lock in the `_atomic`
+    /// callers below, this step is not cheap or `max_frames`-bounded:
+    /// [`Stream::commit_patch_frames`] clones every patch in `patches` while
+    /// chunking it into frames, so its cost is proportional to
+    /// `patches.len()`, not to `max_frames`.
     ///
     /// `stats.total_bytes` is taken as a before/after delta of the child
     /// [`Stream`]'s own `total_bytes` counter — which
@@ -624,6 +629,11 @@ impl StreamSession {
 
     /// Create frames for all active streams based on priority.
     ///
+    /// `priority_threshold` is an inclusive minimum (`>=`): a patch is
+    /// emitted only if its computed [`Priority`] is greater than or equal to
+    /// it (e.g. `Priority::BACKGROUND`, the lowest defined value, admits
+    /// every patch).
+    ///
     /// Convenience single-call wrapper combining
     /// [`Self::extract_prioritized_patches_for_active_streams`] and
     /// [`Self::commit_priority_frames`]. Callers managing their own
@@ -632,8 +642,12 @@ impl StreamSession {
     /// those two methods directly instead, running the expensive extraction
     /// step lock-free — see [`Self::commit_priority_frames`]'s docs for why
     /// this method's single call is unsuitable for that.
-    pub fn create_priority_frames(&mut self, batch_size: usize) -> DomainResult<Vec<Frame>> {
-        let extracted = self.extract_prioritized_patches_for_active_streams(Priority::BACKGROUND);
+    pub fn create_priority_frames(
+        &mut self,
+        priority_threshold: Priority,
+        batch_size: usize,
+    ) -> DomainResult<Vec<Frame>> {
+        let extracted = self.extract_prioritized_patches_for_active_streams(priority_threshold);
         self.commit_priority_frames(extracted, batch_size)
     }
 
@@ -662,17 +676,27 @@ impl StreamSession {
             .iter()
             .filter(|(_, stream)| matches!(stream.state(), StreamState::Streaming))
             .filter_map(|(stream_id, stream)| {
-                stream
-                    .extract_prioritized_patches(priority_threshold)
-                    // Only current error source is the `Streaming`-state
-                    // check, already guaranteed by the `filter` above, so
-                    // discarding is a no-op today. `collect_patches`
-                    // (`stream.rs`) has no depth bound and could grow one
-                    // later (the codebase's established pattern for
-                    // recursive walkers, e.g. #469/#475) — if it does, that
-                    // future error must not be silently dropped here.
-                    .ok()
-                    .map(|patches| (*stream_id, patches))
+                // The `Streaming`-state precondition is already guaranteed by
+                // the `filter` above. `Stream::extract_prioritized_patches`
+                // has one other error source — a `Streaming` stream with no
+                // `source_data` — which no in-crate code path currently
+                // produces (`source_data` is set once in `Stream::new` and
+                // never reassigned to `None`); `Option<JsonData>` permits it
+                // structurally, and `Stream` derives `Deserialize`, so the
+                // log below is defensive/future-proofing against a state no
+                // current caller can construct, not a live path.
+                match stream.extract_prioritized_patches(priority_threshold) {
+                    Ok(patches) => Some((*stream_id, patches)),
+                    Err(error) => {
+                        tracing::debug!(
+                            session_id = %self.id,
+                            %stream_id,
+                            %error,
+                            "skipping stream in priority-frame batch: patch extraction failed"
+                        );
+                        None
+                    }
+                }
             })
             .collect()
     }
@@ -733,8 +757,17 @@ impl StreamSession {
             if !matches!(stream.state(), StreamState::Streaming) {
                 continue;
             }
-            let Ok(frames) = stream.commit_patch_frames(patches, 5) else {
-                continue;
+            let frames = match stream.commit_patch_frames(patches, 5) {
+                Ok(frames) => frames,
+                Err(error) => {
+                    tracing::debug!(
+                        session_id = %self.id,
+                        %stream_id,
+                        %error,
+                        "skipping stream in priority-frame batch: commit failed"
+                    );
+                    continue;
+                }
             };
 
             for frame in frames {

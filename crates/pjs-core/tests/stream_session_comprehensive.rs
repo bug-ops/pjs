@@ -866,7 +866,7 @@ fn test_create_stream_patch_frames_zero_max_frames_does_not_increment_total_byte
 fn test_create_priority_frames_inactive_session() {
     let mut session = StreamSession::new(default_config());
 
-    let result = session.create_priority_frames(10);
+    let result = session.create_priority_frames(Priority::BACKGROUND, 10);
 
     assert!(result.is_err());
     assert!(matches!(
@@ -880,7 +880,9 @@ fn test_create_priority_frames_no_active_streams() {
     let mut session = StreamSession::new(default_config());
     session.activate().unwrap();
 
-    let frames = session.create_priority_frames(10).unwrap();
+    let frames = session
+        .create_priority_frames(Priority::BACKGROUND, 10)
+        .unwrap();
 
     assert_eq!(frames.len(), 0);
 }
@@ -896,7 +898,7 @@ fn test_create_priority_frames_updates_stats() {
     let initial_frame_count = session.stats().total_frames;
 
     // Try to create frames (may be empty depending on stream state)
-    let _ = session.create_priority_frames(5);
+    let _ = session.create_priority_frames(Priority::BACKGROUND, 5);
 
     // Stats should be consistent (no panic)
     assert!(session.stats().total_frames >= initial_frame_count);
@@ -935,7 +937,9 @@ fn test_create_priority_frames_updates_total_bytes_excludes_discarded_frames() {
 
     // Retain fewer frames than the 6 generated, forcing truncation.
     let batch_size = 3;
-    let frames = session.create_priority_frames(batch_size).unwrap();
+    let frames = session
+        .create_priority_frames(Priority::BACKGROUND, batch_size)
+        .unwrap();
     assert_eq!(frames.len(), batch_size);
 
     let expected_bytes: u64 = frames.iter().map(|f| f.estimated_size() as u64).sum();
@@ -967,7 +971,9 @@ fn test_create_priority_frames_skips_preparing_stream_without_erroring() {
     // Left in `Preparing` — never started.
     let _preparing_id = session.create_stream(json_str("other", "value")).unwrap();
 
-    let frames = session.create_priority_frames(10).unwrap();
+    let frames = session
+        .create_priority_frames(Priority::BACKGROUND, 10)
+        .unwrap();
 
     assert!(
         !frames.is_empty(),
