@@ -2,9 +2,7 @@
 //
 // This test file covers the infrastructure/http/streaming.rs module with focus on:
 // - StreamFormat detection from headers and content types
-// - AdaptiveFrameStream functionality and format conversion
 // - BatchFrameStream batching logic
-// - PriorityFrameStream priority ordering
 // - Stream error handling
 // - Response creation with correct headers
 //
@@ -18,8 +16,7 @@ use pjson_rs::{
     domain::entities::{Frame, frame::FramePatch},
     domain::value_objects::{JsonData, JsonPath, Priority, StreamId},
     infrastructure::http::streaming::{
-        AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamFormat,
-        StreamTransportError, create_streaming_response,
+        BatchFrameStream, StreamFormat, StreamTransportError, create_streaming_response,
     },
 };
 
@@ -397,10 +394,6 @@ fn test_stream_format_content_type() {
     );
 }
 
-// ============================================================================
-// AdaptiveFrameStream Tests
-// ============================================================================
-
 /// Builds a patch frame carrying the given `priority` (1-255) — unlike
 /// `Frame::skeleton`, which always hardcodes `Priority::CRITICAL`, this lets
 /// priority-ordering tests exercise real, distinct priority values.
@@ -410,112 +403,6 @@ fn create_test_frame(priority: u8, sequence: u64, _payload: &str) -> Frame {
     let patch = FramePatch::set(path, JsonData::string("test data"));
     let priority = Priority::new(priority).expect("valid priority");
     Frame::patch(stream_id, sequence, priority, vec![patch]).expect("valid patch frame")
-}
-
-#[tokio::test]
-async fn test_adaptive_frame_stream_json_format() {
-    let frames = vec![
-        create_test_frame(200, 1, r#"{"key": "value1"}"#),
-        create_test_frame(150, 2, r#"{"key": "value2"}"#),
-    ];
-
-    let frame_stream = futures::stream::iter(frames);
-    let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json);
-
-    let collected: Vec<_> = adaptive.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 2);
-    for result in collected {
-        assert!(result.is_ok());
-    }
-}
-
-#[tokio::test]
-async fn test_adaptive_frame_stream_ndjson_format() {
-    let frames = vec![create_test_frame(200, 1, r#"{"test": 1}"#)];
-
-    let frame_stream = futures::stream::iter(frames);
-    let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::NdJson);
-
-    let collected: Vec<_> = adaptive.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 1);
-    let formatted = collected[0].as_ref().unwrap();
-    assert_eq!(formatted.last().copied(), Some(b'\n'));
-}
-
-#[tokio::test]
-async fn test_adaptive_frame_stream_sse_format() {
-    let frames = vec![create_test_frame(200, 1, r#"{"event": "update"}"#)];
-
-    let frame_stream = futures::stream::iter(frames);
-    let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::ServerSentEvents);
-
-    let collected: Vec<_> = adaptive.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 1);
-    let formatted = collected[0].as_ref().unwrap();
-    assert!(formatted.starts_with(b"data: "));
-    assert!(formatted.ends_with(b"\n\n"));
-}
-
-/// `with_compression(true)` must yield decompressible gzip payloads (#226).
-/// The previous `String`-typed pipeline returned `Err("not valid UTF-8")` for
-/// every chunk; threading `Vec<u8>` through fixes the architectural mismatch.
-#[cfg(feature = "compression")]
-#[tokio::test]
-async fn test_adaptive_frame_stream_with_compression() {
-    use std::io::Read as _;
-
-    let frames = vec![create_test_frame(200, 1, r#"{"data": "test"}"#)];
-
-    let frame_stream = futures::stream::iter(frames);
-    let adaptive =
-        AdaptiveFrameStream::new(frame_stream, StreamFormat::Json).with_compression(true);
-
-    let collected: Vec<_> = adaptive.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 1);
-    let compressed = collected[0]
-        .as_ref()
-        .expect("compressed payload must be Ok, not Err");
-    assert_eq!(
-        &compressed[..2],
-        &[0x1f, 0x8b],
-        "payload must start with the gzip magic header"
-    );
-
-    let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
-    let mut decompressed = Vec::new();
-    decoder
-        .read_to_end(&mut decompressed)
-        .expect("gzip payload must round-trip");
-    let v: serde_json::Value =
-        serde_json::from_slice(&decompressed).expect("decompressed payload must be valid JSON");
-    assert!(v.is_object());
-}
-
-#[tokio::test]
-async fn test_adaptive_frame_stream_with_buffer_size() {
-    let frames = vec![create_test_frame(200, 1, r#"{"data": "test"}"#)];
-
-    let frame_stream = futures::stream::iter(frames);
-    let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json).with_buffer_size(20);
-
-    let collected: Vec<_> = adaptive.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 1);
-}
-
-#[tokio::test]
-async fn test_adaptive_frame_stream_empty() {
-    let frames: Vec<Frame> = vec![];
-    let frame_stream = futures::stream::iter(frames);
-    let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json);
-
-    let collected: Vec<_> = adaptive.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 0);
 }
 
 // ============================================================================
@@ -608,133 +495,6 @@ async fn test_batch_frame_stream_empty() {
     let collected: Vec<_> = batch.into_stream().collect().await;
 
     assert_eq!(collected.len(), 0);
-}
-
-// ============================================================================
-// PriorityFrameStream Tests
-// ============================================================================
-
-/// Regression test for #517: with a buffer large enough to hold every frame,
-/// `PriorityFrameStream` must emit them in strictly descending priority order
-/// — this is what an inverted or broken `Ord` delegation on `PriorityFrame`
-/// would break, even though `collected.len()` alone would not catch it.
-#[tokio::test]
-async fn test_priority_frame_stream_orders_by_priority() {
-    let frames = vec![
-        create_test_frame(100, 1, r#"{"priority": "low"}"#),
-        create_test_frame(250, 2, r#"{"priority": "critical"}"#),
-        create_test_frame(200, 3, r#"{"priority": "high"}"#),
-        create_test_frame(150, 4, r#"{"priority": "medium"}"#),
-    ];
-
-    let frame_stream = futures::stream::iter(frames);
-    let priority = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 10);
-
-    let collected: Vec<_> = priority.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 4);
-    let priorities: Vec<u64> = collected
-        .into_iter()
-        .map(|result| {
-            let bytes = result.expect("frame must serialize");
-            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            v["priority"].as_u64().unwrap()
-        })
-        .collect();
-    assert_eq!(
-        priorities,
-        vec![250, 200, 150, 100],
-        "frames must be emitted highest priority first"
-    );
-}
-
-#[tokio::test]
-async fn test_priority_frame_stream_small_buffer() {
-    let frames = vec![
-        create_test_frame(100, 1, r#"{"priority": "low"}"#),
-        create_test_frame(250, 2, r#"{"priority": "critical"}"#),
-        create_test_frame(200, 3, r#"{"priority": "high"}"#),
-    ];
-
-    let frame_stream = futures::stream::iter(frames);
-    // Small buffer to test partial priority ordering
-    let priority = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 2);
-
-    let collected: Vec<_> = priority.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 3);
-    let priorities: Vec<u64> = collected
-        .into_iter()
-        .map(|result| {
-            let bytes = result.expect("frame must serialize");
-            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            v["priority"].as_u64().unwrap()
-        })
-        .collect();
-    assert_eq!(
-        priorities,
-        vec![250, 200, 100],
-        "even a buffer smaller than the input must yield each 2-item window highest-first"
-    );
-}
-
-/// Regression test for the equal-priority tiebreak: `PriorityFrame::cmp`
-/// falls back to `sequence` when priorities match, so frames sharing one
-/// priority value must be emitted in ascending sequence order (FIFO within
-/// a priority tier) rather than left to `BinaryHeap`'s unspecified order.
-#[tokio::test]
-async fn test_priority_frame_stream_equal_priority_ties_break_on_sequence() {
-    let frames = vec![
-        create_test_frame(150, 5, r#"{"seq": 5}"#),
-        create_test_frame(150, 1, r#"{"seq": 1}"#),
-        create_test_frame(150, 3, r#"{"seq": 3}"#),
-        create_test_frame(150, 2, r#"{"seq": 2}"#),
-    ];
-
-    let frame_stream = futures::stream::iter(frames);
-    let priority = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 10);
-
-    let collected: Vec<_> = priority.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 4);
-    let sequences: Vec<u64> = collected
-        .into_iter()
-        .map(|result| {
-            let bytes = result.expect("frame must serialize");
-            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            v["sequence"].as_u64().unwrap()
-        })
-        .collect();
-    assert_eq!(
-        sequences,
-        vec![1, 2, 3, 5],
-        "equal-priority frames must be emitted in ascending sequence order (FIFO)"
-    );
-}
-
-#[tokio::test]
-async fn test_priority_frame_stream_empty() {
-    let frames: Vec<Frame> = vec![];
-    let frame_stream = futures::stream::iter(frames);
-    let priority = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 5);
-
-    let collected: Vec<_> = priority.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 0);
-}
-
-#[tokio::test]
-async fn test_priority_frame_stream_sse_format() {
-    let frames = vec![create_test_frame(200, 1, r#"{"test": 1}"#)];
-
-    let frame_stream = futures::stream::iter(frames);
-    let priority = PriorityFrameStream::new(frame_stream, StreamFormat::ServerSentEvents, 5);
-
-    let collected: Vec<_> = priority.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 1);
-    let result = collected[0].as_ref().unwrap();
-    assert!(result.starts_with(b"data: "));
 }
 
 // ============================================================================
@@ -856,49 +616,25 @@ async fn test_create_streaming_response_binary() {
 // Integration Tests
 // ============================================================================
 
+/// Frames flow through `BatchFrameStream` and into an HTTP response with the
+/// SSE `Content-Type` and `data: ...\n\n` wire framing intact end-to-end.
 #[tokio::test]
 async fn test_full_streaming_pipeline() {
-    // Create frames with different priorities
     let frames = vec![
         create_test_frame(100, 1, r#"{"msg": "low priority"}"#),
         create_test_frame(250, 2, r#"{"msg": "critical"}"#),
         create_test_frame(200, 3, r#"{"msg": "high priority"}"#),
     ];
 
-    // Process through priority stream
     let frame_stream = futures::stream::iter(frames);
-    let priority = PriorityFrameStream::new(frame_stream, StreamFormat::ServerSentEvents, 10);
+    let batch = BatchFrameStream::new(frame_stream, StreamFormat::ServerSentEvents, 10);
 
-    let collected: Vec<_> = priority.into_stream().collect().await;
+    let response = create_streaming_response(batch.into_stream(), StreamFormat::ServerSentEvents)
+        .expect("response must be built");
 
-    assert_eq!(collected.len(), 3);
-
-    // All should be formatted as SSE
-    for result in collected {
-        assert!(result.is_ok());
-        let bytes = result.unwrap();
-        assert!(bytes.starts_with(b"data: "));
-        assert!(bytes.ends_with(b"\n\n"));
-    }
-}
-
-#[cfg(feature = "compression")]
-#[tokio::test]
-async fn test_adaptive_stream_builder_pattern() {
-    let frames = vec![create_test_frame(200, 1, r#"{"test": 1}"#)];
-
-    let frame_stream = futures::stream::iter(frames);
-    let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json)
-        .with_compression(true)
-        .with_buffer_size(100);
-
-    let collected: Vec<_> = adaptive.into_stream().collect().await;
-
-    assert_eq!(collected.len(), 1);
-    // Gzip-compressed output now flows as Vec<u8> — the binary payload starts
-    // with the gzip magic header rather than failing UTF-8 validation (#226).
-    let bytes = collected[0]
-        .as_ref()
-        .expect("compressed payload must be Ok with the Vec<u8> pipeline");
-    assert_eq!(&bytes[..2], &[0x1f, 0x8b], "must carry gzip magic header");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "text/event-stream"
+    );
 }

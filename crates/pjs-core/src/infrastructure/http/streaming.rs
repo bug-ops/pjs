@@ -219,31 +219,6 @@ impl StreamFormat {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Serializes a frame directly via [`Frame`]'s own derived
-/// [`Serialize`](serde::Serialize) impl — this is what keeps the per-frame
-/// wire shape (field names, `stream_id` presence, `frame_type`
-/// representation) identical to the buffered `/frames` route, and avoids
-/// materializing an intermediate `serde_json::Value` tree per frame.
-fn format_frame_owned(
-    frame: &Frame,
-    format: StreamFormat,
-) -> Result<Vec<u8>, StreamTransportError> {
-    match format {
-        StreamFormat::Json | StreamFormat::Binary => Ok(sonic_rs::to_vec(frame)?),
-        StreamFormat::NdJson => {
-            let mut out = sonic_rs::to_vec(frame)?;
-            out.push(b'\n');
-            Ok(out)
-        }
-        StreamFormat::ServerSentEvents => {
-            let mut out = Vec::from(b"data: ".as_slice());
-            out.extend_from_slice(&sonic_rs::to_vec(frame)?);
-            out.extend_from_slice(b"\n\n");
-            Ok(out)
-        }
-    }
-}
-
 /// Serializes a batch of frames.
 ///
 /// Each batch is serialized as newline-delimited JSON objects (one object per
@@ -274,108 +249,6 @@ fn format_batch_owned(
             Ok(out)
         }
         StreamFormat::Binary => Ok(sonic_rs::to_vec(frames)?),
-    }
-}
-
-/// Optionally gzip-compresses `bytes` in place.
-///
-/// When `enabled` and the `compression` feature is active, returns the gzip
-/// payload of `bytes`. The output is binary — callers must propagate it as
-/// `Vec<u8>`/`Bytes`, never as `String`. See #226 for the architectural fix
-/// that replaced the previous UTF-8-only path.
-fn maybe_compress(bytes: Vec<u8>, enabled: bool) -> Result<Vec<u8>, StreamTransportError> {
-    #[cfg(feature = "compression")]
-    if enabled {
-        use crate::compression::secure::{ByteCodec, SecureCompressor};
-        let compressor = SecureCompressor::with_default_security(ByteCodec::Gzip);
-        let compressed = compressor
-            .compress(&bytes)
-            .map_err(|e| StreamTransportError::Io(e.to_string()))?;
-        return Ok(compressed.data);
-    }
-    #[cfg(not(feature = "compression"))]
-    let _ = enabled;
-    Ok(bytes)
-}
-
-// ---------------------------------------------------------------------------
-// AdaptiveFrameStream
-// ---------------------------------------------------------------------------
-
-/// Adaptive frame stream that optimizes based on client capabilities.
-///
-/// Frames are prefetched in batches of up to `buffer_size` items per executor
-/// wakeup via `StreamExt::ready_chunks`, matching the documented prefetch
-/// semantics from #163.
-pub struct AdaptiveFrameStream<S> {
-    inner: S,
-    format: StreamFormat,
-    compression: bool,
-    buffer_size: usize,
-}
-
-impl<S> AdaptiveFrameStream<S>
-where
-    S: Stream<Item = Frame> + Unpin + Send + 'static,
-{
-    /// Wrap a frame stream and produce frame bytes in `format`.
-    pub fn new(stream: S, format: StreamFormat) -> Self {
-        Self {
-            inner: stream,
-            format,
-            compression: false,
-            buffer_size: 10,
-        }
-    }
-
-    /// Toggle gzip compression of each frame payload (requires the `compression` feature).
-    ///
-    /// This produces a raw gzip *payload* stream, not an HTTP `Content-Encoding: gzip`
-    /// body — [`create_streaming_response`] and
-    /// [`create_streaming_response_with_content_type`] never set that header, so a
-    /// compressed stream must not be handed to either without setting it first (#226).
-    pub fn with_compression(mut self, enabled: bool) -> Self {
-        self.compression = enabled;
-        self
-    }
-
-    /// Override how many frames are prefetched per executor wake-up.
-    pub fn with_buffer_size(mut self, size: usize) -> Self {
-        self.buffer_size = size;
-        self
-    }
-
-    /// Consume the builder and return a `Stream` of formatted, optionally
-    /// compressed frame payloads.
-    ///
-    /// Items are emitted as `Vec<u8>` because the optional gzip compression
-    /// step produces binary bytes that are not valid UTF-8 (#226). Callers
-    /// that need a textual view of an uncompressed frame can decode each
-    /// payload with `std::str::from_utf8` — but the stream type must remain
-    /// binary to support the compressed path.
-    ///
-    /// `ready_chunks(buffer_size)` polls the inner stream up to `buffer_size`
-    /// times per wakeup, preserving the prefetch semantics of the original
-    /// hand-rolled `poll_next` buffer loop.
-    pub fn into_stream(
-        self,
-    ) -> impl Stream<Item = Result<Vec<u8>, StreamTransportError>> + Send + 'static {
-        let Self {
-            inner,
-            format,
-            compression,
-            buffer_size,
-        } = self;
-        try_stream! {
-            let mut chunked = inner.ready_chunks(buffer_size);
-            while let Some(batch) = chunked.next().await {
-                for frame in batch {
-                    let bytes = format_frame_owned(&frame, format)?;
-                    let bytes = maybe_compress(bytes, compression)?;
-                    yield bytes;
-                }
-            }
-        }
     }
 }
 
@@ -420,8 +293,8 @@ where
     /// Each item is one full batch as `Vec<u8>`. For `StreamFormat::Json` and
     /// `StreamFormat::NdJson` the bytes hold one JSON object per frame, one
     /// per line (NDJSON-of-objects, #167). The stream item type is binary
-    /// (`Vec<u8>`, not `String`) for symmetry with `AdaptiveFrameStream` and
-    /// to leave room for future per-batch compression (#226).
+    /// (`Vec<u8>`, not `String`) to leave room for future per-batch
+    /// compression (#226).
     pub fn into_stream(
         self,
     ) -> impl Stream<Item = Result<Vec<u8>, StreamTransportError>> + Send + 'static {
@@ -446,108 +319,6 @@ where
             if !batch.is_empty() {
                 let bytes = format_batch_owned(&batch, format)?;
                 yield bytes;
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PriorityFrameStream
-// ---------------------------------------------------------------------------
-
-/// Priority-based frame stream that orders frames by importance.
-pub struct PriorityFrameStream<S> {
-    inner: S,
-    format: StreamFormat,
-    buffer_size: usize,
-}
-
-#[derive(Debug, Clone)]
-struct PriorityFrame {
-    frame: Frame,
-}
-
-impl PartialEq for PriorityFrame {
-    fn eq(&self, other: &Self) -> bool {
-        self.frame.priority() == other.frame.priority()
-            && self.frame.sequence() == other.frame.sequence()
-    }
-}
-
-impl Eq for PriorityFrame {}
-
-impl PartialOrd for PriorityFrame {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// Orders by priority first (highest first out of the max-heap); frames of
-/// equal priority tie-break on `sequence` (reversed, since the heap pops the
-/// *greatest* element and lower sequence — the earlier frame — must come out
-/// first), giving deterministic FIFO order within a priority tier.
-impl Ord for PriorityFrame {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.frame
-            .priority()
-            .cmp(&other.frame.priority())
-            .then_with(|| other.frame.sequence().cmp(&self.frame.sequence()))
-    }
-}
-
-impl<S> PriorityFrameStream<S>
-where
-    S: Stream<Item = Frame> + Unpin + Send + 'static,
-{
-    /// Wrap a frame stream that reorders frames by priority before emitting them.
-    pub fn new(stream: S, format: StreamFormat, buffer_size: usize) -> Self {
-        Self {
-            inner: stream,
-            format,
-            buffer_size,
-        }
-    }
-
-    /// Consume the builder and return a `Stream` of priority-ordered, formatted
-    /// frame payloads.
-    ///
-    /// Frames are buffered up to `buffer_size` and emitted highest-priority first.
-    /// Items are `Vec<u8>` for symmetry with the rest of the streaming pipeline
-    /// (#226).
-    pub fn into_stream(
-        self,
-    ) -> impl Stream<Item = Result<Vec<u8>, StreamTransportError>> + Send + 'static {
-        let Self {
-            inner,
-            format,
-            buffer_size,
-        } = self;
-        try_stream! {
-            let mut heap = std::collections::BinaryHeap::<PriorityFrame>::with_capacity(buffer_size);
-            let mut inner_done = false;
-            futures::pin_mut!(inner);
-
-            loop {
-                // Fill the buffer until full or inner stream pauses/ends.
-                while !inner_done && heap.len() < buffer_size {
-                    match inner.next().await {
-                        Some(frame) => {
-                            heap.push(PriorityFrame { frame });
-                        }
-                        None => inner_done = true,
-                    }
-                }
-
-                match heap.pop() {
-                    Some(pf) => {
-                        let bytes = format_frame_owned(&pf.frame, format)?;
-                        yield bytes;
-                    }
-                    None if inner_done => break,
-                    // Buffer empty but inner not done: inner.next().await above
-                    // will re-enter the fill loop on the next iteration.
-                    None => unreachable!("loop above guarantees inner_done or non-empty heap"),
-                }
             }
         }
     }
@@ -585,8 +356,7 @@ pub enum StreamTransportError {
 ///
 /// The stream item type is `Vec<u8>` (binary). This is the canonical type for
 /// both UTF-8 textual formats (`Json`, `NdJson`, `ServerSentEvents`) and binary
-/// payloads (`Binary`, gzip-compressed output from
-/// [`AdaptiveFrameStream::with_compression`]).
+/// payloads (`Binary`, e.g. gzip-compressed output).
 pub fn create_streaming_response<S>(
     stream: S,
     format: StreamFormat,
@@ -665,22 +435,15 @@ where
 mod tests {
     use super::*;
     use crate::domain::entities::Frame;
-    use crate::domain::value_objects::{JsonData, JsonPath, Priority, StreamId};
+    use crate::domain::value_objects::{JsonData, StreamId};
     use axum::http::header;
     use futures::StreamExt;
     use futures::stream;
-    use pjson_rs_domain::entities::frame::FramePatch;
     use std::pin::Pin;
     use std::task::{Context, Poll};
 
     fn make_skeleton_frame() -> Frame {
         Frame::skeleton(StreamId::new(), 1, JsonData::Null)
-    }
-
-    fn make_patch_frame(priority: Priority) -> Frame {
-        let path = JsonPath::new("$.x").expect("valid path");
-        let patch = FramePatch::set(path, JsonData::Null);
-        Frame::patch(StreamId::new(), 1, priority, vec![patch]).expect("valid patch frame")
     }
 
     // -----------------------------------------------------------------------
@@ -753,14 +516,6 @@ mod tests {
         assert!(matches!(format, StreamFormat::ServerSentEvents));
     }
 
-    #[tokio::test]
-    async fn test_adaptive_stream_empty() {
-        let frame_stream = stream::iter(Vec::<Frame>::new());
-        let adaptive = AdaptiveFrameStream::new(frame_stream, StreamFormat::Json);
-        let collected: Vec<_> = adaptive.into_stream().collect().await;
-        assert!(collected.is_empty());
-    }
-
     /// Each output line must be a valid JSON object (NDJSON-of-objects, #167).
     #[tokio::test]
     async fn test_batch_frame_stream_multiple_batches() {
@@ -801,77 +556,9 @@ mod tests {
         );
     }
 
-    /// After the inner stream ends and the buffer drains, `PriorityFrameStream` must
-    /// return `Poll::Ready(None)` — not hang on `Poll::Pending`.
-    #[tokio::test]
-    async fn test_priority_stream_terminates() {
-        let frames: Vec<Frame> = (0..4).map(|_| make_skeleton_frame()).collect();
-        let frame_stream = stream::iter(frames);
-
-        let priority_stream = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 8);
-        let collected: Vec<Result<Vec<u8>, StreamTransportError>> =
-            priority_stream.into_stream().collect().await;
-
-        assert_eq!(collected.len(), 4);
-        for result in &collected {
-            assert!(result.is_ok());
-        }
-    }
-
-    /// Frames must be emitted in descending priority order (highest first).
-    #[tokio::test]
-    async fn test_priority_stream_ordering() {
-        let frames = vec![
-            make_patch_frame(Priority::new(10).unwrap()),
-            make_patch_frame(Priority::new(50).unwrap()),
-            make_patch_frame(Priority::new(30).unwrap()),
-        ];
-        let frame_stream = stream::iter(frames);
-
-        let priority_stream = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 8);
-        let collected: Vec<_> = priority_stream
-            .into_stream()
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .map(|r| r.expect("no error"))
-            .collect();
-
-        let priorities: Vec<u64> = collected
-            .iter()
-            .map(|bytes| {
-                let v: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-                v["priority"].as_u64().unwrap()
-            })
-            .collect();
-
-        assert_eq!(
-            priorities,
-            vec![50, 30, 10],
-            "frames must be ordered highest priority first"
-        );
-    }
-
     // -----------------------------------------------------------------------
     // New tests using PendingThenReady (#168)
     // -----------------------------------------------------------------------
-
-    /// `AdaptiveFrameStream` must yield all N frames when the inner stream
-    /// returns `Poll::Pending` between items (tests that `ready_chunks` does
-    /// not stall the waker contract).
-    #[test]
-    fn test_adaptive_stream_makes_progress_under_pending() {
-        tokio_test::block_on(async {
-            let frames: Vec<Frame> = (0..6).map(|_| make_skeleton_frame()).collect();
-            let inner = PendingThenReady::new(frames.into_iter(), 3);
-            let adaptive = AdaptiveFrameStream::new(inner, StreamFormat::Json);
-            let collected: Vec<_> = adaptive.into_stream().collect().await;
-            assert_eq!(collected.len(), 6);
-            for r in collected {
-                assert!(r.is_ok());
-            }
-        });
-    }
 
     /// `BatchFrameStream` with batch_size=3 over 6 frames must emit exactly 2
     /// batches, even when the inner stream interleaves `Poll::Pending`.
@@ -979,23 +666,6 @@ mod tests {
         assert_eq!(v.as_array().unwrap().len(), 3);
     }
 
-    /// `PriorityFrameStream` must drain its heap and return `None` when the
-    /// inner stream interleaves `Poll::Pending` (regression for the `inner_done`
-    /// fix from commit `a0a8d83`).
-    #[test]
-    fn test_priority_stream_terminates_under_pending() {
-        tokio_test::block_on(async {
-            let frames: Vec<Frame> = (0..5).map(|_| make_skeleton_frame()).collect();
-            let inner = PendingThenReady::new(frames.into_iter(), 4);
-            let priority = PriorityFrameStream::new(inner, StreamFormat::Json, 8);
-            let collected: Vec<_> = priority.into_stream().collect().await;
-            assert_eq!(collected.len(), 5);
-            for r in collected {
-                assert!(r.is_ok());
-            }
-        });
-    }
-
     /// `create_streaming_response_with_content_type` sets the exact content-type
     /// provided by the caller — specifically `application/x-ndjson` when wrapping
     /// a `BatchFrameStream` that promotes `StreamFormat::Json`.
@@ -1038,42 +708,6 @@ mod tests {
             .unwrap();
         // Without the new helper, the caller is stuck with application/json.
         assert_eq!(ct, "application/json");
-    }
-
-    /// Priority ordering is preserved when buffer fill is interleaved with
-    /// `Poll::Pending` from the inner stream.
-    #[test]
-    fn test_priority_stream_ordering_preserved_under_pending() {
-        tokio_test::block_on(async {
-            let frames = vec![
-                make_patch_frame(Priority::new(10).unwrap()),
-                make_patch_frame(Priority::new(50).unwrap()),
-                make_patch_frame(Priority::new(30).unwrap()),
-                make_patch_frame(Priority::new(80).unwrap()),
-            ];
-            let inner = PendingThenReady::new(frames.into_iter(), 2);
-            let priority = PriorityFrameStream::new(inner, StreamFormat::Json, 10);
-            let collected: Vec<_> = priority
-                .into_stream()
-                .collect::<Vec<_>>()
-                .await
-                .into_iter()
-                .map(|r| r.expect("no error"))
-                .collect();
-
-            assert_eq!(collected.len(), 4);
-
-            let priorities: Vec<u64> = collected
-                .iter()
-                .map(|bytes| {
-                    let v: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-                    v["priority"].as_u64().unwrap()
-                })
-                .collect();
-
-            // All frames fit in the buffer (size=10) so they must arrive fully sorted.
-            assert_eq!(priorities, vec![80, 50, 30, 10]);
-        });
     }
 
     /// `sonic_rs::to_vec` must stay parse-equivalent to `serde_json::to_vec` for
@@ -1137,47 +771,6 @@ mod tests {
                     String::from_utf8_lossy(&sonic_bytes)
                 );
             }
-        }
-    }
-
-    /// `with_compression(true)` must produce a payload that round-trips through
-    /// gzip — the previous `String`-based pipeline rejected gzip output as
-    /// invalid UTF-8 (#226). The fix threads `Vec<u8>` end-to-end so binary
-    /// gzip bytes flow unmolested.
-    #[cfg(feature = "compression")]
-    #[tokio::test]
-    async fn test_adaptive_stream_with_compression_round_trips() {
-        use std::io::Read as _;
-
-        let frames: Vec<Frame> = (0..5).map(|_| make_skeleton_frame()).collect();
-        let frame_stream = stream::iter(frames);
-        let adaptive =
-            AdaptiveFrameStream::new(frame_stream, StreamFormat::Json).with_compression(true);
-
-        let collected: Vec<Result<Vec<u8>, StreamTransportError>> =
-            adaptive.into_stream().collect().await;
-
-        assert_eq!(
-            collected.len(),
-            5,
-            "5 frames in → 5 compressed payloads out"
-        );
-
-        for result in collected {
-            let compressed = result.expect("compressed payload must be Ok");
-            assert_eq!(
-                &compressed[..2],
-                &[0x1f, 0x8b],
-                "every payload must carry the gzip magic header"
-            );
-            let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
-            let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .expect("gzip payload must decode");
-            let v: serde_json::Value =
-                serde_json::from_slice(&decompressed).expect("decoded JSON must parse");
-            assert!(v.is_object(), "decoded payload must be a JSON frame object");
         }
     }
 }

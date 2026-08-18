@@ -56,8 +56,8 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 tokio-tungstenite = { workspace = true, optional = true }
-tower = { workspace = true, optional = true }
-tower-http = { workspace = true, features = ["cors", "trace"], optional = true }
+tower = { workspace = true, optional = true, features = ["limit"] }
+tower-http = { workspace = true, features = ["cors", "trace", "timeout"], optional = true }
 tracing = { workspace = true }
 url = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
