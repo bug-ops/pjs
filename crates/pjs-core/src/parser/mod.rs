@@ -121,6 +121,16 @@ impl Parser {
     /// could be recovered — e.g. input `[` or `-`). Returns `Ok(Some(_))` when
     /// at least one byte was committed.
     ///
+    /// # Status: not yet wired into production
+    ///
+    /// No production code in this workspace calls this method — the only
+    /// reference is the `no_run` doc example below, which is never executed.
+    /// It is not yet wired into any streaming/partial-frame HTTP or WebSocket
+    /// ingestion entry point. It delegates to [`JiterPartialParser`], which
+    /// is covered by [`partial`]'s own unit tests, but this wrapper itself
+    /// has no test coverage of its own. See the [`partial`] module docs for
+    /// details.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::error::Error::InvalidJson`] for syntactically invalid

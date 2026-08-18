@@ -2,6 +2,7 @@
 //!
 //! DTOs for transferring schema data across application boundaries.
 
+use pjson_rs_domain::value_objects::enter_deserialize_depth;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -22,8 +23,10 @@ thread_local! {
     /// `OneOf`/`AllOf::schemas`) exhausts the stack (CWE-674) before the
     /// `From` conversion is ever reached.
     ///
-    /// This mirrors `Schema`'s guard exactly (thread-local counter +
-    /// `deserialize_with`, reusing [`pjson_rs_domain::MAX_DESERIALIZE_DEPTH`]) and requires
+    /// This mirrors `Schema`'s guard exactly, sharing the same
+    /// `pjson_rs_domain::value_objects::enter_deserialize_depth` primitive
+    /// (thread-local counter + `deserialize_with`, reusing
+    /// `pjson_rs_domain::MAX_DESERIALIZE_DEPTH`) and requires
     /// `SchemaDefinitionDto` to use serde's default externally-tagged
     /// representation: an internally-tagged enum (`#[serde(tag = "...")]`)
     /// buffers the whole nested value into a generic `Content` tree to find
@@ -34,41 +37,6 @@ thread_local! {
     static SCHEMA_DTO_DESERIALIZE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-/// RAII guard that decrements the thread-local [`SchemaDefinitionDto`]
-/// deserialization depth counter on drop, restoring it even when the guarded
-/// deserialization call returns an error.
-struct SchemaDtoDepthGuard;
-
-impl Drop for SchemaDtoDepthGuard {
-    fn drop(&mut self) {
-        SCHEMA_DTO_DESERIALIZE_DEPTH.with(|depth| depth.set(depth.get() - 1));
-    }
-}
-
-/// Enters one nesting level of [`SchemaDefinitionDto`] deserialization.
-///
-/// Returns a guard that must be held for the duration of the nested
-/// deserialization call and released (dropped) afterward. Rejects with a
-/// deserialization error, rather than recursing further, once
-/// [`pjson_rs_domain::MAX_DESERIALIZE_DEPTH`] is reached.
-fn enter_schema_dto_depth<E>() -> Result<SchemaDtoDepthGuard, E>
-where
-    E: serde::de::Error,
-{
-    use pjson_rs_domain::MAX_DESERIALIZE_DEPTH;
-
-    SCHEMA_DTO_DESERIALIZE_DEPTH.with(|depth| {
-        let current = depth.get();
-        if current >= MAX_DESERIALIZE_DEPTH {
-            return Err(E::custom(format_args!(
-                "SchemaDefinitionDto nesting depth exceeds maximum of {MAX_DESERIALIZE_DEPTH}"
-            )));
-        }
-        depth.set(current + 1);
-        Ok(SchemaDtoDepthGuard)
-    })
-}
-
 /// Bounded-depth `deserialize_with` for `SchemaDefinitionDto::Array`'s `items` field.
 fn deserialize_boxed_schema_dto_option<'de, D>(
     deserializer: D,
@@ -76,7 +44,8 @@ fn deserialize_boxed_schema_dto_option<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    let _guard = enter_schema_dto_depth::<D::Error>()?;
+    let _guard =
+        enter_deserialize_depth::<D::Error>(&SCHEMA_DTO_DESERIALIZE_DEPTH, "SchemaDefinitionDto")?;
     Option::<Box<SchemaDefinitionDto>>::deserialize(deserializer)
 }
 
@@ -87,7 +56,8 @@ fn deserialize_schema_dto_properties<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    let _guard = enter_schema_dto_depth::<D::Error>()?;
+    let _guard =
+        enter_deserialize_depth::<D::Error>(&SCHEMA_DTO_DESERIALIZE_DEPTH, "SchemaDefinitionDto")?;
     HashMap::<String, SchemaDefinitionDto>::deserialize(deserializer)
 }
 
@@ -98,7 +68,8 @@ fn deserialize_schema_dto_list<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    let _guard = enter_schema_dto_depth::<D::Error>()?;
+    let _guard =
+        enter_deserialize_depth::<D::Error>(&SCHEMA_DTO_DESERIALIZE_DEPTH, "SchemaDefinitionDto")?;
     Vec::<SchemaDefinitionDto>::deserialize(deserializer)
 }
 
