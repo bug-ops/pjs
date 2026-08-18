@@ -2,10 +2,105 @@
 //!
 //! DTOs for transferring schema data across application boundaries.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use crate::domain::value_objects::Schema;
+
+thread_local! {
+    /// Per-thread nesting depth reached while deserializing [`SchemaDefinitionDto`].
+    ///
+    /// `SchemaDefinitionDto` is deserialized directly from untrusted input via
+    /// `#[derive(Deserialize)]`, and its recursive conversion into
+    /// [`Schema`] (`impl From<SchemaDefinitionDto> for Schema`) only runs
+    /// *after* deserialization has already fully materialized the DTO tree —
+    /// so `Schema`'s own depth guard (`crates/pjs-domain/src/value_objects/schema.rs`)
+    /// never gets a chance to bound the nesting reached while deserializing
+    /// the DTO itself. Without this guard, a deeply nested
+    /// `SchemaDefinitionDto` document (`items`, `properties`,
+    /// `OneOf`/`AllOf::schemas`) exhausts the stack (CWE-674) before the
+    /// `From` conversion is ever reached.
+    ///
+    /// This mirrors `Schema`'s guard exactly (thread-local counter +
+    /// `deserialize_with`, reusing [`pjson_rs_domain::MAX_DESERIALIZE_DEPTH`]) and requires
+    /// `SchemaDefinitionDto` to use serde's default externally-tagged
+    /// representation: an internally-tagged enum (`#[serde(tag = "...")]`)
+    /// buffers the whole nested value into a generic `Content` tree to find
+    /// the tag *before* any field's `deserialize_with` hook runs, so for a
+    /// self-describing format with no recursion limit of its own (e.g.
+    /// MessagePack), sufficiently deep input would overflow the stack during
+    /// that buffering pass regardless of this guard.
+    static SCHEMA_DTO_DESERIALIZE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// RAII guard that decrements the thread-local [`SchemaDefinitionDto`]
+/// deserialization depth counter on drop, restoring it even when the guarded
+/// deserialization call returns an error.
+struct SchemaDtoDepthGuard;
+
+impl Drop for SchemaDtoDepthGuard {
+    fn drop(&mut self) {
+        SCHEMA_DTO_DESERIALIZE_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
+/// Enters one nesting level of [`SchemaDefinitionDto`] deserialization.
+///
+/// Returns a guard that must be held for the duration of the nested
+/// deserialization call and released (dropped) afterward. Rejects with a
+/// deserialization error, rather than recursing further, once
+/// [`pjson_rs_domain::MAX_DESERIALIZE_DEPTH`] is reached.
+fn enter_schema_dto_depth<E>() -> Result<SchemaDtoDepthGuard, E>
+where
+    E: serde::de::Error,
+{
+    use pjson_rs_domain::MAX_DESERIALIZE_DEPTH;
+
+    SCHEMA_DTO_DESERIALIZE_DEPTH.with(|depth| {
+        let current = depth.get();
+        if current >= MAX_DESERIALIZE_DEPTH {
+            return Err(E::custom(format_args!(
+                "SchemaDefinitionDto nesting depth exceeds maximum of {MAX_DESERIALIZE_DEPTH}"
+            )));
+        }
+        depth.set(current + 1);
+        Ok(SchemaDtoDepthGuard)
+    })
+}
+
+/// Bounded-depth `deserialize_with` for `SchemaDefinitionDto::Array`'s `items` field.
+fn deserialize_boxed_schema_dto_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<Box<SchemaDefinitionDto>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let _guard = enter_schema_dto_depth::<D::Error>()?;
+    Option::<Box<SchemaDefinitionDto>>::deserialize(deserializer)
+}
+
+/// Bounded-depth `deserialize_with` for `SchemaDefinitionDto::Object`'s `properties` field.
+fn deserialize_schema_dto_properties<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, SchemaDefinitionDto>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let _guard = enter_schema_dto_depth::<D::Error>()?;
+    HashMap::<String, SchemaDefinitionDto>::deserialize(deserializer)
+}
+
+/// Bounded-depth `deserialize_with` for `SchemaDefinitionDto::OneOf`/`AllOf`'s `schemas` field.
+fn deserialize_schema_dto_list<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SchemaDefinitionDto>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let _guard = enter_schema_dto_depth::<D::Error>()?;
+    Vec::<SchemaDefinitionDto>::deserialize(deserializer)
+}
 
 /// Schema registration DTO
 ///
@@ -36,8 +131,14 @@ pub struct SchemaMetadataDto {
 /// Schema definition DTO
 ///
 /// Simplified JSON-serializable representation of schema.
+///
+/// Uses serde's default externally-tagged representation (e.g.
+/// `{"Object": {"properties": {...}, ...}}` rather than
+/// `{"type": "object", "properties": {...}}`) so that the recursive fields'
+/// deserialization depth guard (see the module-private `SCHEMA_DTO_DESERIALIZE_DEPTH` thread-local) can
+/// actually bound nesting — an internally-tagged representation would defeat
+/// it, see that guard's doc comment for why.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
 pub enum SchemaDefinitionDto {
     /// JSON string with optional length, pattern, and enumeration constraints.
     String {
@@ -79,7 +180,11 @@ pub enum SchemaDefinitionDto {
     /// JSON array with optional element schema and size constraints.
     Array {
         /// Schema each element must satisfy, or `None` to allow any.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_boxed_schema_dto_option"
+        )]
         items: Option<Box<SchemaDefinitionDto>>,
         /// Minimum number of elements (inclusive).
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +199,7 @@ pub enum SchemaDefinitionDto {
     /// JSON object with named properties and required-field constraints.
     Object {
         /// Schema of each named property.
+        #[serde(deserialize_with = "deserialize_schema_dto_properties")]
         properties: HashMap<String, SchemaDefinitionDto>,
         /// Names of properties that must be present.
         #[serde(default)]
@@ -105,11 +211,13 @@ pub enum SchemaDefinitionDto {
     /// Logical OR — value must validate against exactly one branch.
     OneOf {
         /// Candidate schemas; the value must match exactly one.
+        #[serde(deserialize_with = "deserialize_schema_dto_list")]
         schemas: Vec<SchemaDefinitionDto>,
     },
     /// Logical AND — value must validate against every branch.
     AllOf {
         /// Schemas all of which the value must satisfy.
+        #[serde(deserialize_with = "deserialize_schema_dto_list")]
         schemas: Vec<SchemaDefinitionDto>,
     },
     /// Accepts any JSON value without further validation.
@@ -1459,5 +1567,93 @@ mod tests {
             items: Some(boxed),
             ..
         } if matches!(*boxed, Schema::Array { .. })));
+    }
+
+    // ===========================================
+    // Deserialization Depth Guard Tests
+    // ===========================================
+
+    /// Builds `levels` nested `SchemaDefinitionDto::Array` wrappers around a
+    /// `Boolean` leaf, iteratively (not recursively), so construction itself
+    /// never recurses on the Rust call stack regardless of `levels`.
+    fn nested_array_dto(levels: usize) -> SchemaDefinitionDto {
+        let mut dto = SchemaDefinitionDto::Boolean;
+        for _ in 0..levels {
+            dto = SchemaDefinitionDto::Array {
+                items: Some(Box::new(dto)),
+                min_items: None,
+                max_items: None,
+                unique_items: false,
+            };
+        }
+        dto
+    }
+
+    // `to_vec_named` (map-based struct encoding), not the default `to_vec`
+    // (positional/array-based): several fields on `SchemaDefinitionDto` use
+    // `#[serde(skip_serializing_if = "Option::is_none")]` and are not the
+    // struct's last field (e.g. `Array::items`), so positional encoding
+    // shortens the emitted array and misaligns every field after the
+    // skipped one on decode — unrelated to the depth guard under test here.
+
+    #[test]
+    fn test_schema_dto_deserialize_at_max_depth_succeeds() {
+        let dto = nested_array_dto(pjson_rs_domain::MAX_DESERIALIZE_DEPTH);
+        let bytes = rmp_serde::to_vec_named(&dto).unwrap();
+        let result: Result<SchemaDefinitionDto, _> = rmp_serde::from_slice(&bytes);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn test_schema_dto_deserialize_beyond_max_depth_rejected() {
+        let dto = nested_array_dto(pjson_rs_domain::MAX_DESERIALIZE_DEPTH + 1);
+        let bytes = rmp_serde::to_vec_named(&dto).unwrap();
+        let err = rmp_serde::from_slice::<SchemaDefinitionDto>(&bytes)
+            .unwrap_err()
+            .to_string();
+        // Assert on our message, not just is_err(), so the test cannot pass
+        // because rmp-serde rejected the input for an unrelated reason.
+        assert!(err.contains("SchemaDefinitionDto nesting depth"), "{err}");
+    }
+
+    #[test]
+    fn test_schema_dto_deserialize_small_nesting_roundtrips_via_json() {
+        let dto = nested_array_dto(3);
+        let json = serde_json::to_string(&dto).unwrap();
+        let back: SchemaDefinitionDto = serde_json::from_str(&json).unwrap();
+        let original_schema: Schema = dto.into();
+        let roundtrip_schema: Schema = back.into();
+        assert_eq!(original_schema, roundtrip_schema);
+    }
+
+    /// `Array::items` must stay optional: `#[serde(deserialize_with = ...)]`
+    /// alone suppresses serde derive's implicit "absent `Option<T>` field ->
+    /// `None`" behavior, which would make `items` newly required and break
+    /// any persisted `SchemaDefinitionDto::Array` document that omits it.
+    /// The `#[serde(default, deserialize_with = ...)]` combination on the
+    /// field restores the pre-guard optional behavior.
+    #[test]
+    fn test_schema_dto_array_items_still_optional_when_absent() {
+        let json = r#"{"Array":{"min_items":null,"max_items":null,"unique_items":false}}"#;
+        let dto: SchemaDefinitionDto = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            dto,
+            SchemaDefinitionDto::Array { items: None, .. }
+        ));
+    }
+
+    /// `Object::properties` and `OneOf`/`AllOf::schemas` were already
+    /// required fields before the depth guard (non-`Option` types with no
+    /// `#[serde(default)]`), so adding `deserialize_with` to them — unlike
+    /// `Array::items` above — doesn't change their required-ness.
+    #[test]
+    fn test_schema_dto_properties_and_schemas_still_required() {
+        let json = r#"{"Object":{"required":[],"additional_properties":true}}"#;
+        let result: Result<SchemaDefinitionDto, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "properties should still be required");
+
+        let json = r#"{"OneOf":{}}"#;
+        let result: Result<SchemaDefinitionDto, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "schemas should still be required");
     }
 }
