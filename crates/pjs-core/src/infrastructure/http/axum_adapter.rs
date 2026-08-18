@@ -1703,8 +1703,9 @@ mod tests {
     ///
     /// Drives `create-session → create-stream → start-stream → generate-frames`
     /// over the real Axum router and asserts each step succeeds. After issue
-    /// #232 implemented `Stream::extract_patches` and `batch_patches_into_frames`,
-    /// the route now produces frames for non-empty source data — the assertion
+    /// #232 implemented `Stream::extract_patches` and its patch-to-frame
+    /// batching (now `Stream::chunk_patches_for_commit`), the route now
+    /// produces frames for non-empty source data — the assertion
     /// `frame_count > 0` verifies the full chain end-to-end.
     #[tokio::test]
     async fn generate_frames_route_dispatches_command_end_to_end() {

@@ -703,21 +703,34 @@ impl StreamSession {
 
     /// Turn already-extracted per-stream patches (from
     /// [`Self::extract_prioritized_patches_for_active_streams`]) into
-    /// frames, choosing up to 5 per stream, globally sorting all of them by
-    /// priority, and truncating to `batch_size` — the mutating half of
-    /// [`Self::create_priority_frames`], updating session-level statistics
-    /// and raising [`DomainEvent::FramesBatched`] exactly as that method
-    /// does.
+    /// frames, choosing up to 5 per stream, globally selecting the
+    /// `batch_size` highest-priority candidates, and committing only those
+    /// — the mutating half of [`Self::create_priority_frames`], updating
+    /// session-level statistics and raising [`DomainEvent::FramesBatched`]
+    /// exactly as that method does.
+    ///
+    /// Frame construction and per-stream bookkeeping (`next_sequence`,
+    /// `stats`) happen in two phases so that a candidate discarded by the
+    /// `batch_size` truncation never consumes a sequence number or inflates
+    /// its stream's stats (#506): every stream's patches are first chunked
+    /// via [`Stream::chunk_patches_for_commit`] (pure, no mutation) into
+    /// `(Priority, Vec<FramePatch>)` candidates; the highest-priority
+    /// `batch_size` candidates are selected by index, without reordering the
+    /// candidate list itself; only the selected candidates are then
+    /// finalized via [`Stream::finalize_patch_frame`], walked in each
+    /// stream's original chunk order so `next_sequence` keeps advancing
+    /// monotonically in source-traversal order rather than in cross-stream
+    /// priority order. The finalized frames are re-sorted by priority
+    /// afterward to reproduce the external contract below.
     ///
     /// Despite being the half a caller is expected to run under a lock, this
-    /// is not cheap or `max_frames`-bounded: [`Stream::commit_patch_frames`]
-    /// clones every patch in its input while chunking it into frames
-    /// (`batch_patches_into_frames`, `stream.rs`), so its cost is
-    /// proportional to the total number of patches extracted across every
-    /// `Streaming` stream in the session, not to `max_frames`/`batch_size`
-    /// or the number of frames actually produced. Inherited from
-    /// `create_stream_patch_frames_atomic`'s pre-existing single-stream
-    /// commit step (#472); not addressed here.
+    /// is not cheap or `max_frames`-bounded: [`Stream::chunk_patches_for_commit`]
+    /// clones every patch in its input while chunking it into candidates, so
+    /// its cost is proportional to the total number of patches extracted
+    /// across every `Streaming` stream in the session, not to
+    /// `max_frames`/`batch_size` or the number of frames actually produced.
+    /// Inherited from `create_stream_patch_frames_atomic`'s pre-existing
+    /// single-stream commit step (#472); not addressed here.
     ///
     /// A `stream_id` in `extracted` that no longer exists, or transitioned
     /// out of `Streaming` between extraction and this call (e.g. completed
@@ -733,10 +746,10 @@ impl StreamSession {
     ///
     /// Unlike [`Self::commit_patch_frames_for_stream`], `stats.total_bytes`
     /// here cannot be taken as a child [`Stream`]'s before/after delta:
-    /// frames are committed per-stream but then globally sorted by priority
-    /// and truncated to `batch_size`, so a per-stream delta would count
-    /// bytes for frames this call discards. `estimated_size()` is summed
-    /// directly over only the frames actually retained in the result.
+    /// frames are committed per-stream but selected by global priority
+    /// across streams, so a per-stream delta would count bytes for
+    /// candidates this call discards. `estimated_size()` is summed directly
+    /// over only the frames actually retained in the result.
     pub fn commit_priority_frames(
         &mut self,
         extracted: Vec<(StreamId, Vec<(FramePatch, Priority)>)>,
@@ -748,41 +761,59 @@ impl StreamSession {
             ));
         }
 
-        let mut stream_frames: Vec<(Priority, StreamId, Frame)> = Vec::new();
-
+        // Chunk every stream's patches into frame-sized candidates without
+        // mutating any stream yet — sequence numbers and stats must only be
+        // assigned to candidates that survive the truncation below, per
+        // #506.
+        let mut candidates: Vec<(Priority, StreamId, Vec<FramePatch>)> = Vec::new();
         for (stream_id, patches) in extracted {
-            let Some(stream) = self.streams.get_mut(&stream_id) else {
+            let Some(stream) = self.streams.get(&stream_id) else {
                 continue;
             };
             if !matches!(stream.state(), StreamState::Streaming) {
                 continue;
             }
-            let frames = match stream.commit_patch_frames(patches, 5) {
-                Ok(frames) => frames,
-                Err(error) => {
-                    tracing::debug!(
-                        session_id = %self.id,
-                        %stream_id,
-                        %error,
-                        "skipping stream in priority-frame batch: commit failed"
-                    );
-                    continue;
-                }
-            };
-
-            for frame in frames {
-                let priority = frame.priority();
-                stream_frames.push((priority, stream_id, frame));
+            for (priority, frame_patches) in Stream::chunk_patches_for_commit(patches, 5) {
+                candidates.push((priority, stream_id, frame_patches));
             }
         }
 
-        // Sort by priority (descending)
+        // Determine the surviving subset by index, without reordering
+        // `candidates` itself: finalizing must happen in each stream's
+        // original chunk order (see below), not in global-priority order.
+        let mut order: Vec<usize> = (0..candidates.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(candidates[i].0));
+        order.truncate(batch_size);
+        let mut keep = vec![false; candidates.len()];
+        for i in order {
+            keep[i] = true;
+        }
+
+        // Finalize only the surviving candidates, walking `candidates` in
+        // original (per-stream, source-chunk) order so each stream's
+        // `next_sequence` advances monotonically in the order its chunks
+        // were built rather than in cross-stream priority order.
+        let mut stream_frames: Vec<(Priority, StreamId, Frame)> = Vec::new();
+        for (i, (priority, stream_id, frame_patches)) in candidates.into_iter().enumerate() {
+            if !keep[i] {
+                continue;
+            }
+            let Some(stream) = self.streams.get_mut(&stream_id) else {
+                continue;
+            };
+            let Ok(frame) = stream.finalize_patch_frame(priority, frame_patches) else {
+                continue;
+            };
+            stream_frames.push((priority, stream_id, frame));
+        }
+
+        // Re-sort just the finalized frames by priority (descending) to
+        // reproduce the external contract: frames returned in global
+        // priority order.
         stream_frames.sort_by_key(|frame| std::cmp::Reverse(frame.0));
 
-        // Take up to batch_size frames
         let all_frames: Vec<Frame> = stream_frames
             .into_iter()
-            .take(batch_size)
             .map(|(_, _, frame)| frame)
             .collect();
 
