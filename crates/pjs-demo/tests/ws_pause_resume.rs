@@ -139,6 +139,38 @@ async fn resume_without_prior_pause_is_a_no_op() {
     );
 }
 
+/// Regression test for #428: a valid `command` tag with an extra unknown
+/// field must be rejected, not silently accepted as the tagged variant.
+/// Before the fix, `{"command":"pause","extra":true}` deserialized
+/// successfully as `ClientCommand::Pause` and paused the stream; now it must
+/// take the same malformed-command path as invalid JSON, leaving the stream
+/// unpaused.
+#[tokio::test]
+async fn pause_command_with_unknown_field_is_rejected() {
+    let (state, addr) = spawn_server().await;
+    let session_id = SessionId::new();
+    state.add_session(session_id);
+
+    let url = format!("ws://{addr}/ws/{session_id}");
+    let (mut ws_stream, _) = connect_async(url).await.expect("upgrade should succeed");
+
+    ws_stream
+        .send(WsMessage::Text(
+            r#"{"command":"pause","extra":true}"#.into(),
+        ))
+        .await
+        .expect("sending command with unknown field should succeed at the transport level");
+
+    // If the unknown field were silently ignored, the stream would stay
+    // paused and never emit `stream_complete` within the timeout.
+    let completed =
+        wait_for_text_containing(&mut ws_stream, "stream_complete", Duration::from_secs(2)).await;
+    assert!(
+        completed,
+        "a command with an unknown field must be rejected, not accepted as pause"
+    );
+}
+
 #[tokio::test]
 async fn malformed_command_does_not_disrupt_streaming() {
     let (state, addr) = spawn_server().await;

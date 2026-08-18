@@ -121,11 +121,18 @@ struct StreamControl {
 /// Client-issued command parsed from an incoming WebSocket `Message::Text` frame.
 ///
 /// Example wire format: `{"command":"pause"}` or `{"command":"resume"}`.
+///
+/// Variants use empty-brace struct syntax rather than plain unit variants: serde's
+/// internally-tagged enum derive only enforces `deny_unknown_fields` for struct
+/// variants, so a plain unit variant would silently accept
+/// `{"command":"pause","extra":true}` as `Pause` instead of rejecting it (see #428).
+/// As a side effect, a bare JSON array like `["pause"]` — previously accepted as
+/// `Pause` since serde reads array element 0 as the tag — is now rejected too.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "command", rename_all = "lowercase", deny_unknown_fields)]
 enum ClientCommand {
-    Pause,
-    Resume,
+    Pause {},
+    Resume {},
 }
 
 impl Default for AppState {
@@ -305,7 +312,7 @@ async fn handle_websocket(socket: WebSocket, state: AppState, session_id: Sessio
         while let Some(msg) = receiver.next().await {
             match msg {
                 Ok(Message::Text(text)) => match serde_json::from_str::<ClientCommand>(&text) {
-                    Ok(ClientCommand::Pause) => {
+                    Ok(ClientCommand::Pause {}) => {
                         if cmd_tx.send(StreamControl { paused: true }).is_err() {
                             warn!(
                                 "Session {} received pause but its stream already ended",
@@ -315,7 +322,7 @@ async fn handle_websocket(socket: WebSocket, state: AppState, session_id: Sessio
                             info!("Session {} paused by client", receive_session_id);
                         }
                     }
-                    Ok(ClientCommand::Resume) => {
+                    Ok(ClientCommand::Resume {}) => {
                         if cmd_tx.send(StreamControl { paused: false }).is_err() {
                             warn!(
                                 "Session {} received resume but its stream already ended",
