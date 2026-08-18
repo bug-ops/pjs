@@ -16,9 +16,7 @@ use pjson_rs::infrastructure::integration::{
         get_string_vec,
         pooled_builders::{PooledResponseBuilder, PooledSSEBuilder},
     },
-    simd_acceleration::{
-        SimdConfig, SimdFrameSerializer, SimdJsonProcessor, SimdStreamBuffer, SimdStreamProcessor,
-    },
+    simd_acceleration::{SimdConfig, SimdFrameSerializer, SimdStreamBuffer, SimdStreamProcessor},
     streaming_adapter::{
         IntegrationError, ResponseBody, StreamingAdapter, StreamingFormat, UniversalRequest,
         UniversalResponse,
@@ -495,63 +493,6 @@ fn test_simd_serializer_reset_stats() {
     serializer.reset_stats();
     assert_eq!(serializer.stats().frames_processed, 0);
     assert_eq!(serializer.stats().bytes_written, 0);
-}
-
-#[test]
-fn test_simd_json_validate_valid_json() {
-    let valid_json = br#"{"name": "test", "value": 42, "active": true}"#;
-    let result = SimdJsonProcessor::validate_json(valid_json);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_simd_json_validate_invalid_json() {
-    let invalid_json = br#"{"name": "test", "value": 42"#; // Missing closing brace
-    let result = SimdJsonProcessor::validate_json(invalid_json);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_simd_json_validate_empty_input() {
-    let empty_json = b"";
-    let result = SimdJsonProcessor::validate_json(empty_json);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_simd_extract_priority_field_present() {
-    let json = br#"{"data": "test", "priority": 5, "other": "field"}"#;
-    let result = SimdJsonProcessor::extract_priority_field(json).unwrap();
-    assert_eq!(result, Some(5));
-}
-
-#[test]
-fn test_simd_extract_priority_field_missing() {
-    let json = br#"{"data": "test", "other": "field"}"#;
-    let result = SimdJsonProcessor::extract_priority_field(json).unwrap();
-    assert_eq!(result, None);
-}
-
-#[test]
-fn test_simd_extract_priority_field_wrong_type() {
-    let json = br#"{"priority": "high"}"#; // String instead of number
-    let result = SimdJsonProcessor::extract_priority_field(json).unwrap();
-    assert_eq!(result, None);
-}
-
-#[test]
-fn test_simd_validate_batch() {
-    let inputs = vec![
-        &br#"{"valid": true}"#[..],
-        &br#"{"also": "valid"}"#[..],
-        &br#"{"invalid": true"#[..], // Missing closing brace
-    ];
-
-    let results = SimdJsonProcessor::validate_batch(&inputs);
-    assert_eq!(results.len(), 3);
-    assert!(results[0].is_ok());
-    assert!(results[1].is_ok());
-    assert!(results[2].is_err());
 }
 
 #[test]

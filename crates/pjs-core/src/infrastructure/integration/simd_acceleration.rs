@@ -1,13 +1,11 @@
-// SIMD acceleration module using sonic-rs for high-performance JSON operations
+// SIMD-accelerated frame serialization and stream buffering using sonic-rs
 //
-// This module provides SIMD-accelerated JSON processing for streaming operations,
-// significantly improving performance for large-scale data serialization.
+// This module serializes already-built StreamFrames (to JSON, NDJSON, and SSE
+// formats) and buffers the resulting bytes with SIMD-accelerated sonic-rs
+// serialization, significantly improving performance for large-scale streaming.
 
-use crate::security::SecurityValidator;
 use crate::stream::StreamFrame;
 use bytes::{BufMut, BytesMut};
-use serde::de::Error as _;
-use sonic_rs::{JsonValueTrait, LazyValue};
 
 /// High-performance SIMD-accelerated serializer for stream frames
 pub struct SimdFrameSerializer {
@@ -101,56 +99,6 @@ impl SimdFrameSerializer {
     /// Reset statistics
     pub fn reset_stats(&mut self) {
         self.stats = SerializationStats::default();
-    }
-}
-
-/// SIMD-accelerated JSON validator and parser
-pub struct SimdJsonProcessor;
-
-impl SimdJsonProcessor {
-    /// Validate JSON using SIMD acceleration
-    pub fn validate_json(input: &[u8]) -> Result<(), sonic_rs::Error> {
-        Self::validate_depth(input)?;
-
-        // sonic-rs uses SIMD for ultra-fast validation
-        let _doc = sonic_rs::from_slice::<sonic_rs::Value>(input)?;
-        Ok(())
-    }
-
-    /// Parse and extract specific fields using SIMD with zero-copy where possible
-    pub fn extract_priority_field(input: &[u8]) -> Result<Option<u8>, sonic_rs::Error> {
-        Self::validate_depth(input)?;
-
-        let doc = sonic_rs::from_slice::<LazyValue<'_>>(input)?;
-
-        if let Some(priority_value) = doc.get("priority")
-            && let Some(priority) = priority_value.as_u64()
-        {
-            return Ok(Some(priority as u8));
-        }
-
-        Ok(None)
-    }
-
-    /// Batch validate multiple JSON documents
-    pub fn validate_batch(inputs: &[&[u8]]) -> Vec<Result<(), sonic_rs::Error>> {
-        inputs
-            .iter()
-            .map(|input| Self::validate_json(input))
-            .collect()
-    }
-
-    /// Reject input whose structural nesting exceeds the configured security
-    /// limit before it reaches `sonic_rs::from_slice`.
-    ///
-    /// `sonic-rs` has no internal recursion guard, so an unbounded-depth
-    /// payload handed directly to it can exhaust the process stack. This
-    /// mirrors the pre-parse guard used by [`crate::parser::SonicParser`]
-    /// and [`crate::parser::SimpleParser`].
-    fn validate_depth(input: &[u8]) -> Result<(), sonic_rs::Error> {
-        SecurityValidator::default()
-            .validate_json_depth_bytes(input)
-            .map_err(sonic_rs::Error::custom)
     }
 }
 
@@ -364,60 +312,6 @@ mod tests {
         let content = String::from_utf8(serialized.to_vec()).unwrap();
         assert!(content.contains("\"id\":1"));
         assert!(content.contains("\"id\":2"));
-    }
-
-    #[test]
-    fn test_simd_json_validation() {
-        let valid_json = br#"{"test": "value", "number": 42}"#;
-        let invalid_json = br#"{"test": "value", "number": 42"#;
-
-        assert!(SimdJsonProcessor::validate_json(valid_json).is_ok());
-        assert!(SimdJsonProcessor::validate_json(invalid_json).is_err());
-    }
-
-    #[test]
-    fn test_validate_json_rejects_unbounded_deep_nesting() {
-        // Regression for #456 follow-up: SimdJsonProcessor::validate_json
-        // called sonic_rs::from_slice directly with no depth guard, so a
-        // genuinely deep (no string trick needed) payload reached
-        // sonic-rs's recursion and could stack-overflow the process.
-        let mut json = String::new();
-        for _ in 0..50_000 {
-            json.push('[');
-        }
-        json.push('1');
-        for _ in 0..50_000 {
-            json.push(']');
-        }
-
-        assert!(SimdJsonProcessor::validate_json(json.as_bytes()).is_err());
-    }
-
-    #[test]
-    fn test_extract_priority_field_rejects_unbounded_deep_nesting() {
-        let mut json = String::from(r#"{"priority": 5, "nested": "#);
-        for _ in 0..50_000 {
-            json.push('[');
-        }
-        json.push('1');
-        for _ in 0..50_000 {
-            json.push(']');
-        }
-        json.push('}');
-
-        assert!(SimdJsonProcessor::extract_priority_field(json.as_bytes()).is_err());
-    }
-
-    #[test]
-    fn test_priority_extraction() {
-        let json_with_priority = br#"{"data": "test", "priority": 5}"#;
-        let json_without_priority = br#"{"data": "test"}"#;
-
-        let result1 = SimdJsonProcessor::extract_priority_field(json_with_priority).unwrap();
-        assert_eq!(result1, Some(5));
-
-        let result2 = SimdJsonProcessor::extract_priority_field(json_without_priority).unwrap();
-        assert_eq!(result2, None);
     }
 
     #[test]
