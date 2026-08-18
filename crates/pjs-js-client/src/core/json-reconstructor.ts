@@ -32,7 +32,7 @@ export class JsonReconstructor {
       return { success: false, error: 'Reconstructor already initialized' };
     }
 
-    if ((frame as any).data === undefined) {
+    if (frame.data === undefined) {
       return { success: false, error: 'Skeleton frame missing data field' };
     }
 

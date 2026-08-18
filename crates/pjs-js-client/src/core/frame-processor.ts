@@ -8,7 +8,6 @@
 import {
   FrameType,
   Priority,
-  PatchOperation,
   PJSErrorType,
   JsonPath
 } from '../types/index.js';
@@ -178,21 +177,23 @@ export class FrameProcessor {
 
   // Private helpers
 
-  private validatePatchOperations(patch: PatchOperation, index: number, errors: string[]): void {
+  private validatePatchOperations(patch: unknown, index: number, errors: string[]): void {
     if (!patch || typeof patch !== 'object') {
       errors.push(`Patch operation ${index} must be an object`);
       return;
     }
 
-    if (!patch.path || typeof patch.path !== 'string') {
+    const candidate = patch as Record<string, unknown>;
+
+    if (!candidate.path || typeof candidate.path !== 'string') {
       errors.push(`Patch operation ${index} must have a valid path`);
-    } else if (!this.isValidJsonPath(patch.path)) {
-      errors.push(`Patch operation ${index} has invalid JSON path: ${patch.path}`);
+    } else if (!this.isValidJsonPath(candidate.path)) {
+      errors.push(`Patch operation ${index} has invalid JSON path: ${candidate.path}`);
     }
 
     const validOperations = ['set', 'append', 'merge', 'delete'];
-    if (!patch.operation || !validOperations.includes(patch.operation)) {
-      errors.push(`Patch operation ${index} has invalid operation: ${patch.operation}`);
+    if (typeof candidate.operation !== 'string' || !validOperations.includes(candidate.operation)) {
+      errors.push(`Patch operation ${index} has invalid operation: ${candidate.operation}`);
     }
   }
 
