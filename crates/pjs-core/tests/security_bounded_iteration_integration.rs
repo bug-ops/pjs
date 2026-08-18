@@ -7,8 +7,10 @@
 
 use pjson_rs::domain::{
     DomainError,
-    config::limits::{ALLOWED_SORT_FIELDS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET},
-    ports::repositories::{Pagination, SessionQueryCriteria, SessionQueryResult, SortOrder},
+    config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET},
+    ports::repositories::{
+        Pagination, SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder,
+    },
 };
 use pjson_rs::infrastructure::adapters::{
     generic_store::InMemoryStore,
@@ -61,33 +63,26 @@ mod entry_validation_tests {
     }
 
     #[test]
-    fn test_pagination_validation_rejects_invalid_sort_field() {
-        let pagination = Pagination {
-            offset: 0,
-            limit: 10,
-            sort_by: Some("malicious_field; DROP TABLE".to_string()),
-            sort_order: SortOrder::Ascending,
-        };
-
-        let result = pagination.validate();
-        assert!(result.is_err());
-        let err_msg = format!("{:?}", result.unwrap_err());
-        assert!(err_msg.contains("invalid sort_by"));
-    }
-
-    #[test]
-    fn test_pagination_validation_accepts_allowed_sort_fields() {
-        for field in ALLOWED_SORT_FIELDS {
+    fn test_pagination_sort_field_injection_unrepresentable() {
+        // `sort_by` is typed as `SessionSortField`, an exhaustive enum — an
+        // injection payload like "malicious_field; DROP TABLE" simply cannot
+        // be constructed, so there is no runtime whitelist left to bypass.
+        for field in [
+            SessionSortField::CreatedAt,
+            SessionSortField::UpdatedAt,
+            SessionSortField::StreamCount,
+            SessionSortField::TotalBytes,
+        ] {
             let pagination = Pagination {
                 offset: 0,
                 limit: 10,
-                sort_by: Some(field.to_string()),
+                sort_by: Some(field),
                 sort_order: SortOrder::Ascending,
             };
 
             assert!(
                 pagination.validate().is_ok(),
-                "field '{}' should be allowed",
+                "field '{:?}' should be allowed",
                 field
             );
         }
@@ -241,8 +236,8 @@ mod end_to_end_security_tests {
         // Step 2: Simulate user pagination input - should pass validation
         let user_pagination = Pagination {
             offset: 0,
-            limit: 50,                               // Within limits, larger than dataset
-            sort_by: Some("created_at".to_string()), // Valid field
+            limit: 50, // Within limits, larger than dataset
+            sort_by: Some(SessionSortField::CreatedAt),
             sort_order: SortOrder::Descending,
         };
 
@@ -307,16 +302,9 @@ mod end_to_end_security_tests {
     /// Tests that malicious input is rejected at entry point
     #[test]
     fn test_malicious_input_rejected_at_entry() {
-        // Attempt SQL injection in sort_by
-        let malicious_pagination = Pagination {
-            offset: 0,
-            limit: 10,
-            sort_by: Some("created_at; DELETE FROM sessions--".to_string()),
-            sort_order: SortOrder::Ascending,
-        };
-
-        let result = malicious_pagination.validate();
-        assert!(result.is_err(), "SQL injection attempt should be rejected");
+        // SQL-injection-style payloads in sort_by are no longer a runtime
+        // concern: `sort_by` is typed as `SessionSortField`, so a value like
+        // "created_at; DELETE FROM sessions--" cannot be constructed at all.
 
         // Attempt resource exhaustion via huge offset
         let dos_pagination = Pagination {
@@ -358,7 +346,6 @@ mod end_to_end_security_tests {
         const { assert!(MAX_PAGINATION_LIMIT > 0) };
         const { assert!(MAX_PAGINATION_LIMIT <= 10_000) }; // Industry standard range
         const { assert!(MAX_PAGINATION_OFFSET > 0) };
-        assert!(!ALLOWED_SORT_FIELDS.is_empty());
 
         // Verify infrastructure constants
         const { assert!(MAX_SCAN_LIMIT > 0) };

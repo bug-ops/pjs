@@ -16,8 +16,8 @@ pub use frame_store::InMemoryFrameStore;
 pub use gat_memory_repository::{GatInMemoryStreamRepository, GatInMemoryStreamStore};
 pub use generic_store::{InMemoryStore, SessionStore, StreamStore};
 pub use limits::{
-    ALLOWED_SORT_FIELDS, MAX_HEALTH_METRICS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
-    MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT,
+    MAX_HEALTH_METRICS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET, MAX_RESULTS_LIMIT,
+    MAX_SCAN_LIMIT,
 };
 pub use metrics_collector::{
     InMemoryMetricsCollector, PerformanceMetrics, SessionMetrics, StreamMetrics, TimestampedMetrics,

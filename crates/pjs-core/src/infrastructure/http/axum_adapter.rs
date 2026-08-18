@@ -752,7 +752,8 @@ pub struct SearchSessionsParams {
     /// the rejection goes through the API's standard JSON error envelope instead of axum's
     /// raw `Query`-extractor rejection body.
     pub state: Option<String>,
-    /// Field name to sort by; ignored if not in the allowed sort field list.
+    /// Field name to sort by: one of `created_at`, `updated_at`, `stream_count`,
+    /// `total_bytes`. Any other value is silently ignored (sorting is skipped), not rejected.
     pub sort_by: Option<String>,
     /// Sort direction (`"asc"`/`"ascending"` or `"desc"`/`"descending"`).
     pub sort_order: Option<String>,

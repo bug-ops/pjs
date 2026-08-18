@@ -18,6 +18,7 @@ use crate::domain::{
     value_objects::{Priority, SessionId},
 };
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -131,6 +132,25 @@ impl SessionQueryCriteria {
     }
 }
 
+/// Fields by which session query results can be sorted.
+///
+/// Every variant corresponds to an indexed field on `StreamSession`. Because
+/// this is an exhaustive enum rather than a raw field name, an unrecognized
+/// sort field is unrepresentable — callers can no longer construct a
+/// `Pagination` whose `sort_by` needs runtime whitelist validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSortField {
+    /// Sort by session creation timestamp.
+    CreatedAt,
+    /// Sort by session last-update timestamp.
+    UpdatedAt,
+    /// Sort by number of streams attached to the session.
+    StreamCount,
+    /// Sort by total bytes streamed within the session.
+    TotalBytes,
+}
+
 /// Pagination parameters
 #[derive(Debug, Clone)]
 pub struct Pagination {
@@ -138,8 +158,8 @@ pub struct Pagination {
     pub offset: usize,
     /// Maximum number of items to return.
     pub limit: usize,
-    /// Optional field name to sort by; must be in the allowed sort field list.
-    pub sort_by: Option<String>,
+    /// Optional field to sort by.
+    pub sort_by: Option<SessionSortField>,
     /// Sort direction applied to `sort_by`.
     pub sort_order: SortOrder,
 }
@@ -165,12 +185,9 @@ impl Pagination {
     /// - `limit` exceeds `MAX_PAGINATION_LIMIT` (1000)
     /// - `offset` exceeds `MAX_PAGINATION_OFFSET` (1_000_000)
     /// - `offset + limit` would overflow
-    /// - `sort_by` contains an invalid field name
     pub fn validate(&self) -> DomainResult<()> {
         use crate::domain::DomainError;
-        use crate::domain::config::limits::{
-            ALLOWED_SORT_FIELDS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
-        };
+        use crate::domain::config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET};
 
         if self.limit == 0 {
             return Err(DomainError::InvalidInput(
@@ -197,16 +214,6 @@ impl Pagination {
             return Err(DomainError::InvalidInput(
                 "pagination offset + limit would overflow".to_string(),
             ));
-        }
-
-        // Whitelist sort_by values
-        if let Some(ref sort_by) = self.sort_by
-            && !ALLOWED_SORT_FIELDS.contains(&sort_by.as_str())
-        {
-            return Err(DomainError::InvalidInput(format!(
-                "invalid sort_by field: {}. allowed: {:?}",
-                sort_by, ALLOWED_SORT_FIELDS
-            )));
         }
 
         Ok(())
@@ -590,12 +597,12 @@ mod tests {
         let pagination = Pagination {
             offset: 10,
             limit: 100,
-            sort_by: Some("created_at".to_string()),
+            sort_by: Some(SessionSortField::CreatedAt),
             sort_order: SortOrder::Descending,
         };
         assert_eq!(pagination.offset, 10);
         assert_eq!(pagination.limit, 100);
-        assert_eq!(pagination.sort_by, Some("created_at".to_string()));
+        assert_eq!(pagination.sort_by, Some(SessionSortField::CreatedAt));
         assert_eq!(pagination.sort_order, SortOrder::Descending);
     }
 
@@ -613,7 +620,7 @@ mod tests {
         let pagination = Pagination {
             offset: 5,
             limit: 25,
-            sort_by: Some("name".to_string()),
+            sort_by: Some(SessionSortField::UpdatedAt),
             sort_order: SortOrder::Ascending,
         };
         let cloned = pagination.clone();
@@ -685,26 +692,19 @@ mod tests {
     }
 
     #[test]
-    fn test_pagination_validate_invalid_sort_by_rejected() {
-        let pagination = Pagination {
-            offset: 0,
-            limit: 10,
-            sort_by: Some("invalid_field".to_string()),
-            sort_order: SortOrder::Ascending,
-        };
-        let result = pagination.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(format!("{}", err).contains("invalid sort_by"));
-    }
-
-    #[test]
-    fn test_pagination_validate_valid_sort_by_accepted() {
-        for field in ["created_at", "updated_at", "stream_count"] {
+    fn test_pagination_validate_any_sort_field_accepted() {
+        // An invalid sort field is unrepresentable now that `sort_by` is typed
+        // as `SessionSortField` — every constructible variant must validate.
+        for field in [
+            SessionSortField::CreatedAt,
+            SessionSortField::UpdatedAt,
+            SessionSortField::StreamCount,
+            SessionSortField::TotalBytes,
+        ] {
             let pagination = Pagination {
                 offset: 0,
                 limit: 10,
-                sort_by: Some(field.to_string()),
+                sort_by: Some(field),
                 sort_order: SortOrder::Ascending,
             };
             assert!(pagination.validate().is_ok());

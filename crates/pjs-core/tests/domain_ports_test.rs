@@ -5,8 +5,9 @@
 
 use pjson_rs::domain::ports::{
     BackpressureStrategy, CacheStatistics, ConnectionMetrics, ConnectionState, Pagination,
-    SessionQueryCriteria, SessionQueryResult, SortOrder, StreamFilter, StreamMetadata,
-    StreamStatistics, StreamStatus, SystemTimeProvider, TimeProvider, WriterConfig, WriterMetrics,
+    SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder, StreamFilter,
+    StreamMetadata, StreamStatistics, StreamStatus, SystemTimeProvider, TimeProvider, WriterConfig,
+    WriterMetrics,
 };
 use pjson_rs::domain::value_objects::Priority;
 use std::collections::HashMap;
@@ -68,13 +69,13 @@ fn test_pagination_custom() {
     let pagination = Pagination {
         offset: 100,
         limit: 20,
-        sort_by: Some("created_at".to_string()),
+        sort_by: Some(SessionSortField::CreatedAt),
         sort_order: SortOrder::Descending,
     };
 
     assert_eq!(pagination.offset, 100);
     assert_eq!(pagination.limit, 20);
-    assert_eq!(pagination.sort_by.unwrap(), "created_at");
+    assert_eq!(pagination.sort_by.unwrap(), SessionSortField::CreatedAt);
     assert_eq!(pagination.sort_order, SortOrder::Descending);
 }
 
@@ -83,7 +84,7 @@ fn test_pagination_clone() {
     let pagination = Pagination {
         offset: 50,
         limit: 25,
-        sort_by: Some("priority".to_string()),
+        sort_by: Some(SessionSortField::UpdatedAt),
         sort_order: SortOrder::Ascending,
     };
 

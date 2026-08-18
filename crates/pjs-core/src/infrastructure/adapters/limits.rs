@@ -26,9 +26,7 @@ pub const MAX_RESULTS_LIMIT: usize = 10_000;
 ///
 /// Infrastructure layer can depend on domain layer per Clean Architecture,
 /// so we re-export these constants instead of duplicating them.
-pub use crate::domain::config::limits::{
-    ALLOWED_SORT_FIELDS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
-};
+pub use crate::domain::config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET};
 
 /// Maximum number of health metrics per session.
 ///
@@ -59,7 +57,6 @@ mod tests {
         const { assert!(MAX_PAGINATION_LIMIT > 0) };
         assert_eq!(MAX_PAGINATION_OFFSET, 1_000_000);
         const { assert!(MAX_PAGINATION_OFFSET > 0) };
-        assert!(!ALLOWED_SORT_FIELDS.is_empty());
     }
 
     #[test]

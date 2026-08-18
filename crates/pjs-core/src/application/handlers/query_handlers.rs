@@ -172,15 +172,7 @@ where
                 ..SessionQueryCriteria::default()
             };
 
-            let sort_by = query.sort_by.map(|field| {
-                match field {
-                    SessionSortField::CreatedAt => "created_at",
-                    SessionSortField::UpdatedAt => "updated_at",
-                    SessionSortField::StreamCount => "stream_count",
-                    SessionSortField::TotalBytes => "total_bytes",
-                }
-                .to_string()
-            });
+            let sort_by = query.sort_by;
             let sort_order = match query.sort_order {
                 Some(SortOrder::Descending) => RepoSortOrder::Descending,
                 _ => RepoSortOrder::Ascending,
@@ -826,14 +818,21 @@ mod tests {
                     .collect();
                 let total_count = sessions.len();
 
-                if let Some(sort_field) = &pagination.sort_by {
+                if let Some(sort_field) = pagination.sort_by {
                     sessions.sort_by(|a, b| {
-                        let cmp = match sort_field.as_str() {
-                            "created_at" => a.created_at().cmp(&b.created_at()),
-                            "updated_at" => a.updated_at().cmp(&b.updated_at()),
-                            "stream_count" => a.streams().len().cmp(&b.streams().len()),
-                            "total_bytes" => a.stats().total_bytes.cmp(&b.stats().total_bytes),
-                            _ => std::cmp::Ordering::Equal,
+                        let cmp = match sort_field {
+                            crate::domain::ports::SessionSortField::CreatedAt => {
+                                a.created_at().cmp(&b.created_at())
+                            }
+                            crate::domain::ports::SessionSortField::UpdatedAt => {
+                                a.updated_at().cmp(&b.updated_at())
+                            }
+                            crate::domain::ports::SessionSortField::StreamCount => {
+                                a.streams().len().cmp(&b.streams().len())
+                            }
+                            crate::domain::ports::SessionSortField::TotalBytes => {
+                                a.stats().total_bytes.cmp(&b.stats().total_bytes)
+                            }
                         };
                         match pagination.sort_order {
                             RepoSortOrder::Ascending => cmp,

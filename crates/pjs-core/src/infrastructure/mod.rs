@@ -14,11 +14,11 @@ pub mod schema_repository;
 pub mod websocket;
 
 pub use adapters::{
-    ALLOWED_SORT_FIELDS, GatInMemoryStreamRepository, GatInMemoryStreamStore,
-    InMemoryEventPublisher, InMemoryFrameStore, InMemoryMetricsCollector, InMemoryStore,
-    MAX_HEALTH_METRICS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET, MAX_RESULTS_LIMIT,
-    MAX_SCAN_LIMIT, PerformanceMetrics, SessionMetrics, SessionStore, StoredEvent, StreamMetrics,
-    StreamStore, TimestampedMetrics,
+    GatInMemoryStreamRepository, GatInMemoryStreamStore, InMemoryEventPublisher,
+    InMemoryFrameStore, InMemoryMetricsCollector, InMemoryStore, MAX_HEALTH_METRICS,
+    MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET, MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT,
+    PerformanceMetrics, SessionMetrics, SessionStore, StoredEvent, StreamMetrics, StreamStore,
+    TimestampedMetrics,
 };
 pub use bounded_channel::{
     ByteBoundedSender, Envelope, SendError, TrySendError, byte_bounded_channel,
