@@ -9,7 +9,9 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 use crate::DomainError;
+#[cfg(test)]
 use crate::value_objects::MAX_DESERIALIZE_DEPTH;
+use crate::value_objects::enter_deserialize_depth;
 
 thread_local! {
     /// Per-thread nesting depth reached while deserializing [`Schema`].
@@ -30,12 +32,12 @@ thread_local! {
     /// level in 2-3 JSON container tokens (varies by variant — an `Object`
     /// level costs 3, an `Array` level costs 2), `serde_json`'s own
     /// ~128-level structural limit is reached at a *lower* `Schema` nesting
-    /// depth than [`MAX_DESERIALIZE_DEPTH`] (as low as ~43 for `Object`-heavy
+    /// depth than [`crate::value_objects::MAX_DESERIALIZE_DEPTH`] (as low as ~43 for `Object`-heavy
     /// nesting) and fires first with its own `"recursion limit exceeded"`
     /// message — this guard's own `"Schema nesting depth exceeds maximum of
-    /// {MAX_DESERIALIZE_DEPTH}"` message is reachable in practice only via
-    /// formats with no competing structural recursion limit of their own
-    /// (MessagePack, CBOR, etc.), which is exactly the gap this guard closes.
+    /// N"` message is reachable in practice only via formats with no
+    /// competing structural recursion limit of their own (MessagePack, CBOR,
+    /// etc.), which is exactly the gap this guard closes.
     ///
     /// `JsonData`'s guard threads depth through a
     /// [`serde::de::DeserializeSeed`]-based hand-written `Visitor`, which
@@ -47,50 +49,13 @@ thread_local! {
     /// through derive-generated code without hand-writing a full custom
     /// `Visitor` for all ten variants. A thread-local counter, incremented on
     /// entry to each of `Schema`'s three recursive field positions via
-    /// [`enter_schema_depth`] and decremented by [`SchemaDepthGuard`] on drop
-    /// (so the count restores correctly even when deserialization returns an
-    /// error or the call unwinds), is the practical alternative. Every
-    /// top-level `Schema::deserialize` call both starts and ends at depth 0
-    /// on its thread. Reuses [`MAX_DESERIALIZE_DEPTH`] rather than defining a
-    /// second constant of the same value — both types live in this crate, so
-    /// there is no cross-crate dependency-direction obstacle to sharing it
-    /// (unlike `pjson_rs::config::security::JsonLimits::max_depth`, which
-    /// `MAX_DESERIALIZE_DEPTH` itself matches but can't import from, since
-    /// the dependency direction is `pjs-core` -> `pjs-domain`).
+    /// [`enter_deserialize_depth`] and decremented by its returned
+    /// [`crate::value_objects::DepthGuard`] on drop (so the count restores
+    /// correctly even when deserialization returns an error or the call
+    /// unwinds), is the practical alternative. Every top-level
+    /// `Schema::deserialize` call both starts and ends at depth 0 on its
+    /// thread.
     static SCHEMA_DESERIALIZE_DEPTH: Cell<usize> = const { Cell::new(0) };
-}
-
-/// RAII guard that decrements the thread-local schema deserialization depth
-/// counter on drop, restoring it even when the guarded deserialization call
-/// returns an error.
-struct SchemaDepthGuard;
-
-impl Drop for SchemaDepthGuard {
-    fn drop(&mut self) {
-        SCHEMA_DESERIALIZE_DEPTH.with(|depth| depth.set(depth.get() - 1));
-    }
-}
-
-/// Enters one nesting level of [`Schema`] deserialization.
-///
-/// Returns a guard that must be held for the duration of the nested
-/// deserialization call and released (dropped) afterward. Rejects with a
-/// deserialization error, rather than recursing further, once
-/// [`MAX_DESERIALIZE_DEPTH`] is reached.
-fn enter_schema_depth<E>() -> Result<SchemaDepthGuard, E>
-where
-    E: serde::de::Error,
-{
-    SCHEMA_DESERIALIZE_DEPTH.with(|depth| {
-        let current = depth.get();
-        if current >= MAX_DESERIALIZE_DEPTH {
-            return Err(E::custom(format_args!(
-                "Schema nesting depth exceeds maximum of {MAX_DESERIALIZE_DEPTH}"
-            )));
-        }
-        depth.set(current + 1);
-        Ok(SchemaDepthGuard)
-    })
 }
 
 /// Bounded-depth `deserialize_with` for `Schema::Array`'s `items` field.
@@ -98,7 +63,7 @@ fn deserialize_boxed_schema_option<'de, D>(deserializer: D) -> Result<Option<Box
 where
     D: Deserializer<'de>,
 {
-    let _guard = enter_schema_depth::<D::Error>()?;
+    let _guard = enter_deserialize_depth::<D::Error>(&SCHEMA_DESERIALIZE_DEPTH, "Schema")?;
     Option::<Box<Schema>>::deserialize(deserializer)
 }
 
@@ -109,7 +74,7 @@ fn deserialize_schema_properties<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    let _guard = enter_schema_depth::<D::Error>()?;
+    let _guard = enter_deserialize_depth::<D::Error>(&SCHEMA_DESERIALIZE_DEPTH, "Schema")?;
     HashMap::<String, Schema>::deserialize(deserializer)
 }
 
@@ -118,7 +83,7 @@ fn deserialize_schema_list<'de, D>(deserializer: D) -> Result<SmallVec<[Box<Sche
 where
     D: Deserializer<'de>,
 {
-    let _guard = enter_schema_depth::<D::Error>()?;
+    let _guard = enter_deserialize_depth::<D::Error>(&SCHEMA_DESERIALIZE_DEPTH, "Schema")?;
     SmallVec::<[Box<Schema>; 4]>::deserialize(deserializer)
 }
 
