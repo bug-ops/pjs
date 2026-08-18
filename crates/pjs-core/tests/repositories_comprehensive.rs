@@ -13,8 +13,8 @@
 use chrono::Utc;
 use pjson_rs::domain::{
     ports::repositories::{
-        CacheStatistics, Pagination, SessionQueryCriteria, SortOrder, StreamFilter, StreamMetadata,
-        StreamStatus,
+        CacheStatistics, Pagination, SessionQueryCriteria, SessionSortField, SortOrder,
+        StreamFilter, StreamMetadata, StreamStatus,
     },
     value_objects::Priority,
 };
@@ -38,13 +38,13 @@ fn test_pagination_custom() {
     let pagination = Pagination {
         offset: 10,
         limit: 100,
-        sort_by: Some("created_at".to_string()),
+        sort_by: Some(SessionSortField::CreatedAt),
         sort_order: SortOrder::Descending,
     };
 
     assert_eq!(pagination.offset, 10);
     assert_eq!(pagination.limit, 100);
-    assert_eq!(pagination.sort_by, Some("created_at".to_string()));
+    assert_eq!(pagination.sort_by, Some(SessionSortField::CreatedAt));
     assert_eq!(pagination.sort_order, SortOrder::Descending);
 }
 
@@ -628,7 +628,7 @@ fn test_pagination_with_sorting() {
     let pagination = Pagination {
         offset: 0,
         limit: 20,
-        sort_by: Some("created_at".to_string()),
+        sort_by: Some(SessionSortField::CreatedAt),
         sort_order: SortOrder::Descending,
     };
 

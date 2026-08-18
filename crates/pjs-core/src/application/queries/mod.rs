@@ -115,19 +115,12 @@ pub struct SessionFilters {
     pub has_active_streams: Option<bool>,
 }
 
-/// Fields to sort sessions by
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionSortField {
-    /// Sort by session creation timestamp.
-    CreatedAt,
-    /// Sort by session last-update timestamp.
-    UpdatedAt,
-    /// Sort by number of streams attached to the session.
-    StreamCount,
-    /// Sort by total bytes streamed within the session.
-    TotalBytes,
-}
+/// Fields to sort sessions by.
+///
+/// Re-exported from the domain layer: [`Pagination`](crate::domain::ports::Pagination)
+/// consumes the same type directly, so a query's `sort_by` needs no conversion
+/// before reaching the repository port.
+pub use crate::domain::ports::SessionSortField;
 
 /// Sort order
 #[derive(Debug, Clone, Serialize, Deserialize)]

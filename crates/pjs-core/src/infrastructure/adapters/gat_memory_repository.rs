@@ -55,8 +55,8 @@ use crate::domain::{
     events::DomainEvent,
     ports::{
         Pagination, PriorityDistribution, SessionHealthSnapshot, SessionQueryCriteria,
-        SessionQueryResult, SortOrder, StreamFilter, StreamRepositoryGat, StreamStatistics,
-        StreamStatus, StreamStoreGat,
+        SessionQueryResult, SessionSortField, SortOrder, StreamFilter, StreamRepositoryGat,
+        StreamStatistics, StreamStatus, StreamStoreGat,
     },
     value_objects::{JsonData, Priority, SessionId, StreamId},
 };
@@ -246,13 +246,12 @@ impl GatInMemoryStreamRepository {
     }
 
     /// Helper: Compare sessions by field for sorting
-    fn compare_by_field(a: &StreamSession, b: &StreamSession, field: &str) -> Ordering {
+    fn compare_by_field(a: &StreamSession, b: &StreamSession, field: SessionSortField) -> Ordering {
         match field {
-            "created_at" => a.created_at().cmp(&b.created_at()),
-            "updated_at" => a.updated_at().cmp(&b.updated_at()),
-            "stream_count" => a.streams().len().cmp(&b.streams().len()),
-            "total_bytes" => a.stats().total_bytes.cmp(&b.stats().total_bytes),
-            _ => Ordering::Equal,
+            SessionSortField::CreatedAt => a.created_at().cmp(&b.created_at()),
+            SessionSortField::UpdatedAt => a.updated_at().cmp(&b.updated_at()),
+            SessionSortField::StreamCount => a.streams().len().cmp(&b.streams().len()),
+            SessionSortField::TotalBytes => a.stats().total_bytes.cmp(&b.stats().total_bytes),
         }
     }
 
@@ -557,7 +556,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
             let total_count = filtered.len();
 
             // Sort if sort_by specified
-            if let Some(sort_field) = &pagination.sort_by {
+            if let Some(sort_field) = pagination.sort_by {
                 filtered.sort_by(|a, b| {
                     let cmp = Self::compare_by_field(a, b, sort_field);
                     match pagination.sort_order {
@@ -1197,7 +1196,7 @@ mod tests {
 
         // Sort by stream_count descending
         let pagination = Pagination {
-            sort_by: Some("stream_count".to_string()),
+            sort_by: Some(SessionSortField::StreamCount),
             sort_order: SortOrder::Descending,
             ..Default::default()
         };
