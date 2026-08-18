@@ -6,8 +6,12 @@
 //!
 //! # Security
 //!
-//! Every decompression is routed through `CompressionBombProtector`, which streams the decoder
-//! output and aborts if decompressed size or ratio exceeds configured limits.
+//! [`SecureCompressor::decompress_protected`] and [`SecureCompressor::decompress_nested`] route
+//! decompression through `CompressionBombProtector`, which streams the decoder output and aborts
+//! if decompressed size or ratio exceeds configured limits. These methods are fully implemented
+//! and tested, but currently have no production callers in this codebase. The only live usage
+//! of [`SecureCompressor`] today is outbound compression via [`SecureCompressor::compress`],
+//! which compresses trusted server output without decompression.
 //!
 //! # In-process only
 //!

@@ -97,8 +97,42 @@ pub trait PartialJsonParser: private::Sealed {
 pub struct PartialParseResult {
     /// Structurally complete fragment recovered from the input.
     ///
-    /// For input `{"a":1,"b":[2,3` this is `{"a": 1}` — the trailing open
-    /// array is dropped because it is not yet closed.
+    /// Partial values keep all fully-parsed elements recovered so far. Only
+    /// the syntactically incomplete trailing token (one that would require
+    /// more bytes to be valid) is dropped. For example, given input
+    /// `{"a":1,"b":[2,3` (missing closing `]` for the array), the result
+    /// includes both the complete key `"a"` and the array `[2,3]` with its
+    /// two fully-parsed elements; only the truncation point (right after `3`)
+    /// is reported in `consumed`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::parser::partial::{JiterPartialParser, PartialJsonParser};
+    /// use pjson_rs_domain::value_objects::JsonData;
+    ///
+    /// let parser = JiterPartialParser::new(Default::default());
+    /// let result = parser.parse_partial(b"{\"a\":1,\"b\":[2,3").unwrap();
+    ///
+    /// // The value includes both the complete key-value pair and the array with its elements.
+    /// if let JsonData::Object(map) = &result.value {
+    ///     assert_eq!(map.get("a"), Some(&JsonData::Integer(1)));
+    ///     // The array "b" contains both fully-parsed elements [2, 3]
+    ///     if let Some(JsonData::Array(arr)) = map.get("b") {
+    ///         assert_eq!(arr.len(), 2);
+    ///         assert_eq!(arr[0], JsonData::Integer(2));
+    ///         assert_eq!(arr[1], JsonData::Integer(3));
+    ///     } else {
+    ///         panic!("expected array at key 'b'");
+    ///     }
+    /// } else {
+    ///     panic!("expected object");
+    /// }
+    ///
+    /// // The truncation is reflected in consumed (input length = 15)
+    /// assert_eq!(result.consumed, 15); // entire input was consumed
+    /// assert!(!result.is_complete); // but parse is not complete (missing ']')
+    /// ```
     pub value: JsonData,
 
     /// Number of bytes successfully consumed. The unparsed tail is
