@@ -136,23 +136,23 @@ describe('PJSClient', () => {
       // Mock successful frames for streaming tests
       const mockFrames: Frame[] = [
         {
-          type: FrameType.Skeleton,
+          frame_type: FrameType.Skeleton,
           priority: Priority.Critical,
-          data: { id: null, name: null },
+          payload: { id: null, name: null },
           complete: false,
           timestamp: Date.now()
         },
         {
-          type: FrameType.Patch,
+          frame_type: FrameType.Patch,
           priority: Priority.High,
-          patches: [
+          payload: { patches: [
             { path: '$.id', value: 123, operation: 'set' as const },
             { path: '$.name', value: 'Test User', operation: 'set' as const }
-          ],
+          ] },
           timestamp: Date.now()
         },
         {
-          type: FrameType.Complete,
+          frame_type: FrameType.Complete,
           priority: Priority.Background,
           timestamp: Date.now()
         }
@@ -222,23 +222,23 @@ describe('PJSClient', () => {
     beforeEach(() => {
       const mockFrames: Frame[] = [
         {
-          type: FrameType.Skeleton,
+          frame_type: FrameType.Skeleton,
           priority: Priority.Critical,
-          data: { id: null, name: null },
+          payload: { id: null, name: null },
           complete: false,
           timestamp: Date.now()
         },
         {
-          type: FrameType.Patch,
+          frame_type: FrameType.Patch,
           priority: Priority.High,
-          patches: [
+          payload: { patches: [
             { path: '$.id', value: 1, operation: 'set' as const },
             { path: '$.name', value: 'Test', operation: 'set' as const }
-          ],
+          ] },
           timestamp: Date.now()
         },
         {
-          type: FrameType.Complete,
+          frame_type: FrameType.Complete,
           priority: Priority.Background,
           timestamp: Date.now()
         }
@@ -316,9 +316,9 @@ describe('PJSClient', () => {
 
       // Simulate patch before skeleton
       const patchFrame = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Medium,
-        patches: [],
+        payload: { patches: [] },
         timestamp: Date.now()
       };
 

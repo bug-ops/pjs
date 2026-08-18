@@ -21,9 +21,9 @@ describe('Utility Functions', () => {
   describe('validateFrame', () => {
     test('should validate skeleton frame', () => {
       const frame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: true },
+        payload: { test: true },
         timestamp: Date.now()
       };
 
@@ -32,11 +32,13 @@ describe('Utility Functions', () => {
 
     test('should validate patch frame', () => {
       const frame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High,
-        patches: [
-          { path: '$.test', value: 'value', operation: 'set' }
-        ],
+        payload: {
+          patches: [
+            { path: '$.test', value: 'value', operation: 'set' }
+          ]
+        },
         timestamp: Date.now()
       };
 
@@ -45,7 +47,7 @@ describe('Utility Functions', () => {
 
     test('should validate complete frame', () => {
       const frame = {
-        type: FrameType.Complete,
+        frame_type: FrameType.Complete,
         priority: Priority.Background,
         timestamp: Date.now()
       };
@@ -55,7 +57,7 @@ describe('Utility Functions', () => {
 
     test('should reject invalid frame type', () => {
       const frame = {
-        type: 'invalid',
+        frame_type: 'invalid',
         priority: Priority.Medium
       };
 
@@ -64,16 +66,16 @@ describe('Utility Functions', () => {
 
     test('should reject frame without priority', () => {
       const frame = {
-        type: FrameType.Skeleton,
-        data: {}
+        frame_type: FrameType.Skeleton,
+        payload: {}
       };
 
       expect(validateFrame(frame)).toBe(false);
     });
 
-    test('should reject skeleton frame without data', () => {
+    test('should reject skeleton frame without payload', () => {
       const frame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical
       };
 
@@ -82,7 +84,7 @@ describe('Utility Functions', () => {
 
     test('should reject patch frame without patches', () => {
       const frame = {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: Priority.High
       };
 

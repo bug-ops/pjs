@@ -39,9 +39,9 @@ describe('Full Stream Integration', () => {
     // Mock transport for full workflow
     const mockFrames: Frame[] = [
       {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: {
+        payload: {
           user: {
             id: null,
             name: null,
@@ -66,34 +66,34 @@ describe('Full Stream Integration', () => {
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Critical,
-        patches: [
+        payload: { patches: [
           { path: '$.user.id', value: 12345, operation: 'set' as const }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           { path: '$.user.name', value: 'John Doe', operation: 'set' as const },
           { path: '$.user.email', value: 'john@example.com', operation: 'set' as const }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           { path: '$.user.profile.avatar', value: 'avatar.jpg', operation: 'set' as const }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Medium,
-        patches: [
+        payload: { patches: [
           { 
             path: '$.posts', 
             value: [
@@ -102,13 +102,13 @@ describe('Full Stream Integration', () => {
             ], 
             operation: 'append' as const 
           }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Low,
-        patches: [
+        payload: { patches: [
           { 
             path: '$.user.profile', 
             value: { 
@@ -117,24 +117,24 @@ describe('Full Stream Integration', () => {
             }, 
             operation: 'merge' as const 
           }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Background,
-        patches: [
+        payload: { patches: [
           { path: '$.analytics.views', value: 1250, operation: 'set' as const },
           { path: '$.analytics.likes', value: 89, operation: 'set' as const },
           { path: '$.analytics.shares', value: 23, operation: 'set' as const }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Complete as FrameType.Complete,
+        frame_type: FrameType.Complete as FrameType.Complete,
         priority: Priority.Background,
         timestamp: Date.now(),
-        checksum: 'sha256:abcd1234'
+        payload: { checksum: 'sha256:abcd1234' }
       }
     ];
 
@@ -248,47 +248,47 @@ describe('Full Stream Integration', () => {
     // Mock progressive frames
     const mockFrames: Frame[] = [
       {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { status: null, user: { id: null }, content: null },
+        payload: { status: null, user: { id: null }, content: null },
         complete: false,
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Critical,
-        patches: [
+        payload: { patches: [
           { path: '$.status', value: 'active', operation: 'set' as const },
           { path: '$.user.id', value: 999, operation: 'set' as const }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           { path: '$.user.name', value: 'Alice Smith', operation: 'set' as const }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Medium,
-        patches: [
+        payload: { patches: [
           { path: '$.content', value: 'Lorem ipsum dolor sit amet...', operation: 'set' as const }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Low,
-        patches: [
+        payload: { patches: [
           { path: '$.metadata', value: { created: '2024-01-01' }, operation: 'set' as const }
-        ],
+        ] },
         timestamp: Date.now()
       },
       {
-        type: FrameType.Complete as FrameType.Complete,
+        frame_type: FrameType.Complete as FrameType.Complete,
         priority: Priority.Background,
         timestamp: Date.now()
       }
@@ -369,9 +369,9 @@ describe('Full Stream Integration', () => {
         // Send invalid frame after skeleton
         setTimeout(() => {
           const skeleton: SkeletonFrame = {
-            type: FrameType.Skeleton,
+            frame_type: FrameType.Skeleton,
             priority: Priority.Critical,
-            data: { test: null },
+            payload: { test: null },
             complete: false,
             timestamp: Date.now()
           };
@@ -380,9 +380,9 @@ describe('Full Stream Integration', () => {
 
         setTimeout(() => {
           const invalidFrame = {
-            type: 'invalid_type',
+            frame_type: 'invalid_type',
             priority: Priority.High,
-            data: {}
+            payload: {}
           };
           client.emit(PJSEvent.FrameReceived, { frame: invalidFrame as any });
         }, 50);
@@ -417,9 +417,9 @@ describe('Full Stream Integration', () => {
         if (endpoint === '/api/user1') {
           setTimeout(() => {
             const skeleton: SkeletonFrame = {
-              type: FrameType.Skeleton,
+              frame_type: FrameType.Skeleton,
               priority: Priority.Critical,
-              data: { user: { id: null, name: null } },
+              payload: { user: { id: null, name: null } },
               complete: false,
               timestamp: Date.now()
             };
@@ -428,12 +428,12 @@ describe('Full Stream Integration', () => {
 
           setTimeout(() => {
             const patch = {
-              type: FrameType.Patch as FrameType.Patch,
+              frame_type: FrameType.Patch as FrameType.Patch,
               priority: Priority.High,
-              patches: [
+              payload: { patches: [
                 { path: '$.user.id', value: 1, operation: 'set' as const },
                 { path: '$.user.name', value: 'User One', operation: 'set' as const }
-              ],
+              ] },
               timestamp: Date.now()
             };
             client.emit(PJSEvent.FrameReceived, { frame: patch });
@@ -441,7 +441,7 @@ describe('Full Stream Integration', () => {
 
           setTimeout(() => {
             const complete = {
-              type: FrameType.Complete as FrameType.Complete,
+              frame_type: FrameType.Complete as FrameType.Complete,
               priority: Priority.Background,
               timestamp: Date.now()
             };

@@ -44,7 +44,7 @@ export function validateFrame(frame: any): frame is Frame {
     }
 
     // Check required fields
-    if (!frame.type || !Object.values(FrameType).includes(frame.type)) {
+    if (!frame.frame_type || !Object.values(FrameType).includes(frame.frame_type)) {
       return false;
     }
 
@@ -53,13 +53,13 @@ export function validateFrame(frame: any): frame is Frame {
     }
 
     // Type-specific validation
-    switch (frame.type) {
+    switch (frame.frame_type) {
       case FrameType.Skeleton:
-        return frame.data !== undefined;
-        
+        return frame.payload !== undefined;
+
       case FrameType.Patch:
-        return Array.isArray(frame.patches) && frame.patches.length > 0;
-        
+        return Array.isArray(frame.payload?.patches) && frame.payload.patches.length > 0;
+
       case FrameType.Complete:
         return true; // Complete frames are minimal
         

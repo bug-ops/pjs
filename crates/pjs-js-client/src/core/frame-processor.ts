@@ -38,13 +38,13 @@ export class FrameProcessor {
 
     const candidate = frame as Record<string, unknown>;
 
-    if (!candidate.type) {
-      errors.push('Frame missing type field');
+    if (!candidate.frame_type) {
+      errors.push('Frame missing frame_type field');
       return { isValid: false, errors };
     }
 
-    if (!Object.values(FrameType).includes(candidate.type as FrameType)) {
-      errors.push(`Invalid frame type: ${candidate.type}`);
+    if (!Object.values(FrameType).includes(candidate.frame_type as FrameType)) {
+      errors.push(`Invalid frame type: ${candidate.frame_type}`);
       return { isValid: false, errors };
     }
 
@@ -54,20 +54,21 @@ export class FrameProcessor {
       errors.push('Priority must be between 0 and 100');
     }
 
-    if (candidate.type === FrameType.Skeleton) {
-      if (candidate.data === undefined) {
-        errors.push('Skeleton frame must have data field');
+    if (candidate.frame_type === FrameType.Skeleton) {
+      if (candidate.payload === undefined) {
+        errors.push('Skeleton frame must have payload field');
       }
     }
 
-    if (candidate.type === FrameType.Patch) {
-      if (!Array.isArray(candidate.patches)) {
-        errors.push('Patch frame must have patches array');
-      } else if (candidate.patches.length === 0) {
+    if (candidate.frame_type === FrameType.Patch) {
+      const payload = candidate.payload as Record<string, unknown> | undefined;
+      if (!payload || !Array.isArray(payload.patches)) {
+        errors.push('Patch frame must have payload.patches array');
+      } else if (payload.patches.length === 0) {
         errors.push('Patch frame must have at least one patch operation');
       } else {
-        for (let i = 0; i < candidate.patches.length; i++) {
-          this.validatePatchOperations(candidate.patches[i], i, errors);
+        for (let i = 0; i < payload.patches.length; i++) {
+          this.validatePatchOperations(payload.patches[i], i, errors);
         }
       }
     }
@@ -82,7 +83,7 @@ export class FrameProcessor {
     accepted: boolean;
     error?: { type: PJSErrorType; message: string };
   } {
-    const candidate = frame as { type: FrameType; priority: number };
+    const candidate = frame as { frame_type: FrameType; priority: number };
 
     if (this.streamComplete) {
       return {
@@ -94,7 +95,7 @@ export class FrameProcessor {
       };
     }
 
-    if (candidate.type === FrameType.Patch && this.expectedFrameType === FrameType.Skeleton) {
+    if (candidate.frame_type === FrameType.Patch && this.expectedFrameType === FrameType.Skeleton) {
       return {
         accepted: false,
         error: {
@@ -104,7 +105,7 @@ export class FrameProcessor {
       };
     }
 
-    if (candidate.type === FrameType.Skeleton && this.expectedFrameType === FrameType.Patch) {
+    if (candidate.frame_type === FrameType.Skeleton && this.expectedFrameType === FrameType.Patch) {
       return {
         accepted: false,
         error: {
@@ -114,7 +115,7 @@ export class FrameProcessor {
       };
     }
 
-    if (candidate.type === FrameType.Patch) {
+    if (candidate.frame_type === FrameType.Patch) {
       if (this.lastPatchPriority !== null && candidate.priority > this.lastPatchPriority) {
         return {
           accepted: false,
@@ -130,12 +131,12 @@ export class FrameProcessor {
     this.framesProcessed++;
     this.priorityDistribution[candidate.priority] = (this.priorityDistribution[candidate.priority] ?? 0) + 1;
 
-    if (candidate.type === FrameType.Skeleton) {
+    if (candidate.frame_type === FrameType.Skeleton) {
       this.expectedFrameType = FrameType.Patch;
-    } else if (candidate.type === FrameType.Patch) {
+    } else if (candidate.frame_type === FrameType.Patch) {
       this.lastPatchPriority = candidate.priority;
       this.patchesApplied++;
-    } else if (candidate.type === FrameType.Complete) {
+    } else if (candidate.frame_type === FrameType.Complete) {
       this.streamComplete = true;
     }
 

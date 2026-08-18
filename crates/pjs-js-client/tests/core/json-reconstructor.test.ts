@@ -18,9 +18,9 @@ describe('JsonReconstructor', () => {
   describe('Skeleton Processing', () => {
     test('should process skeleton frame', () => {
       const skeletonFrame: SkeletonFrame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: {
+        payload: {
           user: {
             id: null,
             name: null,
@@ -38,15 +38,15 @@ describe('JsonReconstructor', () => {
       const result = reconstructor.processSkeleton(skeletonFrame);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual(skeletonFrame.data);
-      expect(reconstructor.getCurrentState()).toEqual(skeletonFrame.data);
+      expect(result.data).toEqual(skeletonFrame.payload);
+      expect(reconstructor.getCurrentState()).toEqual(skeletonFrame.payload);
     });
 
     test('should reject invalid skeleton frame', () => {
       const invalidFrame = {
-        type: FrameType.Skeleton as FrameType.Skeleton,
+        frame_type: FrameType.Skeleton as FrameType.Skeleton,
         priority: Priority.Critical,
-        // Missing data field
+        // Missing payload field
         complete: false,
         timestamp: Date.now()
       } as any;
@@ -59,9 +59,9 @@ describe('JsonReconstructor', () => {
 
     test('should reject skeleton when already initialized', () => {
       const skeletonFrame: SkeletonFrame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: true },
+        payload: { test: true },
         complete: false,
         timestamp: Date.now()
       };
@@ -81,9 +81,9 @@ describe('JsonReconstructor', () => {
     beforeEach(() => {
       // Initialize with skeleton
       const skeleton: SkeletonFrame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: {
+        payload: {
           user: {
             id: null,
             name: null,
@@ -104,9 +104,9 @@ describe('JsonReconstructor', () => {
 
     test('should apply simple patch', () => {
       const patchFrame = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.user.id',
             value: 123,
@@ -117,7 +117,7 @@ describe('JsonReconstructor', () => {
             value: 'John Doe',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -133,9 +133,9 @@ describe('JsonReconstructor', () => {
 
     test('should handle append operation for arrays', () => {
       const patchFrame = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Medium,
-        patches: [
+        payload: { patches: [
           {
             path: '$.posts',
             value: [
@@ -144,7 +144,7 @@ describe('JsonReconstructor', () => {
             ],
             operation: 'append' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -161,15 +161,15 @@ describe('JsonReconstructor', () => {
     test('should handle merge operation for objects', () => {
       // First set some initial data
       const initialPatch = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.metadata',
             value: { created: '2024-01-01', version: 1 },
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -177,15 +177,15 @@ describe('JsonReconstructor', () => {
 
       // Then merge additional data
       const mergePatch = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Low,
-        patches: [
+        payload: { patches: [
           {
             path: '$.metadata',
             value: { updated: '2024-01-15', author: 'user123' },
             operation: 'merge' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -202,15 +202,15 @@ describe('JsonReconstructor', () => {
 
     test('should handle nested path application', () => {
       const patchFrame = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Medium,
-        patches: [
+        payload: { patches: [
           {
             path: '$.user.profile.settings.theme',
             value: 'dark',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -227,15 +227,15 @@ describe('JsonReconstructor', () => {
       const freshReconstructor = new JsonReconstructor();
       
       const patchFrame = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.test',
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -247,15 +247,15 @@ describe('JsonReconstructor', () => {
 
     test('should handle invalid JSON path', () => {
       const patchFrame = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: 'invalid.path', // Missing $.
             value: 'value',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -267,9 +267,9 @@ describe('JsonReconstructor', () => {
 
     test('should track patch application statistics', () => {
       const patchFrame = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.High,
-        patches: [
+        payload: { patches: [
           {
             path: '$.user.name',
             value: 'John',
@@ -280,7 +280,7 @@ describe('JsonReconstructor', () => {
             value: 'bad',
             operation: 'set' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 
@@ -298,9 +298,9 @@ describe('JsonReconstructor', () => {
 
       // Add skeleton
       const skeleton: SkeletonFrame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };
@@ -315,9 +315,9 @@ describe('JsonReconstructor', () => {
 
     test('should provide metadata', () => {
       const skeleton: SkeletonFrame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: null },
+        payload: { test: null },
         complete: false,
         timestamp: Date.now()
       };
@@ -336,9 +336,9 @@ describe('JsonReconstructor', () => {
     test('should reset state correctly', () => {
       // Initialize with data
       const skeleton: SkeletonFrame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: { test: 'value' },
+        payload: { test: 'value' },
         complete: false,
         timestamp: Date.now()
       };
@@ -361,9 +361,9 @@ describe('JsonReconstructor', () => {
   describe('Memory Management', () => {
     test('should track memory usage', () => {
       const skeleton: SkeletonFrame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: {
+        payload: {
           largeArray: new Array(1000).fill('data'),
           nestedObject: {
             level1: { level2: { level3: 'deep' } }
@@ -383,9 +383,9 @@ describe('JsonReconstructor', () => {
 
     test('should handle large object reconstruction', () => {
       const skeleton: SkeletonFrame = {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: Priority.Critical,
-        data: {
+        payload: {
           items: []
         },
         complete: false,
@@ -402,15 +402,15 @@ describe('JsonReconstructor', () => {
       }));
 
       const patchFrame = {
-        type: FrameType.Patch as FrameType.Patch,
+        frame_type: FrameType.Patch as FrameType.Patch,
         priority: Priority.Low,
-        patches: [
+        payload: { patches: [
           {
             path: '$.items',
             value: items,
             operation: 'append' as const
           }
-        ],
+        ] },
         timestamp: Date.now()
       };
 

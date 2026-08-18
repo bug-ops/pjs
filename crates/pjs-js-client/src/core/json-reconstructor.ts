@@ -32,14 +32,14 @@ export class JsonReconstructor {
       return { success: false, error: 'Reconstructor already initialized' };
     }
 
-    if (frame.data === undefined) {
-      return { success: false, error: 'Skeleton frame missing data field' };
+    if (frame.payload === undefined) {
+      return { success: false, error: 'Skeleton frame missing payload field' };
     }
 
-    this.state = this.deepClone(frame.data);
+    this.state = this.deepClone(frame.payload);
     this.initialized = true;
 
-    return { success: true, data: frame.data };
+    return { success: true, data: frame.payload };
   }
 
   /**
@@ -52,7 +52,7 @@ export class JsonReconstructor {
     totalPatches: number;
     error?: string;
   } {
-    const patches = frame.patches ?? [];
+    const patches = frame.payload?.patches ?? [];
     const total = patches.length;
 
     if (!this.initialized) {

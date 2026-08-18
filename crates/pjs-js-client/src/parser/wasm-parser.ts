@@ -138,7 +138,7 @@ export class WasmParser {
    *
    * await parser.stream(largeJson, {
    *   onFrame: (frame) => {
-   *     console.log('Frame:', frame.type, 'priority:', frame.priority);
+   *     console.log('Frame:', frame.frame_type, 'priority:', frame.priority);
    *     updateUI(frame);
    *   },
    *   onComplete: (stats) => {
@@ -262,31 +262,31 @@ export class WasmParser {
     // Convert to PJS Frame format
     if (frameType === FrameType.Skeleton) {
       return {
-        type: FrameType.Skeleton,
+        frame_type: FrameType.Skeleton,
         priority: frameData.priority,
-        data: payload,
+        sequence: Number(frameData.sequence),
+        payload,
         complete: false,
         metadata: {
-          sequence: Number(frameData.sequence),
           source: 'wasm-parser'
         }
       };
     } else if (frameType === FrameType.Patch) {
       return {
-        type: FrameType.Patch,
+        frame_type: FrameType.Patch,
         priority: frameData.priority,
-        patches: payload.patches || [],
+        sequence: Number(frameData.sequence),
+        payload: { patches: payload.patches || [] },
         metadata: {
-          sequence: Number(frameData.sequence),
           source: 'wasm-parser'
         }
       };
     } else {
       return {
-        type: FrameType.Complete,
+        frame_type: FrameType.Complete,
         priority: frameData.priority,
+        sequence: Number(frameData.sequence),
         metadata: {
-          sequence: Number(frameData.sequence),
           source: 'wasm-parser'
         }
       };
