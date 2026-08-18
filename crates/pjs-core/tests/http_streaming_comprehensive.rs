@@ -377,11 +377,8 @@ async fn test_priority_frame_stream_sse_format() {
 
 #[test]
 fn test_stream_error_serialization() {
-    let json_error = serde_json::Error::io(std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        "test error",
-    ));
-    let error = StreamTransportError::Serialization(json_error);
+    let sonic_error = <sonic_rs::Error as serde::ser::Error>::custom("test error");
+    let error = StreamTransportError::Serialization(sonic_error);
 
     assert!(error.to_string().contains("Serialization error"));
 }
