@@ -147,8 +147,7 @@ pub struct StoredEvent {
     /// Surrogate key minted with [`EventId::new`] when this record is
     /// stored/published. `DomainEvent` itself carries no identity, so this
     /// id does not correlate across independently-stored copies of "the
-    /// same" event (e.g. each destination in [`CompositeEventPublisher`]
-    /// mints its own).
+    /// same" event.
     pub id: EventId,
     /// Stringified event-type discriminant.
     pub event_type: String,
@@ -165,9 +164,8 @@ pub struct StoredEvent {
     /// under concurrency (the stamp is assigned before the entry is
     /// inserted), per-publisher-instance (restarts at 0 on every `new()`/
     /// `with_channel()`), not comparable across independent
-    /// `InMemoryEventPublisher` instances (e.g. different
-    /// [`CompositeEventPublisher`] destinations), and not an external
-    /// correlation key.
+    /// `InMemoryEventPublisher` instances, and not an external correlation
+    /// key.
     pub sequence: u64,
 }
 
@@ -454,136 +452,6 @@ impl EventPublisherGat for InMemoryEventPublisher {
     }
 }
 
-/// Event publisher variants for composite pattern
-#[derive(Clone)]
-pub enum EventPublisherVariant {
-    /// Variant backed by [`InMemoryEventPublisher`].
-    InMemory(InMemoryEventPublisher),
-}
-
-impl EventPublisherGat for EventPublisherVariant {
-    type PublishFuture<'a>
-        = impl std::future::Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    type PublishBatchFuture<'a>
-        = impl std::future::Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    fn publish(&self, event: DomainEvent) -> Self::PublishFuture<'_> {
-        async move {
-            match self {
-                EventPublisherVariant::InMemory(publisher) => publisher.publish(event).await,
-            }
-        }
-    }
-
-    fn publish_batch(&self, events: Vec<DomainEvent>) -> Self::PublishBatchFuture<'_> {
-        async move {
-            match self {
-                EventPublisherVariant::InMemory(publisher) => publisher.publish_batch(events).await,
-            }
-        }
-    }
-}
-
-/// Composite event publisher that sends to multiple destinations
-#[derive(Clone)]
-pub struct CompositeEventPublisher {
-    publishers: Vec<EventPublisherVariant>,
-    fail_fast: bool,
-}
-
-impl CompositeEventPublisher {
-    /// Build an empty composite publisher with no destinations.
-    pub fn new() -> Self {
-        Self {
-            publishers: Vec::new(),
-            fail_fast: false,
-        }
-    }
-
-    /// Append `publisher` to the list of destinations.
-    pub fn add_publisher(mut self, publisher: EventPublisherVariant) -> Self {
-        self.publishers.push(publisher);
-        self
-    }
-
-    /// When `enabled`, the first failing destination short-circuits the publish.
-    pub fn with_fail_fast(mut self, enabled: bool) -> Self {
-        self.fail_fast = enabled;
-        self
-    }
-}
-
-impl Default for CompositeEventPublisher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EventPublisherGat for CompositeEventPublisher {
-    type PublishFuture<'a>
-        = impl std::future::Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    type PublishBatchFuture<'a>
-        = impl std::future::Future<Output = DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    fn publish(&self, event: DomainEvent) -> Self::PublishFuture<'_> {
-        async move {
-            let mut errors = Vec::new();
-
-            for publisher in &self.publishers {
-                match publisher.publish(event.clone()).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        errors.push(e);
-                        if self.fail_fast {
-                            return Err(errors.into_iter().next().unwrap());
-                        }
-                    }
-                }
-            }
-
-            if errors.is_empty() {
-                Ok(())
-            } else {
-                Err(format!("Multiple publish errors: {errors:?}").into())
-            }
-        }
-    }
-
-    fn publish_batch(&self, events: Vec<DomainEvent>) -> Self::PublishBatchFuture<'_> {
-        async move {
-            let mut errors = Vec::new();
-
-            for publisher in &self.publishers {
-                match publisher.publish_batch(events.clone()).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        errors.push(e);
-                        if self.fail_fast {
-                            return Err(errors.into_iter().next().unwrap());
-                        }
-                    }
-                }
-            }
-
-            if errors.is_empty() {
-                Ok(())
-            } else {
-                Err(format!("Multiple batch publish errors: {errors:?}").into())
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,27 +669,6 @@ mod tests {
             ),
             "an event whose approximate size exceeds the byte budget must be rejected"
         );
-    }
-
-    #[tokio::test]
-    async fn test_composite_publisher() {
-        let publisher1 = InMemoryEventPublisher::new();
-        let publisher2 = InMemoryEventPublisher::new();
-
-        let composite = CompositeEventPublisher::new()
-            .add_publisher(EventPublisherVariant::InMemory(publisher1.clone()))
-            .add_publisher(EventPublisherVariant::InMemory(publisher2.clone()));
-
-        let session_id = SessionId::new();
-        let event = DomainEvent::SessionActivated {
-            session_id,
-            timestamp: chrono::Utc::now(),
-        };
-
-        composite.publish(event).await.unwrap();
-
-        assert_eq!(publisher1.event_count(), 1);
-        assert_eq!(publisher2.event_count(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
