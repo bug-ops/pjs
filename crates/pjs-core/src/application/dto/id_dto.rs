@@ -3,11 +3,7 @@
 //! Handles serialization/deserialization of `Id<T>` domain objects
 //! while keeping domain layer clean of serialization concerns.
 
-use crate::application::dto::priority_dto::{FromDto, ToDto};
-use crate::domain::{
-    DomainError,
-    value_objects::{Id, IdMarker, SessionMarker, StreamMarker},
-};
+use crate::domain::value_objects::{Id, IdMarker, SessionMarker, StreamMarker};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use uuid::Uuid;
@@ -69,20 +65,6 @@ impl<T: IdMarker> From<IdDto<T>> for Id<T> {
     }
 }
 
-impl<T: IdMarker> ToDto<IdDto<T>> for Id<T> {
-    fn to_dto(self) -> IdDto<T> {
-        IdDto::from(self)
-    }
-}
-
-impl<T: IdMarker> FromDto<IdDto<T>> for Id<T> {
-    type Error = DomainError;
-
-    fn from_dto(dto: IdDto<T>) -> Result<Self, Self::Error> {
-        Ok(Id::from(dto))
-    }
-}
-
 impl<T: IdMarker> std::fmt::Display for IdDto<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.uuid)
@@ -110,7 +92,7 @@ mod tests {
 
         assert_eq!(deserialized.uuid(), dto.uuid());
 
-        let domain_session_id = Id::from_dto(deserialized).unwrap();
+        let domain_session_id = Id::from(deserialized);
         assert_eq!(domain_session_id.as_uuid(), session_id.as_uuid());
     }
 
@@ -138,10 +120,10 @@ mod tests {
     fn test_conversion_traits() {
         let session_id = SessionId::new();
 
-        let dto = session_id.to_dto();
+        let dto: SessionIdDto = session_id.into();
         assert_eq!(dto.uuid(), session_id.as_uuid());
 
-        let converted = SessionId::from_dto(dto).unwrap();
+        let converted = SessionId::from(dto);
         assert_eq!(converted.as_uuid(), session_id.as_uuid());
     }
 

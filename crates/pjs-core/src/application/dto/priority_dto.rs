@@ -44,37 +44,6 @@ impl TryFrom<PriorityDto> for Priority {
     }
 }
 
-/// Utility trait for converting domain objects to DTOs
-pub trait ToDto<T> {
-    /// Convert this domain object into its DTO representation.
-    fn to_dto(self) -> T;
-}
-
-impl ToDto<PriorityDto> for Priority {
-    fn to_dto(self) -> PriorityDto {
-        PriorityDto::from(self)
-    }
-}
-
-/// Utility trait for converting DTOs to domain objects
-pub trait FromDto<T> {
-    /// Error returned when the DTO cannot be reconstructed into a valid domain object.
-    type Error;
-
-    /// Convert a DTO into its domain representation, validating invariants.
-    fn from_dto(dto: T) -> Result<Self, Self::Error>
-    where
-        Self: Sized;
-}
-
-impl FromDto<PriorityDto> for Priority {
-    type Error = DomainError;
-
-    fn from_dto(dto: PriorityDto) -> Result<Self, Self::Error> {
-        Priority::try_from(dto)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,7 +63,7 @@ mod tests {
         assert_eq!(deserialized.value(), 100);
 
         // Test conversion back to domain
-        let domain_priority = Priority::from_dto(deserialized).unwrap();
+        let domain_priority = Priority::try_from(deserialized).unwrap();
         assert_eq!(domain_priority, Priority::CRITICAL);
     }
 
@@ -108,15 +77,26 @@ mod tests {
     }
 
     #[test]
+    fn test_try_from_invalid_priority_dto_fails() {
+        // `PriorityDto` is `#[serde(transparent)]` over a bare `u8` and derives
+        // `Deserialize` directly, so it can be built from wire data that bypasses
+        // `PriorityDto::new`'s validation entirely.
+        let invalid_dto: PriorityDto = serde_json::from_str("0").unwrap();
+
+        let result = Priority::try_from(invalid_dto);
+        assert!(matches!(result, Err(DomainError::InvalidPriority(_))));
+    }
+
+    #[test]
     fn test_conversion_traits() {
         let priority = Priority::HIGH;
 
-        // Test ToDto trait
-        let dto = priority.to_dto();
+        // Test From trait
+        let dto: PriorityDto = priority.into();
         assert_eq!(dto.value(), 80);
 
-        // Test FromDto trait
-        let converted = Priority::from_dto(dto).unwrap();
+        // Test TryFrom trait
+        let converted = Priority::try_from(dto).unwrap();
         assert_eq!(converted, Priority::HIGH);
     }
 }

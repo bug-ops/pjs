@@ -34,10 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `pjs-demo`'s `interactive-demo-server` `/pjs-streaming` endpoint's `enable_streaming` query parameter is now wired up and authoritative when explicitly set (overriding `Accept`-header sniffing in either direction), instead of being an inert, dead-code field; both this endpoint and `/api/info` now document that it only requests the skeleton-only response — full SSE/chunked delivery is tracked separately (#163) (#399)
+- **BREAKING** `SearchSessionsQuery.filters.state` (`application::queries::SessionFilters::state`) is now typed as the domain `SessionState` enum instead of an unvalidated `String` — a typo like `state: "activ"` previously matched zero sessions silently instead of being rejected. The HTTP `GET /pjs/sessions/search?state=` query parameter now requires one of `SessionState`'s exact serialized spellings (`Initializing`, `Active`, `Closing`, `Completed`, `Failed`) and rejects anything else with `400` and the API's standard `{"error": ...}` JSON body — **this includes previously-working lowercase or mixed-case values** (e.g. `?state=active`, `?state=COMPLETED`), which matched case-insensitively under the old string-based repository comparison and now fail. `?state=` (present but empty) also now rejects with `400` instead of silently matching zero sessions (#414)
 
 ### Removed
 
 - `pjs-demo`'s `crates/pjs-demo/src/servers/performance_comparison.rs` — dead source with no `[[bin]]` entry and no `mod` declaration, never compiled by any build, referencing APIs (`StreamProcessor::process_json`) that no longer exist and a request schema mismatched with its own front-end HTML. Follow-up work originally scoped to it (`estimate_priority_distribution`, tracked as #405) no longer applies to any running server (#399)
+- **BREAKING** `pjson-rs`'s `application::dto::{ToDto, FromDto}` traits and their `Priority`/`Id<T>` implementations — they duplicated the standard `From`/`TryFrom` impls already defined on the same DTO types for no added behavior. Callers of `.to_dto()` migrate to `.into()`; callers of `.from_dto(x)` migrate to `x.try_into()` (`Priority`) or `x.into()` (`Id<T>`, which cannot fail) (#413)
 
 ## [0.6.3] - 2026-08-18
 
