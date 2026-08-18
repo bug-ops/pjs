@@ -6,14 +6,11 @@
 //! - Global pools (cow_hashmap, string_hashmap, byte_vec, string_vec)
 //! - Concurrent access patterns
 //! - Pool statistics tracking
-//! - Builder patterns (PooledResponseBuilder, PooledSSEBuilder)
 //! - Edge cases and error handling
 
-use pjson_rs::infrastructure::integration::ResponseBody;
 use pjson_rs::infrastructure::integration::object_pool::{
     ObjectPool, PoolStats, get_byte_vec, get_cow_hashmap, get_global_pool_stats,
     get_string_hashmap, get_string_vec,
-    pooled_builders::{PooledResponseBuilder, PooledSSEBuilder},
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -285,185 +282,6 @@ fn test_global_pool_stats_fields() {
     let _ = stats.total_reuse_ratio;
 }
 
-// === PooledResponseBuilder Tests ===
-
-#[test]
-fn test_pooled_response_builder_default() {
-    let builder = PooledResponseBuilder::default();
-    let response = builder.json(pjson_rs::domain::value_objects::JsonData::Null);
-
-    assert_eq!(response.status_code, 200);
-    assert_eq!(response.content_type, "application/json");
-}
-
-#[test]
-fn test_pooled_response_builder_status() {
-    let response = PooledResponseBuilder::new()
-        .status(404)
-        .json(pjson_rs::domain::value_objects::JsonData::Null);
-
-    assert_eq!(response.status_code, 404);
-}
-
-#[test]
-fn test_pooled_response_builder_header() {
-    let response = PooledResponseBuilder::new()
-        .header("X-Custom", "custom-value")
-        .json(pjson_rs::domain::value_objects::JsonData::Null);
-
-    assert_eq!(
-        response.headers.get("X-Custom"),
-        Some(&Cow::Borrowed("custom-value"))
-    );
-}
-
-#[test]
-fn test_pooled_response_builder_content_type() {
-    let response = PooledResponseBuilder::new()
-        .content_type("application/xml")
-        .json(pjson_rs::domain::value_objects::JsonData::Null);
-
-    assert_eq!(response.content_type, "application/xml");
-}
-
-#[test]
-fn test_pooled_response_builder_json() {
-    use pjson_rs::domain::value_objects::JsonData;
-
-    let response = PooledResponseBuilder::new()
-        .status(201)
-        .json(JsonData::String("test".to_string()));
-
-    assert_eq!(response.status_code, 201);
-    match response.body {
-        ResponseBody::Json(JsonData::String(s)) => assert_eq!(s, "test"),
-        _ => panic!("Expected JSON body"),
-    }
-}
-
-#[test]
-fn test_pooled_response_builder_binary() {
-    let data = vec![1, 2, 3, 4, 5];
-    let response = PooledResponseBuilder::new().binary(data.clone());
-
-    assert_eq!(response.content_type, "application/octet-stream");
-    match response.body {
-        ResponseBody::Binary(bytes) => assert_eq!(bytes, data),
-        _ => panic!("Expected Binary body"),
-    }
-}
-
-#[test]
-fn test_pooled_response_builder_chaining() {
-    use pjson_rs::domain::value_objects::JsonData;
-
-    let response = PooledResponseBuilder::new()
-        .status(201)
-        .header("X-Request-ID", "12345")
-        .header("X-Version", "1.0")
-        .content_type("application/json")
-        .json(JsonData::Integer(42));
-
-    assert_eq!(response.status_code, 201);
-    assert_eq!(response.headers.len(), 2);
-    assert_eq!(response.content_type, "application/json");
-}
-
-#[test]
-fn test_pooled_response_builder_multiple_headers() {
-    use pjson_rs::domain::value_objects::JsonData;
-
-    let response = PooledResponseBuilder::new()
-        .header("Header1", "Value1")
-        .header("Header2", "Value2")
-        .header("Header3", "Value3")
-        .json(JsonData::Null);
-
-    assert_eq!(response.headers.len(), 3);
-}
-
-// === PooledSSEBuilder Tests ===
-
-#[test]
-fn test_pooled_sse_builder_default() {
-    let builder = PooledSSEBuilder::default();
-    let response = builder.build();
-
-    assert_eq!(response.status_code, 200);
-    assert_eq!(response.content_type, "text/event-stream");
-}
-
-#[test]
-fn test_pooled_sse_builder_event() {
-    let response = PooledSSEBuilder::new().event("test event").build();
-
-    match response.body {
-        ResponseBody::ServerSentEvents(events) => {
-            assert_eq!(events.len(), 1);
-            assert!(events[0].contains("test event"));
-        }
-        _ => panic!("Expected ServerSentEvents body"),
-    }
-}
-
-#[test]
-fn test_pooled_sse_builder_multiple_events() {
-    let response = PooledSSEBuilder::new()
-        .event("event1")
-        .event("event2")
-        .event("event3")
-        .build();
-
-    match response.body {
-        ResponseBody::ServerSentEvents(events) => {
-            assert_eq!(events.len(), 3);
-        }
-        _ => panic!("Expected ServerSentEvents body"),
-    }
-}
-
-#[test]
-fn test_pooled_sse_builder_header() {
-    let response = PooledSSEBuilder::new().header("X-Custom", "value").build();
-
-    assert_eq!(
-        response.headers.get("X-Custom"),
-        Some(&Cow::Borrowed("value"))
-    );
-}
-
-#[test]
-fn test_pooled_sse_builder_default_headers() {
-    let response = PooledSSEBuilder::new().build();
-
-    // Should have default SSE headers
-    assert_eq!(
-        response.headers.get("Cache-Control"),
-        Some(&Cow::Borrowed("no-cache"))
-    );
-    assert_eq!(
-        response.headers.get("Connection"),
-        Some(&Cow::Borrowed("keep-alive"))
-    );
-}
-
-#[test]
-fn test_pooled_sse_builder_chaining() {
-    let response = PooledSSEBuilder::new()
-        .event("first")
-        .event("second")
-        .header("X-Stream-ID", "123")
-        .build();
-
-    assert_eq!(response.status_code, 200);
-    match response.body {
-        ResponseBody::ServerSentEvents(events) => {
-            assert_eq!(events.len(), 2);
-        }
-        _ => panic!("Expected ServerSentEvents body"),
-    }
-}
-
 // === Concurrent Access Tests ===
 
 #[test]
@@ -616,46 +434,6 @@ fn test_cleaning_pooled_object_take() {
     let obj = get_byte_vec();
     let vec = obj.take();
     assert_eq!(vec.len(), 0);
-}
-
-// === Response Body Integration Tests ===
-
-#[test]
-fn test_response_with_json_data() {
-    use pjson_rs::domain::value_objects::JsonData;
-    use std::collections::HashMap;
-
-    let mut map = HashMap::new();
-    map.insert("key".to_string(), JsonData::String("value".to_string()));
-
-    let response = PooledResponseBuilder::new()
-        .status(200)
-        .json(JsonData::Object(map));
-
-    match response.body {
-        ResponseBody::Json(JsonData::Object(_)) => {}
-        _ => panic!("Expected JSON object"),
-    }
-}
-
-#[test]
-fn test_response_with_empty_binary() {
-    let response = PooledResponseBuilder::new().binary(vec![]);
-
-    match response.body {
-        ResponseBody::Binary(bytes) => assert_eq!(bytes.len(), 0),
-        _ => panic!("Expected empty binary"),
-    }
-}
-
-#[test]
-fn test_sse_with_empty_events() {
-    let response = PooledSSEBuilder::new().build();
-
-    match response.body {
-        ResponseBody::ServerSentEvents(events) => assert_eq!(events.len(), 0),
-        _ => panic!("Expected empty events"),
-    }
 }
 
 // === Type-Specific Pool Tests ===

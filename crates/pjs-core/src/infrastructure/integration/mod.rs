@@ -1,24 +1,11 @@
-//! Clean universal framework-integration layer.
+//! Infrastructure integration utilities.
 //!
-//! Provides a unified interface for integrating PJS with any Rust web
-//! framework through zero-cost GAT abstractions.
+//! Object pooling and SIMD-accelerated serialization helpers. Not currently
+//! exercised by any production code path — their only caller was the
+//! `StreamingAdapter`/`UniversalAdapter` layer removed in #487; evaluating
+//! whether to remove these too is tracked in a follow-up issue.
 
-/// Core streaming adapter — contains all consolidated framework-integration types.
-pub mod streaming_adapter;
-
-/// Framework-specific universal adapter implementation.
-pub mod universal_adapter;
-
-/// Object pooling utilities used by the streaming adapter.
+/// Object pooling utilities.
 pub mod object_pool;
-/// SIMD-accelerated frame processing helpers used by the streaming adapter.
+/// SIMD-accelerated frame processing helpers.
 pub mod simd_acceleration;
-
-// Re-export all core types and traits from streaming_adapter
-pub use streaming_adapter::{
-    IntegrationError, IntegrationResult, ResponseBody, StreamingAdapter, StreamingAdapterExt,
-    StreamingFormat, UniversalRequest, UniversalResponse, streaming_helpers,
-};
-
-// Re-export universal adapter types
-pub use universal_adapter::{AdapterConfig, UniversalAdapter};
