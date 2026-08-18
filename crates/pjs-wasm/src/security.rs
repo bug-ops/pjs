@@ -342,6 +342,17 @@ mod tests {
     }
 
     #[test]
+    fn test_default_max_depth_matches_domain_guard() {
+        assert_eq!(
+            pjson_rs_domain::MAX_DESERIALIZE_DEPTH,
+            DEFAULT_MAX_DEPTH,
+            "pjs-wasm's DEFAULT_MAX_DEPTH should default to the same value as \
+             pjs-domain's MAX_DESERIALIZE_DEPTH hard ceiling, mirroring the same \
+             check in pjson-rs's SecurityConfig"
+        );
+    }
+
+    #[test]
     fn test_config_builder() {
         let config = SecurityConfig::new()
             .set_max_json_size(1024)

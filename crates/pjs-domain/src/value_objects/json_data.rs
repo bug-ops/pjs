@@ -500,7 +500,11 @@ impl<'de> Deserialize<'de> for JsonData {
 /// default. The constant cannot be shared, because the dependency direction
 /// is `pjs-core` -> `pjs-domain`, not the reverse; it is `pub` (re-exported at
 /// the crate root) so callers configuring their own limits can stay in sync
-/// with it rather than duplicating the value blindly.
+/// with it rather than duplicating the value blindly. If this value changes,
+/// update it alongside the guarding tests in `pjson-rs`'s
+/// `config::security::tests` (`test_max_deserialize_depth_matches_domain_guard_defaults`,
+/// `test_jiter_config_default_max_depth_matches_domain_guard`) and `pjs-wasm`'s
+/// `security::tests::test_default_max_depth_matches_domain_guard`.
 ///
 /// Together with this crate's internal per-collection preallocation cap,
 /// this bounds worst-case retained allocation for one `JsonData::deserialize`

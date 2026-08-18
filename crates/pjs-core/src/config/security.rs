@@ -496,6 +496,42 @@ mod tests {
     }
 
     #[test]
+    fn test_max_deserialize_depth_matches_domain_guard_defaults() {
+        // Message only claims the *default* coupling: `high_throughput()` (128)
+        // and `low_memory()` (32) intentionally diverge from
+        // `MAX_DESERIALIZE_DEPTH` and are not, and should not be, covered here.
+        // If this fails, lower the higher value to match — do not raise the
+        // lower one, since both bound stack depth per #464.
+        let msg = "pjs-domain's MAX_DESERIALIZE_DEPTH (a hard ceiling enforced by \
+                    JsonData's Deserialize impl) and pjs-core's JsonLimits::max_depth \
+                    (a configurable knob enforced by SecurityValidator) should default \
+                    to the same value, so a default JsonLimits does not admit input \
+                    that JsonData::deserialize would then reject";
+
+        assert_eq!(
+            pjson_rs_domain::MAX_DESERIALIZE_DEPTH,
+            SecurityConfig::default().json.max_depth,
+            "{msg}"
+        );
+        assert_eq!(
+            pjson_rs_domain::MAX_DESERIALIZE_DEPTH,
+            SecurityConfig::development().json.max_depth,
+            "{msg}"
+        );
+    }
+
+    #[cfg(feature = "partial-parse")]
+    #[test]
+    fn test_jiter_config_default_max_depth_matches_domain_guard() {
+        assert_eq!(
+            pjson_rs_domain::MAX_DESERIALIZE_DEPTH,
+            crate::parser::partial::JiterConfig::default().max_depth,
+            "JiterPartialParser's default max_depth should match pjs-domain's \
+             MAX_DESERIALIZE_DEPTH hard ceiling"
+        );
+    }
+
+    #[test]
     fn test_high_throughput_config() {
         let config = SecurityConfig::high_throughput();
         let default = SecurityConfig::default();
