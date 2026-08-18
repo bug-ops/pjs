@@ -141,16 +141,22 @@ where
     }
 
     /// Persist a mutated session and publish its accumulated domain events.
+    ///
+    /// Events are drained from `session` before the persisted clone is taken,
+    /// so the stored copy's `pending_events` buffer is empty and each
+    /// subsequent call only publishes events produced since the last save.
+    /// If `save_session` fails after the drain, those events are discarded
+    /// rather than retried — there is no path back into `pending_events`.
     async fn save_and_publish(&self, session: &mut StreamSession) -> ApplicationResult<()>
     where
         R: StreamRepositoryGat + Send + Sync,
         P: EventPublisherGat + Send + Sync,
     {
+        let events: Vec<_> = session.take_events().into_iter().collect();
         self.repository
             .save_session(session.clone())
             .await
             .map_err(ApplicationError::Domain)?;
-        let events: Vec<_> = session.take_events().into_iter().collect();
         self.event_publisher
             .publish_batch(events)
             .await
@@ -218,18 +224,7 @@ where
 
             let session_id = session.id();
 
-            // Save to repository
-            self.repository
-                .save_session(session.clone())
-                .await
-                .map_err(ApplicationError::Domain)?;
-
-            // Publish events in batch for better performance
-            let events: Vec<_> = session.take_events().into_iter().collect();
-            self.event_publisher
-                .publish_batch(events)
-                .await
-                .map_err(ApplicationError::Domain)?;
+            self.save_and_publish(&mut session).await?;
 
             Ok(session_id)
         }
@@ -688,6 +683,51 @@ mod tests {
 
         fn publish_batch(&self, _events: Vec<DomainEvent>) -> Self::PublishBatchFuture<'_> {
             async move { Ok(()) }
+        }
+    }
+
+    /// Event publisher that records each `publish_batch` call as its own
+    /// batch, so a test can inspect exactly which events each command's
+    /// `save_and_publish` call emitted.
+    struct RecordingEventPublisher {
+        batches: parking_lot::Mutex<Vec<Vec<DomainEvent>>>,
+    }
+
+    impl RecordingEventPublisher {
+        fn new() -> Self {
+            Self {
+                batches: parking_lot::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn batches(&self) -> Vec<Vec<DomainEvent>> {
+            self.batches.lock().clone()
+        }
+    }
+
+    impl EventPublisherGat for RecordingEventPublisher {
+        type PublishFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type PublishBatchFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn publish(&self, event: DomainEvent) -> Self::PublishFuture<'_> {
+            async move {
+                self.batches.lock().push(vec![event]);
+                Ok(())
+            }
+        }
+
+        fn publish_batch(&self, events: Vec<DomainEvent>) -> Self::PublishBatchFuture<'_> {
+            async move {
+                self.batches.lock().push(events);
+                Ok(())
+            }
         }
     }
 
@@ -1387,5 +1427,102 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(ApplicationError::Validation(_))));
+    }
+
+    /// Regression test for #466: `save_and_publish` must drain
+    /// `pending_events` before persisting the session, so a later command on
+    /// the same session neither finds stale events still queued in the
+    /// persisted copy nor republishes an earlier command's events.
+    #[tokio::test]
+    async fn test_save_and_publish_does_not_leak_pending_events_across_commands() {
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(RecordingEventPublisher::new());
+        let handler = SessionCommandHandler::new(repository.clone(), event_publisher.clone());
+
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        let after_create_session = repository.find_session(session_id).await.unwrap().unwrap();
+        assert!(
+            after_create_session.pending_events().is_empty(),
+            "persisted session must not carry undrained events after CreateSessionCommand"
+        );
+
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"test": "data"}).into(),
+                config: None,
+            })
+            .await
+            .unwrap();
+
+        let after_create_stream = repository.find_session(session_id).await.unwrap().unwrap();
+        assert!(
+            after_create_stream.pending_events().is_empty(),
+            "persisted session must not carry undrained events after CreateStreamCommand"
+        );
+
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
+
+        let after_start_stream = repository.find_session(session_id).await.unwrap().unwrap();
+        assert!(
+            after_start_stream.pending_events().is_empty(),
+            "persisted session must not carry undrained events after StartStreamCommand"
+        );
+
+        let batches = event_publisher.batches();
+        assert_eq!(
+            batches.len(),
+            3,
+            "each command's save_and_publish call must publish exactly one batch"
+        );
+        let (create_session_events, create_stream_events, start_stream_events) =
+            (&batches[0], &batches[1], &batches[2]);
+
+        // Without the fix, each persisted clone still carried its
+        // predecessor's undrained events, so every later batch grew to
+        // include every earlier command's events too.
+        assert_eq!(
+            create_session_events.len(),
+            1,
+            "CreateSessionCommand must publish only its own SessionActivated event"
+        );
+        assert_eq!(
+            create_stream_events.len(),
+            1,
+            "CreateStreamCommand must publish only its own StreamCreated event, not a republish of CreateSessionCommand's"
+        );
+        assert_eq!(
+            start_stream_events.len(),
+            1,
+            "StartStreamCommand must publish only its own StreamStarted event, not a republish of earlier commands'"
+        );
+
+        for event in create_stream_events {
+            assert!(
+                !create_session_events.contains(event),
+                "CreateStreamCommand republished an event from CreateSessionCommand: {event:?}"
+            );
+        }
+        for event in start_stream_events {
+            assert!(
+                !create_session_events.contains(event) && !create_stream_events.contains(event),
+                "StartStreamCommand republished an earlier command's event: {event:?}"
+            );
+        }
     }
 }
