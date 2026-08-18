@@ -73,6 +73,7 @@
 
 use wasm_bindgen::prelude::*;
 
+mod frame_generation;
 mod parser;
 pub mod priority_assignment;
 mod priority_config;

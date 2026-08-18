@@ -34,7 +34,6 @@ use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FrameType;
 use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
@@ -378,106 +377,19 @@ impl PriorityStream {
     }
 
     /// Internal frame generation (reused from parser)
-    fn generate_frames_internal(
+    pub(crate) fn generate_frames_internal(
         &self,
         data: &JsonData,
         stream_id: StreamId,
         min_priority: Priority,
     ) -> Result<Vec<Frame>, String> {
-        use crate::priority_assignment::{group_by_priority, sort_priorities};
-        use pjson_rs_domain::entities::frame::FramePatch;
-
-        let max_depth = self.security_config.max_depth();
-
-        // Pre-allocate frames Vec with estimated capacity
-        // Typical: 1 skeleton + ~2-4 priority groups + 1 complete = ~4-6 frames
-        // Conservative estimate to avoid over-allocation
-        let mut frames = Vec::with_capacity(6);
-        let mut sequence = 0u64;
-
-        // 1. Generate skeleton frame (with depth limit)
-        let skeleton = Self::create_skeleton_with_limit(data, 0, max_depth);
-        frames.push(Frame::skeleton(stream_id, sequence, skeleton));
-        sequence += 1;
-
-        // 2. Extract all fields with priorities (with depth limit)
-        let prioritized_fields = self
-            .priority_assigner
-            .extract_prioritized_fields_with_limit(data, max_depth);
-
-        // 3. Group fields by priority level
-        let grouped = group_by_priority(prioritized_fields);
-
-        // 4. Get sorted priorities (descending order)
-        let mut priorities: Vec<Priority> = grouped.keys().copied().collect();
-        priorities = sort_priorities(priorities);
-
-        // 5. Generate patch frames for each priority level
-        for priority in priorities {
-            if priority < min_priority {
-                continue;
-            }
-
-            if let Some(fields) = grouped.get(&priority) {
-                // Pre-allocate patches Vec with exact capacity
-                let mut patches = Vec::with_capacity(fields.len());
-                for field in fields.iter() {
-                    patches.push(FramePatch::set(field.path.clone(), field.value.clone()));
-                }
-
-                if !patches.is_empty() {
-                    let frame = Frame::patch(stream_id, sequence, priority, patches)
-                        .map_err(|e| format!("Failed to create patch frame: {:?}", e))?;
-
-                    frames.push(frame);
-                    sequence += 1;
-                }
-            }
-        }
-
-        // 6. Add completion frame
-        frames.push(Frame::complete(stream_id, sequence, None));
-
-        Ok(frames)
-    }
-
-    /// Create skeleton structure from data (with depth limit)
-    fn create_skeleton_with_limit(
-        data: &JsonData,
-        current_depth: usize,
-        max_depth: usize,
-    ) -> JsonData {
-        // Security: Stop recursion at max depth
-        if current_depth >= max_depth {
-            return JsonData::Null;
-        }
-
-        match data {
-            JsonData::Object(map) => {
-                // Pre-allocate HashMap with exact capacity to avoid reallocations
-                let mut skeleton_map = HashMap::with_capacity(map.len());
-
-                for (k, v) in map.iter() {
-                    let skeleton_value = match v {
-                        JsonData::Object(_) => {
-                            Self::create_skeleton_with_limit(v, current_depth + 1, max_depth)
-                        }
-                        JsonData::Array(_) => JsonData::Array(vec![]),
-                        JsonData::String(_) => JsonData::Null,
-                        JsonData::Integer(_) => JsonData::Integer(0),
-                        JsonData::Float(_) => JsonData::Float(0.0),
-                        JsonData::Bool(_) => JsonData::Bool(false),
-                        JsonData::Null => JsonData::Null,
-                        _ => JsonData::Null,
-                    };
-                    skeleton_map.insert(k.clone(), skeleton_value);
-                }
-
-                JsonData::Object(skeleton_map)
-            }
-            JsonData::Array(_) => JsonData::Array(vec![]),
-            _ => JsonData::Null,
-        }
+        crate::frame_generation::generate_frames(
+            &self.priority_assigner,
+            data,
+            stream_id,
+            min_priority,
+            self.security_config.max_depth(),
+        )
     }
 
     /// Emit frame to JavaScript callback

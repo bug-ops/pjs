@@ -4,13 +4,11 @@
 //! It wraps the pure domain logic from `pjs-domain` and exposes it through
 //! a JavaScript-friendly API using wasm-bindgen.
 
-use crate::priority_assignment::{PriorityAssigner, group_by_priority, sort_priorities};
+use crate::priority_assignment::PriorityAssigner;
 use crate::priority_config::PriorityConfigBuilder;
 use crate::security::{SecurityConfig, validate_input_size, validate_json_structure};
 use pjson_rs_domain::entities::Frame;
-use pjson_rs_domain::entities::frame::FramePatch;
 use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
-use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 /// PJS Parser for WebAssembly.
@@ -254,116 +252,19 @@ impl PjsParser {
     }
 
     /// Internal frame generation logic (not exposed to JS)
-    fn generate_frames_internal(
+    pub(crate) fn generate_frames_internal(
         &self,
         data: &JsonData,
         stream_id: StreamId,
         min_priority: Priority,
     ) -> Result<Vec<Frame>, String> {
-        let max_depth = self.security_config.max_depth();
-
-        // Pre-allocate frames Vec with estimated capacity
-        // Typical: 1 skeleton + ~2-4 priority groups + 1 complete = ~4-6 frames
-        // Conservative estimate to avoid over-allocation
-        let mut frames = Vec::with_capacity(6);
-        let mut sequence = 0u64;
-
-        // 1. Generate skeleton frame (always first, critical priority)
-        let skeleton = Self::create_skeleton_with_depth(data, 0, max_depth);
-        frames.push(Frame::skeleton(stream_id, sequence, skeleton));
-        sequence += 1;
-
-        // 2. Extract all fields with priorities (depth-limited)
-        let prioritized_fields = self
-            .priority_assigner
-            .extract_prioritized_fields_with_limit(data, max_depth);
-
-        // 3. Group fields by priority level
-        let grouped = group_by_priority(prioritized_fields);
-
-        // 4. Get sorted priorities (descending order)
-        let mut priorities: Vec<Priority> = grouped.keys().copied().collect();
-        priorities = sort_priorities(priorities);
-
-        // 5. Generate patch frames for each priority level (above threshold)
-        for priority in priorities {
-            if priority < min_priority {
-                continue; // Skip priorities below threshold
-            }
-
-            if let Some(fields) = grouped.get(&priority) {
-                // Pre-allocate patches Vec with exact capacity
-                let mut patches = Vec::with_capacity(fields.len());
-                for field in fields.iter() {
-                    patches.push(FramePatch::set(field.path.clone(), field.value.clone()));
-                }
-
-                if !patches.is_empty() {
-                    // Create patch frame
-                    let frame = Frame::patch(stream_id, sequence, priority, patches)
-                        .map_err(|e| format!("Failed to create patch frame: {:?}", e))?;
-
-                    frames.push(frame);
-                    sequence += 1;
-                }
-            }
-        }
-
-        // 6. Add completion frame (always last, critical priority)
-        frames.push(Frame::complete(stream_id, sequence, None));
-
-        Ok(frames)
-    }
-
-    /// Create skeleton structure from data (internal helper)
-    ///
-    /// Generates a skeleton with the same structure but null/empty values.
-    /// Deprecated: Use create_skeleton_with_depth for security.
-    #[allow(dead_code)]
-    fn create_skeleton(data: &JsonData) -> JsonData {
-        Self::create_skeleton_with_depth(data, 0, crate::security::DEFAULT_MAX_DEPTH)
-    }
-
-    /// Create skeleton structure with depth limit (security-safe)
-    ///
-    /// Generates a skeleton with the same structure but null/empty values.
-    /// Stops recursion at max_depth to prevent stack overflow.
-    fn create_skeleton_with_depth(
-        data: &JsonData,
-        current_depth: usize,
-        max_depth: usize,
-    ) -> JsonData {
-        // Security: Stop at max depth
-        if current_depth >= max_depth {
-            return JsonData::Null;
-        }
-
-        match data {
-            JsonData::Object(map) => {
-                // Pre-allocate HashMap with exact capacity to avoid reallocations
-                let mut skeleton_map = HashMap::with_capacity(map.len());
-
-                for (k, v) in map.iter() {
-                    let skeleton_value = match v {
-                        JsonData::Object(_) => {
-                            Self::create_skeleton_with_depth(v, current_depth + 1, max_depth)
-                        }
-                        JsonData::Array(_) => JsonData::Array(vec![]),
-                        JsonData::String(_) => JsonData::Null,
-                        JsonData::Integer(_) => JsonData::Integer(0),
-                        JsonData::Float(_) => JsonData::Float(0.0),
-                        JsonData::Bool(_) => JsonData::Bool(false),
-                        JsonData::Null => JsonData::Null,
-                        _ => JsonData::Null,
-                    };
-                    skeleton_map.insert(k.clone(), skeleton_value);
-                }
-
-                JsonData::Object(skeleton_map)
-            }
-            JsonData::Array(_) => JsonData::Array(vec![]),
-            _ => JsonData::Null,
-        }
+        crate::frame_generation::generate_frames(
+            &self.priority_assigner,
+            data,
+            stream_id,
+            min_priority,
+            self.security_config.max_depth(),
+        )
     }
 }
 
@@ -377,6 +278,7 @@ impl Default for PjsParser {
 mod tests {
     use super::*;
     use pjson_rs_domain::entities::frame::FrameType;
+    use std::collections::HashMap;
 
     #[test]
     fn test_parser_creation() {
@@ -411,7 +313,8 @@ mod tests {
         obj.insert("age".to_string(), JsonData::Integer(30));
         let data = JsonData::Object(obj);
 
-        let skeleton = PjsParser::create_skeleton(&data);
+        let skeleton =
+            crate::frame_generation::build_skeleton(&data, 0, crate::security::DEFAULT_MAX_DEPTH);
 
         if let JsonData::Object(map) = skeleton {
             assert_eq!(map.get("name"), Some(&JsonData::Null));
@@ -429,7 +332,8 @@ mod tests {
         outer.insert("address".to_string(), JsonData::Object(inner));
         let data = JsonData::Object(outer);
 
-        let skeleton = PjsParser::create_skeleton(&data);
+        let skeleton =
+            crate::frame_generation::build_skeleton(&data, 0, crate::security::DEFAULT_MAX_DEPTH);
 
         if let JsonData::Object(map) = skeleton {
             if let Some(JsonData::Object(inner_map)) = map.get("address") {
@@ -446,7 +350,8 @@ mod tests {
     fn test_create_skeleton_array() {
         let data = JsonData::Array(vec![JsonData::Integer(1), JsonData::Integer(2)]);
 
-        let skeleton = PjsParser::create_skeleton(&data);
+        let skeleton =
+            crate::frame_generation::build_skeleton(&data, 0, crate::security::DEFAULT_MAX_DEPTH);
         assert_eq!(skeleton, JsonData::Array(vec![]));
     }
 
@@ -581,7 +486,7 @@ mod tests {
         }
 
         // With depth limit of 5, deeper levels should be replaced with Null
-        let skeleton = PjsParser::create_skeleton_with_depth(&current, 0, 5);
+        let skeleton = crate::frame_generation::build_skeleton(&current, 0, 5);
 
         // Verify skeleton doesn't exceed depth limit
         fn count_depth(data: &JsonData, current: usize) -> usize {
