@@ -355,3 +355,152 @@ async fn test_security_config_integration() {
 const _: fn() = || {
     let _ = std::mem::size_of::<WsMessage>();
 };
+
+/// `Origin` allow-list tests for CSWSH hardening (issue #417).
+///
+/// These bind a real TCP socket and perform an actual HTTP upgrade
+/// handshake — the `Origin` check lives in the axum extractor chain and
+/// isn't reachable from the struct-level tests above, which exercise
+/// `AdaptiveStreamController`/`SecureWebSocketHandler` directly without a
+/// router. Needs `websocket-client` for the `tokio-tungstenite` test client;
+/// `http-server` is already guaranteed by this file's `websocket-server`
+/// gate (`websocket-server` implies `http-server`).
+#[cfg(feature = "websocket-client")]
+mod origin_allow_list {
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::Error as WsError;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    use pjson_rs::infrastructure::websocket::{
+        AxumWebSocketTransport, server::create_websocket_router,
+    };
+
+    /// Spawn a WebSocket router with a caller-provided transport.
+    async fn spawn_ws_test_server_with(
+        transport: AxumWebSocketTransport,
+    ) -> (SocketAddr, Arc<AxumWebSocketTransport>) {
+        let transport = Arc::new(transport);
+        let app = create_websocket_router().with_state(transport.clone());
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind random port");
+        let addr = listener.local_addr().expect("local_addr");
+
+        tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+
+        (addr, transport)
+    }
+
+    fn ws_url(addr: SocketAddr) -> String {
+        format!("ws://{addr}/ws")
+    }
+
+    fn request_with_origin(
+        addr: SocketAddr,
+        origin: &str,
+    ) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+        let mut request = ws_url(addr).into_client_request().expect("valid ws url");
+        request
+            .headers_mut()
+            .insert("Origin", origin.parse().expect("valid origin header value"));
+        request
+    }
+
+    /// Asserts a rejected handshake failed with the given HTTP status, rather
+    /// than succeeding or failing for an unrelated reason.
+    fn assert_rejected_with_status(result: Result<impl Sized, WsError>, expected: u16) {
+        match result {
+            Err(WsError::Http(response)) => {
+                assert_eq!(response.status(), expected, "unexpected rejection status");
+            }
+            Ok(_) => panic!("expected handshake to be rejected, but it succeeded"),
+            Err(other) => panic!("expected HTTP {expected} rejection, got: {other:?}"),
+        }
+    }
+
+    /// Default transport (`allowed_origins` unset, i.e. deny-all) must still
+    /// accept upgrades that carry no `Origin` header at all — native clients
+    /// never send one, and CSWSH requires a browser-attached `Origin`.
+    #[tokio::test]
+    async fn test_no_origin_header_upgrades_under_default_deny_all() {
+        let (addr, _transport) = spawn_ws_test_server_with(AxumWebSocketTransport::new()).await;
+
+        let (_, response) = connect_async(ws_url(addr))
+            .await
+            .expect("upgrade without Origin header must succeed");
+
+        assert_eq!(response.status(), 101);
+    }
+
+    /// A disallowed `Origin` must be rejected with 403 before any WebSocket
+    /// frames are exchanged.
+    #[tokio::test]
+    async fn test_disallowed_origin_rejected_with_403() {
+        let transport = AxumWebSocketTransport::new()
+            .with_allowed_origins(vec!["https://good.example.com".to_string()]);
+        let (addr, _transport) = spawn_ws_test_server_with(transport).await;
+
+        let request = request_with_origin(addr, "https://evil.example.com");
+        let result = connect_async(request).await;
+
+        assert_rejected_with_status(result, 403);
+    }
+
+    /// An allow-listed `Origin` must be permitted to upgrade.
+    #[tokio::test]
+    async fn test_allow_listed_origin_upgrades() {
+        let transport = AxumWebSocketTransport::new()
+            .with_allowed_origins(vec!["https://good.example.com".to_string()]);
+        let (addr, _transport) = spawn_ws_test_server_with(transport).await;
+
+        let request = request_with_origin(addr, "https://good.example.com");
+        let (_, response) = connect_async(request)
+            .await
+            .expect("allow-listed Origin must upgrade");
+
+        assert_eq!(response.status(), 101);
+    }
+
+    /// `["*"]` must accept any `Origin`.
+    #[tokio::test]
+    async fn test_wildcard_allows_arbitrary_origin() {
+        let transport = AxumWebSocketTransport::new().with_allowed_origins(vec!["*".to_string()]);
+        let (addr, _transport) = spawn_ws_test_server_with(transport).await;
+
+        let request = request_with_origin(addr, "https://anything.example.com");
+        let (_, response) = connect_async(request)
+            .await
+            .expect("wildcard allow-list must upgrade any Origin");
+
+        assert_eq!(response.status(), 101);
+    }
+
+    /// Mixing `"*"` with an explicit origin must fail closed (deny-all)
+    /// rather than falling back to permissive matching or panicking. Mirrors
+    /// `http_axum_extension_comprehensive.rs`'s
+    /// `test_sse_stream_endpoint_invalid_allowed_origins_fails_closed`.
+    #[tokio::test]
+    async fn test_wildcard_mixed_with_explicit_origin_fails_closed() {
+        let transport = AxumWebSocketTransport::new().with_allowed_origins(vec![
+            "*".to_string(),
+            "https://good.example.com".to_string(),
+        ]);
+        let (addr, _transport) = spawn_ws_test_server_with(transport).await;
+
+        let request = request_with_origin(addr, "https://good.example.com");
+        let result = connect_async(request).await;
+
+        assert_rejected_with_status(result, 403);
+    }
+}
