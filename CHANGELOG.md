@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `pjs-demo`'s `crates/pjs-demo/src/servers/performance_comparison.rs` — dead source with no `[[bin]]` entry and no `mod` declaration, never compiled by any build, referencing APIs (`StreamProcessor::process_json`) that no longer exist and a request schema mismatched with its own front-end HTML. Follow-up work originally scoped to it (`estimate_priority_distribution`, tracked as #405) no longer applies to any running server (#399)
+- **BREAKING** `pjson-rs`'s `application::dto::{ToDto, FromDto}` traits and their `Priority`/`Id<T>` implementations — they duplicated the standard `From`/`TryFrom` impls already defined on the same DTO types for no added behavior. Callers of `.to_dto()` migrate to `.into()`; callers of `.from_dto(x)` migrate to `x.try_into()` (`Priority`) or `x.into()` (`Id<T>`, which cannot fail) (#413)
 
 ## [0.6.3] - 2026-08-18
 
