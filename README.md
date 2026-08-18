@@ -223,7 +223,6 @@ cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin simple-demo-server --
 | `compression` | zlib/gzip/brotli/zstd decompression with per-session dictionaries | ✅ Yes |
 | `partial-parse` | Streaming partial JSON parsing (`jiter` backend) | No |
 | `http-server` | Axum HTTP server and CQRS endpoints | ✅ Yes |
-| `http-client` | reqwest-based HTTP client | ✅ Yes |
 | `http-auth-jwt` | JWT authentication middleware | No |
 | `websocket-server` | WebSocket transport (server) | ✅ Yes |
 | `websocket-client` | WebSocket transport (client) | ✅ Yes |

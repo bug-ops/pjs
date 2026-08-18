@@ -13,8 +13,7 @@ pub mod metrics_collector;
 
 // Re-export commonly used adapters
 pub use event_publisher::{
-    CompositeEventPublisher, EventPublisherVariant, HttpEventPublisher, InMemoryEventPublisher,
-    StoredEvent,
+    CompositeEventPublisher, EventPublisherVariant, InMemoryEventPublisher, StoredEvent,
 };
 pub use frame_store::InMemoryFrameStore;
 pub use gat_memory_repository::{GatInMemoryStreamRepository, GatInMemoryStreamStore};

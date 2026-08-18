@@ -15,11 +15,11 @@ pub mod websocket;
 
 pub use adapters::{
     ALLOWED_SORT_FIELDS, CompositeEventPublisher, EventPublisherVariant,
-    GatInMemoryStreamRepository, GatInMemoryStreamStore, HttpEventPublisher,
-    InMemoryEventPublisher, InMemoryFrameStore, InMemoryMetricsCollector, InMemoryStore,
-    JsonAdapter, MAX_HEALTH_METRICS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
-    MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT, PerformanceMetrics, SessionMetrics, SessionStore,
-    StoredEvent, StreamMetrics, StreamStore, TimestampedMetrics,
+    GatInMemoryStreamRepository, GatInMemoryStreamStore, InMemoryEventPublisher,
+    InMemoryFrameStore, InMemoryMetricsCollector, InMemoryStore, JsonAdapter, MAX_HEALTH_METRICS,
+    MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET, MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT,
+    PerformanceMetrics, SessionMetrics, SessionStore, StoredEvent, StreamMetrics, StreamStore,
+    TimestampedMetrics,
 };
 pub use bounded_channel::{
     ByteBoundedSender, Envelope, SendError, TrySendError, byte_bounded_channel,
