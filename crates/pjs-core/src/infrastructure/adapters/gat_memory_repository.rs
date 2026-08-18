@@ -18,6 +18,18 @@
 //! insert-if-absent variant, so `stats_cache` stays a plain `DashMap` rather than
 //! adding an upsert method to `InMemoryStore` for this one caller.
 //!
+//! The `*_atomic` methods on [`StreamRepositoryGat`] (`create_stream_atomic`,
+//! `start_stream_atomic`, `complete_stream_atomic`,
+//! `create_stream_patch_frames_atomic`, `close_session_atomic`) are the one
+//! exception to "lock-free": each holds `update_with`'s per-key `DashMap`
+//! shard write lock — which blocks every other session hashing to the same
+//! shard, not just the target session — for the duration of its mutation
+//! (see #457). That closure never `.await`s, so the hold is always brief and
+//! CPU-bound. `create_stream_patch_frames_atomic` narrows this further: it
+//! extracts patches (a traversal proportional to the source payload, not to
+//! `max_frames`) from a snapshot taken *before* acquiring the lock, so only
+//! the cheap, `max_frames`-bounded commit step actually runs under it.
+//!
 //! # Iteration Consistency
 //!
 //! Query methods that iterate over multiple items (`find_sessions_by_criteria`,
@@ -36,13 +48,17 @@ use dashmap::DashMap;
 use crate::domain::{
     DomainError, DomainResult,
     aggregates::StreamSession,
-    entities::{Stream, stream::StreamState},
+    entities::{
+        Frame, Stream,
+        stream::{StreamConfig, StreamState},
+    },
+    events::DomainEvent,
     ports::{
         Pagination, PriorityDistribution, SessionHealthSnapshot, SessionQueryCriteria,
         SessionQueryResult, SortOrder, StreamFilter, StreamRepositoryGat, StreamStatistics,
         StreamStatus, StreamStoreGat,
     },
-    value_objects::{SessionId, StreamId},
+    value_objects::{JsonData, Priority, SessionId, StreamId},
 };
 
 use super::generic_store::{SessionStore, StreamStore};
@@ -275,6 +291,25 @@ impl GatInMemoryStreamRepository {
     fn invalidate_stats_cache(&self, session_id: &SessionId) {
         self.stats_cache.remove(session_id);
     }
+
+    /// Apply `f` to the stored session for `session_id` while holding the
+    /// `DashMap` shard lock for that key, so the read-modify-write is atomic
+    /// with respect to any other call mutating the same session (#457).
+    ///
+    /// Shared by every `*_atomic` method on [`StreamRepositoryGat`] so each
+    /// one only has to supply its own mutation + event-drain closure.
+    fn atomic_session_update<T>(
+        &self,
+        session_id: SessionId,
+        f: impl FnOnce(&mut StreamSession) -> DomainResult<T>,
+    ) -> DomainResult<T> {
+        match self.store.update_with(&session_id, f) {
+            Some(result) => result,
+            None => Err(DomainError::SessionNotFound(format!(
+                "Session {session_id} not found"
+            ))),
+        }
+    }
 }
 
 impl StreamRepositoryGat for GatInMemoryStreamRepository {
@@ -285,6 +320,31 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
 
     type SaveSessionFuture<'a>
         = impl Future<Output = DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    type CreateStreamAtomicFuture<'a>
+        = impl Future<Output = DomainResult<(StreamId, Vec<DomainEvent>)>> + Send + 'a
+    where
+        Self: 'a;
+
+    type StartStreamAtomicFuture<'a>
+        = impl Future<Output = DomainResult<Vec<DomainEvent>>> + Send + 'a
+    where
+        Self: 'a;
+
+    type CompleteStreamAtomicFuture<'a>
+        = impl Future<Output = DomainResult<Vec<DomainEvent>>> + Send + 'a
+    where
+        Self: 'a;
+
+    type CreateStreamPatchFramesAtomicFuture<'a>
+        = impl Future<Output = DomainResult<(Vec<Frame>, Vec<DomainEvent>)>> + Send + 'a
+    where
+        Self: 'a;
+
+    type CloseSessionAtomicFuture<'a>
+        = impl Future<Output = DomainResult<Vec<DomainEvent>>> + Send + 'a
     where
         Self: 'a;
 
@@ -323,6 +383,123 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
             self.invalidate_stats_cache(&session_id);
             self.store.insert(session_id, session);
             Ok(())
+        }
+    }
+
+    /// Atomically create a stream, holding the `DashMap` shard lock for
+    /// `session_id` for the full read-modify-write so a concurrent mutation
+    /// of the same session cannot lose an update (#457).
+    fn create_stream_atomic(
+        &self,
+        session_id: SessionId,
+        source_data: JsonData,
+        config: Option<StreamConfig>,
+    ) -> Self::CreateStreamAtomicFuture<'_> {
+        async move {
+            let result = self.atomic_session_update(session_id, |session| {
+                let stream_id = session.create_stream_with_config(source_data, config)?;
+                Ok((stream_id, session.take_events().into_iter().collect()))
+            });
+            if result.is_ok() {
+                self.invalidate_stats_cache(&session_id);
+            }
+            result
+        }
+    }
+
+    /// Atomically start a stream, holding the `DashMap` shard lock for
+    /// `session_id` for the full read-modify-write so a concurrent mutation
+    /// of the same session cannot lose an update (#457).
+    fn start_stream_atomic(
+        &self,
+        session_id: SessionId,
+        stream_id: StreamId,
+    ) -> Self::StartStreamAtomicFuture<'_> {
+        async move {
+            let result = self.atomic_session_update(session_id, |session| {
+                session.start_stream(stream_id)?;
+                Ok(session.take_events().into_iter().collect())
+            });
+            if result.is_ok() {
+                self.invalidate_stats_cache(&session_id);
+            }
+            result
+        }
+    }
+
+    /// Atomically complete a stream, holding the `DashMap` shard lock for
+    /// `session_id` for the full read-modify-write so concurrent completions
+    /// on the same session cannot lose an update (#457).
+    fn complete_stream_atomic(
+        &self,
+        session_id: SessionId,
+        stream_id: StreamId,
+    ) -> Self::CompleteStreamAtomicFuture<'_> {
+        async move {
+            let result = self.atomic_session_update(session_id, |session| {
+                session.complete_stream(stream_id)?;
+                Ok(session.take_events().into_iter().collect())
+            });
+            if result.is_ok() {
+                self.invalidate_stats_cache(&session_id);
+            }
+            result
+        }
+    }
+
+    /// Atomically generate patch frames for a stream, holding the `DashMap`
+    /// shard lock for `session_id` for the full read-modify-write so a
+    /// concurrent mutation of the same session cannot lose an update (#457).
+    /// Extracts prioritized patches outside any lock, then holds the
+    /// `DashMap` shard lock only for the cheap `O(max_frames)` commit step.
+    ///
+    /// `extract_prioritized_patches_for_stream` traverses the stream's full
+    /// `source_data` — proportional to payload size, not to `max_frames` —
+    /// so running it inside `update_with`'s critical section would block
+    /// every other session hashing to the same `DashMap` shard for that
+    /// whole traversal. `source_data` never changes after stream creation,
+    /// so extracting from a snapshot taken here is safe; the commit step
+    /// re-checks the stream is still `Streaming` in case a concurrent call
+    /// completed or failed it in between (see `Stream::commit_patch_frames`).
+    fn create_stream_patch_frames_atomic(
+        &self,
+        session_id: SessionId,
+        stream_id: StreamId,
+        priority_threshold: Priority,
+        max_frames: usize,
+    ) -> Self::CreateStreamPatchFramesAtomicFuture<'_> {
+        async move {
+            let session = self.store.get(&session_id).ok_or_else(|| {
+                DomainError::SessionNotFound(format!("Session {session_id} not found"))
+            })?;
+            let patches =
+                session.extract_prioritized_patches_for_stream(stream_id, priority_threshold)?;
+
+            let result = self.atomic_session_update(session_id, |session| {
+                let frames =
+                    session.commit_patch_frames_for_stream(stream_id, patches, max_frames)?;
+                Ok((frames, session.take_events().into_iter().collect()))
+            });
+            if result.is_ok() {
+                self.invalidate_stats_cache(&session_id);
+            }
+            result
+        }
+    }
+
+    /// Atomically close a session, holding the `DashMap` shard lock for
+    /// `session_id` for the full read-modify-write so concurrent commands
+    /// on the same session cannot lose an update (#457).
+    fn close_session_atomic(&self, session_id: SessionId) -> Self::CloseSessionAtomicFuture<'_> {
+        async move {
+            let result = self.atomic_session_update(session_id, |session| {
+                session.close()?;
+                Ok(session.take_events().into_iter().collect())
+            });
+            if result.is_ok() {
+                self.invalidate_stats_cache(&session_id);
+            }
+            result
         }
     }
 
@@ -434,9 +611,15 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                         "total_bytes".to_string(),
                         session.stats().total_bytes as f64,
                     );
+                    // Health monitoring wants a recency-sensitive signal, not the
+                    // lifetime mean, so this reads the EMA field (#458). The key is
+                    // named to match, so a consumer of both this snapshot and
+                    // `GET /pjs/sessions/{id}/stats` (which serializes `SessionStats`
+                    // verbatim) sees the same name for the same value instead of
+                    // `avg_duration_ms` silently aliasing `recent_avg_duration_ms`.
                     metrics.insert(
-                        "avg_duration_ms".to_string(),
-                        session.stats().average_stream_duration_ms,
+                        "recent_avg_duration_ms".to_string(),
+                        session.stats().recent_avg_duration_ms,
                     );
 
                     debug_assert!(
@@ -1470,5 +1653,346 @@ mod tests {
         // Remove should invalidate cache
         repo.remove_session(session_id).await.unwrap();
         assert!(!repo.stats_cache.contains_key(&session_id));
+    }
+
+    // ===== complete_stream_atomic concurrency tests (#457, #458) =====
+
+    // A plain `#[tokio::test]` runs on the `current_thread` flavor: the
+    // spawned tasks below are cooperatively scheduled on one OS thread and,
+    // since `complete_stream_atomic`'s critical section has no `.await`
+    // point, none of them can actually interleave — the test would pass
+    // against the old racy load-mutate-save implementation too. A real
+    // multi-thread runtime plus a `Barrier` releasing every task at once is
+    // required to force genuine concurrent entry into `update_with`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_complete_stream_atomic_concurrent_calls_lose_no_update() {
+        use std::sync::Arc;
+
+        let repo = Arc::new(GatInMemoryStreamRepository::new());
+
+        const N: usize = 50;
+        let mut session = StreamSession::new(SessionConfig {
+            max_concurrent_streams: N,
+            ..SessionConfig::default()
+        });
+        session.activate().unwrap();
+        let session_id = session.id();
+
+        let mut stream_ids = Vec::with_capacity(N);
+        for _ in 0..N {
+            let stream_id = session
+                .create_stream(JsonData::String("test".to_string()))
+                .unwrap();
+            session.start_stream(stream_id).unwrap();
+            stream_ids.push(stream_id);
+        }
+        // Drain the StreamStarted events accumulated above so each
+        // completion below returns exactly the one event it produced.
+        let _ = session.take_events();
+        repo.save_session(session).await.unwrap();
+
+        // Complete every stream concurrently against the same session. A
+        // load-mutate-save race would silently drop some of these updates.
+        // The barrier holds every task at the starting line so they all
+        // arrive at `update_with` for the same session_id at once, instead
+        // of the runtime happening to run them one after another.
+        let barrier = Arc::new(tokio::sync::Barrier::new(N));
+        let handles: Vec<_> = stream_ids
+            .into_iter()
+            .map(|stream_id| {
+                let repo = Arc::clone(&repo);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    repo.complete_stream_atomic(session_id, stream_id)
+                        .await
+                        .unwrap()
+                })
+            })
+            .collect();
+
+        let mut total_events = 0;
+        for handle in handles {
+            total_events += handle.await.unwrap().len();
+        }
+        assert_eq!(total_events, N);
+
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        assert_eq!(session.stats().completed_streams, N as u64);
+        assert_eq!(session.stats().active_streams, 0);
+        assert!(session.stats().average_stream_duration_ms.is_finite());
+        assert!(session.stats().recent_avg_duration_ms.is_finite());
+    }
+
+    /// Regression test for the tester's cross-command gap: the original fix
+    /// only made `complete_stream_atomic` atomic against itself, leaving
+    /// `StartStreamCommand` (and other write commands) able to race a
+    /// concurrent `CompleteStreamCommand` on the same session via the old
+    /// load-mutate-save cycle. `start_stream_atomic` now shares the same
+    /// per-session lock, so a `StartStreamCommand` racing a
+    /// `CompleteStreamCommand` on the same session cannot lose either side's
+    /// `SessionStats` update.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_start_and_complete_on_same_session_lose_no_update() {
+        use std::sync::Arc;
+
+        let repo = Arc::new(GatInMemoryStreamRepository::new());
+
+        const N: usize = 30;
+        let mut session = StreamSession::new(SessionConfig {
+            max_concurrent_streams: N * 2,
+            ..SessionConfig::default()
+        });
+        session.activate().unwrap();
+        let session_id = session.id();
+
+        // N streams to be started then completed concurrently.
+        let mut to_complete = Vec::with_capacity(N);
+        for _ in 0..N {
+            let stream_id = session
+                .create_stream(JsonData::String("test".to_string()))
+                .unwrap();
+            session.start_stream(stream_id).unwrap();
+            to_complete.push(stream_id);
+        }
+        // N more streams, left in `Preparing`, to be started concurrently.
+        let mut to_start = Vec::with_capacity(N);
+        for _ in 0..N {
+            to_start.push(
+                session
+                    .create_stream(JsonData::String("test".to_string()))
+                    .unwrap(),
+            );
+        }
+        let _ = session.take_events();
+        repo.save_session(session).await.unwrap();
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(N * 2));
+        let mut handles = Vec::with_capacity(N * 2);
+        for stream_id in to_complete {
+            let repo = Arc::clone(&repo);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                repo.complete_stream_atomic(session_id, stream_id)
+                    .await
+                    .unwrap();
+            }));
+        }
+        for stream_id in to_start {
+            let repo = Arc::clone(&repo);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                repo.start_stream_atomic(session_id, stream_id)
+                    .await
+                    .unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        assert_eq!(session.stats().total_streams, (N * 2) as u64);
+        assert_eq!(session.stats().completed_streams, N as u64);
+        // Every stream counts toward `active_streams` from creation until it
+        // terminates (see `StreamSession::create_stream`); only the N
+        // completed above have terminated.
+        assert_eq!(session.stats().active_streams, N as u64);
+    }
+
+    #[tokio::test]
+    async fn test_complete_stream_atomic_returns_session_not_found() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let missing_session_id = SessionId::new();
+        let result = repo
+            .complete_stream_atomic(missing_session_id, StreamId::new())
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::SessionNotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_atomic_creates_stream_and_applies_config() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        // Drain the SessionActivated event so the assertion below only
+        // counts events this call itself produces.
+        let _ = session.take_events();
+        let session_id = session.id();
+        repo.save_session(session).await.unwrap();
+
+        let custom_config = StreamConfig {
+            max_frame_size: 4321,
+            ..StreamConfig::default()
+        };
+        let (stream_id, events) = repo
+            .create_stream_atomic(
+                session_id,
+                JsonData::String("test".to_string()),
+                Some(custom_config.clone()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 2); // StreamCreated + StreamConfigUpdated
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        assert_eq!(session.stats().total_streams, 1);
+        assert_eq!(
+            session.stream(stream_id).unwrap().config().max_frame_size,
+            custom_config.max_frame_size
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_atomic_returns_session_not_found() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let result = repo
+            .create_stream_atomic(SessionId::new(), JsonData::String("test".to_string()), None)
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::SessionNotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_start_stream_atomic_returns_session_not_found() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let result = repo
+            .start_stream_atomic(SessionId::new(), StreamId::new())
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::SessionNotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_patch_frames_atomic_returns_session_not_found() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let result = repo
+            .create_stream_patch_frames_atomic(
+                SessionId::new(),
+                StreamId::new(),
+                Priority::HIGH,
+                10,
+            )
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::SessionNotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_patch_frames_atomic_generates_frames_and_updates_stats() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        let source_data: JsonData = serde_json::json!({
+            "id": "abc",
+            "items": [1, 2, 3, 4, 5]
+        })
+        .into();
+        let stream_id = session.create_stream(source_data).unwrap();
+        session.start_stream(stream_id).unwrap();
+        let _ = session.take_events();
+        repo.save_session(session).await.unwrap();
+
+        let (frames, events) = repo
+            .create_stream_patch_frames_atomic(session_id, stream_id, Priority::BACKGROUND, 16)
+            .await
+            .unwrap();
+
+        assert!(!frames.is_empty());
+        assert_eq!(events.len(), 1); // FramesBatched
+
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        assert_eq!(session.stats().total_frames, frames.len() as u64);
+        assert!(session.stats().total_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn test_close_session_atomic_closes_and_returns_events() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        let _ = session.take_events();
+        repo.save_session(session).await.unwrap();
+
+        let events = repo.close_session_atomic(session_id).await.unwrap();
+        assert_eq!(events.len(), 1); // SessionClosed
+
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        assert_eq!(
+            session.state(),
+            &crate::domain::events::SessionState::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn test_close_session_atomic_returns_session_not_found() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let result = repo.close_session_atomic(SessionId::new()).await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::SessionNotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_session_health_avg_duration_reflects_recency_ema_not_lifetime_mean() {
+        let repo = GatInMemoryStreamRepository::new();
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let session_id = session.id();
+        repo.save_session(session).await.unwrap();
+
+        // Sequential completions with non-uniform durations so the lifetime
+        // mean and the recency EMA diverge.
+        for sleep_ms in [15, 60, 15] {
+            let mut session = repo.find_session(session_id).await.unwrap().unwrap();
+            let stream_id = session
+                .create_stream(JsonData::String("test".to_string()))
+                .unwrap();
+            session.start_stream(stream_id).unwrap();
+            repo.save_session(session).await.unwrap();
+
+            tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+
+            repo.complete_stream_atomic(session_id, stream_id)
+                .await
+                .unwrap();
+        }
+
+        let session = repo.find_session(session_id).await.unwrap().unwrap();
+        let lifetime_mean = session.stats().average_stream_duration_ms;
+        let recency_ema = session.stats().recent_avg_duration_ms;
+        assert_ne!(lifetime_mean, recency_ema);
+
+        let health = repo.get_session_health(session_id).await.unwrap();
+        assert_eq!(health.metrics["recent_avg_duration_ms"], recency_ema);
+        assert_ne!(health.metrics["recent_avg_duration_ms"], lifetime_mean);
     }
 }

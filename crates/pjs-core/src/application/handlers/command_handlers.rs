@@ -249,20 +249,29 @@ where
             CommandValidator::validate_create_stream(&command)
                 .map_err(|errors| ApplicationError::Validation(errors.join("; ")))?;
 
-            let mut session = self.load_session(command.session_id.into()).await?;
+            // Atomic per-session read-modify-write (#457): a plain load +
+            // mutate + save cycle can race under a concurrent mutation of
+            // the same session (e.g. a completion) and silently drop one
+            // side's update to SessionStats.
+            let (stream_id, events) = self
+                .repository
+                .create_stream_atomic(
+                    command.session_id.into(),
+                    command.source_data,
+                    command.config,
+                )
+                .await
+                .map_err(|e| match e {
+                    crate::domain::DomainError::SessionNotFound(_) => ApplicationError::NotFound(
+                        format!("Session {} not found", command.session_id),
+                    ),
+                    other => ApplicationError::Domain(other),
+                })?;
 
-            let stream_id = session
-                .create_stream(command.source_data)
+            self.event_publisher
+                .publish_batch(events)
+                .await
                 .map_err(ApplicationError::Domain)?;
-
-            // Update stream configuration if provided
-            if let Some(config) = command.config {
-                session
-                    .update_stream_config(stream_id, config)
-                    .map_err(ApplicationError::Domain)?;
-            }
-
-            self.save_and_publish(&mut session).await?;
 
             Ok(stream_id)
         }
@@ -284,13 +293,22 @@ where
 
     fn handle(&self, command: StartStreamCommand) -> Self::HandleFuture<'_> {
         async move {
-            let mut session = self.load_session(command.session_id.into()).await?;
+            // Atomic per-session read-modify-write (#457): see CreateStreamCommand.
+            let events = self
+                .repository
+                .start_stream_atomic(command.session_id.into(), command.stream_id.into())
+                .await
+                .map_err(|e| match e {
+                    crate::domain::DomainError::SessionNotFound(_) => ApplicationError::NotFound(
+                        format!("Session {} not found", command.session_id),
+                    ),
+                    other => ApplicationError::Domain(other),
+                })?;
 
-            session
-                .start_stream(command.stream_id.into())
+            self.event_publisher
+                .publish_batch(events)
+                .await
                 .map_err(ApplicationError::Domain)?;
-
-            self.save_and_publish(&mut session).await?;
 
             Ok(())
         }
@@ -312,13 +330,24 @@ where
 
     fn handle(&self, command: CompleteStreamCommand) -> Self::HandleFuture<'_> {
         async move {
-            let mut session = self.load_session(command.session_id.into()).await?;
+            // Atomic per-session read-modify-write (#457): a plain load +
+            // mutate + save cycle can race under concurrent completions for
+            // the same session and silently drop one update to SessionStats.
+            let events = self
+                .repository
+                .complete_stream_atomic(command.session_id.into(), command.stream_id.into())
+                .await
+                .map_err(|e| match e {
+                    crate::domain::DomainError::SessionNotFound(_) => ApplicationError::NotFound(
+                        format!("Session {} not found", command.session_id),
+                    ),
+                    other => ApplicationError::Domain(other),
+                })?;
 
-            session
-                .complete_stream(command.stream_id.into())
+            self.event_publisher
+                .publish_batch(events)
+                .await
                 .map_err(ApplicationError::Domain)?;
-
-            self.save_and_publish(&mut session).await?;
 
             Ok(())
         }
@@ -343,22 +372,43 @@ where
             CommandValidator::validate_generate_frames(&command)
                 .map_err(|errors| ApplicationError::Validation(errors.join("; ")))?;
 
-            let mut session = self.load_session(command.session_id.into()).await?;
-
             // Generate frames through the aggregate root so session-level
             // stats and events stay consistent with the child stream mutation.
             let priority = command
                 .priority_threshold
                 .try_into()
                 .map_err(ApplicationError::Domain)?;
-            let frames = session
-                .create_stream_patch_frames(command.stream_id.into(), priority, command.max_frames)
+
+            // Atomic per-session read-modify-write (#457): see CreateStreamCommand.
+            let (frames, events) = self
+                .repository
+                .create_stream_patch_frames_atomic(
+                    command.session_id.into(),
+                    command.stream_id.into(),
+                    priority,
+                    command.max_frames,
+                )
+                .await
                 .map_err(|e| match e {
+                    crate::domain::DomainError::SessionNotFound(_) => ApplicationError::NotFound(
+                        format!("Session {} not found", command.session_id),
+                    ),
                     crate::domain::DomainError::StreamNotFound(_) => ApplicationError::NotFound(
                         format!("Stream {} not found", command.stream_id),
                     ),
                     other => ApplicationError::Domain(other),
                 })?;
+
+            // Publish immediately after the atomic call, before any
+            // fallible I/O below: `create_stream_patch_frames_atomic`
+            // already drained these events from the session's buffer inside
+            // its lock, so if a later step (e.g. `append_frames`) fails and
+            // returns early, there is no buffer left to recover them from —
+            // publishing first ensures they are never silently lost.
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             // WebSocket frame production runs through a disjoint session model
             // (`infrastructure/websocket`) and does not increment this counter, so
@@ -377,8 +427,6 @@ where
                 .append_frames(command.stream_id.into(), frames.clone())
                 .await
                 .map_err(ApplicationError::Domain)?;
-
-            self.save_and_publish(&mut session).await?;
 
             Ok(frames)
         }
@@ -445,11 +493,22 @@ where
 
     fn handle(&self, command: CloseSessionCommand) -> Self::HandleFuture<'_> {
         async move {
-            let mut session = self.load_session(command.session_id.into()).await?;
+            // Atomic per-session read-modify-write (#457): see CreateStreamCommand.
+            let events = self
+                .repository
+                .close_session_atomic(command.session_id.into())
+                .await
+                .map_err(|e| match e {
+                    crate::domain::DomainError::SessionNotFound(_) => ApplicationError::NotFound(
+                        format!("Session {} not found", command.session_id),
+                    ),
+                    other => ApplicationError::Domain(other),
+                })?;
 
-            session.close().map_err(ApplicationError::Domain)?;
-
-            self.save_and_publish(&mut session).await?;
+            self.event_publisher
+                .publish_batch(events)
+                .await
+                .map_err(ApplicationError::Domain)?;
 
             Ok(())
         }
@@ -568,6 +627,52 @@ mod tests {
         where
             Self: 'a;
 
+        type CreateStreamAtomicFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<(
+                    StreamId,
+                    Vec<crate::domain::events::DomainEvent>,
+                )>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+
+        type StartStreamAtomicFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<Vec<crate::domain::events::DomainEvent>>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+
+        type CompleteStreamAtomicFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<Vec<crate::domain::events::DomainEvent>>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+
+        type CreateStreamPatchFramesAtomicFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<(
+                    Vec<Frame>,
+                    Vec<crate::domain::events::DomainEvent>,
+                )>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+
+        type CloseSessionAtomicFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<Vec<crate::domain::events::DomainEvent>>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+
         type RemoveSessionFuture<'a>
             = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
         where
@@ -607,6 +712,97 @@ mod tests {
             async move {
                 self.sessions.lock().insert(session.id(), session);
                 Ok(())
+            }
+        }
+
+        fn create_stream_atomic(
+            &self,
+            session_id: SessionId,
+            source_data: crate::domain::value_objects::JsonData,
+            config: Option<crate::domain::entities::stream::StreamConfig>,
+        ) -> Self::CreateStreamAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.sessions.lock();
+                let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!(
+                        "Session {session_id} not found"
+                    ))
+                })?;
+                let stream_id = session.create_stream_with_config(source_data, config)?;
+                Ok((stream_id, session.take_events().into_iter().collect()))
+            }
+        }
+
+        fn start_stream_atomic(
+            &self,
+            session_id: SessionId,
+            stream_id: StreamId,
+        ) -> Self::StartStreamAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.sessions.lock();
+                let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!(
+                        "Session {session_id} not found"
+                    ))
+                })?;
+                session.start_stream(stream_id)?;
+                Ok(session.take_events().into_iter().collect())
+            }
+        }
+
+        fn complete_stream_atomic(
+            &self,
+            session_id: SessionId,
+            stream_id: StreamId,
+        ) -> Self::CompleteStreamAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.sessions.lock();
+                let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!(
+                        "Session {session_id} not found"
+                    ))
+                })?;
+                session.complete_stream(stream_id)?;
+                Ok(session.take_events().into_iter().collect())
+            }
+        }
+
+        fn create_stream_patch_frames_atomic(
+            &self,
+            session_id: SessionId,
+            stream_id: StreamId,
+            priority_threshold: crate::domain::value_objects::Priority,
+            max_frames: usize,
+        ) -> Self::CreateStreamPatchFramesAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.sessions.lock();
+                let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!(
+                        "Session {session_id} not found"
+                    ))
+                })?;
+                let frames = session.create_stream_patch_frames(
+                    stream_id,
+                    priority_threshold,
+                    max_frames,
+                )?;
+                Ok((frames, session.take_events().into_iter().collect()))
+            }
+        }
+
+        fn close_session_atomic(
+            &self,
+            session_id: SessionId,
+        ) -> Self::CloseSessionAtomicFuture<'_> {
+            async move {
+                let mut sessions = self.sessions.lock();
+                let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                    crate::domain::DomainError::SessionNotFound(format!(
+                        "Session {session_id} not found"
+                    ))
+                })?;
+                session.close()?;
+                Ok(session.take_events().into_iter().collect())
             }
         }
 
@@ -731,6 +927,109 @@ mod tests {
         }
     }
 
+    /// Event publisher that records every published event, for asserting on
+    /// what actually got published rather than merely whether the handler
+    /// returned `Ok`.
+    struct TrackingEventPublisher {
+        published: parking_lot::Mutex<Vec<DomainEvent>>,
+    }
+
+    impl TrackingEventPublisher {
+        fn new() -> Self {
+            Self {
+                published: parking_lot::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn published_events(&self) -> Vec<DomainEvent> {
+            self.published.lock().clone()
+        }
+    }
+
+    impl EventPublisherGat for TrackingEventPublisher {
+        type PublishFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type PublishBatchFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn publish(&self, event: DomainEvent) -> Self::PublishFuture<'_> {
+            async move {
+                self.published.lock().push(event);
+                Ok(())
+            }
+        }
+
+        fn publish_batch(&self, events: Vec<DomainEvent>) -> Self::PublishBatchFuture<'_> {
+            async move {
+                self.published.lock().extend(events);
+                Ok(())
+            }
+        }
+    }
+
+    /// Frame store whose `append_frames` always fails, for testing that a
+    /// downstream persistence failure doesn't discard events already
+    /// drained from the session's atomic mutation.
+    struct FailingFrameStore;
+
+    impl crate::domain::ports::FrameStoreGat for FailingFrameStore {
+        type AppendFramesFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        type GetFramesFuture<'a>
+            = impl std::future::Future<
+                Output = crate::domain::DomainResult<crate::domain::ports::FrameStorePage>,
+            > + Send
+            + 'a
+        where
+            Self: 'a;
+
+        type DeleteFramesForStreamFuture<'a>
+            = impl std::future::Future<Output = crate::domain::DomainResult<()>> + Send + 'a
+        where
+            Self: 'a;
+
+        fn append_frames(
+            &self,
+            _stream_id: StreamId,
+            _frames: Vec<Frame>,
+        ) -> Self::AppendFramesFuture<'_> {
+            async move {
+                Err(crate::domain::DomainError::InvalidInput(
+                    "simulated frame store failure".to_string(),
+                ))
+            }
+        }
+
+        fn get_frames(
+            &self,
+            _stream_id: StreamId,
+            _since_sequence: Option<u64>,
+            _priority_filter: Option<crate::domain::value_objects::Priority>,
+            _limit: Option<usize>,
+        ) -> Self::GetFramesFuture<'_> {
+            async move {
+                Ok(crate::domain::ports::FrameStorePage {
+                    frames: Vec::new(),
+                    total_matching: 0,
+                })
+            }
+        }
+
+        fn delete_frames_for_stream(
+            &self,
+            _stream_id: StreamId,
+        ) -> Self::DeleteFramesForStreamFuture<'_> {
+            async move { Ok(()) }
+        }
+    }
     #[tokio::test]
     async fn test_create_session_command() {
         let repository = Arc::new(MockRepository::new());
@@ -1275,6 +1574,78 @@ mod tests {
             "every frame returned by the command must be persisted",
         );
         assert_eq!(page.total_matching, frames.len());
+    }
+
+    #[tokio::test]
+    async fn test_generate_frames_publishes_events_before_frame_store_failure() {
+        // Regression test: create_stream_patch_frames_atomic drains the
+        // session's event buffer inside its lock, so once it returns there
+        // is no buffer left to recover those events from. The handler must
+        // publish them before any later fallible step (append_frames) can
+        // discard them on error.
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(TrackingEventPublisher::new());
+        let frame_store = Arc::new(FailingFrameStore);
+
+        let handler = SessionCommandHandler::with_stores(
+            repository.clone(),
+            event_publisher.clone(),
+            Arc::new(crate::domain::ports::NoopDictionaryStore),
+            frame_store,
+        );
+
+        let session_id = handler
+            .handle(CreateSessionCommand {
+                config: SessionConfig::default(),
+                client_info: None,
+                user_agent: None,
+                ip_address: None,
+            })
+            .await
+            .unwrap();
+
+        let stream_id = handler
+            .handle(CreateStreamCommand {
+                session_id: session_id.into(),
+                source_data: serde_json::json!({"items": [1, 2, 3, 4]}).into(),
+                config: None,
+            })
+            .await
+            .unwrap();
+
+        handler
+            .handle(StartStreamCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+            })
+            .await
+            .unwrap();
+
+        // Every event published above (SessionActivated, StreamCreated,
+        // StreamStarted) is irrelevant to this assertion; only what happens
+        // from here matters.
+        let events_before = event_publisher.published_events().len();
+
+        let result = handler
+            .handle(GenerateFramesCommand {
+                session_id: session_id.into(),
+                stream_id: stream_id.into(),
+                priority_threshold: crate::application::dto::PriorityDto::new(1).unwrap(),
+                max_frames: 8,
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "FailingFrameStore must cause the command to fail"
+        );
+
+        let events_after = event_publisher.published_events().len();
+        assert!(
+            events_after > events_before,
+            "FramesBatched must be published even though append_frames failed \
+             (was {events_before}, now {events_after})"
+        );
     }
 
     #[tokio::test]

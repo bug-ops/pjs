@@ -2,7 +2,7 @@
 
 use crate::{
     DomainError, DomainResult,
-    entities::Frame,
+    entities::{Frame, frame::FramePatch},
     value_objects::{JsonData, JsonPath, Priority, SessionId, StreamId},
 };
 use chrono::{DateTime, Utc};
@@ -328,6 +328,25 @@ impl Stream {
         priority_threshold: Priority,
         max_frames: usize,
     ) -> DomainResult<Vec<Frame>> {
+        let patches = self.extract_prioritized_patches(priority_threshold)?;
+        self.commit_patch_frames(patches, max_frames)
+    }
+
+    /// Compute prioritized patches for this stream's current `source_data`,
+    /// without mutating any state — the expensive half of
+    /// [`Self::create_patch_frames`] (a full traversal of `source_data`,
+    /// computing a priority for every leaf value).
+    ///
+    /// Split out from [`Self::commit_patch_frames`] so a caller that needs
+    /// its own concurrency control around the *mutating* half (e.g. a
+    /// repository holding a per-session lock for the read-modify-write) can
+    /// run this traversal lock-free and only take the lock for the cheap
+    /// commit step. Safe to call without holding any lock: `source_data` is
+    /// set once at stream creation and never mutated afterward.
+    pub fn extract_prioritized_patches(
+        &self,
+        priority_threshold: Priority,
+    ) -> DomainResult<Vec<(FramePatch, Priority)>> {
         if !matches!(self.state, StreamState::Streaming) {
             return Err(DomainError::InvalidStreamState(
                 "Stream must be in streaming state to create frames".to_string(),
@@ -338,8 +357,31 @@ impl Stream {
             DomainError::InvalidStreamState("No source data available for patches".to_string())
         })?;
 
-        let prioritized = self.extract_patches(source_data, priority_threshold)?;
-        let frames = self.batch_patches_into_frames(prioritized, max_frames)?;
+        self.extract_patches(source_data, priority_threshold)
+    }
+
+    /// Turn already-extracted prioritized patches (from
+    /// [`Self::extract_prioritized_patches`]) into frames and commit their
+    /// bookkeeping (`next_sequence`, `stats`) — the cheap, `O(max_frames)`
+    /// half of [`Self::create_patch_frames`].
+    ///
+    /// Re-checks the streaming-state precondition itself: if the stream
+    /// transitioned out of `Streaming` between the caller's earlier
+    /// [`Self::extract_prioritized_patches`] call and this one, this fails
+    /// cleanly instead of committing frames for a stream that can no longer
+    /// accept them.
+    pub fn commit_patch_frames(
+        &mut self,
+        patches: Vec<(FramePatch, Priority)>,
+        max_frames: usize,
+    ) -> DomainResult<Vec<Frame>> {
+        if !matches!(self.state, StreamState::Streaming) {
+            return Err(DomainError::InvalidStreamState(
+                "Stream must be in streaming state to create frames".to_string(),
+            ));
+        }
+
+        let frames = self.batch_patches_into_frames(patches, max_frames)?;
 
         for frame in &frames {
             self.record_frame_created(frame);

@@ -273,6 +273,18 @@ pub struct SessionHealthSnapshot {
     /// Fraction of recent operations that returned errors, in `[0.0, 1.0]`.
     pub error_rate: f64,
     /// Free-form named metrics captured at snapshot time.
+    ///
+    /// No key is contractually guaranteed across implementations, but
+    /// [`GatInMemoryStreamRepository`](crate::infrastructure::adapters::GatInMemoryStreamRepository)
+    /// currently populates:
+    /// - `"active_streams"` — same value as [`Self::active_streams`], as `f64`.
+    /// - `"total_bytes"` — `SessionStats::total_bytes`, as `f64`.
+    /// - `"recent_avg_duration_ms"` — `SessionStats::recent_avg_duration_ms`
+    ///   (the recency-weighted EMA, deliberately *not*
+    ///   `SessionStats::average_stream_duration_ms`'s lifetime mean — see #458);
+    ///   named to match the `SessionStats` field it mirrors so it reads
+    ///   unambiguously next to `GET /pjs/sessions/{id}/stats`'s response,
+    ///   which serializes `SessionStats` (and both duration fields) verbatim.
     pub metrics: HashMap<String, f64>,
 }
 
