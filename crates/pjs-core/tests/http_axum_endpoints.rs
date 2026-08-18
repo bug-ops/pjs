@@ -859,6 +859,74 @@ mod stream_frames_stream {
         assert_eq!(line_count, 4);
     }
 
+    /// Regression test for #516: the streaming route's per-frame JSON shape must
+    /// match the buffered `/frames` route's shape exactly — same field names
+    /// (`frame_type`, not the old hand-rolled `type`), `stream_id` present, and
+    /// `frame_type` using the same serde representation (not `Debug`-formatted).
+    #[tokio::test]
+    async fn test_stream_frames_shape_matches_buffered_frames_route() {
+        let (app, session_id, stream_id) = seed_streamed_frames(1).await;
+
+        let buffered_request = Request::builder()
+            .uri(format!(
+                "/pjs/sessions/{session_id}/streams/{stream_id}/frames"
+            ))
+            .method("GET")
+            .body(Body::empty())
+            .unwrap();
+        let buffered_response = app.clone().oneshot(buffered_request).await.unwrap();
+        assert_eq!(buffered_response.status(), StatusCode::OK);
+        let buffered_body = axum::body::to_bytes(buffered_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let buffered_json: JsonValue = serde_json::from_slice(&buffered_body).unwrap();
+        let buffered_frame = buffered_json["frames"][0].clone();
+
+        let streamed_response = app
+            .oneshot(stream_request(session_id, stream_id, None))
+            .await
+            .unwrap();
+        assert_eq!(streamed_response.status(), StatusCode::OK);
+        let streamed_body = axum::body::to_bytes(streamed_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = std::str::from_utf8(&streamed_body).unwrap();
+        let streamed_frame: JsonValue = serde_json::from_str(text.lines().next().unwrap())
+            .expect("streamed frame must be valid JSON");
+
+        let mut buffered_keys: Vec<&str> = buffered_frame
+            .as_object()
+            .expect("buffered frame must be an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut streamed_keys: Vec<&str> = streamed_frame
+            .as_object()
+            .expect("streamed frame must be an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        buffered_keys.sort_unstable();
+        streamed_keys.sort_unstable();
+        assert_eq!(
+            streamed_keys, buffered_keys,
+            "streaming route field names must match the buffered /frames route"
+        );
+
+        assert!(
+            streamed_frame.get("stream_id").is_some(),
+            "streamed frame must carry stream_id, like the buffered route"
+        );
+        assert!(
+            streamed_frame.get("frame_type").is_some(),
+            "field must be named frame_type, not type"
+        );
+        assert_eq!(
+            streamed_frame["frame_type"], buffered_frame["frame_type"],
+            "frame_type must use the buffered route's serde representation, not Debug format"
+        );
+    }
+
     #[tokio::test]
     async fn test_stream_frames_sse_accept() {
         let (app, session_id, stream_id) = seed_streamed_frames(3).await;

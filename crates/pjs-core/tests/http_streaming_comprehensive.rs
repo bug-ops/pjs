@@ -15,8 +15,8 @@
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use futures::StreamExt;
 use pjson_rs::{
-    domain::entities::Frame,
-    domain::value_objects::{JsonData, StreamId},
+    domain::entities::{Frame, frame::FramePatch},
+    domain::value_objects::{JsonData, JsonPath, Priority, StreamId},
     infrastructure::http::streaming::{
         AdaptiveFrameStream, BatchFrameStream, PriorityFrameStream, StreamFormat,
         StreamTransportError, create_streaming_response,
@@ -401,12 +401,15 @@ fn test_stream_format_content_type() {
 // AdaptiveFrameStream Tests
 // ============================================================================
 
-fn create_test_frame(_priority: u8, sequence: u64, _payload: &str) -> Frame {
+/// Builds a patch frame carrying the given `priority` (1-255) — unlike
+/// `Frame::skeleton`, which always hardcodes `Priority::CRITICAL`, this lets
+/// priority-ordering tests exercise real, distinct priority values.
+fn create_test_frame(priority: u8, sequence: u64, _payload: &str) -> Frame {
     let stream_id = StreamId::new();
-    let json_data = JsonData::string("test data");
-
-    // Use skeleton frame for simpler testing
-    Frame::skeleton(stream_id, sequence, json_data)
+    let path = JsonPath::new("$.value").expect("valid path");
+    let patch = FramePatch::set(path, JsonData::string("test data"));
+    let priority = Priority::new(priority).expect("valid priority");
+    Frame::patch(stream_id, sequence, priority, vec![patch]).expect("valid patch frame")
 }
 
 #[tokio::test]
@@ -611,6 +614,10 @@ async fn test_batch_frame_stream_empty() {
 // PriorityFrameStream Tests
 // ============================================================================
 
+/// Regression test for #517: with a buffer large enough to hold every frame,
+/// `PriorityFrameStream` must emit them in strictly descending priority order
+/// — this is what an inverted or broken `Ord` delegation on `PriorityFrame`
+/// would break, even though `collected.len()` alone would not catch it.
 #[tokio::test]
 async fn test_priority_frame_stream_orders_by_priority() {
     let frames = vec![
@@ -625,11 +632,20 @@ async fn test_priority_frame_stream_orders_by_priority() {
 
     let collected: Vec<_> = priority.into_stream().collect().await;
 
-    // Should get all frames
     assert_eq!(collected.len(), 4);
-    for result in collected {
-        assert!(result.is_ok());
-    }
+    let priorities: Vec<u64> = collected
+        .into_iter()
+        .map(|result| {
+            let bytes = result.expect("frame must serialize");
+            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            v["priority"].as_u64().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        priorities,
+        vec![250, 200, 150, 100],
+        "frames must be emitted highest priority first"
+    );
 }
 
 #[tokio::test]
@@ -647,6 +663,53 @@ async fn test_priority_frame_stream_small_buffer() {
     let collected: Vec<_> = priority.into_stream().collect().await;
 
     assert_eq!(collected.len(), 3);
+    let priorities: Vec<u64> = collected
+        .into_iter()
+        .map(|result| {
+            let bytes = result.expect("frame must serialize");
+            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            v["priority"].as_u64().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        priorities,
+        vec![250, 200, 100],
+        "even a buffer smaller than the input must yield each 2-item window highest-first"
+    );
+}
+
+/// Regression test for the equal-priority tiebreak: `PriorityFrame::cmp`
+/// falls back to `sequence` when priorities match, so frames sharing one
+/// priority value must be emitted in ascending sequence order (FIFO within
+/// a priority tier) rather than left to `BinaryHeap`'s unspecified order.
+#[tokio::test]
+async fn test_priority_frame_stream_equal_priority_ties_break_on_sequence() {
+    let frames = vec![
+        create_test_frame(150, 5, r#"{"seq": 5}"#),
+        create_test_frame(150, 1, r#"{"seq": 1}"#),
+        create_test_frame(150, 3, r#"{"seq": 3}"#),
+        create_test_frame(150, 2, r#"{"seq": 2}"#),
+    ];
+
+    let frame_stream = futures::stream::iter(frames);
+    let priority = PriorityFrameStream::new(frame_stream, StreamFormat::Json, 10);
+
+    let collected: Vec<_> = priority.into_stream().collect().await;
+
+    assert_eq!(collected.len(), 4);
+    let sequences: Vec<u64> = collected
+        .into_iter()
+        .map(|result| {
+            let bytes = result.expect("frame must serialize");
+            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            v["sequence"].as_u64().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        sequences,
+        vec![1, 2, 3, 5],
+        "equal-priority frames must be emitted in ascending sequence order (FIFO)"
+    );
 }
 
 #[tokio::test]

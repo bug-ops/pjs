@@ -219,32 +219,25 @@ impl StreamFormat {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn frame_to_value(frame: &Frame) -> serde_json::Value {
-    serde_json::json!({
-        "type": format!("{:?}", frame.frame_type()),
-        "priority": frame.priority().value(),
-        "sequence": frame.sequence(),
-        "timestamp": frame.timestamp().to_rfc3339(),
-        "payload": frame.payload(),
-        "metadata": frame.metadata()
-    })
-}
-
+/// Serializes a frame directly via [`Frame`]'s own derived
+/// [`Serialize`](serde::Serialize) impl — this is what keeps the per-frame
+/// wire shape (field names, `stream_id` presence, `frame_type`
+/// representation) identical to the buffered `/frames` route, and avoids
+/// materializing an intermediate `serde_json::Value` tree per frame.
 fn format_frame_owned(
     frame: &Frame,
     format: StreamFormat,
 ) -> Result<Vec<u8>, StreamTransportError> {
-    let v = frame_to_value(frame);
     match format {
-        StreamFormat::Json | StreamFormat::Binary => Ok(sonic_rs::to_vec(&v)?),
+        StreamFormat::Json | StreamFormat::Binary => Ok(sonic_rs::to_vec(frame)?),
         StreamFormat::NdJson => {
-            let mut out = sonic_rs::to_vec(&v)?;
+            let mut out = sonic_rs::to_vec(frame)?;
             out.push(b'\n');
             Ok(out)
         }
         StreamFormat::ServerSentEvents => {
             let mut out = Vec::from(b"data: ".as_slice());
-            out.extend_from_slice(&sonic_rs::to_vec(&v)?);
+            out.extend_from_slice(&sonic_rs::to_vec(frame)?);
             out.extend_from_slice(b"\n\n");
             Ok(out)
         }
@@ -260,28 +253,27 @@ fn format_batch_owned(
     frames: &[Frame],
     format: StreamFormat,
 ) -> Result<Vec<u8>, StreamTransportError> {
-    let values: Vec<_> = frames.iter().map(frame_to_value).collect();
     match format {
         // #167: NDJSON-of-objects — one JSON object per line per frame.
         // Identical wire bytes for Json and NdJson; only content_type() differs.
         StreamFormat::Json | StreamFormat::NdJson => {
             let mut out = Vec::new();
-            for v in values {
-                out.extend_from_slice(&sonic_rs::to_vec(&v)?);
+            for frame in frames {
+                out.extend_from_slice(&sonic_rs::to_vec(frame)?);
                 out.push(b'\n');
             }
             Ok(out)
         }
         StreamFormat::ServerSentEvents => {
             let mut out = Vec::new();
-            for v in values {
+            for frame in frames {
                 out.extend_from_slice(b"data: ");
-                out.extend_from_slice(&sonic_rs::to_vec(&v)?);
+                out.extend_from_slice(&sonic_rs::to_vec(frame)?);
                 out.extend_from_slice(b"\n\n");
             }
             Ok(out)
         }
-        StreamFormat::Binary => Ok(sonic_rs::to_vec(&values)?),
+        StreamFormat::Binary => Ok(sonic_rs::to_vec(frames)?),
     }
 }
 
@@ -473,12 +465,12 @@ pub struct PriorityFrameStream<S> {
 #[derive(Debug, Clone)]
 struct PriorityFrame {
     frame: Frame,
-    priority: u8,
 }
 
 impl PartialEq for PriorityFrame {
     fn eq(&self, other: &Self) -> bool {
-        self.priority == other.priority
+        self.frame.priority() == other.frame.priority()
+            && self.frame.sequence() == other.frame.sequence()
     }
 }
 
@@ -490,9 +482,16 @@ impl PartialOrd for PriorityFrame {
     }
 }
 
+/// Orders by priority first (highest first out of the max-heap); frames of
+/// equal priority tie-break on `sequence` (reversed, since the heap pops the
+/// *greatest* element and lower sequence — the earlier frame — must come out
+/// first), giving deterministic FIFO order within a priority tier.
 impl Ord for PriorityFrame {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.priority.cmp(&other.priority)
+        self.frame
+            .priority()
+            .cmp(&other.frame.priority())
+            .then_with(|| other.frame.sequence().cmp(&self.frame.sequence()))
     }
 }
 
@@ -533,8 +532,7 @@ where
                 while !inner_done && heap.len() < buffer_size {
                     match inner.next().await {
                         Some(frame) => {
-                            let priority = frame.priority().value();
-                            heap.push(PriorityFrame { frame, priority });
+                            heap.push(PriorityFrame { frame });
                         }
                         None => inner_done = true,
                     }
@@ -1079,7 +1077,7 @@ mod tests {
     }
 
     /// `sonic_rs::to_vec` must stay parse-equivalent to `serde_json::to_vec` for
-    /// the `serde_json::Value` shapes `frame_to_value` can produce — the two
+    /// the range of JSON shapes a serialized [`Frame`] can produce — the two
     /// encoders are not guaranteed byte-identical (e.g. float formatting), so
     /// this asserts round-trip equivalence per edge case and records where the
     /// raw bytes happen to diverge (informational, not a failure).
