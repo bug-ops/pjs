@@ -330,7 +330,7 @@ fn test_validation_performance() {
 
 #[test]
 fn test_deep_nesting_validation() {
-    let validator = ValidationService::with_max_depth(50);
+    let validator = ValidationService::new().with_max_depth(50);
 
     // Create deeply nested object (30 levels)
     fn create_nested(depth: usize) -> JsonData {

@@ -61,6 +61,113 @@ const SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 /// connection.
 const SESSION_MAX_AGE: Duration = Duration::from_secs(3600);
 
+/// Pre-resolved `Origin` allow-list policy for [`AxumWebSocketTransport::upgrade_handler`].
+///
+/// Resolved once at construction (see [`AxumWebSocketTransport::with_allowed_origins`])
+/// from a `Vec<String>` with the same config semantics as
+/// [`crate::infrastructure::http::axum_adapter::build_cors_layer_from_origins`]'s
+/// `allowed_origins`, rather than re-parsing the list on every upgrade request.
+#[derive(Debug, Clone)]
+enum OriginAllowList {
+    /// `[]` — deny all cross-origin upgrades (fail-closed default).
+    DenyAll,
+    /// `["*"]` — allow any origin.
+    ///
+    /// **This is more permissive on a WebSocket endpoint than the
+    /// equivalent CORS `Any` on an HTTP endpoint.** Browsers refuse to
+    /// send credentials (cookies) on a CORS request whose response is
+    /// `Access-Control-Allow-Origin: *`, so wildcard CORS can't itself be
+    /// used to steal a credentialed session. WebSocket has no such rule —
+    /// the browser attaches ambient credentials to the handshake
+    /// regardless of what the server's `Origin` policy turns out to be.
+    /// Setting this fully re-enables the CSWSH this allow-list exists to
+    /// prevent; only use it for endpoints that perform their own
+    /// authentication and don't rely on browser ambient credentials.
+    Any,
+    /// Explicit origin list, matched by case-sensitive byte equality
+    /// against the `Origin` header value.
+    Explicit(Vec<axum::http::HeaderValue>),
+}
+
+impl OriginAllowList {
+    /// Resolve a raw `allowed_origins` list into a policy.
+    ///
+    /// Mixing `"*"` with explicit origins is treated as [`Self::DenyAll`]
+    /// (fail-closed) rather than a construction error: unlike
+    /// `build_cors_layer_from_origins`, this is called from a builder that
+    /// returns `Self`, not `Result`.
+    fn resolve(allowed_origins: &[String]) -> Self {
+        let has_wildcard = allowed_origins.iter().any(|o| o == "*");
+        let has_explicit = allowed_origins.iter().any(|o| o != "*");
+
+        match (allowed_origins.is_empty(), has_wildcard, has_explicit) {
+            (true, _, _) => OriginAllowList::DenyAll,
+            (_, true, true) => OriginAllowList::DenyAll,
+            (_, true, false) => OriginAllowList::Any,
+            (_, false, _) => OriginAllowList::Explicit(
+                allowed_origins
+                    .iter()
+                    .filter_map(|o| Self::parse_explicit_origin(o))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Parse one explicit `allowed_origins` entry, warning about entries
+    /// that can never match a real browser `Origin` header instead of
+    /// silently accepting them.
+    ///
+    /// A real `Origin` value is always a lowercase `scheme://host[:port]`
+    /// with no path. An entry like `"example.com"` (missing scheme),
+    /// `"https://example.com/"` (trailing path), or
+    /// `"HTTPS://Example.com"` (uppercase) still parses as a valid
+    /// `HeaderValue` and is kept fail-closed, but can never equal an
+    /// actual `Origin` header byte-for-byte — making that entry an
+    /// effective silent deny with no other diagnostic, unlike
+    /// `build_cors_layer_from_origins`, which hard-errors on unparseable
+    /// origins. An entry that fails to parse as a `HeaderValue` at all is
+    /// dropped (it could never match anything).
+    fn parse_explicit_origin(origin: &str) -> Option<axum::http::HeaderValue> {
+        // `"null"` is a legitimate `Origin` value per the Fetch/HTML spec —
+        // sent by sandboxed iframes, `file://` pages, and some redirected
+        // requests — not a malformed entry, so it's exempt from the
+        // shape check below.
+        let looks_like_origin = origin == "null"
+            || origin.split_once("://").is_some_and(|(scheme, rest)| {
+                !rest.contains('/')
+                    && !scheme.bytes().any(|b| b.is_ascii_uppercase())
+                    && !rest.bytes().any(|b| b.is_ascii_uppercase())
+            });
+        if !looks_like_origin {
+            warn!(
+                "WebSocket allowed_origins entry {origin:?} does not look like a real Origin \
+                 (expected lowercase `scheme://host[:port]` with no path) and will likely never \
+                 match a real request"
+            );
+        }
+
+        match origin.parse::<axum::http::HeaderValue>() {
+            Ok(value) => Some(value),
+            Err(e) => {
+                warn!(
+                    "WebSocket allowed_origins entry {origin:?} is not a valid header value \
+                     and is being dropped: {e}"
+                );
+                None
+            }
+        }
+    }
+
+    /// Whether a present `Origin` header value is allowed.
+    fn allows(&self, origin: &axum::http::HeaderValue) -> bool {
+        match self {
+            OriginAllowList::DenyAll => false,
+            OriginAllowList::Any => true,
+            OriginAllowList::Explicit(list) => list.iter().any(|o| o == origin),
+        }
+    }
+}
+
 /// Axum WebSocket transport implementation
 pub struct AxumWebSocketTransport {
     controller: Arc<AdaptiveStreamController>,
@@ -75,6 +182,10 @@ pub struct AxumWebSocketTransport {
     /// Per-IP rate limiter applied to upgrade requests, connection establishment,
     /// and inbound application-level messages.
     rate_limiter: Arc<WebSocketRateLimiter>,
+    /// `Origin` allow-list applied to WebSocket upgrades, to block
+    /// cross-site WebSocket hijacking (CSWSH) from browser clients. See
+    /// [`Self::with_allowed_origins`].
+    allowed_origins: OriginAllowList,
 }
 
 impl AxumWebSocketTransport {
@@ -118,7 +229,36 @@ impl AxumWebSocketTransport {
             outgoing_channels: Arc::new(RwLock::new(HashMap::new())),
             connection_sessions: Arc::new(RwLock::new(HashMap::new())),
             rate_limiter: Arc::new(WebSocketRateLimiter::new(config)),
+            allowed_origins: OriginAllowList::DenyAll,
         }
+    }
+
+    /// Restrict WebSocket upgrades to the given `Origin` allow-list.
+    ///
+    /// Reuses the config semantics of
+    /// [`HttpServerConfig::allowed_origins`](crate::infrastructure::http::axum_adapter::HttpServerConfig::allowed_origins)'s
+    /// CORS allow-list:
+    /// - `[]` (the default) — deny all cross-origin upgrades (fail-closed)
+    /// - `["*"]` — allow any origin. **More dangerous here than the
+    ///   equivalent CORS `Any`**: browsers attach ambient credentials to a
+    ///   WebSocket handshake regardless of the server's `Origin` response,
+    ///   unlike CORS, so a wildcard here fully re-enables the CSWSH this
+    ///   allow-list exists to prevent.
+    /// - `"*"` mixed with explicit origins — treated as deny-all (fail
+    ///   closed); unlike the CORS layer this cannot be surfaced as a
+    ///   construction error, since this builder returns `Self`
+    ///
+    /// Explicit entries that can never match a real `Origin` header (no
+    /// `scheme://`, a trailing path, or uppercase letters) are kept
+    /// fail-closed but logged with `warn!`, since they'd otherwise silently
+    /// deny every browser connection with no diagnostic.
+    ///
+    /// This only governs requests that *carry* an `Origin` header. A
+    /// request without one is always allowed to upgrade regardless of this
+    /// list — see [`Self::upgrade_handler`] for why that is safe.
+    pub fn with_allowed_origins(mut self, allowed_origins: Vec<String>) -> Self {
+        self.allowed_origins = OriginAllowList::resolve(&allowed_origins);
+        self
     }
 
     /// Handle WebSocket upgrade for Axum.
@@ -126,6 +266,11 @@ impl AxumWebSocketTransport {
     /// Extracts the peer address via [`ConnectInfo`] and rejects upgrade
     /// requests that exceed the per-IP request budget with HTTP 429 before any
     /// WebSocket frames are exchanged.
+    ///
+    /// Also rejects, with HTTP 403, upgrades carrying an `Origin` header not
+    /// in [`Self::with_allowed_origins`]'s allow-list — see that method and
+    /// the check's own doc comment below for the CSWSH threat model and why
+    /// a missing `Origin` header is allowed.
     ///
     /// Configures axum/tungstenite's transport-level `max_message_size` and
     /// `max_frame_size` from the transport's [`RateLimitConfig::max_frame_size`],
@@ -141,6 +286,7 @@ impl AxumWebSocketTransport {
     pub async fn upgrade_handler(
         ws: WebSocketUpgrade,
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
+        headers: axum::http::HeaderMap,
         State(transport): State<Arc<Self>>,
     ) -> Response {
         let client_ip = addr.ip();
@@ -148,6 +294,26 @@ impl AxumWebSocketTransport {
         if let Err(e) = transport.rate_limiter.check_request(client_ip) {
             warn!("WebSocket upgrade denied for IP {}: {}", client_ip, e);
             return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
+        }
+
+        // Browsers always attach `Origin` to a WebSocket handshake, and
+        // CSWSH depends on the browser sending that header along with
+        // ambient credentials (cookies). A missing `Origin` therefore
+        // cannot be a browser exploiting CSWSH — it's a native client, e.g.
+        // `PjsWebSocketClient` or a non-browser tool, none of which send
+        // one. Rejecting those would break every native client while
+        // gaining no CSWSH protection, so an absent header is always
+        // allowed here regardless of `allowed_origins`. Combined with the
+        // fail-closed `DenyAll` default, this means browser clients are
+        // refused by default while native clients keep working.
+        if let Some(origin) = headers.get(axum::http::header::ORIGIN)
+            && !transport.allowed_origins.allows(origin)
+        {
+            warn!(
+                "WebSocket upgrade rejected for IP {}: disallowed Origin {:?}",
+                client_ip, origin
+            );
+            return StatusCode::FORBIDDEN.into_response();
         }
 
         let max_frame_size = transport.rate_limiter.config().max_frame_size;

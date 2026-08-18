@@ -229,6 +229,20 @@ pub enum SchemaValidationError {
         reason: String,
     },
 
+    /// Regex pattern exceeded the maximum accepted length
+    ///
+    /// Returned before the pattern is compiled, so oversized patterns never
+    /// reach [`Self::InvalidPattern`] or [`Self::PatternMismatch`].
+    #[error("Pattern too long at '{path}': length {length} exceeds maximum {max}")]
+    PatternTooLong {
+        /// JSON path where error occurred
+        path: String,
+        /// Actual pattern length in bytes
+        length: usize,
+        /// Maximum accepted pattern length in bytes
+        max: usize,
+    },
+
     /// Array size constraint violation
     #[error("Array size constraint at '{path}': size {actual} not in [{min}, {max}]")]
     ArraySizeConstraint {

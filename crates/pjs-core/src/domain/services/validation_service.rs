@@ -11,10 +11,7 @@ use crate::domain::value_objects::{
 };
 
 #[cfg(feature = "schema-validation")]
-use {dashmap::DashMap, once_cell::sync::Lazy};
-
-#[cfg(feature = "schema-validation")]
-static REGEX_CACHE: Lazy<DashMap<String, regex::Regex>> = Lazy::new(DashMap::new);
+use {dashmap::DashMap, std::sync::Arc};
 
 /// Schema validation service
 ///
@@ -41,25 +38,115 @@ static REGEX_CACHE: Lazy<DashMap<String, regex::Regex>> = Lazy::new(DashMap::new
 pub struct ValidationService {
     /// Maximum validation depth to prevent stack overflow
     max_depth: usize,
+    /// Maximum accepted length (in bytes) for a schema's regex `pattern`,
+    /// checked before compilation so an oversized pattern is rejected
+    /// without ever being compiled or cached.
+    #[cfg(feature = "schema-validation")]
+    max_pattern_length: usize,
+    /// Per-instance cache of compiled patterns, keyed by pattern source.
+    ///
+    /// Scoped to the service instance (rather than a process-wide
+    /// `static`) so cached regexes are reclaimed when the service is
+    /// dropped, and bounded by [`Self::MAX_REGEX_CACHE_ENTRIES`] so it
+    /// cannot grow without limit for the service's lifetime either.
+    #[cfg(feature = "schema-validation")]
+    regex_cache: DashMap<String, Arc<regex::Regex>>,
 }
 
 impl ValidationService {
     /// Maximum default validation depth
     const DEFAULT_MAX_DEPTH: usize = 32;
 
+    /// Default maximum length (in bytes) for a schema's regex `pattern`.
+    #[cfg(feature = "schema-validation")]
+    const DEFAULT_MAX_PATTERN_LENGTH: usize = 1024;
+
+    /// Hard ceiling on [`Self::max_pattern_length`], regardless of what a
+    /// caller requests via [`Self::with_max_pattern_length`].
+    ///
+    /// The pattern text is echoed into `InvalidPattern`/`PatternMismatch`
+    /// error values, so `max_pattern_length` is also an anti-amplification
+    /// bound, not just a compile-cost knob. Clamping to this ceiling means
+    /// raising the configured limit can't fully disable that bound (e.g.
+    /// `with_max_pattern_length(usize::MAX)` still caps at this value).
+    #[cfg(feature = "schema-validation")]
+    const MAX_PATTERN_LENGTH_CEILING: usize = 8 * 1024; // 8 KiB
+
+    /// Maximum number of compiled patterns retained in [`Self::regex_cache`]
+    /// before it is flushed. Combined with [`Self::REGEX_SIZE_LIMIT`], this
+    /// bounds a single thread's view of the cache to roughly
+    /// `MAX_REGEX_CACHE_ENTRIES * REGEX_SIZE_LIMIT` = 64 MiB.
+    ///
+    /// This does **not** bound total process memory on its own: `regex`'s
+    /// lazy DFA cache ([`Self::REGEX_DFA_SIZE_LIMIT`]) is a per-thread pool
+    /// held inside each compiled `Regex`, so the real worst case scales
+    /// additionally with the number of distinct threads that have matched
+    /// against each cached pattern — roughly
+    /// `entries * (REGEX_SIZE_LIMIT + threads_touched * REGEX_DFA_SIZE_LIMIT)`,
+    /// i.e. ≈320 MiB at 64 threads (down from the unbounded, process-lifetime
+    /// `static` this cache replaced).
+    #[cfg(feature = "schema-validation")]
+    const MAX_REGEX_CACHE_ENTRIES: usize = 64;
+
+    /// Maximum compiled program size accepted for a single regex.
+    ///
+    /// This is one tenth of `regex`'s crate-default `size_limit` (10 MiB),
+    /// chosen to be close to the practical floor: ordinary patterns like a bare
+    /// `^\d{4}-\d{2}-\d{2}$` date or `^(\d{1,3}\.){3}\d{1,3}$` IPv4 sit right
+    /// at 64 KiB, and a plain ISO-8601 timestamp pattern needs 128 KiB, so a
+    /// meaningfully smaller limit rejects realistic schema patterns rather
+    /// than pathological ones. The memory bound is instead taken from
+    /// [`Self::MAX_REGEX_CACHE_ENTRIES`] — see that constant's doc for how
+    /// this combines into the cache's overall memory bound, including the
+    /// per-thread DFA caveat.
+    ///
+    /// **Documented limitation**: patterns needing a Unicode character
+    /// class under bounded repetition (e.g. `^\p{L}{1,64}$`, ~4 MiB;
+    /// `^\p{L}{1,255}$`, 16 MiB) still exceed this limit and are rejected
+    /// with [`SchemaValidationError::InvalidPattern`]. Accepting those would
+    /// require a limit close to `regex`'s own default (~10 MiB), which
+    /// reopens most of the memory-bound gap this fix exists to close; this
+    /// is treated as an accepted trade-off, not a bug.
+    #[cfg(feature = "schema-validation")]
+    const REGEX_SIZE_LIMIT: usize = 1024 * 1024; // 1 MiB
+
+    /// Maximum DFA cache size accepted for a single regex, per thread that
+    /// matches against it. See [`Self::MAX_REGEX_CACHE_ENTRIES`].
+    #[cfg(feature = "schema-validation")]
+    const REGEX_DFA_SIZE_LIMIT: usize = 64 * 1024; // 64 KiB
+
     /// Create a new validation service with default configuration
     pub fn new() -> Self {
         Self {
             max_depth: Self::DEFAULT_MAX_DEPTH,
+            #[cfg(feature = "schema-validation")]
+            max_pattern_length: Self::DEFAULT_MAX_PATTERN_LENGTH,
+            #[cfg(feature = "schema-validation")]
+            regex_cache: DashMap::new(),
         }
     }
 
-    /// Create validation service with custom maximum depth
+    /// Set the maximum nested validation depth.
     ///
     /// # Arguments
     /// * `max_depth` - Maximum nested validation depth
-    pub fn with_max_depth(max_depth: usize) -> Self {
-        Self { max_depth }
+    pub fn with_max_depth(mut self, max_depth: usize) -> Self {
+        self.max_depth = max_depth;
+        self
+    }
+
+    /// Set the maximum accepted length (in bytes) for a schema's regex
+    /// `pattern`. Patterns longer than this are rejected with
+    /// [`SchemaValidationError::PatternTooLong`] before compilation.
+    ///
+    /// Clamped to a hard, non-configurable ceiling (8 KiB) regardless of
+    /// the requested value, since the pattern text is echoed into error
+    /// values — this bound can't be raised away to disable that
+    /// anti-amplification guard.
+    #[cfg(feature = "schema-validation")]
+    pub fn with_max_pattern_length(mut self, max_pattern_length: usize) -> Self {
+        self.max_pattern_length = max_pattern_length.min(Self::MAX_PATTERN_LENGTH_CEILING);
+        self
     }
 
     /// Validate JSON data against a schema
@@ -348,13 +435,48 @@ impl ValidationService {
 
         #[cfg(feature = "schema-validation")]
         if let Some(pat) = pattern {
-            let re = REGEX_CACHE.entry(pat.clone()).or_try_insert_with(|| {
-                regex::Regex::new(pat).map_err(|e| SchemaValidationError::InvalidPattern {
+            // Reject oversized patterns before compiling or caching them.
+            // This also bounds how much pattern text can ever reach
+            // `InvalidPattern`/`PatternMismatch` below, so a multi-megabyte
+            // attacker-controlled pattern can't be re-amplified into error
+            // values or logs.
+            if pat.len() > self.max_pattern_length {
+                return Err(SchemaValidationError::PatternTooLong {
                     path: path.to_string(),
-                    pattern: pat.clone(),
-                    reason: e.to_string(),
-                })
-            })?;
+                    length: pat.len(),
+                    max: self.max_pattern_length,
+                });
+            }
+
+            if self.regex_cache.len() >= Self::MAX_REGEX_CACHE_ENTRIES {
+                // Generation-flush eviction: len()-then-clear is not atomic
+                // under dashmap, so concurrent inserters can transiently
+                // overshoot this cap by roughly the number of racing
+                // threads. That overshoot is bounded and acceptable, not a
+                // correctness bug.
+                self.regex_cache.clear();
+            }
+
+            let re: Arc<regex::Regex> = {
+                let guard = self.regex_cache.entry(pat.clone()).or_try_insert_with(|| {
+                    regex::RegexBuilder::new(pat)
+                        .size_limit(Self::REGEX_SIZE_LIMIT)
+                        .dfa_size_limit(Self::REGEX_DFA_SIZE_LIMIT)
+                        .build()
+                        .map(Arc::new)
+                        .map_err(|e| SchemaValidationError::InvalidPattern {
+                            path: path.to_string(),
+                            pattern: pat.clone(),
+                            reason: e.to_string(),
+                        })
+                })?;
+                // Clone the Arc and let the dashmap shard guard drop here,
+                // instead of holding it across `is_match` below — matching
+                // regexes against large input strings would otherwise
+                // serialize all requests hashing to the same shard.
+                guard.value().clone()
+            };
+
             if !re.is_match(value) {
                 return Err(SchemaValidationError::PatternMismatch {
                     path: path.to_string(),
@@ -1071,7 +1193,7 @@ mod tests {
 
     #[test]
     fn test_validate_max_depth_exceeded() {
-        let validator = ValidationService::with_max_depth(5);
+        let validator = ValidationService::new().with_max_depth(5);
 
         // Create nested structure that exceeds max depth
         fn create_nested(depth: usize) -> JsonData {
@@ -1257,5 +1379,170 @@ mod tests {
             "expected InvalidPattern for a syntactically invalid regex, got: {:?}",
             result
         );
+    }
+
+    #[test]
+    #[cfg(feature = "schema-validation")]
+    fn test_validate_string_pattern_too_long_rejected() {
+        let validator = ValidationService::new().with_max_pattern_length(8);
+        // Deliberately an *invalid* regex (unbalanced parens): if the
+        // length check ran after compilation instead of before, this
+        // would surface as `InvalidPattern`, not `PatternTooLong` — this
+        // test would then pass for the wrong reason with a merely
+        // oversized-but-valid pattern like `"a".repeat(9)`.
+        let schema = Schema::String {
+            min_length: None,
+            max_length: None,
+            pattern: Some("(".repeat(9)),
+            allowed_values: None,
+        };
+
+        let result = validator.validate(&JsonData::String("aaa".to_string()), &schema, "/name");
+        assert!(matches!(
+            result,
+            Err(SchemaValidationError::PatternTooLong {
+                length: 9,
+                max: 8,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "schema-validation")]
+    fn test_validate_string_pattern_at_max_length_is_accepted() {
+        // Boundary: exactly `max_pattern_length` bytes must be accepted
+        // (the check is `len > max`, not `len >= max`); a regression to
+        // `>=` would reject this and only this test would catch it.
+        let validator = ValidationService::new().with_max_pattern_length(8);
+        let schema = Schema::String {
+            min_length: None,
+            max_length: None,
+            pattern: Some("a".repeat(8)),
+            allowed_values: None,
+        };
+
+        let result =
+            validator.validate(&JsonData::String("aaaaaaaa".to_string()), &schema, "/name");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "schema-validation")]
+    fn test_regex_cache_stays_bounded_across_many_patterns() {
+        let validator = ValidationService::new();
+
+        // Compile far more distinct patterns than the cache cap, checking
+        // it never grows past the bound (allowing slack for the
+        // documented non-atomic flush, which is single-threaded-safe here).
+        for i in 0..(ValidationService::MAX_REGEX_CACHE_ENTRIES * 3) {
+            let schema = Schema::String {
+                min_length: None,
+                max_length: None,
+                pattern: Some(format!("^pattern-{i}$")),
+                allowed_values: None,
+            };
+            let data = JsonData::String(format!("pattern-{i}"));
+            assert!(validator.validate(&data, &schema, "/value").is_ok());
+            assert!(validator.regex_cache.len() <= ValidationService::MAX_REGEX_CACHE_ENTRIES);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "schema-validation")]
+    fn test_valid_pattern_still_matches_after_cache_flush() {
+        let validator = ValidationService::new();
+        let schema = Schema::String {
+            min_length: None,
+            max_length: None,
+            pattern: Some("^[a-z]+$".to_string()),
+            allowed_values: None,
+        };
+
+        assert!(
+            validator
+                .validate(&JsonData::String("hello".to_string()), &schema, "/name")
+                .is_ok()
+        );
+
+        // Force a flush, then re-validate the same pattern: it must be
+        // recompiled transparently and still match.
+        validator.regex_cache.clear();
+
+        assert!(
+            validator
+                .validate(&JsonData::String("world".to_string()), &schema, "/name")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate(&JsonData::String("123".to_string()), &schema, "/name")
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "schema-validation")]
+    fn test_realistic_pattern_corpus_compiles_under_configured_limits() {
+        // Regression guard for the `REGEX_SIZE_LIMIT` DoS-hardening
+        // trade-off: nothing else in this suite compiles a non-trivial
+        // schema `pattern`, so a size limit tight enough to reject
+        // ordinary, non-pathological patterns (e.g. a bare ISO-8601
+        // timestamp, which needs ~128 KiB) could regress silently. Each
+        // entry pairs a realistic pattern with a value that must match it
+        // under the service's default configuration.
+        let validator = ValidationService::new();
+        let corpus: &[(&str, &str, &str)] = &[
+            (
+                "email",
+                r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
+                "user@example.com",
+            ),
+            (
+                "uuid",
+                r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ),
+            (
+                "iso8601",
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$",
+                "2024-01-15T12:00:00Z",
+            ),
+            ("date", r"^\d{4}-\d{2}-\d{2}$", "2024-01-15"),
+            ("ipv4", r"^(\d{1,3}\.){3}\d{1,3}$", "192.168.1.1"),
+            ("hex-color", r"^#[0-9a-fA-F]{6}$", "#1a2b3c"),
+            ("slug", r"^[a-z0-9-]{1,64}$", "hello-world-123"),
+            (
+                "semver",
+                r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?$",
+                "1.2.3-beta",
+            ),
+            (
+                "jwt-ish",
+                r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$",
+                "abc123.def456.ghi789",
+            ),
+            // Measured at exactly 1 MiB (regex 1.13.1): pins
+            // `REGEX_SIZE_LIMIT` precisely, so this test is a tripwire for
+            // *any* future reduction, not just one below ~128 KiB (the
+            // tightest of the patterns above, `iso8601`).
+            ("any-char-1000", r"^[\s\S]{1,1000}$", "x"),
+        ];
+
+        for (name, pattern, value) in corpus {
+            let schema = Schema::String {
+                min_length: None,
+                max_length: None,
+                pattern: Some((*pattern).to_string()),
+                allowed_values: None,
+            };
+            let result =
+                validator.validate(&JsonData::String((*value).to_string()), &schema, "/value");
+            assert!(
+                result.is_ok(),
+                "pattern {name:?} ({pattern}) should compile and match {value:?} under the \
+                 configured REGEX_SIZE_LIMIT, got: {result:?}"
+            );
+        }
     }
 }
