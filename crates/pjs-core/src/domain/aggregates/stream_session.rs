@@ -121,7 +121,12 @@ pub struct SessionStats {
     /// content-idempotent, so repeated polling against unchanged source data
     /// keeps adding the same bytes rather than counting them once.
     pub total_bytes: u64,
-    /// Average per-stream duration, in milliseconds.
+    /// Lifetime arithmetic mean of per-stream duration, in milliseconds,
+    /// over streams that completed successfully (never updated by
+    /// [`StreamSession::fail_stream`]). Each sample is a stream's
+    /// `completed_at - created_at`, so it includes time spent queued/preparing
+    /// before [`StreamSession::start_stream`], not just time spent actively
+    /// streaming.
     pub average_stream_duration_ms: f64,
 }
 
@@ -465,11 +470,14 @@ impl StreamSession {
         self.stats.active_streams = self.stats.active_streams.saturating_sub(1);
         self.stats.completed_streams += 1;
 
-        // Update average duration
+        // Update running arithmetic mean via Welford's incremental formula.
+        // `completed_streams` was already incremented above, so it is the
+        // sample count including this stream.
         if let Some(duration) = stream.duration() {
             let duration_ms = duration.num_milliseconds() as f64;
-            self.stats.average_stream_duration_ms =
-                (self.stats.average_stream_duration_ms + duration_ms) / 2.0;
+            self.stats.average_stream_duration_ms += (duration_ms
+                - self.stats.average_stream_duration_ms)
+                / self.stats.completed_streams as f64;
         }
 
         self.update_timestamp();
@@ -771,6 +779,73 @@ mod tests {
         assert!(session.complete_stream(stream_id).is_ok());
         assert_eq!(session.stats().active_streams, 0);
         assert_eq!(session.stats().completed_streams, 1);
+    }
+
+    #[test]
+    fn test_average_stream_duration_single_stream_equals_its_duration() {
+        let mut session = StreamSession::new(SessionConfig::default());
+        assert!(session.activate().is_ok());
+
+        let mut map = HashMap::new();
+        map.insert("test".to_string(), JsonData::String("data".to_string()));
+        let source_data = JsonData::Object(map);
+
+        let stream_id = session.create_stream(source_data).unwrap();
+        assert!(session.start_stream(stream_id).is_ok());
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        assert!(session.complete_stream(stream_id).is_ok());
+
+        let d1 = session.stream(stream_id).unwrap().duration().unwrap();
+        let d1_ms = d1.num_milliseconds() as f64;
+
+        // A single sample's running mean must equal the sample itself, not
+        // the old EMA result of `duration_ms / 2.0`. Exact `f64` equality is
+        // safe here only because `num_milliseconds()` yields small whole
+        // integers with no rounding error, not because float comparison is
+        // generally safe in this codebase.
+        assert_eq!(session.stats().average_stream_duration_ms, d1_ms);
+    }
+
+    #[test]
+    fn test_average_stream_duration_two_streams_is_true_arithmetic_mean() {
+        let mut session = StreamSession::new(SessionConfig::default());
+        assert!(session.activate().is_ok());
+
+        let mut map = HashMap::new();
+        map.insert("test".to_string(), JsonData::String("data".to_string()));
+        let source_data = JsonData::Object(map);
+
+        let stream_id_1 = session.create_stream(source_data.clone()).unwrap();
+        assert!(session.start_stream(stream_id_1).is_ok());
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        assert!(session.complete_stream(stream_id_1).is_ok());
+        let d1_ms = session
+            .stream(stream_id_1)
+            .unwrap()
+            .duration()
+            .unwrap()
+            .num_milliseconds() as f64;
+
+        let stream_id_2 = session.create_stream(source_data).unwrap();
+        assert!(session.start_stream(stream_id_2).is_ok());
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert!(session.complete_stream(stream_id_2).is_ok());
+        let d2_ms = session
+            .stream(stream_id_2)
+            .unwrap()
+            .duration()
+            .unwrap()
+            .num_milliseconds() as f64;
+
+        // The true arithmetic mean of two samples, not the old EMA result
+        // (which would weigh the second sample by 0.5 regardless of history).
+        // Exact `f64` equality is safe here only because both samples are
+        // small whole millisecond integers, not because float comparison is
+        // generally safe in this codebase.
+        assert_eq!(
+            session.stats().average_stream_duration_ms,
+            (d1_ms + d2_ms) / 2.0
+        );
     }
 
     #[test]
