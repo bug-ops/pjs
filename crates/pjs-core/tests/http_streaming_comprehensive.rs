@@ -159,6 +159,18 @@ fn test_stream_format_from_accept_header_wildcard_beats_lower_q_explicit_type() 
     assert!(matches!(format, StreamFormat::Json));
 }
 
+/// SC-002: a tied `q` between a wildcard and an exact match is broken by RFC
+/// 9110 §12.5.1 media-range specificity, not by first occurrence in the header.
+#[test]
+fn test_stream_format_from_accept_header_specificity_breaks_tied_q() {
+    let headers = accept_headers("application/*;q=1.0, application/x-ndjson;q=1.0");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::NdJson),
+        "the more specific application/x-ndjson must win a tied q over application/*"
+    );
+}
+
 /// M7: a `q` value that fails to parse drops the entry entirely, distinguishing
 /// it from an absent `q` (which defaults to `1.0`).
 #[test]
@@ -168,25 +180,24 @@ fn test_stream_format_from_accept_header_unparsable_q_drops_entry() {
     assert!(matches!(format, StreamFormat::Json));
 }
 
-/// S9: `f32::from_str` parses `"nan"`/`"inf"`/`"-inf"` successfully, and
-/// `NaN.clamp(0.0, 1.0)` returns `NaN` unchanged — without the `is_finite()`
-/// filter, a `q=nan` entry would survive the `q <= 0.0` rejection guard, win
-/// `is_none_or` as the first `best`, and then permanently poison every later
-/// comparison (`q > NaN` is always `false`), so no later entry could ever
-/// displace it. All three must drop their entry exactly like an unparsable `q`.
+/// S9: `f32::from_str` parses `"nan"`/`"inf"`/`"-inf"` successfully, and the
+/// `is_finite()` check drops them during sanitization, before the entry ever
+/// reaches `headers_accept`. This matters because `headers_accept`'s own
+/// `parse_q_value` treats an unparsable `q` as *absent* — defaulting to `1.0`,
+/// the highest priority — rather than dropping the entry; a `q=nan` entry that
+/// slipped past our own filter would therefore win outright, not lose.
 #[test]
 fn test_stream_format_from_accept_header_q_nan_drops_entry() {
     let headers = accept_headers("text/event-stream;q=nan, application/x-ndjson");
     let format = StreamFormat::from_accept_header(&headers);
     assert!(
         matches!(format, StreamFormat::NdJson),
-        "a NaN q must not poison the comparison and win by default"
+        "a NaN q must not win by default"
     );
 }
 
 /// Same as above with the NaN entry seen *after* the real entry — proves the
-/// poisoning bug (which triggers only when the NaN entry becomes `best` first)
-/// can't resurface depending on header ordering.
+/// drop doesn't depend on header ordering.
 #[test]
 fn test_stream_format_from_accept_header_q_nan_drops_entry_reverse_order() {
     let headers = accept_headers("application/json;q=1.0, text/event-stream;q=nan");
@@ -242,6 +253,133 @@ fn test_stream_format_from_accept_header_bounds_entries_honors_last_entry() {
     assert!(
         matches!(format, StreamFormat::ServerSentEvents),
         "the 16th entry is still within MAX_ACCEPT_ENTRIES and must be honored"
+    );
+}
+
+/// Regression for a flood of entries well beyond `MAX_ACCEPT_ENTRIES` (16), not
+/// just a single entry past it — a large flood must not somehow reach the
+/// parser via some batching/chunking difference from the single-extra-entry case.
+#[test]
+fn test_stream_format_from_accept_header_flood_beyond_bound_dropped() {
+    let mut entries = vec!["application/octet-stream"; 16];
+    entries.extend(std::iter::repeat_n("text/event-stream", 34));
+    let header_value = entries.join(", ");
+    let headers = accept_headers(&header_value);
+
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::Binary),
+        "only the first MAX_ACCEPT_ENTRIES (16) of a 50-entry flood must reach the parser"
+    );
+}
+
+/// #518 review finding S1: `headers_accept::Accept::from_str` fails the
+/// *entire* header on a single malformed entry. A malformed entry must be
+/// dropped individually during sanitization, not discard every other,
+/// well-formed entry.
+#[test]
+fn test_stream_format_from_accept_header_malformed_entry_preserves_others() {
+    let headers = accept_headers("text/event-stream, garbage!!");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::ServerSentEvents),
+        "a malformed entry must be dropped individually, not discard the whole header"
+    );
+}
+
+/// A comma inside a quoted parameter value defeats naive comma-splitting
+/// (pre-existing limitation, not introduced by this migration — neither the
+/// old nor the new parser handles RFC 9110 quoted-string commas). Per-entry
+/// validation (review finding S1) must still drop only the corrupted
+/// fragment, not the well-formed entries around it.
+#[test]
+fn test_stream_format_from_accept_header_quoted_comma_param_entry() {
+    let headers = accept_headers("text/event-stream;message=\"a, b\", application/x-ndjson");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::ServerSentEvents),
+        "the corrupted fragment from the quoted comma must be dropped, keeping the well-formed entries"
+    );
+}
+
+/// #518 review finding S2: `origin/main`'s hand-rolled parser clamps a
+/// finite, out-of-range `q` (e.g. `q=5`) into `[0.0, 1.0]` and keeps the
+/// entry — it does not drop it. FR-005 was corrected 2026-08-19 to match.
+#[test]
+fn test_stream_format_from_accept_header_out_of_range_q_clamped_and_kept() {
+    let headers = accept_headers("text/event-stream;q=5");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::ServerSentEvents),
+        "a finite out-of-range q must be clamped to 1.0 and the entry kept, not dropped"
+    );
+}
+
+/// Companion to the above: a negative out-of-range `q` clamps to `0.0`, which
+/// is `headers_accept`'s own explicit-rejection value — the entry is kept but
+/// never wins, the same observable outcome as `origin/main`'s explicit
+/// `q <= 0.0` drop.
+#[test]
+fn test_stream_format_from_accept_header_negative_out_of_range_q_is_excluded() {
+    let headers = accept_headers("text/event-stream;q=-5");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+/// #518 review finding S3: floor-rounding a tiny positive `q` to 3 decimal
+/// digits could produce `0.000`, which `headers_accept` treats as an explicit
+/// rejection — flipping a barely-acceptable preference into a hard rejection.
+/// Any originally-positive `q` must remain positive after reformatting.
+#[test]
+fn test_stream_format_from_accept_header_tiny_positive_q_survives() {
+    let headers = accept_headers("text/event-stream;q=0.0004");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::ServerSentEvents),
+        "a tiny positive q must not be rounded down to 0.000"
+    );
+}
+
+/// #518 review finding S4: `headers_accept`'s wildcard matching is general
+/// RFC 9110 `type/*`/`*/*` matching, broader than this route's historical,
+/// scoped wildcard support (only `*/*` and `application/*`). A range like
+/// `*/x-ndjson` must be dropped, not treated as matching every candidate the
+/// way `*/*` does.
+#[test]
+fn test_stream_format_from_accept_header_bare_wildcard_subtype_is_rejected() {
+    let headers = accept_headers("text/event-stream;q=0.5, */x-ndjson;q=1.0");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::ServerSentEvents),
+        "*/x-ndjson must be dropped, not outrank the lower-q but valid text/event-stream entry"
+    );
+}
+
+/// Companion to the above (impl-critic M1): a `type/*` wildcard other than
+/// `application/*` (e.g. `text/*`) is also outside this route's historical,
+/// scoped wildcard support and must be dropped rather than generalized.
+#[test]
+fn test_stream_format_from_accept_header_type_wildcard_other_than_application_is_rejected() {
+    let headers = accept_headers("text/*;q=1.0");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+/// #518 review finding N1 (round 2): `headers_accept::Accept::negotiate` locks
+/// each candidate onto its single best-specificity matching `Accept` entry and
+/// only then checks that entry's `q` — so a `q=0` on a concrete type excludes
+/// *only* that candidate, not the whole negotiation. `origin/main` instead
+/// dropped the `q=0` entry from the header outright before matching, so the
+/// `*/*` entry's hardcoded vote for `StreamFormat::Json` always won. This is a
+/// deliberate, documented behavior change (see CHANGELOG.md) beyond the
+/// specificity tie-break, pinned here so it isn't an untested side effect.
+#[test]
+fn test_stream_format_from_accept_header_q_zero_concrete_type_falls_through_to_wildcard() {
+    let headers = accept_headers("application/json;q=0, */*");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::ServerSentEvents),
+        "rejecting application/json specifically must not also exclude the separately-stated */* wildcard"
     );
 }
 
