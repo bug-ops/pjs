@@ -80,6 +80,171 @@ fn test_stream_format_from_accept_header_missing() {
     assert!(matches!(format, StreamFormat::Json));
 }
 
+// ----------------------------------------------------------------------------
+// q-value negotiation (RFC 9110 §12.5.1) — from_accept_header rewrite
+// ----------------------------------------------------------------------------
+
+fn accept_headers(value: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::ACCEPT, HeaderValue::from_str(value).unwrap());
+    headers
+}
+
+/// S3 regression: a lower-q explicit type must not beat a higher-q one that
+/// appears earlier in the header.
+#[test]
+fn test_stream_format_from_accept_header_q_value_preference() {
+    let headers = accept_headers("application/json, text/event-stream;q=0.1");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+#[test]
+fn test_stream_format_from_accept_header_sse_beats_lower_q_ndjson() {
+    let headers = accept_headers("text/event-stream;q=0.9, application/x-ndjson;q=0.8");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::ServerSentEvents));
+}
+
+#[test]
+fn test_stream_format_from_accept_header_ndjson_beats_lower_q_sse() {
+    let headers = accept_headers("application/x-ndjson;q=0.9, text/event-stream;q=0.8");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::NdJson));
+}
+
+#[test]
+fn test_stream_format_from_accept_header_q_zero_is_explicit_rejection() {
+    let headers = accept_headers("text/event-stream;q=0");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+#[test]
+fn test_stream_format_from_accept_header_wildcard_falls_back_to_json() {
+    let headers = accept_headers("*/*");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+#[test]
+fn test_stream_format_from_accept_header_unrecognized_type_falls_back_to_json() {
+    let headers = accept_headers("application/xml");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+#[test]
+fn test_stream_format_from_accept_header_case_and_whitespace_tolerant() {
+    let headers = accept_headers("TEXT/EVENT-STREAM ; Q=0.5");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::ServerSentEvents));
+}
+
+/// Exact media-range matching kills the substring-match regression: a longer,
+/// unrelated type must not match a shorter registered one.
+#[test]
+fn test_stream_format_from_accept_header_no_substring_match() {
+    let headers = accept_headers("application/x-ndjson-plus");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+/// S8: a high-q wildcard must beat a low-q explicit type — the same bug class
+/// as the S3 regression above, with `*/*` substituted for `application/json`.
+#[test]
+fn test_stream_format_from_accept_header_wildcard_beats_lower_q_explicit_type() {
+    let headers = accept_headers("text/event-stream;q=0.1, */*");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+/// M7: a `q` value that fails to parse drops the entry entirely, distinguishing
+/// it from an absent `q` (which defaults to `1.0`).
+#[test]
+fn test_stream_format_from_accept_header_unparsable_q_drops_entry() {
+    let headers = accept_headers("text/event-stream;q=abc");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+/// S9: `f32::from_str` parses `"nan"`/`"inf"`/`"-inf"` successfully, and
+/// `NaN.clamp(0.0, 1.0)` returns `NaN` unchanged — without the `is_finite()`
+/// filter, a `q=nan` entry would survive the `q <= 0.0` rejection guard, win
+/// `is_none_or` as the first `best`, and then permanently poison every later
+/// comparison (`q > NaN` is always `false`), so no later entry could ever
+/// displace it. All three must drop their entry exactly like an unparsable `q`.
+#[test]
+fn test_stream_format_from_accept_header_q_nan_drops_entry() {
+    let headers = accept_headers("text/event-stream;q=nan, application/x-ndjson");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::NdJson),
+        "a NaN q must not poison the comparison and win by default"
+    );
+}
+
+/// Same as above with the NaN entry seen *after* the real entry — proves the
+/// poisoning bug (which triggers only when the NaN entry becomes `best` first)
+/// can't resurface depending on header ordering.
+#[test]
+fn test_stream_format_from_accept_header_q_nan_drops_entry_reverse_order() {
+    let headers = accept_headers("application/json;q=1.0, text/event-stream;q=nan");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::Json),
+        "a NaN q appearing after a valid entry must still be dropped, not override it"
+    );
+}
+
+#[test]
+fn test_stream_format_from_accept_header_q_infinity_drops_entry() {
+    let headers = accept_headers("text/event-stream;q=inf");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+#[test]
+fn test_stream_format_from_accept_header_q_negative_infinity_drops_entry() {
+    let headers = accept_headers("text/event-stream;q=-inf");
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(matches!(format, StreamFormat::Json));
+}
+
+/// M8: entries beyond `MAX_ACCEPT_ENTRIES` (16) are ignored, not just "don't
+/// panic" — the 17th entry here would flip the result to SSE if it were
+/// considered.
+#[test]
+fn test_stream_format_from_accept_header_bounds_entries() {
+    let mut entries = vec!["application/xml"; 16];
+    entries.push("text/event-stream");
+    let header_value = entries.join(", ");
+    let headers = accept_headers(&header_value);
+
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::Json),
+        "the 17th entry must be ignored beyond MAX_ACCEPT_ENTRIES"
+    );
+}
+
+/// M14: companion to the above — entry 16 (the last one still within the
+/// bound) must still be honored, so the bound isn't silently narrower than
+/// documented.
+#[test]
+fn test_stream_format_from_accept_header_bounds_entries_honors_last_entry() {
+    let mut entries = vec!["application/xml"; 15];
+    entries.push("text/event-stream");
+    let header_value = entries.join(", ");
+    let headers = accept_headers(&header_value);
+
+    let format = StreamFormat::from_accept_header(&headers);
+    assert!(
+        matches!(format, StreamFormat::ServerSentEvents),
+        "the 16th entry is still within MAX_ACCEPT_ENTRIES and must be honored"
+    );
+}
+
 #[test]
 fn test_stream_format_content_type() {
     assert_eq!(StreamFormat::Json.content_type(), "application/json");
@@ -445,9 +610,9 @@ async fn test_create_streaming_response_sse() {
         response.headers().get(header::CACHE_CONTROL).unwrap(),
         "no-cache"
     );
-    assert_eq!(
-        response.headers().get(header::CONNECTION).unwrap(),
-        "keep-alive"
+    assert!(
+        response.headers().get(header::CONNECTION).is_none(),
+        "the encoder, not the application, owns connection-management headers"
     );
     assert_eq!(response.headers().get("X-Accel-Buffering").unwrap(), "no");
 }
@@ -465,9 +630,9 @@ async fn test_create_streaming_response_ndjson() {
         response.headers().get(header::CONTENT_TYPE).unwrap(),
         "application/x-ndjson"
     );
-    assert_eq!(
-        response.headers().get("Transfer-Encoding").unwrap(),
-        "chunked"
+    assert!(
+        response.headers().get("Transfer-Encoding").is_none(),
+        "the encoder, not the application, owns transfer framing"
     );
 }
 

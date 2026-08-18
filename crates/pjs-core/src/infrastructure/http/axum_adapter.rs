@@ -51,7 +51,10 @@ use super::handlers::{
         create_session, get_session, get_session_stats, list_sessions, search_sessions,
         session_health,
     },
-    streams::{create_stream, generate_frames, get_stream, get_stream_frames, start_stream},
+    streams::{
+        create_stream, generate_frames, get_stream, get_stream_frames, start_stream,
+        stream_stream_frames,
+    },
 };
 
 /// HTTP server configuration.
@@ -663,6 +666,10 @@ where
         .route(
             "/pjs/sessions/{session_id}/streams/{stream_id}/frames",
             get(get_stream_frames::<R, P, S>),
+        )
+        .route(
+            "/pjs/sessions/{session_id}/streams/{stream_id}/frames/stream",
+            get(stream_stream_frames::<R, P, S>),
         )
         .route("/pjs/sessions/search", get(search_sessions::<R, P, S>))
         .route("/pjs/sessions", get(list_sessions::<R, P, S>))
