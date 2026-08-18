@@ -104,16 +104,24 @@ impl SonicParser {
             return Err(Error::Other(format!("Input too large: {}", input.len())));
         }
 
-        // UTF-8 validation (safe approach)
-        let json_str = std::str::from_utf8(input)
-            .map_err(|e| Error::Other(format!("Invalid UTF-8 input: {}", e)))?;
+        // Pre-validate JSON structure for safety (before parsing). Scans raw
+        // bytes directly: the delimiters checked here are ASCII, and ASCII
+        // byte values never occur inside a multi-byte UTF-8 sequence (valid
+        // or invalid), so this bound check is safe ahead of UTF-8 validation.
+        // Bounds nesting depth for well-formed structural input; see #456
+        // for a known bypass via string-literal content (pre-existing gap,
+        // preserved as-is here, not introduced by this change).
+        self.pre_validate_json_bytes(input)?;
 
-        // Pre-validate JSON structure for safety (before parsing)
-        self.pre_validate_json_string(json_str)?;
-
-        // Parse with sonic-rs SIMD acceleration
+        // Parse with sonic-rs SIMD acceleration. `sonic_rs::from_slice`
+        // still runs its own eager, full-slice UTF-8 validation up front
+        // (it is not literally fused into the structural-parsing pass), but
+        // that validation uses SIMD (`simdutf8`) instead of the scalar
+        // `std::str::from_utf8` this code used to call directly — that's
+        // the actual win here, plus `pre_validate_json_bytes` above no
+        // longer decodes per-char via `.chars()`.
         let value: SonicValue =
-            sonic_rs::from_str(json_str).map_err(|e| Error::invalid_json(0, e.to_string()))?;
+            sonic_rs::from_slice(input).map_err(|e| Error::invalid_json(0, e.to_string()))?;
 
         // Post-validate parsed JSON structure for additional checks
         self.validate_json_structure(&value)?;
@@ -175,20 +183,22 @@ impl SonicParser {
         self.stats.borrow().clone()
     }
 
-    /// Pre-validate JSON string for basic safety checks (before parsing)
-    fn pre_validate_json_string(&self, json_str: &str) -> Result<()> {
-        // Count nesting depth by counting braces/brackets
+    /// Pre-validate JSON bytes for basic safety checks (before parsing)
+    fn pre_validate_json_bytes(&self, input: &[u8]) -> Result<()> {
+        // Count nesting depth by counting braces/brackets. `{`, `[`, `}`,
+        // `]` are ASCII, so a byte-level scan is UTF-8-safe even before the
+        // input has been validated as UTF-8.
         let mut depth = 0;
         let mut max_depth = 0;
 
-        for ch in json_str.chars() {
-            match ch {
-                '{' | '[' => {
+        for &byte in input {
+            match byte {
+                b'{' | b'[' => {
                     depth += 1;
                     max_depth = max_depth.max(depth);
                     self.validator.validate_json_depth(max_depth)?;
                 }
-                '}' | ']' => {
+                b'}' | b']' => {
                     depth = depth.saturating_sub(1);
                 }
                 _ => {}
@@ -508,13 +518,32 @@ mod tests {
     #[test]
     fn test_sonic_invalid_utf8_handling() {
         let parser = SonicParser::new();
-        // Create invalid UTF-8 sequence
+        // Invalid UTF-8 bytes where a JSON value is structurally expected:
+        // sonic-rs still eagerly scans the whole slice for UTF-8 validity up
+        // front, but that scan is only surfaced as an error after a
+        // successful structural walk reaches the end of input. Here the
+        // structural walk fails immediately (0xFF is not a valid value-start
+        // byte), so the error returned is a generic structural parse error,
+        // not an invalid-UTF-8 one.
         let invalid_utf8 = &[0xFF, 0xFE, 0xFD];
-
         let result = parser.parse(invalid_utf8);
         assert!(result.is_err());
 
-        let error_msg = result.unwrap_err().to_string();
+        // Invalid UTF-8 embedded inside an otherwise well-formed JSON string:
+        // the structural walk completes and the precomputed UTF-8 scan
+        // result is then surfaced explicitly as an invalid-UTF-8 error.
+        //
+        // Note: this now comes back as `Error::InvalidJson` (via
+        // `sonic_rs::Error`'s own message), whereas the old
+        // `std::str::from_utf8` pre-check path returned `Error::Other`. This
+        // is an intentional, semver-visible error-variant change from this
+        // fix; no downstream code was found to match on the old variant.
+        let mut embedded = b"{\"key\": \"".to_vec();
+        embedded.extend_from_slice(&[0xFF, 0xFE, 0xFD]);
+        embedded.extend_from_slice(b"\"}");
+        let result2 = parser.parse(&embedded);
+        assert!(result2.is_err());
+        let error_msg = result2.unwrap_err().to_string();
         assert!(error_msg.contains("Invalid UTF-8"));
     }
 
@@ -689,6 +718,18 @@ mod tests {
                 SemanticType::Table { .. }
             ));
         }
+    }
+
+    #[test]
+    fn test_sonic_multibyte_utf8_content() {
+        let parser = SonicParser::new();
+        // Multi-byte UTF-8: Cyrillic, CJK, and an emoji (4-byte sequence)
+        let json = "{\"greeting\": \"Привет мир\", \"city\": \"東京\", \"emoji\": \"🎉\"}"
+            .as_bytes()
+            .to_vec();
+
+        let result = parser.parse(&json).unwrap();
+        assert_eq!(result.payload.len(), json.len());
     }
 
     #[test]
