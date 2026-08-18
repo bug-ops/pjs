@@ -416,7 +416,6 @@ PJS uses feature flags to minimize compile times and binary size. Be mindful whe
 - `http-server` - Axum HTTP server
 - `websocket-client` - WebSocket client
 - `websocket-server` - WebSocket server
-- `http-client` - HTTP event publishing
 
 ### Memory Allocators (Optional)
 - `mimalloc` - Use mimalloc allocator

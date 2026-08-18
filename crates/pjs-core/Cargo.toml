@@ -40,7 +40,6 @@ pastey = { workspace = true }
 pjson-rs-domain = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true, optional = true }
-reqwest = { workspace = true, features = ["json"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true, optional = true }
@@ -76,7 +75,6 @@ default = [
   "schema-validation",
   "compression",
   "http-server",
-  "http-client",
   "websocket-server",
   "websocket-client",
 ]
@@ -95,7 +93,6 @@ partial-parse = ["dep:jiter"]
 schema-validation = ["dep:regex"]
 
 # Infrastructure features
-http-client = ["dep:reqwest"]
 http-server = [
     "dep:async-stream",
     "dep:axum",
