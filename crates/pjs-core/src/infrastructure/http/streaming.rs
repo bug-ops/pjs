@@ -7,6 +7,9 @@ use axum::{
     response::Response,
 };
 use futures::{Stream, StreamExt};
+use headers_accept::Accept;
+use mediatype::{MediaType, MediaTypeBuf, Name, names};
+use std::str::FromStr;
 
 /// Streaming format types
 #[derive(Debug, Clone, Copy)]
@@ -25,30 +28,116 @@ pub enum StreamFormat {
 /// negotiation.
 ///
 /// Bounds iteration over untrusted input (project security invariant); entries
-/// beyond this count are ignored, not rejected.
+/// beyond this count are ignored, not rejected. Enforced by truncating the raw
+/// header string *before* it reaches [`headers_accept`]'s parser, since that
+/// crate does not itself bound entry count.
 const MAX_ACCEPT_ENTRIES: usize = 16;
+
+/// Non-standard "ndjson" subtype name.
+///
+/// Not present in [`mediatype`]'s built-in IANA registry constants (`x-`
+/// prefixed extension types aren't registered), so it is declared here.
+const X_NDJSON: Name<'static> = Name::new_unchecked("x-ndjson");
+
+/// Server-supported media ranges for this route, paired with the
+/// [`StreamFormat`] each selects.
+///
+/// Order is the tie-break preference used when [`Accept::negotiate`] finds
+/// multiple candidates matching the same `Accept` entry at equal specificity
+/// and `q` (e.g. a bare `*/*` or `application/*`, which match every entry
+/// here equally) — [`StreamFormat::Json`] listed first preserves the
+/// permissive default fallback.
+static SUPPORTED_MEDIA_TYPES: [(MediaType<'static>, StreamFormat); 4] = [
+    (
+        MediaType::new(names::APPLICATION, names::JSON),
+        StreamFormat::Json,
+    ),
+    (
+        MediaType::new(names::TEXT, names::EVENT_STREAM),
+        StreamFormat::ServerSentEvents,
+    ),
+    (
+        MediaType::new(names::APPLICATION, X_NDJSON),
+        StreamFormat::NdJson,
+    ),
+    (
+        MediaType::new(names::APPLICATION, names::OCTET_STREAM),
+        StreamFormat::Binary,
+    ),
+];
+
+/// Whether `media_range` is eligible for negotiation.
+///
+/// Wildcards are restricted to exactly `*/*` and `application/*`
+/// (case-insensitive) — the only two forms this route has ever supported.
+/// Any other range containing a `*` (e.g. `text/*`, `*/x-ndjson`) is rejected
+/// here rather than handed to `headers_accept`, whose wildcard matching is
+/// general RFC 9110 `type/*`/`*/*` matching — broader than this route's
+/// historical, scoped wildcard support, and would otherwise let e.g.
+/// `*/x-ndjson` match every candidate the same as `*/*`. Non-wildcard ranges
+/// are always eligible; an unrecognized concrete type (e.g. `application/xml`)
+/// simply never matches any candidate in [`SUPPORTED_MEDIA_TYPES`] and falls
+/// through to the permissive fallback.
+fn is_supported_media_range(media_range: &str) -> bool {
+    !media_range.contains('*')
+        || media_range.eq_ignore_ascii_case("*/*")
+        || media_range.eq_ignore_ascii_case("application/*")
+}
+
+/// Formats an already-clamped `q` (`[0.0, 1.0]`) to the `<=3` fractional digits
+/// `headers_accept`'s `QValue` grammar requires.
+///
+/// Rounds to the nearest representable value, but never rounds a positive `q`
+/// down to `0.000` — `headers_accept` treats `q=0` as an explicit rejection of
+/// the entry, so floor-rounding e.g. `q=0.0004` to `0.000` would flip a
+/// (barely) acceptable preference into a hard rejection.
+fn format_q(q: f32) -> String {
+    if q <= 0.0 {
+        return "0.000".to_string();
+    }
+    let milli = ((q * 1000.0).round() as u32).max(1);
+    if milli >= 1000 {
+        "1.000".to_string()
+    } else {
+        format!("0.{milli:03}")
+    }
+}
 
 impl StreamFormat {
     /// Picks a streaming format for the request's `Accept` header.
     ///
-    /// Quality-value negotiation per RFC 9110 §12.5.1 over a small supported set
-    /// (`text/event-stream`, `application/x-ndjson`, `application/octet-stream`,
-    /// `application/json`), plus `*/*` and `application/*`, which vote for the default
-    /// ([`Self::Json`]) at their own `q` rather than matching a concrete format — this
-    /// is what lets a low-`q` explicit type lose to a high-`q` wildcard (and vice
-    /// versa), rather than the wildcard being excluded from the race entirely.
+    /// Negotiation is RFC 9110 §12.5.1-conformant for this route's supported media
+    /// ranges, delegated to [`headers_accept::Accept::negotiate`]: candidates are
+    /// ranked by `q` value first and by media-range specificity as the tiebreaker
+    /// (exact match > `application/*` > `*/*`).
     ///
-    /// - Entries are compared by their `q` parameter (RFC 9110 §12.4.2), defaulting to
-    ///   `1.0` when absent; the highest-`q` surviving entry wins, ties broken by first
-    ///   occurrence — not by media-range specificity, unlike full RFC 9110 conformance.
     /// - `q=0` is an explicit rejection of that media range and drops the entry.
-    /// - A `q` parameter that fails to parse as a finite float in range also drops its
-    ///   entry (`nan`/`inf`/`-inf` all count as failing to parse here) — a malformed
-    ///   preference is treated as "no preference stated", not "highest preference".
-    /// - Media-range comparison is case-insensitive and exact (no substring
-    ///   matching): `application/x-ndjson-plus` does not match `application/x-ndjson`.
+    /// - A `q` parameter that is non-finite (`nan`/`inf`/`-inf`) or otherwise fails
+    ///   to parse as a float drops its entry — a malformed preference is treated
+    ///   as "no preference stated", not "highest preference". This is validated
+    ///   before delegating to `headers_accept`, whose own default treats an
+    ///   unparsable `q` as absent (i.e. `1.0`, the highest priority) rather than
+    ///   dropping the entry.
+    /// - A finite but out-of-range `q` (e.g. `q=5`) is clamped to `[0.0, 1.0]` and
+    ///   the entry is kept — matching the pre-migration hand-rolled parser's
+    ///   `.clamp(0.0, 1.0)` exactly (not dropped; only `q=0`, non-finite, and
+    ///   unparsable `q` are dropped).
+    /// - Wildcard matching is restricted to exactly `*/*` and `application/*`
+    ///   (case-insensitive), which vote for [`Self::Json`] at their own `q`.
+    ///   Any other range containing a `*` (e.g. `text/*`, `*/x-ndjson`) is
+    ///   rejected rather than delegated to `headers_accept`'s more general
+    ///   `type/*`/`*/*` matching, which is broader than this route's
+    ///   historical, scoped wildcard support.
+    /// - Each surviving entry is validated as a well-formed media type
+    ///   independently, before negotiation; a malformed entry (e.g. `garbage!!`)
+    ///   is dropped individually and does not discard the rest of the header —
+    ///   `headers_accept::Accept::from_str` itself fails the *entire* header on a
+    ///   single bad entry, so this crate is never handed anything but
+    ///   already-validated, surviving entries.
     /// - At most `MAX_ACCEPT_ENTRIES` (16) comma-separated entries are considered;
-    ///   any beyond that bound are silently ignored.
+    ///   any beyond that bound are silently ignored. This bound is enforced by
+    ///   truncating the raw header string before it reaches `headers_accept`'s
+    ///   parser, since that crate does not itself bound entry count.
     /// - A missing header, an unparsable header value, or no entry surviving
     ///   negotiation all fall back to [`Self::Json`].
     pub fn from_accept_header(headers: &HeaderMap) -> Self {
@@ -59,54 +148,60 @@ impl StreamFormat {
             return Self::Json;
         };
 
-        let mut best: Option<(Self, f32)> = None;
+        let mut sanitized_entries: Vec<String> = Vec::new();
         for entry in accept_str.split(',').take(MAX_ACCEPT_ENTRIES) {
             let mut parts = entry.split(';');
             let media_range = parts.next().unwrap_or("").trim();
-            if media_range.is_empty() {
+            if media_range.is_empty() || !is_supported_media_range(media_range) {
                 continue;
             }
 
-            let mut q = Some(1.0f32);
+            let mut q_str: Option<&str> = None;
             for param in parts {
                 let mut kv = param.splitn(2, '=');
                 let name = kv.next().unwrap_or("").trim();
                 if name.eq_ignore_ascii_case("q") {
-                    let value = kv.next().unwrap_or("").trim();
-                    q = value
-                        .parse::<f32>()
-                        .ok()
-                        .filter(|v| v.is_finite())
-                        .map(|v| v.clamp(0.0, 1.0));
+                    q_str = Some(kv.next().unwrap_or("").trim());
                     break;
                 }
             }
-            let Some(q) = q else { continue };
-            if q <= 0.0 {
-                continue;
-            }
 
-            let format = if media_range.eq_ignore_ascii_case("text/event-stream") {
-                Self::ServerSentEvents
-            } else if media_range.eq_ignore_ascii_case("application/x-ndjson") {
-                Self::NdJson
-            } else if media_range.eq_ignore_ascii_case("application/octet-stream") {
-                Self::Binary
-            } else if media_range.eq_ignore_ascii_case("application/json")
-                || media_range == "*/*"
-                || media_range.eq_ignore_ascii_case("application/*")
-            {
-                Self::Json
-            } else {
-                continue;
+            let sanitized = match q_str {
+                None => media_range.to_string(),
+                Some(raw_q) => {
+                    let Ok(q) = raw_q.parse::<f32>() else {
+                        continue;
+                    };
+                    if !q.is_finite() {
+                        continue;
+                    }
+                    format!("{media_range};q={}", format_q(q.clamp(0.0, 1.0)))
+                }
             };
 
-            if best.is_none_or(|(_, best_q)| q > best_q) {
-                best = Some((format, q));
+            // Validate independently, per entry: `Accept::from_str` fails the
+            // whole header on a single malformed entry (S1), so a bad entry must
+            // be dropped here, before the survivors are ever joined together.
+            if MediaTypeBuf::from_str(&sanitized).is_err() {
+                continue;
             }
+            sanitized_entries.push(sanitized);
         }
 
-        best.map_or(Self::Json, |(format, _)| format)
+        if sanitized_entries.is_empty() {
+            return Self::Json;
+        }
+        let Ok(accept) = Accept::from_str(&sanitized_entries.join(",")) else {
+            return Self::Json;
+        };
+
+        let Some(best) = accept.negotiate(SUPPORTED_MEDIA_TYPES.iter().map(|(mt, _)| mt)) else {
+            return Self::Json;
+        };
+        SUPPORTED_MEDIA_TYPES
+            .iter()
+            .find(|(mt, _)| mt == best)
+            .map_or(Self::Json, |(_, format)| *format)
     }
 
     /// MIME type that corresponds to this streaming format.
