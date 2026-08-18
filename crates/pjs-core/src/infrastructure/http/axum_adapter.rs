@@ -20,9 +20,12 @@ use tower_http::{
 };
 
 use crate::{
-    application::handlers::{
-        command_handlers::SessionCommandHandler,
-        query_handlers::{SessionQueryHandler, StreamQueryHandler, SystemQueryHandler},
+    application::{
+        handlers::{
+            command_handlers::SessionCommandHandler,
+            query_handlers::{SessionQueryHandler, StreamQueryHandler, SystemQueryHandler},
+        },
+        queries::SortOrder,
     },
     domain::{
         SessionState,
@@ -745,6 +748,20 @@ pub(crate) fn parse_sort_field(raw: String) -> Result<SessionSortField, PjsError
         .map_err(|_| PjsError::InvalidSortField(raw))
 }
 
+/// Parse a raw `sort_order` query-string value into a [`SortOrder`], mapping failure to
+/// [`PjsError::InvalidSortOrder`].
+///
+/// Kept as a raw `String` on [`SearchSessionsParams`] for the same reason as
+/// [`parse_sort_field`]: a bad value is rejected here, inside the handler, with the API's
+/// standard JSON error envelope rather than axum's `Query` extractor's plain-text rejection.
+/// Delegates to [`SortOrder`]'s `#[serde(rename_all = "snake_case")]` derive, which also
+/// carries `#[serde(alias = "asc")]`/`#[serde(alias = "desc")]` on its variants — so both the
+/// long (`ascending`/`descending`) and short (`asc`/`desc`) spellings are accepted.
+pub(crate) fn parse_sort_order(raw: String) -> Result<SortOrder, PjsError> {
+    serde_json::from_value(serde_json::Value::String(raw.clone()))
+        .map_err(|_| PjsError::InvalidSortOrder(raw))
+}
+
 /// Pagination parameters
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
@@ -774,12 +791,14 @@ pub struct SearchSessionsParams {
     /// `?state=` — it is not treated as "absent". Omitting the parameter entirely still
     /// yields `None` (no sort applied), which continues to return `200`.
     pub sort_by: Option<String>,
-    /// Sort direction (`"asc"`/`"ascending"` or `"desc"`/`"descending"`).
+    /// Sort direction. Must be `"asc"`, `"ascending"`, `"desc"`, or `"descending"`,
+    /// case-sensitive.
     ///
-    /// Unlike `sort_by`, an unrecognized or empty value here is **silently ignored** —
-    /// sorting falls back to its default order rather than the request being rejected.
-    /// This is a known asymmetry, tracked for a follow-up (`parse_sort_order`, mirroring
-    /// `parse_sort_field`) rather than fixed in the same change as `sort_by`'s validation.
+    /// Same treatment as `sort_by`: parsed via `parse_sort_order` rather than typed
+    /// directly, so an unrecognized or empty value is rejected with `400` through the
+    /// API's standard JSON error envelope instead of being silently ignored or falling
+    /// through axum's raw `Query`-extractor rejection body. Omitting the parameter
+    /// entirely still yields `None` (default sort order), which continues to return `200`.
     pub sort_order: Option<String>,
     /// Maximum number of sessions to return.
     pub limit: Option<usize>,
@@ -837,6 +856,10 @@ pub enum PjsError {
     )]
     InvalidSortField(String),
 
+    /// Provided `sort_order` value does not match any recognized sort direction.
+    #[error("Invalid sort order: {0} (expected one of: asc, ascending, desc, descending)")]
+    InvalidSortOrder(String),
+
     /// Generic HTTP-layer error not covered by other variants.
     ///
     /// # Invariant
@@ -886,6 +909,7 @@ impl IntoResponse for PjsError {
             PjsError::InvalidPriority(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::InvalidSessionState(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::InvalidSortField(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            PjsError::InvalidSortOrder(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             PjsError::HttpError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
@@ -1496,6 +1520,178 @@ mod tests {
 
         let req = Request::builder()
             .uri("/pjs/sessions/search?sort_by=")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// #497: each spelling `parse_sort_order` accepts — both the short (`asc`/`desc`)
+    /// and long (`ascending`/`descending`) forms — is accepted end-to-end through the
+    /// real router.
+    #[tokio::test]
+    async fn search_sessions_route_accepts_valid_sort_order() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        for value in ["asc", "ascending", "desc", "descending"] {
+            let req = Request::builder()
+                .uri(format!("/pjs/sessions/search?sort_order={value}"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+
+            let resp = router.clone().oneshot(req).await.unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::OK,
+                "value {value} should be accepted"
+            );
+        }
+    }
+
+    /// #497: an unrecognized `sort_order` value must be rejected with a `400` carrying
+    /// the API's standard `{"error": ...}` JSON envelope (via `PjsError::InvalidSortOrder`),
+    /// mirroring `sort_by`'s treatment — previously an unrecognized value was silently
+    /// ignored, falling back to the default sort order.
+    #[tokio::test]
+    async fn search_sessions_route_rejects_unknown_sort_order() {
+        use axum::body::to_bytes;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/pjs/sessions/search?sort_order=bogus")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            content_type.starts_with("application/json"),
+            "rejection must use the API's JSON envelope, got content-type: {content_type}"
+        );
+
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json.get("error").is_some_and(|e| e.is_string()),
+            "body must match the standard {{\"error\": ...}} envelope, got: {json}"
+        );
+    }
+
+    /// #497: `?sort_order=` (present but empty) is rejected with `400`, the same
+    /// treatment [`parse_sort_field`] gives an empty `?sort_by=` — an empty value is not
+    /// treated as "absent". See [`search_sessions_route_returns_ok`] for the
+    /// genuinely-absent case (no `sort_order` param at all), which must still return `200`.
+    #[tokio::test]
+    async fn search_sessions_route_rejects_empty_sort_order() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/pjs/sessions/search?sort_order=")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// #497: exercises the issue's literal repro — `?sort_order=decs` (a typo for `desc`)
+    /// previously fell through the old hand-rolled `match`'s `_ => None` arm and was
+    /// silently ignored rather than rejected; now it returns `400`.
+    #[tokio::test]
+    async fn search_sessions_route_rejects_sort_order_typo() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/pjs/sessions/search?sort_order=decs")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// #497: `sort_order` matching is case-sensitive, like `sort_by` and `state` — an
+    /// otherwise-valid spelling in the wrong case (`"ASC"`) is rejected with `400` rather
+    /// than being accepted or silently ignored.
+    #[tokio::test]
+    async fn search_sessions_route_rejects_uppercase_sort_order() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let repository = Arc::new(MockRepository::new());
+        let event_publisher = Arc::new(MockEventPublisher);
+        let stream_store = Arc::new(MockStreamStore);
+        let state = PjsAppState::new(repository, event_publisher, stream_store);
+
+        let router =
+            create_pjs_router_with_config::<MockRepository, MockEventPublisher, MockStreamStore>(
+                &HttpServerConfig::default(),
+            )
+            .expect("router should build")
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/pjs/sessions/search?sort_order=ASC")
             .body(axum::body::Body::empty())
             .unwrap();
 
