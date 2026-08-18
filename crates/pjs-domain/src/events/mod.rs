@@ -814,30 +814,9 @@ pub trait EventSubscriber {
 
 /// Extension methods for DomainEvent
 impl DomainEvent {
-    /// Get event timestamp
+    /// Alias for [`timestamp`](Self::timestamp).
     pub fn occurred_at(&self) -> DateTime<Utc> {
-        match self {
-            DomainEvent::SessionActivated { timestamp, .. }
-            | DomainEvent::SessionClosed { timestamp, .. }
-            | DomainEvent::SessionExpired { timestamp, .. }
-            | DomainEvent::StreamCreated { timestamp, .. }
-            | DomainEvent::StreamStarted { timestamp, .. }
-            | DomainEvent::StreamCompleted { timestamp, .. }
-            | DomainEvent::StreamFailed { timestamp, .. }
-            | DomainEvent::StreamCancelled { timestamp, .. }
-            | DomainEvent::SkeletonGenerated { timestamp, .. }
-            | DomainEvent::PatchFramesGenerated { timestamp, .. }
-            | DomainEvent::FramesBatched { timestamp, .. }
-            | DomainEvent::PriorityThresholdAdjusted { timestamp, .. }
-            | DomainEvent::StreamConfigUpdated { timestamp, .. }
-            | DomainEvent::PerformanceMetricsRecorded { timestamp, .. }
-            | DomainEvent::SessionTimedOut { timestamp, .. }
-            | DomainEvent::SessionTimeoutExtended { timestamp, .. }
-            | DomainEvent::BackpressureReceived { timestamp, .. }
-            | DomainEvent::StreamPaused { timestamp, .. }
-            | DomainEvent::StreamResumed { timestamp, .. }
-            | DomainEvent::CreditsUpdated { timestamp, .. } => *timestamp,
-        }
+        self.timestamp()
     }
 
     /// Get event metadata as key-value pairs
@@ -845,7 +824,7 @@ impl DomainEvent {
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("event_type".to_string(), self.event_type().to_string());
         metadata.insert("session_id".to_string(), self.session_id().to_string());
-        metadata.insert("timestamp".to_string(), self.occurred_at().to_rfc3339());
+        metadata.insert("timestamp".to_string(), self.timestamp().to_rfc3339());
 
         if let Some(stream_id) = self.stream_id() {
             metadata.insert("stream_id".to_string(), stream_id.to_string());
