@@ -7,7 +7,6 @@ pub mod event_publisher;
 pub mod frame_store;
 pub mod gat_memory_repository;
 pub mod generic_store;
-pub mod json_adapter;
 pub mod limits;
 pub mod metrics_collector;
 
@@ -16,7 +15,6 @@ pub use event_publisher::{InMemoryEventPublisher, StoredEvent};
 pub use frame_store::InMemoryFrameStore;
 pub use gat_memory_repository::{GatInMemoryStreamRepository, GatInMemoryStreamStore};
 pub use generic_store::{InMemoryStore, SessionStore, StreamStore};
-pub use json_adapter::JsonAdapter;
 pub use limits::{
     ALLOWED_SORT_FIELDS, MAX_HEALTH_METRICS, MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET,
     MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT,
