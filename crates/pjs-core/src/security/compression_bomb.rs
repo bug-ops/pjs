@@ -1,4 +1,10 @@
-//! Compression bomb protection to prevent memory exhaustion attacks
+//! Compression bomb protection to prevent memory exhaustion attacks.
+//!
+//! This module provides [`CompressionBombProtector`] and [`CompressionBombDetector`] for
+//! detecting and preventing decompression attacks. The streaming ratio, size, and depth guards
+//! are fully implemented and tested, but currently have no production entry point wired into
+//! this codebase's HTTP/WebSocket layers. See [`crate::compression::secure::SecureCompressor`]
+//! for the protected decompression methods that are defined but not yet called from the public API.
 
 use crate::{Error, Result};
 use std::io::Read;
