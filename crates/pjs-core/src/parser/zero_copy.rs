@@ -357,16 +357,40 @@ impl<'a> ZeroCopyParser<'a> {
                     b'r' => result.push(b'\r'),
                     b't' => result.push(b'\t'),
                     b'u' => {
-                        // Unicode escape sequence
-                        if i + 5 < input.len() {
-                            // Simplified: just skip unicode for now
+                        let high = Self::parse_hex4(input, i + 2)?;
+                        i += 6;
+
+                        let codepoint = if (0xD800..=0xDBFF).contains(&high) {
+                            // High surrogate: must be followed by a low surrogate.
+                            if i + 1 >= input.len() || input[i] != b'\\' || input[i + 1] != b'u' {
+                                return Err(DomainError::InvalidInput(
+                                    "Unpaired high surrogate in unicode escape".to_string(),
+                                ));
+                            }
+                            let low = Self::parse_hex4(input, i + 2)?;
+                            if !(0xDC00..=0xDFFF).contains(&low) {
+                                return Err(DomainError::InvalidInput(
+                                    "High surrogate not followed by low surrogate".to_string(),
+                                ));
+                            }
                             i += 6;
-                            continue;
-                        } else {
+                            0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00)
+                        } else if (0xDC00..=0xDFFF).contains(&high) {
                             return Err(DomainError::InvalidInput(
-                                "Invalid unicode escape".to_string(),
+                                "Unpaired low surrogate in unicode escape".to_string(),
                             ));
-                        }
+                        } else {
+                            high
+                        };
+
+                        let ch = char::from_u32(codepoint).ok_or_else(|| {
+                            DomainError::InvalidInput(
+                                "Invalid unicode codepoint in escape sequence".to_string(),
+                            )
+                        })?;
+                        let mut buf = [0u8; 4];
+                        result.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                        continue;
                     }
                     _ => {
                         return Err(DomainError::InvalidInput(
@@ -383,6 +407,25 @@ impl<'a> ZeroCopyParser<'a> {
 
         String::from_utf8(result)
             .map_err(|e| DomainError::InvalidInput(format!("Invalid UTF-8: {e}")))
+    }
+
+    /// Parse a 4-digit hex escape (`XXXX` in `\uXXXX`) starting at `pos`.
+    fn parse_hex4(input: &[u8], pos: usize) -> DomainResult<u32> {
+        let hex = input
+            .get(pos..pos + 4)
+            .ok_or_else(|| DomainError::InvalidInput("Invalid unicode escape".to_string()))?;
+        // `from_str_radix` alone would accept a leading `+` (e.g. "+041"); reject
+        // anything but plain hex digits so malformed escapes error instead of
+        // silently decoding to an unintended codepoint.
+        if !hex.iter().all(u8::is_ascii_hexdigit) {
+            return Err(DomainError::InvalidInput(
+                "Invalid unicode escape".to_string(),
+            ));
+        }
+        let hex_str = std::str::from_utf8(hex)
+            .map_err(|_| DomainError::InvalidInput("Invalid unicode escape".to_string()))?;
+        u32::from_str_radix(hex_str, 16)
+            .map_err(|_| DomainError::InvalidInput("Invalid unicode escape".to_string()))
     }
 }
 
@@ -826,12 +869,194 @@ mod tests {
     #[test]
     fn test_escape_sequence_unicode_basic() {
         let mut parser = ZeroCopyParser::new();
-        // Test that unicode escapes are processed (even if not fully decoded)
         let input = br#""text\u0041""#;
 
+        let result = parser.parse_lazy(input).unwrap();
+        match result {
+            LazyJsonValue::StringOwned(s) => {
+                assert_eq!(s, "textA");
+            }
+            _ => panic!("Expected owned string due to escapes"),
+        }
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_surrogate_pair() {
+        let mut parser = ZeroCopyParser::new();
+        // U+1F600 GRINNING FACE, encoded via a UTF-16 surrogate pair escape
+        let input = br#""\uD83D\uDE00""#;
+
+        let result = parser.parse_lazy(input).unwrap();
+        match result {
+            LazyJsonValue::StringOwned(s) => {
+                assert_eq!(s, "\u{1F600}");
+            }
+            _ => panic!("Expected owned string due to escapes"),
+        }
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_unpaired_high_surrogate_errors() {
+        let mut parser = ZeroCopyParser::new();
+        // Lone high surrogate with no following low surrogate escape
+        let input = br#""\uD83D""#;
+
         let result = parser.parse_lazy(input);
-        // Parser should handle unicode escapes without error
-        assert!(result.is_ok());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_lone_low_surrogate_errors() {
+        let mut parser = ZeroCopyParser::new();
+        let input = br#""\uDE00""#;
+
+        let result = parser.parse_lazy(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_hex_too_short_errors() {
+        let mut parser = ZeroCopyParser::new();
+        let input = br#""\u00""#;
+
+        let result = parser.parse_lazy(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_invalid_hex_digit_errors() {
+        let mut parser = ZeroCopyParser::new();
+        let input = br#""\uZZZZ""#;
+
+        let result = parser.parse_lazy(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_leading_plus_rejected() {
+        let mut parser = ZeroCopyParser::new();
+        // Regression test: `u32::from_str_radix` alone accepts a leading '+',
+        // which must not be treated as a valid hex digit.
+        let input = br#""\u+041""#;
+
+        let result = parser.parse_lazy(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_high_surrogate_not_followed_by_escape_errors() {
+        let mut parser = ZeroCopyParser::new();
+        // High surrogate followed by plain characters (no backslash at all).
+        let input = br#""\uD83DAB""#;
+
+        let result = parser.parse_lazy(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_high_surrogate_followed_by_non_u_escape_errors() {
+        let mut parser = ZeroCopyParser::new();
+        // High surrogate followed by a `\n` escape rather than `\u`.
+        let input = br#""\uD83D\n""#;
+
+        let result = parser.parse_lazy(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_high_surrogate_followed_by_non_low_surrogate_errors() {
+        let mut parser = ZeroCopyParser::new();
+        // Second escape is a valid \u escape but its value is not a low surrogate.
+        let input = br#""\uD83D\u0041""#;
+
+        let result = parser.parse_lazy(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_null_codepoint() {
+        let mut parser = ZeroCopyParser::new();
+        let input = br#""\u0000""#;
+
+        let result = parser.parse_lazy(input).unwrap();
+        match result {
+            LazyJsonValue::StringOwned(s) => {
+                assert_eq!(s, "\u{0000}");
+            }
+            _ => panic!("Expected owned string due to escapes"),
+        }
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_two_byte_char() {
+        let mut parser = ZeroCopyParser::new();
+        // U+00E9 LATIN SMALL LETTER E WITH ACUTE, 2-byte UTF-8
+        let input = br#""\u00e9""#;
+
+        let result = parser.parse_lazy(input).unwrap();
+        match result {
+            LazyJsonValue::StringOwned(s) => {
+                assert_eq!(s, "\u{00e9}");
+            }
+            _ => panic!("Expected owned string due to escapes"),
+        }
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_three_byte_char() {
+        let mut parser = ZeroCopyParser::new();
+        // U+4E2D CJK UNIFIED IDEOGRAPH, 3-byte UTF-8
+        let input = br#""\u4e2d""#;
+
+        let result = parser.parse_lazy(input).unwrap();
+        match result {
+            LazyJsonValue::StringOwned(s) => {
+                assert_eq!(s, "\u{4e2d}");
+            }
+            _ => panic!("Expected owned string due to escapes"),
+        }
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_max_bmp_noncharacter() {
+        let mut parser = ZeroCopyParser::new();
+        let input = br#""\uffff""#;
+
+        let result = parser.parse_lazy(input).unwrap();
+        match result {
+            LazyJsonValue::StringOwned(s) => {
+                assert_eq!(s, "\u{ffff}");
+            }
+            _ => panic!("Expected owned string due to escapes"),
+        }
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_lowercase_hex_surrogate_pair() {
+        let mut parser = ZeroCopyParser::new();
+        let input = br#""\ud83d\ude00""#;
+
+        let result = parser.parse_lazy(input).unwrap();
+        match result {
+            LazyJsonValue::StringOwned(s) => {
+                assert_eq!(s, "\u{1F600}");
+            }
+            _ => panic!("Expected owned string due to escapes"),
+        }
+    }
+
+    #[test]
+    fn test_escape_sequence_unicode_surrogate_pair_with_surrounding_ascii() {
+        let mut parser = ZeroCopyParser::new();
+        let input = br#""a\uD83D\uDE00b""#;
+
+        let result = parser.parse_lazy(input).unwrap();
+        match result {
+            LazyJsonValue::StringOwned(s) => {
+                assert_eq!(s, "a\u{1F600}b");
+            }
+            _ => panic!("Expected owned string due to escapes"),
+        }
     }
 
     #[test]
