@@ -102,6 +102,17 @@ impl StreamRepositoryGat for MockRepository {
     where
         Self: 'a;
 
+    type BatchGenerateFramesAtomicFuture<'a>
+        = impl std::future::Future<
+            Output = pjson_rs::domain::DomainResult<(
+                Vec<pjson_rs::domain::entities::Frame>,
+                Vec<DomainEvent>,
+            )>,
+        > + Send
+        + 'a
+    where
+        Self: 'a;
+
     type CloseSessionAtomicFuture<'a>
         = impl std::future::Future<Output = pjson_rs::domain::DomainResult<Vec<DomainEvent>>>
         + Send
@@ -219,6 +230,26 @@ impl StreamRepositoryGat for MockRepository {
             })?;
             let frames =
                 session.create_stream_patch_frames(stream_id, priority_threshold, max_frames)?;
+            Ok((frames, session.take_events().into_iter().collect()))
+        }
+    }
+
+    fn batch_generate_frames_atomic(
+        &self,
+        session_id: SessionId,
+        max_frames: usize,
+    ) -> Self::BatchGenerateFramesAtomicFuture<'_> {
+        async move {
+            let mut sessions = self.sessions.lock();
+            let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                pjson_rs::domain::DomainError::SessionNotFound(format!(
+                    "Session {session_id} not found"
+                ))
+            })?;
+            let extracted = session.extract_prioritized_patches_for_active_streams(
+                pjson_rs::domain::value_objects::Priority::BACKGROUND,
+            );
+            let frames = session.commit_priority_frames(extracted, max_frames)?;
             Ok((frames, session.take_events().into_iter().collect()))
         }
     }

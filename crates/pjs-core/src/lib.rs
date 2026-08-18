@@ -24,6 +24,8 @@ pub mod infrastructure;
 pub mod parser;
 pub mod security;
 pub mod stream;
+#[cfg(test)]
+mod test_support;
 
 // Global allocator diagnostics
 pub use global_alloc::global_allocator_name;

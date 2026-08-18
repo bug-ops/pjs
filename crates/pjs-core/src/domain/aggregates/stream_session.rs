@@ -2,7 +2,11 @@
 
 use crate::domain::{
     DomainError, DomainResult,
-    entities::{Frame, Stream, frame::FramePatch, stream::StreamConfig},
+    entities::{
+        Frame, Stream,
+        frame::FramePatch,
+        stream::{StreamConfig, StreamState},
+    },
     events::{DomainEvent, SessionState},
     ports::{SystemTimeProvider, TimeProvider},
     value_objects::{JsonData, Priority, SessionId, StreamId},
@@ -501,7 +505,7 @@ impl StreamSession {
     /// transactional rollback) never has to reason about two independently
     /// fallible calls. In practice the second call cannot fail here: a
     /// freshly created stream is always in
-    /// [`StreamState::Preparing`](crate::domain::entities::stream::StreamState::Preparing),
+    /// [`StreamState::Preparing`],
     /// which [`Stream::is_active`](crate::domain::entities::Stream::is_active)
     /// treats as active — the only condition `update_stream_config` checks —
     /// and nothing else can run between the two calls within one `&mut self`
@@ -618,38 +622,124 @@ impl StreamSession {
         Ok(())
     }
 
-    /// Create frames for all active streams based on priority
+    /// Create frames for all active streams based on priority.
     ///
-    /// Unlike [`Self::create_stream_patch_frames`], `stats.total_bytes` here
-    /// cannot be taken as a child `Stream` before/after delta: frames are
-    /// generated per-stream but then globally sorted by priority and
-    /// truncated to `batch_size`, so a per-stream delta would count bytes
-    /// for frames this call discards. `estimated_size()` is summed directly
-    /// over only the frames actually retained in `all_frames`.
+    /// Convenience single-call wrapper combining
+    /// [`Self::extract_prioritized_patches_for_active_streams`] and
+    /// [`Self::commit_priority_frames`]. Callers managing their own
+    /// concurrency control around the mutating half (e.g. a repository
+    /// holding a per-session lock for the read-modify-write) should call
+    /// those two methods directly instead, running the expensive extraction
+    /// step lock-free — see [`Self::commit_priority_frames`]'s docs for why
+    /// this method's single call is unsuitable for that.
     pub fn create_priority_frames(&mut self, batch_size: usize) -> DomainResult<Vec<Frame>> {
+        let extracted = self.extract_prioritized_patches_for_active_streams(Priority::BACKGROUND);
+        self.commit_priority_frames(extracted, batch_size)
+    }
+
+    /// Compute prioritized patches for every currently-`Streaming` stream,
+    /// without mutating any state — the expensive half of
+    /// [`Self::create_priority_frames`] (one full `source_data` traversal
+    /// per stream). Streams not in the `Streaming` state (e.g. still
+    /// `Preparing`, or already finished) are silently omitted rather than
+    /// erroring, since [`Stream::extract_prioritized_patches`] only accepts
+    /// `Streaming` streams and a batch spanning many streams should not fail
+    /// as a whole over one that is not yet ready.
+    ///
+    /// Split out so a caller that needs its own concurrency control around
+    /// the *mutating* half (e.g. a repository holding a per-session lock)
+    /// can run this traversal lock-free and only take the lock for
+    /// [`Self::commit_priority_frames`]'s commit step — mirroring
+    /// [`Self::extract_prioritized_patches_for_stream`]'s single-stream
+    /// counterpart. Note that commit step is itself proportional to the
+    /// total number of patches extracted across every `Streaming` stream,
+    /// not to `max_frames`/`batch_size` — see that method's docs.
+    pub fn extract_prioritized_patches_for_active_streams(
+        &self,
+        priority_threshold: Priority,
+    ) -> Vec<(StreamId, Vec<(FramePatch, Priority)>)> {
+        self.streams
+            .iter()
+            .filter(|(_, stream)| matches!(stream.state(), StreamState::Streaming))
+            .filter_map(|(stream_id, stream)| {
+                stream
+                    .extract_prioritized_patches(priority_threshold)
+                    // Only current error source is the `Streaming`-state
+                    // check, already guaranteed by the `filter` above, so
+                    // discarding is a no-op today. `collect_patches`
+                    // (`stream.rs`) has no depth bound and could grow one
+                    // later (the codebase's established pattern for
+                    // recursive walkers, e.g. #469/#475) — if it does, that
+                    // future error must not be silently dropped here.
+                    .ok()
+                    .map(|patches| (*stream_id, patches))
+            })
+            .collect()
+    }
+
+    /// Turn already-extracted per-stream patches (from
+    /// [`Self::extract_prioritized_patches_for_active_streams`]) into
+    /// frames, choosing up to 5 per stream, globally sorting all of them by
+    /// priority, and truncating to `batch_size` — the mutating half of
+    /// [`Self::create_priority_frames`], updating session-level statistics
+    /// and raising [`DomainEvent::FramesBatched`] exactly as that method
+    /// does.
+    ///
+    /// Despite being the half a caller is expected to run under a lock, this
+    /// is not cheap or `max_frames`-bounded: [`Stream::commit_patch_frames`]
+    /// clones every patch in its input while chunking it into frames
+    /// (`batch_patches_into_frames`, `stream.rs`), so its cost is
+    /// proportional to the total number of patches extracted across every
+    /// `Streaming` stream in the session, not to `max_frames`/`batch_size`
+    /// or the number of frames actually produced. Inherited from
+    /// `create_stream_patch_frames_atomic`'s pre-existing single-stream
+    /// commit step (#472); not addressed here.
+    ///
+    /// A `stream_id` in `extracted` that no longer exists, or transitioned
+    /// out of `Streaming` between extraction and this call (e.g. completed
+    /// concurrently), is silently skipped rather than failing the whole
+    /// batch — the same reasoning as
+    /// [`Self::extract_prioritized_patches_for_active_streams`]'s omission,
+    /// and critically: unlike that read-only method, propagating an error
+    /// here mid-loop via `?` would leave streams processed by earlier loop
+    /// iterations with their frame/sequence bookkeeping already committed
+    /// while this method's own session-level stats update and
+    /// `FramesBatched` event never run, permanently desynchronizing the two
+    /// (see #477).
+    ///
+    /// Unlike [`Self::commit_patch_frames_for_stream`], `stats.total_bytes`
+    /// here cannot be taken as a child [`Stream`]'s before/after delta:
+    /// frames are committed per-stream but then globally sorted by priority
+    /// and truncated to `batch_size`, so a per-stream delta would count
+    /// bytes for frames this call discards. `estimated_size()` is summed
+    /// directly over only the frames actually retained in the result.
+    pub fn commit_priority_frames(
+        &mut self,
+        extracted: Vec<(StreamId, Vec<(FramePatch, Priority)>)>,
+        batch_size: usize,
+    ) -> DomainResult<Vec<Frame>> {
         if !self.is_active() {
             return Err(DomainError::InvalidSessionState(
                 "Session is not active".to_string(),
             ));
         }
 
-        let mut all_frames = Vec::new();
-        let mut frame_count = 0;
-
-        // Collect frames from all active streams, sorted by priority
         let mut stream_frames: Vec<(Priority, StreamId, Frame)> = Vec::new();
 
-        for (stream_id, stream) in &mut self.streams {
-            if !stream.is_active() {
+        for (stream_id, patches) in extracted {
+            let Some(stream) = self.streams.get_mut(&stream_id) else {
+                continue;
+            };
+            if !matches!(stream.state(), StreamState::Streaming) {
                 continue;
             }
-
-            // Try to create frames from this stream
-            let frames = stream.create_patch_frames(Priority::BACKGROUND, 5)?;
+            let Ok(frames) = stream.commit_patch_frames(patches, 5) else {
+                continue;
+            };
 
             for frame in frames {
                 let priority = frame.priority();
-                stream_frames.push((priority, *stream_id, frame));
+                stream_frames.push((priority, stream_id, frame));
             }
         }
 
@@ -657,13 +747,14 @@ impl StreamSession {
         stream_frames.sort_by_key(|frame| std::cmp::Reverse(frame.0));
 
         // Take up to batch_size frames
-        for (_, _, frame) in stream_frames.into_iter().take(batch_size) {
-            all_frames.push(frame);
-            frame_count += 1;
-        }
+        let all_frames: Vec<Frame> = stream_frames
+            .into_iter()
+            .take(batch_size)
+            .map(|(_, _, frame)| frame)
+            .collect();
 
         // Update session stats
-        self.stats.total_frames += frame_count;
+        self.stats.total_frames += all_frames.len() as u64;
         self.stats.total_bytes += all_frames
             .iter()
             .map(|frame| frame.estimated_size() as u64)

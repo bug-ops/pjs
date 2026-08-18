@@ -951,6 +951,32 @@ fn test_create_priority_frames_updates_total_bytes_excludes_discarded_frames() {
     );
 }
 
+/// Regression test for #477: a stream still `Preparing` (created but never
+/// started) must not abort the whole batch — `create_priority_frames` skips
+/// non-`Streaming` streams rather than erroring, and must produce frames
+/// from the `Streaming` stream alongside it, with session stats reflecting
+/// exactly the streams that actually contributed.
+#[test]
+fn test_create_priority_frames_skips_preparing_stream_without_erroring() {
+    let mut session = StreamSession::new(default_config());
+    session.activate().unwrap();
+
+    let streaming_id = session.create_stream(json_str("field", "value")).unwrap();
+    session.start_stream(streaming_id).unwrap();
+
+    // Left in `Preparing` — never started.
+    let _preparing_id = session.create_stream(json_str("other", "value")).unwrap();
+
+    let frames = session.create_priority_frames(10).unwrap();
+
+    assert!(
+        !frames.is_empty(),
+        "the Streaming stream's frames must still be produced"
+    );
+    assert!(frames.iter().all(|f| f.stream_id() == streaming_id));
+    assert_eq!(session.stats().total_frames, frames.len() as u64);
+}
+
 // ============================================================================
 // Edge Cases
 // ============================================================================
