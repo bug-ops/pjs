@@ -108,9 +108,10 @@ impl SonicParser {
         // bytes directly: the delimiters checked here are ASCII, and ASCII
         // byte values never occur inside a multi-byte UTF-8 sequence (valid
         // or invalid), so this bound check is safe ahead of UTF-8 validation.
-        // Bounds nesting depth for well-formed structural input; see #456
-        // for a known bypass via string-literal content (pre-existing gap,
-        // preserved as-is here, not introduced by this change).
+        // Tracks in-string state so delimiter bytes inside string literals
+        // are never counted toward structural depth — see #456, which fixed
+        // a bypass where crafted string content could deflate the reported
+        // depth below the real structural nesting.
         self.pre_validate_json_bytes(input)?;
 
         // Parse with sonic-rs SIMD acceleration. `sonic_rs::from_slice`
@@ -183,29 +184,16 @@ impl SonicParser {
         self.stats.borrow().clone()
     }
 
-    /// Pre-validate JSON bytes for basic safety checks (before parsing)
+    /// Pre-validate JSON bytes for basic safety checks (before parsing).
+    ///
+    /// Scans raw bytes directly: the delimiters checked here are ASCII, and
+    /// ASCII byte values never occur inside a multi-byte UTF-8 sequence
+    /// (valid or invalid), so this bound check is safe ahead of UTF-8
+    /// validation. Tracks in-string state (`"` toggles it, `\` escapes the
+    /// following byte) so delimiter bytes inside string literals are never
+    /// counted toward structural depth — see #456.
     fn pre_validate_json_bytes(&self, input: &[u8]) -> Result<()> {
-        // Count nesting depth by counting braces/brackets. `{`, `[`, `}`,
-        // `]` are ASCII, so a byte-level scan is UTF-8-safe even before the
-        // input has been validated as UTF-8.
-        let mut depth = 0;
-        let mut max_depth = 0;
-
-        for &byte in input {
-            match byte {
-                b'{' | b'[' => {
-                    depth += 1;
-                    max_depth = max_depth.max(depth);
-                    self.validator.validate_json_depth(max_depth)?;
-                }
-                b'}' | b']' => {
-                    depth = depth.saturating_sub(1);
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
+        self.validator.validate_json_depth_bytes(input)
     }
 
     /// Validate JSON structure for security (depth, complexity, etc.)
@@ -718,6 +706,48 @@ mod tests {
                 SemanticType::Table { .. }
             ));
         }
+    }
+
+    /// Builds a payload that is structurally nested `depth` levels deep, but
+    /// where every closing level is preceded by a string literal containing a
+    /// stray `]` byte (`["]",["]",...,1]]]...`) — the classic depth-counter
+    /// bypass from issue #456.
+    fn build_depth_bypass_payload(depth: usize) -> String {
+        let mut json = String::new();
+        for _ in 0..depth {
+            json.push_str("[\"]\",");
+        }
+        json.push('1');
+        for _ in 0..depth {
+            json.push(']');
+        }
+        json
+    }
+
+    #[test]
+    fn test_sonic_depth_bypass_via_string_literals_rejected() {
+        let parser = SonicParser::new();
+        // Default max_depth is 64; this is structurally 70 levels deep, but a
+        // naive brace/bracket counter that doesn't track in-string state sees
+        // the `]` bytes inside each `"]"` string as closes and never reports
+        // more than depth 1.
+        let payload = build_depth_bypass_payload(70);
+
+        let result = parser.parse(payload.as_bytes());
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("depth"));
+    }
+
+    #[test]
+    fn test_sonic_brackets_in_strings_do_not_false_positive() {
+        let parser = SonicParser::new();
+        // Legitimate JSON containing structural-looking characters inside
+        // string values, well within the depth limit, must still parse.
+        let json = br#"{"key": "a[b]c{d}e", "arr": [1, 2, 3], "note": "[[[}}}"}"#;
+
+        let result = parser.parse(json);
+        assert!(result.is_ok());
     }
 
     #[test]

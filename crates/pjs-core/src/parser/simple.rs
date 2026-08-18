@@ -70,6 +70,7 @@ impl SimpleParser {
     pub fn parse(&self, input: &[u8]) -> Result<Frame> {
         // Security validation
         self.validator.validate_input_size(input.len())?;
+        self.validator.validate_json_depth_bytes(input)?;
 
         // Parse with serde_json
         let value: Value = serde_json::from_slice(input)
@@ -421,6 +422,39 @@ mod tests {
                 SemanticType::Table { .. }
             ));
         }
+    }
+
+    #[test]
+    fn test_depth_bypass_via_string_literals_rejected() {
+        let parser = SimpleParser::new();
+        // Same crafted payload as the SonicParser regression test: 70 levels
+        // of genuine nesting, with a `"]"` string preceding each close so a
+        // naive counter never sees depth exceed 1. SimpleParser is the
+        // fallback `Parser::parse` reaches when SonicParser rejects a
+        // payload, so it must independently enforce the depth bound rather
+        // than relying on sonic's pre-validation alone.
+        let mut json = String::new();
+        for _ in 0..70 {
+            json.push_str("[\"]\",");
+        }
+        json.push('1');
+        for _ in 0..70 {
+            json.push(']');
+        }
+
+        let result = parser.parse(json.as_bytes());
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("depth"));
+    }
+
+    #[test]
+    fn test_brackets_in_strings_do_not_false_positive() {
+        let parser = SimpleParser::new();
+        let json = br#"{"key": "a[b]c{d}e", "arr": [1, 2, 3], "note": "[[[}}}"}"#;
+
+        let result = parser.parse(json);
+        assert!(result.is_ok());
     }
 
     #[test]

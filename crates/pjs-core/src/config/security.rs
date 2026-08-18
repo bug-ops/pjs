@@ -21,6 +21,15 @@ pub struct SecurityConfig {
     pub sessions: SessionLimits,
 }
 
+/// Hard ceiling on [`JsonLimits::max_depth`], enforced by [`SecurityConfig::validate`].
+///
+/// `sonic-rs` has no internal recursion limit, so `max_depth` is the only
+/// guard between untrusted input and unbounded parser recursion. This caps
+/// misconfiguration (e.g. an operator or deserialized config setting an
+/// unreasonably large limit) from reopening the stack-exhaustion risk fixed
+/// in #456; it does not by itself guarantee safety on every stack size.
+pub const MAX_SAFE_JSON_DEPTH: usize = 512;
+
 /// JSON processing security limits
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonLimits {
@@ -198,7 +207,7 @@ impl SecurityConfig {
     ///
     /// Returns [`ConfigError::MustBePositive`] when a size field is zero.
     /// Returns [`ConfigError::InconsistentBounds`] when min > max for session
-    /// ID length.
+    /// ID length, or `max_depth` exceeds [`MAX_SAFE_JSON_DEPTH`].
     ///
     /// # Examples
     ///
@@ -214,6 +223,14 @@ impl SecurityConfig {
             return Err(ConfigError::InconsistentBounds {
                 section: s,
                 message: "min_session_id_length must be <= max_session_id_length",
+            });
+        }
+
+        if self.json.max_depth > MAX_SAFE_JSON_DEPTH {
+            return Err(ConfigError::InconsistentBounds {
+                section: "security.json",
+                message: "max_depth exceeds MAX_SAFE_JSON_DEPTH (sonic-rs has no internal \
+                           recursion limit; excessive depth risks stack exhaustion)",
             });
         }
 
@@ -455,6 +472,27 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_rejects_max_depth_above_hard_ceiling() {
+        let mut config = SecurityConfig::default();
+        config.json.max_depth = MAX_SAFE_JSON_DEPTH + 1;
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InconsistentBounds {
+                section: "security.json",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_max_depth_exactly_at_hard_ceiling_validates() {
+        let mut config = SecurityConfig::default();
+        config.json.max_depth = MAX_SAFE_JSON_DEPTH;
+        config.validate().expect("boundary value must be valid");
     }
 
     #[test]
