@@ -340,9 +340,11 @@ impl Stream {
     /// Split out from [`Self::commit_patch_frames`] so a caller that needs
     /// its own concurrency control around the *mutating* half (e.g. a
     /// repository holding a per-session lock for the read-modify-write) can
-    /// run this traversal lock-free and only take the lock for the cheap
-    /// commit step. Safe to call without holding any lock: `source_data` is
-    /// set once at stream creation and never mutated afterward.
+    /// run this traversal lock-free and only take the lock for the commit
+    /// step — which is itself `O(patches.len())`, not cheap or
+    /// `max_frames`-bounded; see [`Self::commit_patch_frames`]'s docs. Safe
+    /// to call without holding any lock: `source_data` is set once at
+    /// stream creation and never mutated afterward.
     pub fn extract_prioritized_patches(
         &self,
         priority_threshold: Priority,
@@ -362,8 +364,13 @@ impl Stream {
 
     /// Turn already-extracted prioritized patches (from
     /// [`Self::extract_prioritized_patches`]) into frames and commit their
-    /// bookkeeping (`next_sequence`, `stats`) — the cheap, `O(max_frames)`
-    /// half of [`Self::create_patch_frames`].
+    /// bookkeeping (`next_sequence`, `stats`) — the other half of
+    /// [`Self::create_patch_frames`].
+    ///
+    /// `max_frames` only bounds the number of frames returned, not the work
+    /// done to produce them: every patch in `patches` is still cloned into
+    /// some frame, so this call's cost is `O(patches.len())`, proportional to
+    /// the total number of patches extracted, not to `max_frames`.
     ///
     /// Re-checks the streaming-state precondition itself: if the stream
     /// transitioned out of `Streaming` between the caller's earlier
