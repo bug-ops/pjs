@@ -12,18 +12,14 @@
 //! # Status: not yet wired into production
 //!
 //! As of this writing, no production code path in this workspace calls
-//! [`PartialJsonParser::parse_partial`] or the
-//! [`Parser::parse_partial`](crate::parser::Parser::parse_partial) wrapper
-//! around it. The only call sites are this module's own unit tests, `no_run`
-//! doc examples, and `Parser::parse_partial`'s own implementation (which
-//! constructs [`JiterPartialParser`] internally as part of that wrapper —
-//! but the wrapper itself has no caller). No streaming/partial-frame HTTP or
-//! WebSocket ingestion entry point exists yet that feeds either of them real
-//! traffic, and the `partial-parse` feature gating this module is not part
-//! of `pjs-core`'s default feature set. The implementation and its unit
-//! tests are maintained in anticipation of a future streaming ingestion
-//! feature, but it should not be assumed battle-tested against production
-//! traffic until such a caller exists.
+//! [`PartialJsonParser::parse_partial`]. The only call sites are this
+//! module's own unit tests and `no_run` doc examples. No streaming/
+//! partial-frame HTTP or WebSocket ingestion entry point exists yet that
+//! feeds it real traffic, and the `partial-parse` feature gating this
+//! module is not part of `pjs-core`'s default feature set. The
+//! implementation and its unit tests are maintained in anticipation of a
+//! future streaming ingestion feature, but it should not be assumed
+//! battle-tested against production traffic until such a caller exists.
 //!
 //! # What this module does NOT use
 //!
