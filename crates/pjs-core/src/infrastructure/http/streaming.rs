@@ -70,15 +70,15 @@ fn format_frame_owned(
 ) -> Result<Vec<u8>, StreamTransportError> {
     let v = frame_to_value(frame);
     match format {
-        StreamFormat::Json | StreamFormat::Binary => Ok(serde_json::to_vec(&v)?),
+        StreamFormat::Json | StreamFormat::Binary => Ok(sonic_rs::to_vec(&v)?),
         StreamFormat::NdJson => {
-            let mut out = serde_json::to_vec(&v)?;
+            let mut out = sonic_rs::to_vec(&v)?;
             out.push(b'\n');
             Ok(out)
         }
         StreamFormat::ServerSentEvents => {
             let mut out = Vec::from(b"data: ".as_slice());
-            out.extend_from_slice(&serde_json::to_vec(&v)?);
+            out.extend_from_slice(&sonic_rs::to_vec(&v)?);
             out.extend_from_slice(b"\n\n");
             Ok(out)
         }
@@ -101,7 +101,7 @@ fn format_batch_owned(
         StreamFormat::Json | StreamFormat::NdJson => {
             let mut out = Vec::new();
             for v in values {
-                out.extend_from_slice(&serde_json::to_vec(&v)?);
+                out.extend_from_slice(&sonic_rs::to_vec(&v)?);
                 out.push(b'\n');
             }
             Ok(out)
@@ -110,12 +110,12 @@ fn format_batch_owned(
             let mut out = Vec::new();
             for v in values {
                 out.extend_from_slice(b"data: ");
-                out.extend_from_slice(&serde_json::to_vec(&v)?);
+                out.extend_from_slice(&sonic_rs::to_vec(&v)?);
                 out.extend_from_slice(b"\n\n");
             }
             Ok(out)
         }
-        StreamFormat::Binary => Ok(serde_json::to_vec(&values)?),
+        StreamFormat::Binary => Ok(sonic_rs::to_vec(&values)?),
     }
 }
 
@@ -393,7 +393,7 @@ where
 pub enum StreamTransportError {
     /// Frame failed to serialize to JSON.
     #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
+    Serialization(#[from] sonic_rs::Error),
 
     /// Underlying I/O or transport failure.
     #[error("IO error: {0}")]
@@ -900,6 +900,70 @@ mod tests {
             // All frames fit in the buffer (size=10) so they must arrive fully sorted.
             assert_eq!(priorities, vec![80, 50, 30, 10]);
         });
+    }
+
+    /// `sonic_rs::to_vec` must stay parse-equivalent to `serde_json::to_vec` for
+    /// the `serde_json::Value` shapes `frame_to_value` can produce — the two
+    /// encoders are not guaranteed byte-identical (e.g. float formatting), so
+    /// this asserts round-trip equivalence per edge case and records where the
+    /// raw bytes happen to diverge (informational, not a failure).
+    #[test]
+    fn test_sonic_rs_matches_serde_json_semantics() {
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            ("empty_object", serde_json::json!({})),
+            ("empty_array", serde_json::json!([])),
+            ("null", serde_json::Value::Null),
+            (
+                "unicode_and_escapes",
+                serde_json::json!({
+                    "s": "héllo \"quoted\" \n \t \u{0} emoji \u{1F600} \u{2028}"
+                }),
+            ),
+            (
+                "numbers",
+                serde_json::json!({
+                    "u64_max": u64::MAX,
+                    "i64_min": i64::MIN,
+                    "zero": 0,
+                    "neg_zero_float": -0.0_f64,
+                    "integral_float": 1.0_f64,
+                    "fractional": 1234.567890123_f64,
+                    "small_exp": 1.5e-10_f64,
+                    "large_exp": 1.5e300_f64,
+                }),
+            ),
+            (
+                "nested",
+                serde_json::json!({
+                    "a": [1, 2, {"b": [null, true, false, "x"]}],
+                    "c": {}
+                }),
+            ),
+        ];
+
+        for (name, value) in cases {
+            let serde_bytes = serde_json::to_vec(&value).expect("serde_json must serialize");
+            let sonic_bytes = sonic_rs::to_vec(&value).expect("sonic_rs must serialize");
+
+            let serde_roundtrip: serde_json::Value =
+                serde_json::from_slice(&serde_bytes).expect("serde_json bytes must parse");
+            let sonic_roundtrip: serde_json::Value =
+                serde_json::from_slice(&sonic_bytes).expect("sonic_rs bytes must parse");
+
+            assert_eq!(
+                serde_roundtrip, sonic_roundtrip,
+                "case `{name}`: sonic_rs and serde_json must be semantically equivalent"
+            );
+
+            if serde_bytes != sonic_bytes {
+                eprintln!(
+                    "note: case `{name}` byte output differs (semantically equal) — \
+                     serde_json={:?} sonic_rs={:?}",
+                    String::from_utf8_lossy(&serde_bytes),
+                    String::from_utf8_lossy(&sonic_bytes)
+                );
+            }
+        }
     }
 
     /// `with_compression(true)` must produce a payload that round-trips through
