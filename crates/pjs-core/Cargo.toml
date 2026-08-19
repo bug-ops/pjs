@@ -30,6 +30,8 @@ futures = { workspace = true }
 getrandom = { workspace = true, optional = true }
 headers-accept = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true, features = ["http1", "http2", "server"] }
+hyper-util = { workspace = true, optional = true, features = ["server-auto", "tokio", "service"] }
 jiter = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 maplit = { workspace = true }
@@ -104,6 +106,8 @@ http-server = [
     "dep:getrandom",
     "dep:headers-accept",
     "dep:mediatype",
+    "dep:hyper",
+    "dep:hyper-util",
 ]
 http-auth-jwt = ["http-server", "dep:jsonwebtoken"]
 metrics = ["http-server", "dep:metrics", "dep:metrics-exporter-prometheus"]

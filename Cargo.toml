@@ -41,6 +41,7 @@ getrandom = "0.4"
 headers-accept = "0.3.0"
 hmac = "0.13"
 hyper = "1.11"
+hyper-util = "0.1.20"
 jiter = "0.16"
 js-sys = "0.3"
 jsonwebtoken = { version = "11.0", default-features = false, features = ["use_pem"] }

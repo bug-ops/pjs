@@ -15,8 +15,10 @@ use axum::{
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use pjson_rs::{
-    ApplicationError, ApplicationResult, DomainError, DomainResult, compression::SchemaCompressor,
+    ApplicationError, ApplicationResult, DomainError, DomainResult,
+    compression::SchemaCompressor,
     domain::value_objects::SessionId,
+    infrastructure::http::{ConnectionLimits, serve_with_limits},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -222,7 +224,9 @@ pub async fn run() -> ApplicationResult<()> {
     info!("WebSocket streaming server running on http://127.0.0.1:3001");
     info!("WebSocket endpoint: ws://127.0.0.1:3001/ws/{{session_id}}");
 
-    axum::serve(listener, app(app_state))
+    let mut limits = ConnectionLimits::default();
+    limits.max_connection_duration = None;
+    serve_with_limits(listener, app(app_state), limits)
         .await
         .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Server error: {e}"))))?;
 

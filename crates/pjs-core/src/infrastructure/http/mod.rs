@@ -8,6 +8,8 @@ pub mod handlers;
 #[cfg(feature = "metrics")]
 pub mod metrics;
 pub mod middleware;
+#[cfg(feature = "http-server")]
+pub mod serve;
 pub mod streaming;
 
 pub use axum_adapter::{
@@ -19,6 +21,8 @@ pub use axum_adapter::{
 pub use axum_adapter::{create_pjs_router_with_auth, create_pjs_router_with_rate_limit_and_auth};
 pub use axum_extension::{HttpExtensionConfig, PjsExtension};
 pub use middleware::{RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig};
+#[cfg(feature = "http-server")]
+pub use serve::{ConnectionLimits, serve_with_limits};
 pub use streaming::{
     BatchFrameStream, StreamFormat, StreamTransportError, create_streaming_response,
     create_streaming_response_with_content_type,

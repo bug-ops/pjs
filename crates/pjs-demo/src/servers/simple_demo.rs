@@ -11,7 +11,11 @@ use axum::{
     routing::get,
 };
 use clap::Parser;
-use pjson_rs::{PriorityStreamer, stream::PriorityStreamFrame};
+use pjson_rs::{
+    PriorityStreamer,
+    infrastructure::http::{ConnectionLimits, serve_with_limits},
+    stream::PriorityStreamFrame,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, time::Duration};
@@ -380,7 +384,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting simple demo server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    serve_with_limits(listener, app, ConnectionLimits::default()).await?;
 
     Ok(())
 }
