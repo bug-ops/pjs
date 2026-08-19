@@ -42,62 +42,27 @@ This suite compares PJS against major JSON parsing libraries to demonstrate the 
 
 ## Benchmark Categories
 
+The `[[bench]]` targets below are the ones actually wired into `Cargo.toml` and runnable today; older docs on this page describing `memory_benchmarks`, `streaming_benchmarks`, and `time_to_first_data` predate a benchmark-suite cleanup and no longer apply (those files were disabled since v0.2.0).
+
 ### 1. Basic Throughput (`cargo bench --bench simple_throughput`)
 
-Raw parsing speed comparison across different JSON sizes:
+Raw parsing speed comparison across different JSON sizes (small/medium/large payloads), `serde_json` vs `sonic_rs` (`benchmark_serde_json`, `benchmark_sonic_rs`, `benchmark_comparison`). See the note above — the dedicated "PJS Parser" comparison arm was removed along with the dead parser it measured (#486, #488); this bench now only compares `serde_json` against `sonic_rs` directly.
 
-- **Small JSON** (43 bytes) - API responses, configuration
-- **Medium JSON** (~1.7KB) - User profiles, product data
-- **Large JSON** (~357KB) - Analytics data, large catalogs
+### 2. Zero-Copy Parser (`cargo bench --bench zero_copy_bench`)
 
-**Measured Results:**
+Benchmarks `ZeroCopyParser`/`LazyParser` against simple strings, JSON objects, arrays, and memory efficiency (`bench_simple_string`, `bench_json_objects`, `bench_arrays`, `bench_memory_efficiency`) — the crate's actual zero-copy parsing hot path.
 
-- See the note above — the dedicated "PJS Parser" comparison numbers were removed along with the dead parser they measured; `parsing_comparison` still benchmarks `serde_json` vs `sonic_rs` directly
-- PJS maintains **significant advantage** for streaming scenarios (5.3x faster progressive loading)
+### 3. Serde Overhead (`cargo bench --bench serde_overhead_bench`)
 
-### 2. Memory Usage Benchmarks (`cargo bench --bench memory_benchmarks`)
+Measures the cost of this crate's hand-written `Serialize`/`Deserialize` impls and value-object construction: custom serde serialization/deserialization, value-object creation, and UUID/string conversion (`benchmark_custom_serde_serialization`, `benchmark_custom_serde_deserialization`, `benchmark_value_object_creation`, `benchmark_uuid_string_conversion`).
 
-Testing memory efficiency and progressive loading patterns:
+### 4. GAT Query Performance (`cargo bench --bench gat_query_benchmarks`)
 
-- **1MB-10MB Dataset** - Memory usage comparison across large datasets
-- **Progressive vs Batch Loading** - UI rendering patterns
-- **Concurrent User Scenarios** - Memory scaling with multiple sessions
+Validates the GAT-based repository ports meet their performance targets (sub-millisecond query methods at 1000 sessions/streams, lock-free `DashMap` operations, zero `Box<dyn Future>` allocations): session lookup, active-session queries, criteria search, existence checks, health snapshots, saves, concurrent operations, and latency distribution.
 
-**Key Results:**
+### 5. HTTP Streaming (`cargo bench --bench http_streaming`)
 
-- PJS **3.0-3.8x faster** than serde_json for large datasets
-- **5.3x faster** progressive loading vs traditional batch processing
-- **Bounded memory usage** vs peak memory spikes in traditional parsing
-- **Instant UI updates** with skeleton-first approach
-
-### 3. Streaming Performance (`cargo bench --bench streaming_benchmarks`)
-
-Time-to-First-Meaningful-Paint (TTFMP) and perceived performance:
-
-- **Analytics Dashboard** - Critical metrics vs detailed logs
-- **Social Media Feed** - First posts vs full timeline  
-- **E-commerce Catalog** - Product grid vs recommendations
-
-**Measured Results:**
-
-- **Progressive loading**: 5.3x faster than batch processing
-- **Skeleton delivery**: Instant critical data availability
-- **User experience**: Immediate feedback vs loading screens
-- **Memory efficiency**: Bounded usage vs peak spikes
-
-### 4. Implementation Optimizations
-
-Performance techniques used in PJS:
-
-- **Zero-copy** streaming via `ZeroCopyParser`/`LazyParser`
-- **Adaptive processing** - disables heavy analysis for large JSON
-- **Incremental allocation** patterns for better memory usage
-
-**Implementation Benefits:**
-
-- **Zero-copy parsing** - `ZeroCopyParser`/`LazyParser` avoid intermediate allocation
-- **Vectorized operations** for numeric arrays
-- **Cache-friendly** data structures
+Added to answer #514: isolates `sonic_rs` vs `serde_json` on the exact serialization primitive #510 swapped (`bench_serialization_many_small_calls`, `bench_serialization_one_big_call`), plus an end-to-end baseline over the actual production call chain (`bench_batch_frame_stream_e2e`, via `BatchFrameStream::into_stream()`). Measured: `sonic_rs` is ~1.4-1.6x faster per-frame and ~1.7-1.8x faster per-batch at the primitive level, but only ~9-11% faster on the full production route once `frame_to_value`'s unchanged `serde_json`-based prep and stream/async overhead are accounted for — see the bench's own module doc for the full caveat.
 
 ## Real-World Impact
 
@@ -151,17 +116,20 @@ cargo bench
 ### Individual Benchmark Suites
 
 ```bash
-# Basic throughput comparison
+# Basic throughput comparison (serde_json vs sonic_rs)
 cargo bench --bench simple_throughput
 
-# Memory usage and progressive loading
-cargo bench --bench memory_benchmarks
+# Zero-copy parser (ZeroCopyParser/LazyParser)
+cargo bench --bench zero_copy_bench
 
-# Streaming performance and TTFMP
-cargo bench --bench streaming_benchmarks
+# Hand-written serde impl and value-object overhead
+cargo bench --bench serde_overhead_bench
 
-# Time to First Critical Data scenarios
-cargo bench --bench time_to_first_data
+# GAT-based repository port query performance
+cargo bench --bench gat_query_benchmarks
+
+# HTTP streaming serialization (sonic_rs vs serde_json, e2e route)
+cargo bench --bench http_streaming
 ```
 
 ## Interpreting Results
