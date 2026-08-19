@@ -1878,6 +1878,8 @@ dependencies = [
  "getrandom 0.4.3",
  "headers-accept",
  "hmac",
+ "hyper",
+ "hyper-util",
  "jiter",
  "jsonwebtoken",
  "maplit",

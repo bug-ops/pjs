@@ -757,9 +757,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// when polled, and hyper stops polling a response body once its outbound buffer
 /// fills waiting on the client to read the socket, so a client that stops reading
 /// entirely is never caught by this layer; that requires connection/socket-level
-/// accounting in whatever owns the `TcpListener` and calls `axum::serve` (currently
-/// `pjs-demo`, not `pjs-core` — this crate only builds `Router`s), tracked as a
-/// follow-up rather than fixed here.
+/// accounting in whatever owns the `TcpListener`. [`serve_with_limits`](super::serve::serve_with_limits)
+/// (`infrastructure::http::serve`) closes that gap at the connection level via its
+/// `max_connection_duration` limit, for any caller that serves this crate's routers
+/// through it instead of plain `axum::serve` (#523).
 ///
 /// On the current streaming route (`GET .../frames/stream`, #511) this layer is
 /// close to a no-op even for the producer-stall case it does cover:
