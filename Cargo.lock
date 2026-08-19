@@ -1814,7 +1814,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pjs-bench"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "criterion",
@@ -1830,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-demo"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "axum",
  "chrono",
@@ -1849,7 +1849,7 @@ dependencies = [
 
 [[package]]
 name = "pjs-wasm"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
@@ -1864,7 +1864,7 @@ dependencies = [
 
 [[package]]
 name = "pjson-rs"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "pjson-rs-domain"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "proptest",
@@ -3761,9 +3761,9 @@ dependencies = [
 
 [[package]]
 name = "zerovec-derive"
-version = "0.11.4"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47402523226a02bfe5230160dc3ccc089aa6f6f19e7fcbb4e6f824bbb1b4aa62"
+checksum = "9f212a141d820099d57ffafb9569be9617a6f27d3dc881fbee8fb56642f917a9"
 dependencies = [
  "proc-macro2",
  "quote",

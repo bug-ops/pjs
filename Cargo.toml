@@ -7,7 +7,7 @@ resolver = "3"
 [workspace.package]
 homepage = "https://github.com/bug-ops/pjs"
 documentation = "https://docs.rs/pjson-rs"
-version = "0.6.3"
+version = "0.7.0"
 authors = ["Andrei G. <k05h31@gmail.com>"]
 readme = "README.md"
 edition = "2024"
@@ -53,8 +53,8 @@ metrics-exporter-prometheus = "0.18"
 mimalloc = "0.1"
 parking_lot = "0.12"
 pastey = "0.2"
-pjson-rs = { version = "0.6.3", path = "crates/pjs-core" }
-pjson-rs-domain = { version = "0.6.3", path = "crates/pjs-domain" }
+pjson-rs = { version = "0.7.0", path = "crates/pjs-core" }
+pjson-rs-domain = { version = "0.7.0", path = "crates/pjs-domain" }
 priority-queue = "2.7"
 proptest = "1.11"
 rand = "0.10"
