@@ -1,290 +1,202 @@
-# PJS - Priority JSON Streaming Protocol
+<div align="center">
+
+# PJS — Priority JSON Streaming
+
+**Send the JSON your UI needs first. Stream the rest.**
 
 [![Crates.io](https://img.shields.io/crates/v/pjson-rs)](https://crates.io/crates/pjson-rs)
 [![docs.rs](https://img.shields.io/docsrs/pjson-rs)](https://docs.rs/pjson-rs)
 [![CI](https://img.shields.io/github/actions/workflow/status/bug-ops/pjs/ci.yml?branch=main&label=build)](https://github.com/bug-ops/pjs/actions)
 [![codecov](https://codecov.io/gh/bug-ops/pjs/branch/main/graph/badge.svg)](https://codecov.io/gh/bug-ops/pjs)
-[![MSRV](https://img.shields.io/crates/msrv/pjson-rs)](https://crates.io/crates/pjson-rs)
-[![License](https://img.shields.io/crates/l/pjson-rs)](LICENSE)
+[![MSRV](https://img.shields.io/crates/msrv/pjson-rs)](#status)
+[![License](https://img.shields.io/crates/l/pjson-rs)](#license)
 
-**Priority-based streaming | Progressive loading | Zero-copy operations | WebAssembly ready**
+</div>
 
-High-performance Rust library for priority-based JSON streaming with SIMD acceleration. Stream large JSON responses progressively, delivering critical data first while background data loads asynchronously.
+![Plain JSON vs PJS: the same response, but the page is usable from the first frames](docs/assets/01-why-pjs.svg)
 
-> [!IMPORTANT]
-> GAT migration (1.82x faster), HTTP adapter with CQRS, comprehensive security hardening with bounded iteration and input validation. Requires **nightly Rust** for zero-cost async abstractions.
+A large JSON response is all-or-nothing: the client renders only after the last byte arrives. PJS splits one document into a **skeleton** plus prioritized **patches**, so the UI shows meaningful content after the first frames while the heavy tail streams in the background.
 
-## Features
+It is the same breadth-first idea behind the React Server Components wire format and GraphQL's `@defer`/`@stream` — packaged as a small, framework-agnostic protocol: plain-JSON frames, [JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) paths, any transport. Rust core, WebAssembly client (~70 KB gzipped).
 
-- **Blazing Fast** - SIMD-accelerated parsing, GAT-based zero-cost abstractions (1.82x faster than async_trait)
-- **Smart Streaming** - Priority-based delivery sends critical data first, skeleton-first rendering
-- **Memory Efficient** - Optimized progressive loading, bounded memory usage, zero-copy operations
-- **WebAssembly** - Browser and Node.js support with compact bundle (~70KB gzipped)
-- **Secure** - Defense-in-depth decompression protection, DoS prevention, input validation
-- **Schema Aware** - Automatic compression based on schema analysis
-- **Production Ready** - Clean Architecture, comprehensive test suite, Prometheus metrics
+## How it works
 
-## Performance
+### 1 · Encode
 
-| Benchmark | Result | Notes |
-|-----------|--------|-------|
-| **GAT Async** | **1.82x faster** | Static dispatch vs `async_trait` virtual calls |
+The server derives a skeleton (full structure, empty values), assigns each subtree a priority (`0–255`), and splits the document into frames.
 
-Reproducible benchmarks: `cargo bench -p pjs-bench`
+![Encoding: one document becomes a skeleton and prioritized patch frames](docs/assets/02-encoding.svg)
 
-## Installation
+### 2 · Stream
 
-```bash
-cargo add pjson-rs
+Frames go out in priority order over HTTP/1.1, HTTP/2, WebSocket, or raw TCP. Every frame is plain JSON:
+
+```json
+{
+  "@type": "patch",
+  "@seq": 1,
+  "@priority": 100,
+  "@patches": [
+    { "op": "replace", "path": "/user/id",   "value": 12345 },
+    { "op": "replace", "path": "/user/name", "value": "Alice" }
+  ]
+}
 ```
 
-Or add to `Cargo.toml`:
+Large arrays are chunked and streamed at low priority so they never block critical data.
+
+### 3 · Reassemble
+
+The client applies each patch to its local tree and re-renders immediately. Apply, render, repeat — no custom parser required on the consuming side.
+
+![Reassembly: each frame patches the tree at a JSON Pointer path, the UI updates instantly](docs/assets/03-reassembly.svg)
+
+## Why bother
+
+![Share of the interface that is usable over time: PJS vs plain JSON](docs/assets/04-perceived-latency.svg)
+
+Same bytes, same bandwidth — only the *order* changes. Layout appears with the skeleton, critical fields right after, heavy tails last. On slow links that is the difference between staring at a spinner and using the page. The protocol's design target is a 5–10× reduction in *perceived* latency for large payloads (see the [specification](docs/architecture/SPECIFICATION.md)); bytes-on-wire stay roughly the same.
+
+## Quick start
+
+### Rust server (Axum)
 
 ```toml
 [dependencies]
-pjson-rs = "0.7"
+pjson-rs = "0.6"
 ```
-
-> [!NOTE]
-> Requires Rust 1.89+ (nightly). See [MSRV policy](#building) for details.
-
-## Quick Start
-
-### Rust HTTP Server
 
 ```rust
 use pjson_rs::infrastructure::http::axum_adapter::create_pjs_router;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let app = create_pjs_router().with_state(app_state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
     axum::serve(listener, app).await?;
+    Ok(())
 }
 ```
 
-Start server and test:
-
-```bash
-# Run priority streaming demo
-cargo run --example simple_priority_demo
-
-# Or run with compression support
-cargo run --example compression_demo --features compression
-```
-
-### WebAssembly (Browser)
+### Browser (WebAssembly)
 
 ```bash
 npm install @pjson/wasm
 ```
 
-#### PriorityStream API (Recommended)
+```js
+import init, { PriorityStream } from '@pjson/wasm';
 
-```html
-<script type="module">
-import init, { PriorityStream, PriorityConstants } from './pkg/pjs_wasm.js';
+await init();
+const stream = new PriorityStream();
 
-async function main() {
-    await init();
-
-    const stream = new PriorityStream();
-    stream.setMinPriority(PriorityConstants.MEDIUM());
-
-    // Register callbacks
-    stream.onFrame((frame) => {
-        console.log(`${frame.type} [${frame.priority}]: ${frame.payload}`);
-        if (frame.priority >= 80) {
-            updateUI(JSON.parse(frame.payload)); // High priority first
-        }
-    });
-
-    stream.onComplete((stats) => {
-        console.log(`Completed: ${stats.totalFrames} frames in ${stats.durationMs}ms`);
-    });
-
-    // Start streaming
-    stream.start(JSON.stringify({ id: 123, name: "Alice", bio: "..." }));
-}
-
-main();
-</script>
-```
-
-> [!TIP]
-> Use the PriorityStream API for automatic frame handling and built-in security limits. Ideal for real-time dashboards and progressive loading.
-
-#### Simple Parser API
-
-```html
-<script type="module">
-import init, { PjsParser, PriorityConstants } from './pkg/pjs_wasm.js';
-
-async function main() {
-    await init();
-    const parser = new PjsParser();
-
-    const frames = parser.generateFrames(
-        JSON.stringify({ user_id: 123, name: "Alice" }),
-        PriorityConstants.MEDIUM()
-    );
-
-    frames.forEach(frame => {
-        if (frame.priority >= 90) {
-            updateUI(frame.data); // Critical data first
-        }
-    });
-}
-
-main();
-</script>
-```
-
-#### Interactive Demo
-
-Try the [Browser Demo](crates/pjs-wasm/demo/) with transport switching, performance benchmarks, and real-time metrics.
-
-### WebAssembly (Node.js)
-
-```javascript
-import init, { PjsParser } from '@pjson/node';
-import { readFile } from 'fs/promises';
-
-const wasmBuffer = await readFile('./node_modules/@pjson/node/pjs_wasm_bg.wasm');
-await init(wasmBuffer);
-
-const parser = new PjsParser();
-const frames = parser.generateFrames(JSON.stringify(data), 50);
-
-frames.forEach(frame => {
-    console.log(`Priority ${frame.priority}: ${frame.frame_type}`);
+stream.onFrame((frame) => {
+  if (frame.priority >= 80) {
+    updateUI(JSON.parse(frame.payload)); // critical data — render now
+  }
 });
+stream.onComplete((stats) => console.log(`${stats.totalFrames} frames in ${stats.durationMs} ms`));
+
+stream.start(json);
 ```
-
-### Build WASM from Source
-
-```bash
-# Install wasm-pack
-curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-# Build for different targets
-wasm-pack build crates/pjs-wasm --target web --release      # Browsers
-wasm-pack build crates/pjs-wasm --target nodejs --release   # Node.js
-wasm-pack build crates/pjs-wasm --target bundler --release  # Webpack/Rollup
-```
-
-## Use Cases
-
-- **Real-time Dashboards** - Show key metrics instantly, load details progressively
-- **Mobile Apps** - Optimize for slow networks, critical data first
-- **E-commerce** - Product essentials load immediately, reviews/images follow
-- **Financial Platforms** - Trading data prioritized over historical charts
-- **Gaming Leaderboards** - Player rank appears instantly, full list streams in
-
-## Building
-
-### Prerequisites
-
-> [!WARNING]
-> This project requires **nightly Rust** for Generic Associated Types (GAT) features. Stable Rust is not supported.
-
-```bash
-rustup install nightly
-rustup override set nightly
-```
-
-### Build Commands
-
-```bash
-# Standard build
-cargo build --release
-
-# Run tests with nextest
-cargo nextest run --workspace
-
-# Run benchmarks
-cargo bench -p pjs-bench
-
-# Run demo servers (feature names are forwarded to pjson-rs, hence the prefix)
-cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin interactive-demo-server --features "pjson-rs/simd-auto,pjson-rs/schema-validation,pjson-rs/compression,pjson-rs/http-server,pjson-rs/websocket-server"
-cargo run --manifest-path crates/pjs-demo/Cargo.toml --bin simple-demo-server --features "pjson-rs/simd-auto,pjson-rs/http-server"
-```
-
-### Feature Flags
 
 > [!TIP]
-> Start with default features. Add extras only when needed to keep compile times fast.
+> See it side by side: `cargo run --example simple_priority_demo`, or the [browser demo](crates/pjs-wasm/demo) with transport switching and live metrics. Node.js usage and building WASM from source are covered in [`crates/pjs-wasm`](crates/pjs-wasm).
 
-| Feature | Description | Default |
-|---------|-------------|---------|
-| `simd-auto` | Currently a no-op (the SIMD-dispatching parser it used to gate was removed in #486/#488); kept default-on for compatibility. `sonic-rs`, used unconditionally elsewhere in the crate (e.g. SSE serialization), already dispatches at runtime to the best available instruction set (AVX-512/AVX2/SSE4.2/NEON) regardless of this feature | ✅ Yes |
-| `simd-avx512` | x86_64-only. Additionally forwards to `sonic-rs/avx512`; requires `RUSTFLAGS="-C target-cpu=native"` (or explicit `-C target-feature=+avx512f`) to actually take effect | No |
-| `schema-validation` | Schema validation engine | ✅ Yes |
-| `compression` | zlib/gzip/brotli/zstd decompression with per-session dictionaries | ✅ Yes |
-| `partial-parse` | Streaming partial JSON parsing (`jiter` backend) | No |
-| `http-server` | Axum HTTP server and CQRS endpoints | ✅ Yes |
-| `http-auth-jwt` | JWT authentication middleware | No |
-| `websocket-server` | WebSocket transport (server) | ✅ Yes |
-| `websocket-client` | WebSocket transport (client) | ✅ Yes |
-| `mimalloc` | Use mimalloc as global allocator | No |
-| `metrics` | Prometheus metrics endpoint | No |
+## When to use it — and when not
 
-> **Note:** The `jemalloc` feature was removed in v0.6.0 (breaking change). Switch to `mimalloc` or the system allocator.
+**Good fit**
+
+- One endpoint returns a large document (hundreds of KB and up) and time-to-first-render matters: dashboards, feeds, catalogs, trading screens.
+- Clients on slow or unstable networks — mobile first of all.
+- A REST/JSON stack where adopting GraphQL or React Server Components is not on the table.
+
+**Skip it**
+
+- Payloads are small. Plain JSON over HTTP/2 is already fine.
+- You are on RSC, or on GraphQL with `@defer`/`@stream` — you get this at the framework layer.
+- The document can simply be paginated or split into separate endpoints. Do that instead.
+
+## How it compares
+
+|  | **PJS** | RSC wire format | GraphQL `@defer`/`@stream` | NDJSON / SSE |
+|---|---|---|---|---|
+| Stack | any | React | GraphQL | any |
+| Transport | HTTP, WS, TCP | HTTP | HTTP multipart | HTTP |
+| Unit of delivery | JSON Pointer patches | component props | fragments / list items | independent lines |
+| Explicit priorities | ✅ `0–255` per subtree | implicit (`Suspense`) | per directive | — |
+| Falls back to plain JSON | ✅ content negotiation | — | — | n/a |
+
+## Performance
+
+Two different questions, two different numbers:
+
+- **Protocol value — time to first usable render.** This is what PJS exists for; the chart above shows the mechanism. An end-to-end TTFR benchmark (throttled network, plain JSON vs PJS) is the headline number we are building next — until it lands, treat the chart as illustrative.
+- **Implementation cost — parsing and dispatch.** SIMD-accelerated parsing (`sonic-rs`, runtime dispatch to AVX-512/AVX2/SSE4.2/NEON) and GAT-based static dispatch, measured at **1.82× faster** than `async_trait` virtual calls. Reproduce: `cargo bench -p pjs-bench`.
 
 ## Security
 
-PJS includes built-in security features to prevent DoS attacks:
+Streaming parsers are a DoS surface, so limits are on by default: max document size and nesting depth, bounded array/object cardinality, checked arithmetic, and 4-layer decompression-bomb protection. All limits are configurable per stream.
 
-```javascript
-import { PriorityStream, SecurityConfig } from '@pjson/wasm';
+<details>
+<summary>Default limits</summary>
 
-const security = new SecurityConfig()
-    .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB limit
-    .setMaxDepth(32);                  // 32 levels max
+| Limit | Default |
+|---|---|
+| Max JSON size | 10 MB |
+| Max nesting depth | 64 |
+| Max array elements / object keys | 10 000 |
+| Max RLE run | 100 000 items |
+| Max delta-array size | 1 000 000 elements |
+| Max decompressed size | 10 MB |
 
-const stream = new PriorityStream();
+```js
+const security = new SecurityConfig().setMaxJsonSize(5 * 1024 * 1024).setMaxDepth(32);
 stream.setSecurityConfig(security);
 ```
 
-**Default Limits:**
+</details>
 
-- Max JSON size: 10 MB
-- Max nesting depth: 64 levels
-- Max array elements: 10,000
-- Max object keys: 10,000
+## Feature flags
+
+Defaults cover the common server + browser path; everything else is opt-in.
+
+<details>
+<summary>All flags</summary>
+
+| Feature | Description | Default |
+|---|---|---|
+| `simd-auto` | sonic-rs SIMD backend, runtime CPU dispatch | ✅ |
+| `simd-avx512` | x86_64 only; needs `-C target-cpu=native` | — |
+| `schema-validation` | Schema validation engine | ✅ |
+| `compression` | zlib/gzip/brotli/zstd with per-session dictionaries | ✅ |
+| `partial-parse` | Streaming partial JSON parsing (`jiter`) | — |
+| `http-server` / `http-client` | Axum server · reqwest client | ✅ |
+| `http-auth-jwt` | JWT middleware | — |
+| `websocket-server` / `websocket-client` | WebSocket transport | ✅ |
+| `mimalloc` | mimalloc as global allocator | — |
+| `metrics` | Prometheus endpoint | — |
+
+> [!NOTE]
+> The `jemalloc` feature was removed in v0.6.0 — switch to `mimalloc` or the system allocator.
+
+</details>
+
+## Status
+
+`0.6.x` — the core protocol works end to end (Rust server, WASM browser client, Node.js), CI on Linux/macOS/Windows.
 
 > [!IMPORTANT]
-> **Security**: Comprehensive multi-layer protection including bounded iteration (DoS prevention), input validation, and 4-layer defense-in-depth decompression protection against compression bombs (CVSS 7.5 vulnerabilities fixed).
+> Currently requires **nightly Rust** (zero-cost GAT async abstractions). Supporting stable is a priority on the road to `1.0` — if this blocks you, say so in [Discussions](https://github.com/bug-ops/pjs/discussions): it directly affects how we prioritize.
 
-**Decompression Security:**
-
-- **MAX_RLE_COUNT**: 100,000 items per run
-- **MAX_DELTA_ARRAY_SIZE**: 1,000,000 elements
-- **MAX_DECOMPRESSED_SIZE**: 10 MB total
-- **Integer overflow protection**: Checked arithmetic throughout
+> [!NOTE]
+> Pre-`1.0`: the [wire format](docs/architecture/SPECIFICATION.md) is a draft and may still change. Feedback on the frame format is the most valuable contribution right now.
 
 ## Architecture
 
-PJS follows Clean Architecture with Domain-Driven Design:
-
-- **pjs-domain** - Pure business logic, WASM-compatible
-- **pjs-wasm** - WebAssembly bindings with PriorityStream API, security limits
-- **pjs-core** - Rust implementation with HTTP/WebSocket integration
-- **pjs-demo** - Interactive demo servers with real-time streaming
-- **pjs-js-client** - TypeScript/JavaScript client with WasmBackend transport
-- **pjs-bench** - Comprehensive performance benchmarks
-
-**Key Features:**
-
-- **GAT Migration**: Zero-cost async abstractions (1.82x faster than async_trait)
-- **HTTP Adapter**: 8 REST endpoints with CQRS pattern
-- **Security Hardening**: Bounded iteration, input validation, decompression bomb protection
-- **Generic Type System**: Type-safe Id<T> wrappers, generic InMemoryStore<K, V>
-- **Platform Support**: Windows, Linux, macOS validated
+Workspace crates, one line each: `pjs-domain` (pure protocol logic, WASM-compatible) · `pjs-core` (Rust implementation, HTTP/WebSocket) · `pjs-wasm` (browser/Node bindings) · `pjs-js-client` (TypeScript client) · `pjs-demo` (interactive demo servers) · `pjs-bench` (benchmarks). Details in [`docs/architecture`](docs/architecture).
 
 ## Contributing
-
-Contributions welcome! Please ensure:
 
 ```bash
 rustup override set nightly
@@ -293,24 +205,14 @@ cargo nextest run --workspace --all-features
 cargo +nightly fmt --check
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
-
-## Resources
-
-- [Protocol Specification](docs/architecture/SPECIFICATION.md)
-- [Changelog](CHANGELOG.md)
-- [Benchmarks](crates/pjs-bench/README.md)
-- [Discussions](https://github.com/bug-ops/pjs/discussions)
+Dual-licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
 
 ---
 
-*PJS: Priority-based JSON streaming for instant user experiences.*
+<div align="center">
+<sub>PJS — priority-based JSON streaming for interfaces that refuse to wait.</sub>
+</div>
