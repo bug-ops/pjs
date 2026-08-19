@@ -250,6 +250,139 @@ async fn max_connection_duration_closes_connection_with_stalled_body_reader() {
     );
 }
 
+/// A connection that sends **zero bytes** (never even a partial request
+/// line) is closed once `header_read_timeout` elapses, not left to linger
+/// until `max_connection_duration`.
+///
+/// This is the headline finding from the #525/#526 security audit:
+/// hyper-util's `auto::Builder` runs an unguarded `ReadVersion` preface-sniff
+/// step before any protocol builder engages, and `header_read_timeout` only
+/// arms once >=1 byte classifies the connection as H1/H2 — so before the
+/// accept-level preface-read gate, a client sending nothing at all was
+/// bounded solely by `max_connection_duration` (300s default), making it far
+/// cheaper to hold open than `header_read_timeout_closes_stalled_connection`
+/// above (which sends a partial request line and thus already exercises the
+/// gated-on-first-byte h1 timeout).
+#[tokio::test]
+async fn zero_byte_connection_closed_by_header_read_timeout_not_max_duration() {
+    let mut limits = ConnectionLimits::default();
+    limits.header_read_timeout = Some(Duration::from_millis(150));
+    limits.max_connection_duration = Some(Duration::from_secs(5));
+    let addr = spawn_server(ok_router(), limits).await;
+
+    let mut client = TcpStream::connect(addr).await.expect("connect");
+    // Deliberately send nothing.
+
+    let start = Instant::now();
+    let mut buf = [0u8; 16];
+    let read = timeout(Duration::from_secs(2), client.read(&mut buf))
+        .await
+        .expect(
+            "connection sending zero bytes was not closed within 2s (well short of the 5s \
+         max_connection_duration) -- the ReadVersion preface-sniff hole looks unguarded",
+        );
+    let elapsed = start.elapsed();
+
+    assert_eq!(
+        read.expect("read error"),
+        0,
+        "expected EOF once the preface-read gate closes the zero-byte connection"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(80) && elapsed < Duration::from_secs(2),
+        "connection closed after {elapsed:?}; expected closure near header_read_timeout \
+         (150ms), not near-instant (missing timer) or near max_connection_duration (5s)"
+    );
+}
+
+/// A source IP that opens more connections than `max_connections_per_ip`
+/// has the excess rejected at accept level — before any task is spawned or
+/// byte is read — while connections within the cap are served normally.
+#[tokio::test]
+async fn per_ip_cap_rejects_connections_beyond_limit() {
+    let mut limits = ConnectionLimits::default();
+    limits.header_read_timeout = None;
+    limits.max_connection_duration = None;
+    limits.max_connections_per_ip = Some(2);
+    let addr = spawn_server(ok_router(), limits).await;
+
+    // Open (and hold open, never completing a request) `max_connections_per_ip`
+    // connections from the same source IP (127.0.0.1), each occupying a
+    // per-IP slot until dropped at the end of the test.
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        held.push(TcpStream::connect(addr).await.expect("connect within cap"));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+
+    // A third connection from the same IP exceeds the cap and must be
+    // rejected immediately, without ever reaching the router.
+    let mut excess = TcpStream::connect(addr).await.expect("connect excess");
+    let mut buf = [0u8; 16];
+    let read = timeout(Duration::from_secs(1), excess.read(&mut buf))
+        .await
+        .expect("excess connection was never closed");
+    assert_eq!(
+        read.expect("read error"),
+        0,
+        "expected EOF: a connection beyond max_connections_per_ip should be rejected"
+    );
+
+    drop(held);
+}
+
+/// Rejecting a connection for exceeding `max_connections_per_ip` releases
+/// the *global* `max_connections` semaphore permit it had acquired before
+/// the per-IP check ran — the permit must not leak.
+///
+/// Two genuinely different source IPs aren't reachable from a single-host
+/// test harness without OS-level loopback aliasing, so this proves permit
+/// release indirectly: with `max_connections: 2` and `max_connections_per_ip:
+/// 1`, connection A holds the one per-IP slot (and one of the two global
+/// permits) open. Connection B, same IP, exceeds the per-IP cap and is
+/// rejected. If B's global permit leaked instead of being released by the
+/// accept loop's `continue`, both global permits would now be permanently
+/// consumed (one held by A, one leaked by B), and the accept loop would
+/// never call `accept()` again — connection C would sit un-accepted (no read
+/// event at all) rather than receiving its own prompt EOF from the per-IP
+/// check.
+#[tokio::test]
+async fn per_ip_rejection_releases_the_global_connection_permit() {
+    let mut limits = ConnectionLimits::default();
+    limits.header_read_timeout = None;
+    limits.max_connection_duration = None;
+    limits.max_connections = 2;
+    limits.max_connections_per_ip = Some(1);
+    let addr = spawn_server(ok_router(), limits).await;
+
+    let _client_a = TcpStream::connect(addr).await.expect("connect A");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut client_b = TcpStream::connect(addr).await.expect("connect B");
+    let mut buf = [0u8; 16];
+    let read_b = timeout(Duration::from_secs(1), client_b.read(&mut buf))
+        .await
+        .expect("connection B was never closed");
+    assert_eq!(
+        read_b.expect("read error"),
+        0,
+        "expected EOF: B exceeds the per-IP cap"
+    );
+
+    let mut client_c = TcpStream::connect(addr).await.expect("connect C");
+    let read_c = timeout(Duration::from_millis(500), client_c.read(&mut buf))
+        .await
+        .expect(
+            "connection C was never accepted -- this indicates B's global semaphore permit \
+         leaked instead of being released on rejection",
+        );
+    assert_eq!(
+        read_c.expect("read error"),
+        0,
+        "expected EOF: C also exceeds the per-IP cap, but must still be accepted promptly"
+    );
+}
+
 /// With `max_connections: 1`, a second connection is left unserved — its
 /// bytes sit unread on the socket — until the first connection's permit is
 /// released, proving the accept loop applies real backpressure rather than

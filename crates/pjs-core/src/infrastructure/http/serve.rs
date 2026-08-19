@@ -10,7 +10,12 @@
 //! the accept loop and the raw connection, which is what [`serve_with_limits`]
 //! does in place of `axum::serve`.
 
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    io,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::{Extension, Router, extract::ConnectInfo};
 use hyper_util::{
@@ -20,7 +25,30 @@ use hyper_util::{
 };
 use tokio::{net::TcpListener, sync::Semaphore};
 use tower::Layer;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
+
+use crate::security::rate_limit::{
+    RateLimitConfig, RateLimitError, RateLimitGuard, WebSocketRateLimiter,
+};
+
+/// Interval between HTTP/2 keep-alive `PING` frames sent on an established
+/// connection.
+///
+/// Bounds an *unresponsive* HTTP/2 connection below `max_connection_duration`
+/// by detecting a peer that stops answering pings. This is a responsiveness
+/// check only, not an idleness check: a peer that keeps acknowledging pings
+/// every interval survives the full `max_connection_duration` ceiling
+/// regardless of how idle the connection otherwise is. Inert unless an
+/// interval is set, since hyper's h2 keep-alive defaults to disabled.
+const H2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Deadline for a peer to acknowledge an HTTP/2 keep-alive `PING` before the
+/// connection is dropped as unresponsive.
+///
+/// 20s matches hyper's own current default (`hyper::proto::h2::server`);
+/// pinned explicitly here (rather than left implicit) so a future change to
+/// that upstream default doesn't silently change this crate's behavior.
+const H2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Connection-level limits enforced by [`serve_with_limits`], independent of
 /// (and in addition to) the request-level tower layers applied by this
@@ -51,6 +79,13 @@ pub struct ConnectionLimits {
     /// this crate picks 10s to cut the cost of a slowloris-style
     /// header-trickle attack roughly 6x relative to hyper's default while
     /// remaining far above the time any real client needs to send headers.
+    ///
+    /// Also gates [`serve_with_limits`]'s preface-read wait (see that
+    /// function's implementation) — setting this to `None` together with
+    /// `max_connection_duration: None` lets a connection that never sends a
+    /// byte hold its `max_connections` slot (and, if assigned one, its
+    /// `max_connections_per_ip` slot) indefinitely; at least one of the two
+    /// should normally stay `Some`.
     pub header_read_timeout: Option<Duration>,
 
     /// Hard ceiling on a single connection's total lifetime, `None` to
@@ -84,6 +119,48 @@ pub struct ConnectionLimits {
     /// concern already covered by `MAX_CONCURRENT_REQUESTS` in
     /// `apply_common_layers`.
     pub max_connections: usize,
+
+    /// Hard cap on concurrently open HTTP/2 streams per connection, `None`
+    /// to leave hyper's own default in place.
+    ///
+    /// Defaults to `Some(128)`. Hyper's own default is `Some(200)` and is
+    /// documented as explicitly unstable ("not part of the stability of
+    /// hyper... encouraged to set your own limit") — 128 sits strictly
+    /// below that default while remaining far above what any legitimate
+    /// browser or client needs. Combined with `max_connections`, this
+    /// bounds the worst case at `max_connections * max_concurrent_streams`
+    /// in-flight streams before `MAX_CONCURRENT_REQUESTS` (see
+    /// `apply_common_layers`) parks the rest.
+    pub max_concurrent_streams: Option<u32>,
+
+    /// Hard cap on concurrently open connections from a single accept-level
+    /// source IP, `None` to disable.
+    ///
+    /// Defaults to `Some(64)` — 1/16th of the default `max_connections`
+    /// pool, so at least 16 distinct source IPs are needed to fully exhaust
+    /// it. All three `pjs-demo` servers bind `127.0.0.1`, so every local
+    /// connection (including load/CI test loops) shares this one budget;
+    /// 64 concurrent connections from a single source is still far above
+    /// realistic demo or local-test load, so this is not special-cased.
+    ///
+    /// Enforced by a private `WebSocketRateLimiter` instance owned by
+    /// [`serve_with_limits`], independent of (and never sharing state with)
+    /// any `RateLimitMiddleware` the router itself may apply. `None`
+    /// disables the cap entirely — no limiter instance is constructed, no
+    /// cleanup task is spawned, and no per-connection map entry is made, so
+    /// a reverse-proxy deployment that sets this to `None` (see below) pays
+    /// no cost for it.
+    ///
+    /// **Reverse-proxy caveat**: like `max_connection_duration`, this is
+    /// enforced at the accept level, before any HTTP request is parsed — no
+    /// headers exist yet, so `X-Forwarded-For`/trusted-proxy configuration
+    /// cannot apply here. Every connection arriving through a
+    /// connection-pooling reverse proxy (nginx, a load balancer, etc.)
+    /// shares that proxy's single source IP, so this cap would apply to all
+    /// of them combined rather than to each real client individually. A
+    /// deployment behind such a proxy must set this to `None` and rely on
+    /// the proxy's own per-client limiting instead.
+    pub max_connections_per_ip: Option<usize>,
 }
 
 impl Default for ConnectionLimits {
@@ -92,6 +169,8 @@ impl Default for ConnectionLimits {
             header_read_timeout: Some(Duration::from_secs(10)),
             max_connection_duration: Some(Duration::from_secs(300)),
             max_connections: 1024,
+            max_concurrent_streams: Some(128),
+            max_connections_per_ip: Some(64),
         }
     }
 }
@@ -147,12 +226,45 @@ pub async fn serve_with_limits(
     let mut builder = Builder::new(TokioExecutor::new());
     builder.http1().timer(TokioTimer::new());
     builder.http2().timer(TokioTimer::new());
+    // Gated rather than passed through unconditionally: hyper's
+    // `max_concurrent_streams(None)` means "remove the limit entirely", the
+    // opposite of this field's `None` = "leave hyper's own default in
+    // place" contract — skipping the call when `None` is what actually
+    // preserves hyper's default of 200.
+    if let Some(max_concurrent_streams) = limits.max_concurrent_streams {
+        builder
+            .http2()
+            .max_concurrent_streams(max_concurrent_streams);
+    }
+    builder
+        .http2()
+        .keep_alive_interval(Some(H2_KEEP_ALIVE_INTERVAL))
+        .keep_alive_timeout(H2_KEEP_ALIVE_TIMEOUT);
     if let Some(header_read_timeout) = limits.header_read_timeout {
         builder.http1().header_read_timeout(header_read_timeout);
     }
     let builder = Arc::new(builder);
     let semaphore = Arc::new(Semaphore::new(limits.max_connections));
     let max_connection_duration = limits.max_connection_duration;
+    let header_read_timeout = limits.header_read_timeout;
+
+    // Separate from any `RateLimitMiddleware` the router itself may apply:
+    // sharing one `Arc<WebSocketRateLimiter>` would let an accept-level IP
+    // flood saturate the middleware's tracked-client map and start
+    // rejecting legitimate new clients at the HTTP layer.
+    //
+    // `None` skips construction entirely (rather than substituting
+    // `usize::MAX`), so a deployment that disables this cap — e.g. behind a
+    // connection-pooling reverse proxy, see the field's doc — pays no cost
+    // for it: no limiter, no cleanup task, no per-connection map entry.
+    let per_ip_limiter = limits.max_connections_per_ip.map(|max_connections_per_ip| {
+        let limiter = Arc::new(WebSocketRateLimiter::new(RateLimitConfig {
+            max_connections_per_ip,
+            ..Default::default()
+        }));
+        limiter.spawn_cleanup_task(Duration::from_secs(60));
+        limiter
+    });
 
     loop {
         // Acquired before accept() so a full connection pool applies
@@ -165,13 +277,79 @@ pub async fn serve_with_limits(
         };
         let (stream, peer_addr) = accept_with_retry(&listener).await;
 
-        let io = TokioIo::new(stream);
+        // Rejects fast, before the stream is ever wrapped or a task
+        // spawned — this mitigates (does not fully close: `permit` above is
+        // still acquired before this check runs, so >=16 distinct source
+        // IPs, or `max_connections_per_ip: None`, still reproduce the
+        // symptom) the accept-level backlog-hang, since a single stalling
+        // source IP's connections are rejected immediately by `continue`
+        // without ever reaching hyper. Only `ConnectionLimitExceeded` (the
+        // per-IP cap itself) rejects; every other error — today only
+        // `CapacityExceeded` (the limiter's own tracked-client map is full),
+        // but `RateLimitError` is not `#[non_exhaustive]` so this stays
+        // exhaustive-by-intent rather than by variant count — fails *open*
+        // instead of reusing `WebSocketRateLimiter`'s fail-closed default:
+        // at accept level, fail-closed would mean total lockout of every
+        // new source IP once the map fills, whereas the global
+        // `max_connections` semaphore already bounds the worst case.
+        let guard = match &per_ip_limiter {
+            Some(limiter) => {
+                let ip_key = accept_rate_limit_key(peer_addr.ip());
+                match RateLimitGuard::new(Arc::clone(limiter), ip_key) {
+                    Ok(guard) => Some(guard),
+                    Err(RateLimitError::ConnectionLimitExceeded { .. }) => {
+                        warn!(%peer_addr, "per-IP connection limit exceeded, dropping connection");
+                        continue;
+                    }
+                    Err(error) => {
+                        debug!(
+                            %peer_addr, %error,
+                            "per-IP rate limiter rejected connection for a reason other \
+                             than the per-IP cap; admitting"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
         let peer_service = Extension(ConnectInfo(peer_addr)).layer(router.clone());
         let service = TowerToHyperService::new(peer_service);
         let builder = Arc::clone(&builder);
 
         tokio::spawn(async move {
             let _permit = permit;
+            let _guard = guard;
+
+            // Closes the *zero-byte* gap in hyper-util's `auto::Builder`,
+            // whose `ReadVersion` preface-sniffing step runs before any
+            // protocol builder engages and has no timer of its own —
+            // `header_read_timeout` only arms once >=1 byte classifies the
+            // connection as H1, so a client that never sends anything was
+            // otherwise bounded solely by `max_connection_duration` (300s
+            // default). `readable()` is readiness-only and consumes no
+            // bytes, so hyper still sees the full stream afterward; this
+            // check is protocol-agnostic and applies to h1 and h2 alike.
+            //
+            // Residual, not fully closed: a client that sends exactly one
+            // byte matching the H2 preface, then stalls, still passes this
+            // gate (`readable()` only requires *some* data to have arrived)
+            // and rides out the full `max_connection_duration` before
+            // `ReadVersion` itself gives up — this raises the attacker's
+            // cost from 0 bytes to 1 byte, it does not add a timer to
+            // `ReadVersion`. `max_connections_per_ip` and `max_connections`
+            // still bound that window.
+            if let Some(timeout) = header_read_timeout
+                && tokio::time::timeout(timeout, stream.readable())
+                    .await
+                    .is_err()
+            {
+                debug!(%peer_addr, "no bytes received within header_read_timeout, dropping");
+                return;
+            }
+
+            let io = TokioIo::new(stream);
             let conn = builder.serve_connection_with_upgrades(io, service);
             let result = match max_connection_duration {
                 Some(deadline) => match tokio::time::timeout(deadline, conn).await {
@@ -187,6 +365,46 @@ pub async fn serve_with_limits(
                 debug!(%error, "connection closed with error");
             }
         });
+    }
+}
+
+/// Masks an IPv6 address down to its /64 network prefix for accept-level
+/// per-IP rate-limit keying; IPv4 addresses pass through unchanged.
+///
+/// Without this masking, an attacker holding a routed /64 (trivially
+/// available from many providers) could rotate addresses within that prefix
+/// to both bypass `ConnectionLimits::max_connections_per_ip` and exhaust
+/// `WebSocketRateLimiter`'s tracked-client map. This intentionally diverges
+/// from `RateLimitMiddleware`'s exact-IP keying, which governs a different
+/// (request-level) layer and is left unchanged.
+///
+/// Two cases are normalized *before* the /64 mask is applied, both because
+/// their top 64 bits are all zero and would otherwise collapse onto the
+/// same `::/64` key as every other such address:
+/// - **IPv4-mapped addresses** (`::ffff:a.b.c.d`) are unwrapped to their
+///   plain `IpAddr::V4` form. A dual-stack `[::]:port` listener reports
+///   every IPv4 peer this way by default on Linux (`bindv6only=0`);
+///   without unwrapping, all IPv4 traffic would share one 64-connection
+///   budget — a new DoS the accept-level cap would itself introduce.
+/// - **Loopback** (`::1`) passes through unmasked, since it is not
+///   IPv4-mapped and would otherwise mask to the same `::/64` key as the
+///   unspecified address and other zero-prefix addresses. Reachable only
+///   locally, so this is lower stakes than the IPv4-mapped case, but kept
+///   explicit rather than left as an incidental collision.
+fn accept_rate_limit_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return IpAddr::V4(v4);
+            }
+            if v6.is_loopback() {
+                return ip;
+            }
+            let mut octets = v6.octets();
+            octets[8..].fill(0);
+            IpAddr::V6(Ipv6Addr::from(octets))
+        }
     }
 }
 
@@ -218,4 +436,74 @@ fn is_connection_error(error: &io::Error) -> bool {
             | io::ErrorKind::ConnectionAborted
             | io::ErrorKind::ConnectionReset
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    #[test]
+    fn ipv4_addresses_pass_through_unmasked() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7));
+        assert_eq!(accept_rate_limit_key(ip), ip);
+    }
+
+    #[test]
+    fn ipv6_addresses_sharing_a_64_prefix_mask_to_the_same_key() {
+        let a: IpAddr = "2001:db8:1234:5678:aaaa:bbbb:cccc:dddd".parse().unwrap();
+        let b: IpAddr = "2001:db8:1234:5678:1111:2222:3333:4444".parse().unwrap();
+        assert_eq!(accept_rate_limit_key(a), accept_rate_limit_key(b));
+    }
+
+    #[test]
+    fn ipv6_addresses_with_different_64_prefixes_mask_to_different_keys() {
+        let a: IpAddr = "2001:db8:1234:5678::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1234:5679::1".parse().unwrap();
+        assert_ne!(accept_rate_limit_key(a), accept_rate_limit_key(b));
+    }
+
+    #[test]
+    fn masked_ipv6_key_zeroes_exactly_the_low_64_bits() {
+        let ip: IpAddr = "2001:db8:1234:5678:ffff:ffff:ffff:ffff".parse().unwrap();
+        let expected: IpAddr = "2001:db8:1234:5678::".parse().unwrap();
+        assert_eq!(accept_rate_limit_key(ip), expected);
+    }
+
+    /// Regression for critic finding S2: on a dual-stack `[::]:port`
+    /// listener, distinct IPv4 clients are reported as distinct
+    /// IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`), which must not
+    /// collapse onto a single shared key -- otherwise 64 connections from
+    /// one attacker would exhaust the per-IP budget for every IPv4 client
+    /// behind the dual-stack listener.
+    #[test]
+    fn ipv4_mapped_ipv6_addresses_are_not_collapsed_into_one_key() {
+        let a: IpAddr = "::ffff:203.0.113.7".parse().unwrap();
+        let b: IpAddr = "::ffff:198.51.100.99".parse().unwrap();
+        assert_ne!(
+            accept_rate_limit_key(a),
+            accept_rate_limit_key(b),
+            "distinct IPv4-mapped addresses must not share a per-IP rate-limit key"
+        );
+    }
+
+    /// Regression for critic finding S2: an IPv4-mapped address must key
+    /// the same way its plain IPv4 form would, not fall back to the
+    /// `::/64` bucket shared by loopback and other zero-prefix addresses.
+    #[test]
+    fn ipv4_mapped_ipv6_address_keys_like_its_ipv4_form() {
+        let mapped: IpAddr = "::ffff:203.0.113.7".parse().unwrap();
+        let plain = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7));
+        assert_ne!(
+            accept_rate_limit_key(mapped),
+            accept_rate_limit_key(IpAddr::V6(Ipv6Addr::UNSPECIFIED)),
+            "an IPv4-mapped address must not key as the unspecified `::/64` bucket"
+        );
+        assert_eq!(
+            accept_rate_limit_key(mapped),
+            accept_rate_limit_key(plain),
+            "an IPv4-mapped address should key identically to its plain IPv4 form"
+        );
+    }
 }

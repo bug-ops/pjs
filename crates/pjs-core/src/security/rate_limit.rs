@@ -558,7 +558,12 @@ pub struct RateLimitStats {
 }
 
 /// Rate limiting middleware for tracking client IPs
-#[derive(Debug, Clone)]
+///
+/// Deliberately not `Clone`: [`Drop`] decrements a connection counter, so a
+/// clone would silently over-decrement it. Existing callers that need to
+/// share ownership wrap this in `Arc` instead (see
+/// `infrastructure::websocket::server`).
+#[derive(Debug)]
 pub struct RateLimitGuard {
     rate_limiter: Arc<WebSocketRateLimiter>,
     client_ip: IpAddr,
