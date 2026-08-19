@@ -164,7 +164,7 @@ Get the parser version.
 
 ```javascript
 const v = PjsParser.version();
-console.log(v); // e.g. "0.6.3"
+console.log(v); // e.g. "0.7.0"
 ```
 
 ##### `generateFrames(jsonStr: string, minPriority: number): Frame[]`
@@ -225,7 +225,7 @@ Get the WASM module version.
 
 ```javascript
 import { version } from '@pjson/wasm';
-console.log(version()); // e.g. "0.6.3"
+console.log(version()); // e.g. "0.7.0"
 ```
 
 ## Security Limits
