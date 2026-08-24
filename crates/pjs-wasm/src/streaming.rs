@@ -46,7 +46,6 @@ export type ErrorCallback = (error: string) => void;
 
 /// Statistics about a completed stream.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamStats {
     /// Total number of frames generated
@@ -65,7 +64,6 @@ pub struct StreamStats {
 /// The `type` field contains one of: `"skeleton"`, `"patch"`, `"complete"`, `"error"`.
 /// The `payload` field contains the frame data as a JSON string.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct FrameData {
     /// Frame type: "skeleton", "patch", "complete", or "error"
     #[serde(rename = "type")]
