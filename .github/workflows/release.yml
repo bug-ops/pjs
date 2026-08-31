@@ -105,7 +105,7 @@ jobs:
           save-if: false
 
       - name: Install nextest
-        uses: taiki-e/install-action@v2.86.5
+        uses: taiki-e/install-action@v2.87.0
         with:
           tool: nextest
 
@@ -183,7 +183,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@v2.86.5
+        uses: taiki-e/install-action@v2.87.0
         with:
           tool: wasm-pack
 
