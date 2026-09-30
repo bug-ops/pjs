@@ -4,16 +4,17 @@
 //! to progressively decompress data as frames arrive.
 
 use crate::{
-    compression::{CompressedData, CompressionStrategy, DICT_SENTINEL, SchemaCompressor},
+    compression::{
+        CompressedData, CompressionStrategy, DICT_SENTINEL, MAX_DELTA_ARRAY_SIZE, MAX_RLE_COUNT,
+        SchemaCompressor, as_integer,
+    },
     domain::{DomainError, DomainResult},
     stream::{Priority, StreamFrame},
 };
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-// Security limits to prevent decompression bomb attacks
-const MAX_RLE_COUNT: u64 = 100_000;
-const MAX_DELTA_ARRAY_SIZE: usize = 1_000_000;
+// Byte limit on expanded output of one decompression call
 const MAX_DECOMPRESSED_SIZE: usize = 10_485_760; // 10MB
 
 /// Remaining allowance, in estimated heap bytes, for expanded output of one decompression call
@@ -372,7 +373,7 @@ impl StreamingDecompressor {
                 self.decompress_dictionary(&compressed_data.data, &metadata.dictionary_map)
             }
 
-            CompressionStrategy::Delta { .. } => self.decompress_delta(&compressed_data.data),
+            CompressionStrategy::Delta => self.decompress_delta(&compressed_data.data),
 
             CompressionStrategy::RunLength => self.decompress_run_length(&compressed_data.data),
 
@@ -517,28 +518,44 @@ impl StreamingDecompressor {
             )));
         }
 
-        // Extract base value from metadata
-        let base_value = arr[0]
+        let base = arr[0]
             .get("delta_base")
-            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_number())
             .ok_or_else(|| {
                 DomainError::CompressionError(
                     "Missing or invalid delta_base in metadata".to_string(),
                 )
             })?;
+        let base_int = as_integer(base);
 
-        // Reconstruct original values from deltas
         let mut original_values = Vec::new();
         for delta_value in arr.iter().skip(1) {
-            let delta = delta_value.as_f64().ok_or_else(|| {
-                DomainError::CompressionError("Invalid delta value: expected number".to_string())
-            })?;
-
-            let original = base_value + delta;
-            original_values.push(JsonValue::from(original));
+            let original = match (base_int, as_integer(delta_value)) {
+                (Some(base), Some(delta)) => Self::integer_value(base + delta)?,
+                _ => {
+                    let base = base.as_f64().unwrap_or_default();
+                    let delta = delta_value.as_f64().ok_or_else(|| {
+                        DomainError::CompressionError(
+                            "Invalid delta value: expected number".to_string(),
+                        )
+                    })?;
+                    JsonValue::from(base + delta)
+                }
+            };
+            original_values.push(original);
         }
 
         Ok(JsonValue::Array(original_values))
+    }
+
+    /// Exact JSON integer for `n`, an error if it fits neither `i64` nor `u64`
+    fn integer_value(n: i128) -> DomainResult<JsonValue> {
+        i64::try_from(n)
+            .map(JsonValue::from)
+            .or_else(|_| u64::try_from(n).map(JsonValue::from))
+            .map_err(|_| {
+                DomainError::CompressionError(format!("Delta-decoded value {n} overflows u64"))
+            })
     }
 
     /// Decompress run-length encoded data
@@ -587,7 +604,7 @@ impl StreamingDecompressor {
                                 )
                             })?;
 
-                            if count > MAX_RLE_COUNT {
+                            if count > MAX_RLE_COUNT as u64 {
                                 return Err(DomainError::CompressionError(format!(
                                     "RLE count {} exceeds maximum {}",
                                     count, MAX_RLE_COUNT
@@ -1076,12 +1093,9 @@ mod tests {
         let mut dict = HashMap::new();
         dict.insert("test".to_string(), 0);
 
-        let mut bases = HashMap::new();
-        bases.insert("value".to_string(), 100.0);
-
         let mut compressor = StreamingCompressor::with_strategies(
             CompressionStrategy::Dictionary { dictionary: dict },
-            CompressionStrategy::Delta { base_values: bases },
+            CompressionStrategy::Delta,
         );
 
         let frame = StreamFrame {
@@ -1170,9 +1184,6 @@ mod tests {
         let mut string_dict = HashMap::new();
         string_dict.insert("test".to_string(), 0);
 
-        let mut numeric_deltas = HashMap::new();
-        numeric_deltas.insert("value".to_string(), 100.0);
-
         let compressed_frame = CompressedFrame {
             frame: StreamFrame {
                 data: json!({"test": "data"}),
@@ -1182,17 +1193,13 @@ mod tests {
             compressed_data: CompressedData {
                 strategy: CompressionStrategy::Hybrid {
                     string_dict: string_dict.clone(),
-                    numeric_deltas: numeric_deltas.clone(),
                 },
                 compressed_size: 20,
                 data: json!({"value": 5.0}), // Delta from base 100
                 compression_metadata: HashMap::new(),
             },
             decompression_metadata: DecompressionMetadata {
-                strategy: CompressionStrategy::Hybrid {
-                    string_dict,
-                    numeric_deltas,
-                },
+                strategy: CompressionStrategy::Hybrid { string_dict },
                 dictionary_map: HashMap::new(),
                 delta_bases: HashMap::new(),
             },
@@ -1457,7 +1464,7 @@ mod tests {
     fn test_decompress_run_length_cumulative_overflow() {
         let decompressor = StreamingDecompressor::new();
 
-        // Multiple runs that sum to exceed MAX_DECOMPRESSED_SIZE
+        // Multiple runs that sum to exceed MAX_DECOMPRESSED_ELEMENTS
         let data = json!([
             {"rle_value": "a", "rle_count": 5_000_000},
             {"rle_value": "b", "rle_count": 6_000_000}
@@ -1626,13 +1633,8 @@ mod tests {
     fn test_decompress_data_strategy_delta() {
         let decompressor = StreamingDecompressor::new();
 
-        let mut bases = HashMap::new();
-        bases.insert("value".to_string(), 100.0);
-
         let compressed_data = CompressedData {
-            strategy: CompressionStrategy::Delta {
-                base_values: bases.clone(),
-            },
+            strategy: CompressionStrategy::Delta,
             compressed_size: 10,
             data: json!({
                 "sequence": [
@@ -1644,7 +1646,7 @@ mod tests {
             compression_metadata: HashMap::new(),
         };
         let metadata = DecompressionMetadata {
-            strategy: CompressionStrategy::Delta { base_values: bases },
+            strategy: CompressionStrategy::Delta,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
         };
@@ -1683,13 +1685,9 @@ mod tests {
         let mut string_dict = HashMap::new();
         string_dict.insert("test".to_string(), 0);
 
-        let mut numeric_deltas = HashMap::new();
-        numeric_deltas.insert("value".to_string(), 100.0);
-
         let compressed_data = CompressedData {
             strategy: CompressionStrategy::Hybrid {
                 string_dict: string_dict.clone(),
-                numeric_deltas: numeric_deltas.clone(),
             },
             compressed_size: 10,
             data: json!({
@@ -1700,10 +1698,7 @@ mod tests {
         let mut dictionary_map = HashMap::new();
         dictionary_map.insert(0, "test".to_string());
         let metadata = DecompressionMetadata {
-            strategy: CompressionStrategy::Hybrid {
-                string_dict,
-                numeric_deltas,
-            },
+            strategy: CompressionStrategy::Hybrid { string_dict },
             dictionary_map,
             delta_bases: HashMap::new(),
         };
@@ -2088,5 +2083,66 @@ mod tests {
             &mut ByteBudget::new(MAX_DECOMPRESSED_SIZE),
         );
         assert_eq!(result.unwrap(), "plain string");
+    }
+
+    fn decode_delta(arr: JsonValue) -> DomainResult<JsonValue> {
+        StreamingDecompressor::new().decompress_delta(&arr)
+    }
+
+    fn delta_header(base: JsonValue) -> JsonValue {
+        json!({"delta_base": base, "delta_type": "numeric_sequence"})
+    }
+
+    #[test]
+    fn test_decompress_delta_integer_path_with_negative_base() {
+        let decoded = decode_delta(json!([delta_header(json!(-10)), 0, 5, 12])).unwrap();
+        assert_eq!(decoded, json!([-10, -5, 2]));
+    }
+
+    #[test]
+    fn test_decompress_delta_integer_path_reaches_u64_max() {
+        let decoded = decode_delta(json!([delta_header(json!(0)), 0, u64::MAX])).unwrap();
+        assert_eq!(decoded, json!([0, u64::MAX]));
+    }
+
+    #[test]
+    fn test_decompress_delta_integer_sum_overflow_is_error() {
+        let result = decode_delta(json!([delta_header(json!(1)), u64::MAX]));
+        assert!(matches!(result, Err(DomainError::CompressionError(_))));
+    }
+
+    #[test]
+    fn test_decompress_delta_int_base_with_float_delta_takes_float_path() {
+        let decoded = decode_delta(json!([delta_header(json!(100)), 0.5])).unwrap();
+        assert_eq!(decoded, json!([100.5]));
+    }
+
+    #[test]
+    fn test_decompress_delta_legacy_float_base_takes_float_path() {
+        let decoded = decode_delta(json!([delta_header(json!(100.0)), 5, 6])).unwrap();
+        assert_eq!(decoded, json!([105.0, 106.0]));
+    }
+
+    #[test]
+    fn test_hybrid_frame_round_trips_through_streaming_decompressor() {
+        let data = json!({
+            "seq": (0..100u64).map(|i| 5_000_000 + i).collect::<Vec<_>>(),
+            "tags": ["premium_subscription_tier", "premium_subscription_tier", "premium_subscription_tier", "x"]
+        });
+        let mut compressor = SchemaCompressor::new();
+        let strategy = compressor.analyze_and_optimize(&data).unwrap().clone();
+        assert!(matches!(strategy, CompressionStrategy::Hybrid { .. }));
+
+        let mut streaming = StreamingCompressor::with_strategies(strategy.clone(), strategy);
+        let frame = StreamFrame {
+            data: data.clone(),
+            priority: Priority::HIGH,
+            metadata: HashMap::new(),
+        };
+        let compressed = streaming.compress_frame(frame).unwrap();
+        let decoded = StreamingDecompressor::new()
+            .decompress_frame(compressed)
+            .unwrap();
+        assert_eq!(decoded.data, data);
     }
 }

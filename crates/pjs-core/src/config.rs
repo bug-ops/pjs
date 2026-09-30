@@ -225,7 +225,7 @@ impl PjsConfig {
     /// Validate the entire configuration, including all sub-configs.
     ///
     /// Validation is fail-fast: the first error encountered is returned.
-    /// The chain order is: `streaming`, `parser`, `simd`, `security`, `compression`.
+    /// The chain order is: `streaming`, `parser`, `simd`, `security`.
     ///
     /// # Errors
     ///
@@ -243,7 +243,6 @@ impl PjsConfig {
         self.parser.validate()?;
         self.simd.validate()?;
         self.security.validate()?;
-        self.compression.validate()?;
         Ok(())
     }
 
@@ -306,16 +305,10 @@ impl PjsConfig {
         Self {
             security: SecurityConfig::low_memory(),
             compression: CompressionConfig {
-                min_array_length: 1,
                 min_string_length: 2,
                 min_frequency_count: 1,
-                uuid_compression_potential: 0.5,
                 min_net_savings: 4, // Lower floor than the default, for smaller mobile payloads
-                delta_threshold: 15.0, // Lower threshold
-                min_delta_potential: 0.2,
-                run_length_threshold: 10.0, // Lower threshold
-                min_compression_potential: 0.3,
-                min_numeric_sequence_size: 2,
+                min_numeric_sequence_size: 3,
             },
             parser: ParserConfig {
                 max_input_size_mb: 10,
@@ -464,7 +457,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut analyzer = SchemaAnalyzer::with_config(compression_config);
+        let analyzer = SchemaAnalyzer::with_config(compression_config);
 
         // Test data that should trigger dictionary compression with a zeroed floor
         let data = json!({

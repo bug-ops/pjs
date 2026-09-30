@@ -35,7 +35,7 @@ fn demo_basic_schema_analysis() -> Result<(), Box<dyn std::error::Error>> {
     println!("1️⃣  Basic Schema Analysis");
     println!("-----------------------");
 
-    let mut analyzer = SchemaAnalyzer::new();
+    let analyzer = SchemaAnalyzer::new();
 
     // Sample e-commerce data with repetitive patterns
     let sample_data = json!({
@@ -87,14 +87,10 @@ fn demo_basic_schema_analysis() -> Result<(), Box<dyn std::error::Error>> {
                 println!("     '{string}' → {index}");
             }
         }
-        CompressionStrategy::Hybrid {
-            ref string_dict,
-            ref numeric_deltas,
-        } => {
+        CompressionStrategy::Hybrid { ref string_dict } => {
             let string_dict_len = string_dict.len();
             println!("   - String dictionary: {string_dict_len} entries");
-            let numeric_deltas_len = numeric_deltas.len();
-            println!("   - Numeric deltas: {numeric_deltas_len} fields");
+            println!("   - Integer arrays delta-encoded");
         }
         _ => println!("   - Strategy: {strategy:?}"),
     }
@@ -266,7 +262,7 @@ fn demo_realworld_patterns() -> Result<(), Box<dyn std::error::Error>> {
     println!("4️⃣  Real-world Data Patterns");
     println!("----------------------------");
 
-    let mut analyzer = SchemaAnalyzer::new();
+    let analyzer = SchemaAnalyzer::new();
 
     // Simulate a realistic API response: 5 users with genuine field-level repetition
     // ("subscription_active" x4, "standard_user" x4) large enough to net a real wire-byte
