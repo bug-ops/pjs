@@ -11,11 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `AlignedBuffer::as_mut_capacity_slice` returns `&mut [MaybeUninit<u8>]` instead of `&mut [u8]` (**BREAKING**)
+- `AlignedBuffer::as_mut_capacity_slice` returns `&mut [MaybeUninit<u8>]` instead of `&mut [u8]` (**BREAKING**) (#552)
 
 ### Fixed
 
-- Tighten `StreamingDecompressor` run-length and dictionary decompression size limits
+- Tighten `StreamingDecompressor` run-length and dictionary decompression size limits (#552)
 - `pjs-wasm`'s `StreamStats`/`FrameData` no longer derive `tsify(into_wasm_abi, from_wasm_abi)`, which `tsify` 0.5.8 deprecated; both types are already converted manually via `serde_wasm_bindgen`, so the attribute was unused (#531)
 
 ## [0.7.0] - 2026-08-19
