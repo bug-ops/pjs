@@ -105,15 +105,8 @@ fn test_compressor_with_dictionary_strategy() {
 
 #[test]
 fn test_compressor_with_delta_strategy() {
-    let mut bases = HashMap::new();
-    bases.insert("value".to_string(), 100.0);
-
-    let mut compressor = StreamingCompressor::with_strategies(
-        CompressionStrategy::None,
-        CompressionStrategy::Delta {
-            base_values: bases.clone(),
-        },
-    );
+    let mut compressor =
+        StreamingCompressor::with_strategies(CompressionStrategy::None, CompressionStrategy::Delta);
 
     let frame = StreamFrame {
         data: json!({"value": 105}),
@@ -130,13 +123,9 @@ fn test_compressor_with_hybrid_strategy() {
     let mut string_dict = HashMap::new();
     string_dict.insert("test".to_string(), 0);
 
-    let mut numeric_deltas = HashMap::new();
-    numeric_deltas.insert("value".to_string(), 100.0);
-
     let mut compressor = StreamingCompressor::with_strategies(
         CompressionStrategy::Hybrid {
             string_dict: string_dict.clone(),
-            numeric_deltas: numeric_deltas.clone(),
         },
         CompressionStrategy::None,
     );

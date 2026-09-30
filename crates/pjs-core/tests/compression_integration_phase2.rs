@@ -64,17 +64,13 @@ fn test_decompress_frame_with_delta_strategy() {
             metadata: HashMap::new(),
         },
         compressed_data: CompressedData {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             compressed_size: 20,
             data: json!([{"delta_base": 10.0, "delta_type": "numeric"}, 1.0, 2.0]),
             compression_metadata: HashMap::new(),
         },
         decompression_metadata: DecompressionMetadata {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
         },
@@ -125,7 +121,6 @@ fn test_decompress_frame_with_hybrid_strategy() {
         compressed_data: CompressedData {
             strategy: CompressionStrategy::Hybrid {
                 string_dict: HashMap::new(),
-                numeric_deltas: HashMap::new(),
             },
             compressed_size: 10,
             data: json!({"test": "data"}),
@@ -134,7 +129,6 @@ fn test_decompress_frame_with_hybrid_strategy() {
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Hybrid {
                 string_dict: HashMap::new(),
-                numeric_deltas: HashMap::new(),
             },
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
@@ -160,17 +154,13 @@ fn test_decompress_delta_via_frame() {
             metadata: HashMap::new(),
         },
         compressed_data: CompressedData {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             compressed_size: 20,
             data: json!([{"delta_base": 100.0, "delta_type": "numeric"}, -10.0, 5.0]),
             compression_metadata: HashMap::new(),
         },
         decompression_metadata: DecompressionMetadata {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
         },
@@ -194,17 +184,13 @@ fn test_decompress_delta_missing_base_treated_as_regular_array() {
             metadata: HashMap::new(),
         },
         compressed_data: CompressedData {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             compressed_size: 20,
             data: json!([{"delta_type": "numeric"}, 1.0]),
             compression_metadata: HashMap::new(),
         },
         decompression_metadata: DecompressionMetadata {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
         },
@@ -226,17 +212,13 @@ fn test_decompress_delta_invalid_delta_value_error() {
             metadata: HashMap::new(),
         },
         compressed_data: CompressedData {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             compressed_size: 20,
             data: json!([{"delta_base": 100.0, "delta_type": "numeric"}, "not_a_number"]),
             compression_metadata: HashMap::new(),
         },
         decompression_metadata: DecompressionMetadata {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
         },
@@ -520,9 +502,7 @@ fn test_compressor_with_custom_strategies() {
     let skeleton_strategy = CompressionStrategy::Dictionary {
         dictionary: dict.clone(),
     };
-    let content_strategy = CompressionStrategy::Delta {
-        base_values: HashMap::new(),
-    };
+    let content_strategy = CompressionStrategy::Delta;
 
     let mut compressor = StreamingCompressor::with_strategies(skeleton_strategy, content_strategy);
 
@@ -1332,17 +1312,13 @@ fn test_metadata_update_with_delta_bases() {
             metadata: HashMap::new(),
         },
         compressed_data: CompressedData {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             compressed_size: 10,
             data: json!({"data": "test"}),
             compression_metadata: HashMap::new(),
         },
         decompression_metadata: DecompressionMetadata {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             dictionary_map: HashMap::new(),
             delta_bases,
         },

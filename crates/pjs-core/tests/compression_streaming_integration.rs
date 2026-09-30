@@ -30,10 +30,7 @@ fn test_streaming_compressor_with_custom_strategies() {
         dictionary: dictionary.clone(),
     };
 
-    let mut base_values = HashMap::new();
-    base_values.insert("value".to_string(), 100.0);
-
-    let content_strategy = CompressionStrategy::Delta { base_values };
+    let content_strategy = CompressionStrategy::Delta;
 
     let compressor =
         StreamingCompressor::with_strategies(skeleton_strategy, content_strategy.clone());
@@ -427,17 +424,13 @@ fn test_decompress_delta_strategy() {
             metadata: HashMap::new(),
         },
         compressed_data: pjson_rs::compression::CompressedData {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             compressed_size: 30,
             data: compressed_data,
             compression_metadata: HashMap::new(),
         },
         decompression_metadata: DecompressionMetadata {
-            strategy: CompressionStrategy::Delta {
-                base_values: HashMap::new(),
-            },
+            strategy: CompressionStrategy::Delta,
             dictionary_map: HashMap::new(),
             delta_bases: HashMap::new(),
         },
@@ -510,7 +503,6 @@ fn test_decompress_hybrid_strategy() {
         compressed_data: pjson_rs::compression::CompressedData {
             strategy: CompressionStrategy::Hybrid {
                 string_dict: HashMap::new(),
-                numeric_deltas: HashMap::new(),
             },
             compressed_size: 15,
             data: compressed_data,
@@ -519,7 +511,6 @@ fn test_decompress_hybrid_strategy() {
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Hybrid {
                 string_dict: HashMap::new(),
-                numeric_deltas: HashMap::new(),
             },
             dictionary_map,
             delta_bases: HashMap::new(),
@@ -808,10 +799,7 @@ fn test_hybrid_dictionary_and_delta_do_not_corrupt_each_other() {
 
     let mut compressor = StreamingCompressor::with_strategies(
         CompressionStrategy::None,
-        CompressionStrategy::Hybrid {
-            string_dict,
-            numeric_deltas: HashMap::new(),
-        },
+        CompressionStrategy::Hybrid { string_dict },
     );
 
     let original_data = json!({"states": ["active", "inactive", "active", "inactive"]});
@@ -918,16 +906,13 @@ fn test_compression_preserves_frame_metadata() {
 fn test_delta_compression_round_trip() {
     use pjson_rs::compression::SchemaCompressor;
 
-    let mut base_values = HashMap::new();
-    base_values.insert("values".to_string(), 100.0);
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta);
 
-    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
-
-    let original_data = json!({
-        "values": [100.0, 101.0, 102.0, 103.0, 104.0]
-    });
+    let original_data = json!({ "values": (0..30u64).map(|i| 1_000_000 + i).collect::<Vec<_>>() });
 
     let compressed = compressor.compress(&original_data).unwrap();
+    let encoded = compressed.data["values"].as_array().unwrap();
+    assert!(encoded[0].get("delta_base").is_some());
 
     let decompressor = StreamingDecompressor::new();
     let decompressed = decompressor.decompress_delta(&compressed.data).unwrap();
@@ -941,11 +926,13 @@ fn test_rle_compression_round_trip() {
 
     let compressor = SchemaCompressor::with_strategy(CompressionStrategy::RunLength);
 
-    let original_data = json!({
-        "repeated_values": [1, 1, 1, 2, 2, 3, 3, 3, 3]
-    });
+    let values = [vec![1; 60], vec![2; 60], vec![3; 60]].concat();
+    let original_data = json!({ "repeated_values": values });
 
     let compressed = compressor.compress(&original_data).unwrap();
+    let encoded = compressed.data["repeated_values"].as_array().unwrap();
+    assert!(encoded.iter().any(|v| v.get("rle_count").is_some()));
+    assert!(encoded.len() < 10);
 
     let decompressor = StreamingDecompressor::new();
     let decompressed = decompressor
@@ -959,16 +946,13 @@ fn test_rle_compression_round_trip() {
 fn test_delta_compression_negative_values_round_trip() {
     use pjson_rs::compression::SchemaCompressor;
 
-    let mut base_values = HashMap::new();
-    base_values.insert("temps".to_string(), 0.0);
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta);
 
-    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
-
-    let original_data = json!({
-        "temps": [-10.0, -5.0, 0.0, 5.0, 10.0]
-    });
+    let original_data = json!({ "temps": (0..30i64).map(|i| i - 1_000_000).collect::<Vec<_>>() });
 
     let compressed = compressor.compress(&original_data).unwrap();
+    let encoded = compressed.data["temps"].as_array().unwrap();
+    assert!(encoded[0].get("delta_base").is_some());
 
     let decompressor = StreamingDecompressor::new();
     let decompressed = decompressor.decompress_delta(&compressed.data).unwrap();
@@ -982,15 +966,13 @@ fn test_rle_compression_mixed_types_round_trip() {
 
     let compressor = SchemaCompressor::with_strategy(CompressionStrategy::RunLength);
 
-    let original_data = json!({
-        "data": [
-            "a", "a", "a",
-            "b",
-            "c", "c", "c", "c"
-        ]
-    });
+    let values = [vec!["a"; 50], vec!["b"], vec!["c"; 50]].concat();
+    let original_data = json!({ "data": values });
 
     let compressed = compressor.compress(&original_data).unwrap();
+    let encoded = compressed.data["data"].as_array().unwrap();
+    assert!(encoded.iter().any(|v| v.get("rle_count").is_some()));
+    assert!(encoded.len() < 10);
 
     let decompressor = StreamingDecompressor::new();
     let decompressed = decompressor
@@ -1004,16 +986,17 @@ fn test_rle_compression_mixed_types_round_trip() {
 fn test_delta_compression_fractional_values() {
     use pjson_rs::compression::SchemaCompressor;
 
-    let mut base_values = HashMap::new();
-    base_values.insert("measurements".to_string(), 10.0);
-
-    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta);
 
     let original_data = json!({
-        "measurements": [10.5, 11.0, 11.5, 12.0, 12.5]
+        "measurements": (0..30).map(|i| 10.5 + f64::from(i) * 0.5).collect::<Vec<_>>()
     });
 
     let compressed = compressor.compress(&original_data).unwrap();
+    assert_eq!(
+        compressed.data, original_data,
+        "floats are never delta-encoded"
+    );
 
     let decompressor = StreamingDecompressor::new();
     let decompressed = decompressor.decompress_delta(&compressed.data).unwrap();
@@ -1027,17 +1010,13 @@ fn test_rle_compression_nested_objects() {
 
     let compressor = SchemaCompressor::with_strategy(CompressionStrategy::RunLength);
 
-    let original_data = json!({
-        "items": [
-            {"id": 1},
-            {"id": 1},
-            {"id": 1},
-            {"id": 2},
-            {"id": 2}
-        ]
-    });
+    let values = [vec![json!({"id": 1}); 50], vec![json!({"id": 2}); 50]].concat();
+    let original_data = json!({ "items": values });
 
     let compressed = compressor.compress(&original_data).unwrap();
+    let encoded = compressed.data["items"].as_array().unwrap();
+    assert!(encoded.iter().any(|v| v.get("rle_count").is_some()));
+    assert!(encoded.len() < 10);
 
     let decompressor = StreamingDecompressor::new();
     let decompressed = decompressor
@@ -1051,10 +1030,7 @@ fn test_rle_compression_nested_objects() {
 fn test_delta_compression_empty_array() {
     use pjson_rs::compression::SchemaCompressor;
 
-    let mut base_values = HashMap::new();
-    base_values.insert("values".to_string(), 100.0);
-
-    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta { base_values });
+    let compressor = SchemaCompressor::with_strategy(CompressionStrategy::Delta);
 
     let original_data = json!({
         "values": []
@@ -1090,13 +1066,8 @@ fn test_rle_compression_empty_array() {
 
 #[test]
 fn test_full_frame_delta_round_trip() {
-    let mut base_values = HashMap::new();
-    base_values.insert("sequence".to_string(), 1000.0);
-
-    let mut compressor = StreamingCompressor::with_strategies(
-        CompressionStrategy::None,
-        CompressionStrategy::Delta { base_values },
-    );
+    let mut compressor =
+        StreamingCompressor::with_strategies(CompressionStrategy::None, CompressionStrategy::Delta);
 
     let original_data = json!({
         "sequence": [1000.0, 1001.0, 1002.0, 1003.0]

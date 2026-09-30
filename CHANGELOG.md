@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Tighten `StreamingDecompressor` run-length and dictionary decompression size limits (#552)
+- **BREAKING** `SchemaAnalyzer` selects Delta/RunLength/Dictionary by exact byte savings, Delta is lossless integer-only, `CompressionConfig` drops six threshold fields (#TBD)
 - `pjs-wasm`'s `StreamStats`/`FrameData` no longer derive `tsify(into_wasm_abi, from_wasm_abi)`, which `tsify` 0.5.8 deprecated; both types are already converted manually via `serde_wasm_bindgen`, so the attribute was unused (#531)
 
 ## [0.7.0] - 2026-08-19
