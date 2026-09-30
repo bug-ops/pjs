@@ -12,7 +12,7 @@ use crate::{
 use dashmap::DashMap;
 use std::{
     alloc::Layout,
-    mem,
+    mem::{self, MaybeUninit},
     ptr::{self, NonNull},
     slice,
     sync::Arc,
@@ -437,19 +437,38 @@ impl AlignedBuffer {
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
-    /// Get a mutable slice with full capacity
-    pub fn as_mut_capacity_slice(&mut self) -> &mut [u8] {
-        // SAFETY: `self.ptr` was allocated via `AlignedAllocator::alloc_aligned` for exactly
-        // `self.capacity` bytes. The `&mut self` receiver ensures exclusive access for the
-        // lifetime of the returned slice. Callers are responsible for initializing bytes
-        // before reading them; `set_len` is `unsafe` and documents that requirement.
-        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.capacity) }
+    /// Get a mutable view of the full capacity as possibly-uninitialized bytes
+    ///
+    /// The returned bytes may be uninitialized or hold stale data, so they cannot be read
+    /// without an explicit `unsafe` assertion of initialization. After writing, publish the
+    /// written prefix with [`set_len`](Self::set_len).
+    ///
+    /// # Examples
+    /// ```
+    /// use pjson_rs::parser::buffer_pool::AlignedBuffer;
+    ///
+    /// let mut buffer = AlignedBuffer::new(64, 32).unwrap();
+    /// for (dst, src) in buffer.as_mut_capacity_slice().iter_mut().zip(b"abc") {
+    ///     dst.write(*src);
+    /// }
+    /// // SAFETY: the first 3 bytes were initialized above.
+    /// unsafe { buffer.set_len(3) };
+    /// assert_eq!(buffer.as_slice(), b"abc");
+    /// ```
+    pub fn as_mut_capacity_slice(&mut self) -> &mut [MaybeUninit<u8>] {
+        // SAFETY: `self.ptr` was allocated for exactly `self.capacity` bytes and `&mut self`
+        // guarantees exclusivity. `MaybeUninit<u8>` has the same layout as `u8` and permits
+        // uninitialized contents.
+        unsafe {
+            slice::from_raw_parts_mut(self.ptr.as_ptr().cast::<MaybeUninit<u8>>(), self.capacity)
+        }
     }
 
     /// Set the length of valid data
     ///
     /// # Safety
-    /// Caller must ensure that `new_len` bytes are initialized
+    /// Caller must ensure that `new_len <= capacity()` and that the first `new_len` bytes are
+    /// initialized
     pub unsafe fn set_len(&mut self, new_len: usize) {
         debug_assert!(
             new_len <= self.capacity,
@@ -842,6 +861,12 @@ pub fn initialize_global_buffer_pool(config: PoolConfig) -> DomainResult<()> {
 
 #[cfg(test)]
 mod tests {
+    fn fill_uninit(dst: &mut [MaybeUninit<u8>], src: &[u8]) {
+        for (slot, byte) in dst.iter_mut().zip(src) {
+            slot.write(*byte);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -959,12 +984,34 @@ mod tests {
         // Test unsafe set_len
         unsafe {
             // Write some data directly
-            let slice = buffer.as_mut_capacity_slice();
-            slice[0..5].copy_from_slice(b"SIMD!");
+            fill_uninit(buffer.as_mut_capacity_slice(), b"SIMD!");
             buffer.set_len(5);
         }
         assert_eq!(buffer.len(), 5);
         assert_eq!(&buffer.as_slice()[0..5], b"SIMD!");
+    }
+
+    #[test]
+    fn test_reused_buffer_exposes_no_stale_bytes() {
+        let pool = BufferPool::new();
+        {
+            let mut pooled = pool.acquire(BufferSize::Small).unwrap();
+            let buffer = pooled.buffer_mut().unwrap();
+            buffer.extend_from_slice(b"stale-contents").unwrap();
+        }
+        let mut pooled = pool.acquire(BufferSize::Small).unwrap();
+        let buffer = pooled.buffer_mut().unwrap();
+        assert!(buffer.is_empty());
+        assert!(buffer.as_slice().is_empty());
+        assert!(buffer.as_mut_slice().is_empty());
+
+        let capacity = buffer.capacity();
+        let view = buffer.as_mut_capacity_slice();
+        assert_eq!(view.len(), capacity);
+        fill_uninit(view, b"abcd");
+        // SAFETY: the first 4 bytes were initialized above.
+        unsafe { buffer.set_len(4) };
+        assert_eq!(buffer.as_slice(), b"abcd");
     }
 
     #[test]
@@ -973,6 +1020,8 @@ mod tests {
         let _initial_alignment = buffer.actual_alignment();
 
         // Set some length first
+        fill_uninit(buffer.as_mut_capacity_slice(), &[0u8; 32]);
+        // SAFETY: the first 32 bytes were initialized above and 32 <= capacity.
         unsafe {
             buffer.set_len(32);
         }
