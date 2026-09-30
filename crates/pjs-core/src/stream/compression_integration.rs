@@ -16,6 +16,60 @@ const MAX_RLE_COUNT: u64 = 100_000;
 const MAX_DELTA_ARRAY_SIZE: usize = 1_000_000;
 const MAX_DECOMPRESSED_SIZE: usize = 10_485_760; // 10MB
 
+/// Remaining allowance, in estimated heap bytes, for expanded output of one decompression call
+#[derive(Debug)]
+struct ByteBudget {
+    remaining: usize,
+    limit: usize,
+}
+
+impl ByteBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            remaining: limit,
+            limit,
+        }
+    }
+
+    /// Reserves `unit_bytes * count` bytes, failing before any allocation happens.
+    fn charge(&mut self, unit_bytes: usize, count: usize) -> DomainResult<()> {
+        unit_bytes
+            .checked_mul(count)
+            .and_then(|total| self.remaining.checked_sub(total))
+            .map(|left| self.remaining = left)
+            .ok_or_else(|| {
+                DomainError::CompressionError(format!(
+                    "Decompressed size exceeds maximum {}",
+                    self.limit
+                ))
+            })
+    }
+}
+
+const VALUE_NODE_BYTES: usize = std::mem::size_of::<JsonValue>();
+// Estimated heap size of one BTreeMap leaf node.
+const OBJECT_NODE_BYTES: usize = 640;
+const OBJECT_ENTRY_BYTES: usize = std::mem::size_of::<String>();
+
+/// Conservative estimate of the heap memory one clone of `value` occupies
+fn heap_estimate(value: &JsonValue) -> usize {
+    let own = match value {
+        JsonValue::String(s) => s.len(),
+        JsonValue::Array(arr) => arr.iter().map(heap_estimate).fold(0, usize::saturating_add),
+        JsonValue::Object(obj) if obj.is_empty() => 0,
+        JsonValue::Object(obj) => obj
+            .iter()
+            .map(|(key, child)| {
+                key.len()
+                    .saturating_add(OBJECT_ENTRY_BYTES)
+                    .saturating_add(heap_estimate(child))
+            })
+            .fold(OBJECT_NODE_BYTES, usize::saturating_add),
+        _ => 0,
+    };
+    own.saturating_add(VALUE_NODE_BYTES)
+}
+
 /// Streaming compressor that maintains compression state across frames
 #[derive(Debug, Clone)]
 pub struct StreamingCompressor {
@@ -346,24 +400,38 @@ impl StreamingDecompressor {
         data: &JsonValue,
         dictionary: &HashMap<u16, String>,
     ) -> DomainResult<JsonValue> {
+        Self::expand_dictionary(
+            data,
+            dictionary,
+            &mut ByteBudget::new(MAX_DECOMPRESSED_SIZE),
+        )
+    }
+
+    fn expand_dictionary(
+        data: &JsonValue,
+        dictionary: &HashMap<u16, String>,
+        budget: &mut ByteBudget,
+    ) -> DomainResult<JsonValue> {
         match data {
             JsonValue::Object(obj) => {
                 let mut decompressed = serde_json::Map::with_capacity(obj.len());
                 for (key, value) in obj {
-                    decompressed
-                        .insert(key.clone(), self.decompress_dictionary(value, dictionary)?);
+                    decompressed.insert(
+                        key.clone(),
+                        Self::expand_dictionary(value, dictionary, budget)?,
+                    );
                 }
                 Ok(JsonValue::Object(decompressed))
             }
             JsonValue::Array(arr) => {
                 let decompressed: Result<Vec<_>, _> = arr
                     .iter()
-                    .map(|item| self.decompress_dictionary(item, dictionary))
+                    .map(|item| Self::expand_dictionary(item, dictionary, budget))
                     .collect();
                 Ok(JsonValue::Array(decompressed?))
             }
             JsonValue::String(s) => {
-                Self::decode_dictionary_string(s, dictionary).map(JsonValue::String)
+                Self::decode_dictionary_string(s, dictionary, budget).map(JsonValue::String)
             }
             _ => Ok(data.clone()),
         }
@@ -380,6 +448,7 @@ impl StreamingDecompressor {
     fn decode_dictionary_string(
         s: &str,
         dictionary: &HashMap<u16, String>,
+        budget: &mut ByteBudget,
     ) -> DomainResult<String> {
         let Some(rest) = s.strip_prefix(DICT_SENTINEL) else {
             return Ok(s.to_string());
@@ -390,11 +459,13 @@ impl StreamingDecompressor {
         let index: u16 = rest.parse().map_err(|_| {
             DomainError::CompressionError(format!("malformed dictionary marker: {s:?}"))
         })?;
-        dictionary.get(&index).cloned().ok_or_else(|| {
+        let entry = dictionary.get(&index).ok_or_else(|| {
             DomainError::CompressionError(format!(
                 "dictionary marker index {index} not found in active dictionary"
             ))
-        })
+        })?;
+        budget.charge(entry.len().saturating_add(VALUE_NODE_BYTES), 1)?;
+        Ok(entry.clone())
     }
 
     /// Decompress delta-encoded values
@@ -471,18 +542,24 @@ impl StreamingDecompressor {
     }
 
     /// Decompress run-length encoded data
+    ///
+    /// Estimated heap size of all expanded runs in one call is bounded by
+    /// `MAX_DECOMPRESSED_SIZE` bytes.
     pub fn decompress_run_length(&self, data: &JsonValue) -> DomainResult<JsonValue> {
+        Self::expand_run_length(data, &mut ByteBudget::new(MAX_DECOMPRESSED_SIZE))
+    }
+
+    fn expand_run_length(data: &JsonValue, budget: &mut ByteBudget) -> DomainResult<JsonValue> {
         match data {
             JsonValue::Object(obj) => {
                 let mut decompressed_obj = serde_json::Map::new();
                 for (key, value) in obj {
-                    decompressed_obj.insert(key.clone(), self.decompress_run_length(value)?);
+                    decompressed_obj.insert(key.clone(), Self::expand_run_length(value, budget)?);
                 }
                 Ok(JsonValue::Object(decompressed_obj))
             }
             JsonValue::Array(arr) => {
                 let mut decompressed_values = Vec::new();
-                let mut total_size = 0usize;
 
                 for item in arr {
                     if let Some(obj) = item.as_object() {
@@ -501,26 +578,15 @@ impl StreamingDecompressor {
                             ));
                         }
 
-                        // Check if this is an RLE-encoded run
-                        if has_rle_value && has_rle_count {
-                            let value = obj
-                                .get("rle_value")
-                                .ok_or_else(|| {
-                                    DomainError::CompressionError("Missing rle_value".to_string())
-                                })?
-                                .clone();
+                        if let (Some(value), Some(count)) =
+                            (obj.get("rle_value"), obj.get("rle_count"))
+                        {
+                            let count = count.as_u64().ok_or_else(|| {
+                                DomainError::CompressionError(
+                                    "Invalid rle_count: expected positive integer".to_string(),
+                                )
+                            })?;
 
-                            let count =
-                                obj.get("rle_count")
-                                    .and_then(|v| v.as_u64())
-                                    .ok_or_else(|| {
-                                        DomainError::CompressionError(
-                                            "Invalid rle_count: expected positive integer"
-                                                .to_string(),
-                                        )
-                                    })?;
-
-                            // VULN-001 FIX: Validate RLE count to prevent decompression bomb
                             if count > MAX_RLE_COUNT {
                                 return Err(DomainError::CompressionError(format!(
                                     "RLE count {} exceeds maximum {}",
@@ -528,39 +594,21 @@ impl StreamingDecompressor {
                                 )));
                             }
 
-                            // VULN-003 FIX: Convert u64 to usize safely to prevent overflow
-                            let count_usize = usize::try_from(count).map_err(|_| {
+                            let count = usize::try_from(count).map_err(|_| {
                                 DomainError::CompressionError(format!(
                                     "RLE count {} exceeds platform maximum",
                                     count
                                 ))
                             })?;
 
-                            // Track total decompressed size across all RLE runs
-                            total_size = total_size.checked_add(count_usize).ok_or_else(|| {
-                                DomainError::CompressionError(
-                                    "Total decompressed size overflow".to_string(),
-                                )
-                            })?;
+                            budget.charge(heap_estimate(value), count)?;
 
-                            if total_size > MAX_DECOMPRESSED_SIZE {
-                                return Err(DomainError::CompressionError(format!(
-                                    "Decompressed size {} exceeds maximum {}",
-                                    total_size, MAX_DECOMPRESSED_SIZE
-                                )));
-                            }
-
-                            // Expand the run
-                            for _ in 0..count {
-                                decompressed_values.push(value.clone());
-                            }
+                            decompressed_values.extend(std::iter::repeat_n(value, count).cloned());
                         } else {
-                            // Not an RLE object, process recursively
-                            decompressed_values.push(self.decompress_run_length(item)?);
+                            decompressed_values.push(Self::expand_run_length(item, budget)?);
                         }
                     } else {
-                        // Not an object, process recursively
-                        decompressed_values.push(self.decompress_run_length(item)?);
+                        decompressed_values.push(Self::expand_run_length(item, budget)?);
                     }
                 }
 
@@ -1311,6 +1359,101 @@ mod tests {
     }
 
     #[test]
+    fn test_decompress_run_length_byte_budget_shared_across_runs() {
+        let decompressor = StreamingDecompressor::new();
+        let value = "x".repeat(1024);
+        let run = json!({"rle_value": value, "rle_count": 2_000});
+        assert!(
+            decompressor
+                .decompress_run_length(&json!([run.clone()]))
+                .is_ok()
+        );
+
+        let runs: Vec<_> = (0..10).map(|_| run.clone()).collect();
+        assert!(decompressor.decompress_run_length(&json!(runs)).is_err());
+    }
+
+    #[test]
+    fn test_decompress_run_length_many_large_runs_rejected() {
+        let decompressor = StreamingDecompressor::new();
+        let big = "x".repeat(10 * 1024);
+        let runs: Vec<_> = (0..10)
+            .map(|_| json!({"rle_value": big, "rle_count": 100_000}))
+            .collect();
+
+        assert!(decompressor.decompress_run_length(&json!(runs)).is_err());
+    }
+
+    #[test]
+    fn test_decompress_run_length_small_object_charged_by_heap_size() {
+        let decompressor = StreamingDecompressor::new();
+        let runs: Vec<_> = (0..200)
+            .map(|_| json!({"rle_value": {"": 0}, "rle_count": 100_000}))
+            .collect();
+
+        assert!(decompressor.decompress_run_length(&json!(runs)).is_err());
+        assert!(
+            heap_estimate(&json!({"": 0})) >= OBJECT_NODE_BYTES,
+            "object nodes must carry container overhead"
+        );
+    }
+
+    #[test]
+    fn test_decompress_dictionary_expansion_bounded() {
+        let decompressor = StreamingDecompressor::new();
+        let dictionary = HashMap::from([(0u16, "y".repeat(1024 * 1024))]);
+        let marker = format!("{DICT_SENTINEL}0");
+        let data = JsonValue::Array(vec![json!(marker); 500]);
+
+        assert!(
+            decompressor
+                .decompress_dictionary(&data, &dictionary)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_decompress_dictionary_expansion_within_budget() {
+        let decompressor = StreamingDecompressor::new();
+        let dictionary = HashMap::from([(0u16, "y".repeat(1024))]);
+        let marker = format!("{DICT_SENTINEL}0");
+        let data = JsonValue::Array(vec![json!(marker); 100]);
+
+        let result = decompressor
+            .decompress_dictionary(&data, &dictionary)
+            .unwrap();
+        assert_eq!(result.as_array().unwrap().len(), 100);
+    }
+
+    #[test]
+    fn test_decompress_run_length_byte_budget_shared_across_nesting() {
+        let decompressor = StreamingDecompressor::new();
+        let big = "x".repeat(1024);
+        let nested: Vec<_> = (0..20)
+            .map(|_| json!([{"rle_value": big, "rle_count": 1_000}]))
+            .collect();
+
+        assert!(decompressor.decompress_run_length(&json!(nested)).is_err());
+    }
+
+    #[test]
+    fn test_decompress_run_length_single_large_value_rejected() {
+        let decompressor = StreamingDecompressor::new();
+        let big = "x".repeat(1024 * 1024);
+        let data = json!([{"rle_value": big, "rle_count": 100_000}]);
+
+        assert!(decompressor.decompress_run_length(&data).is_err());
+    }
+
+    #[test]
+    fn test_byte_budget_charge_overflow_rejected() {
+        let mut budget = ByteBudget::new(MAX_DECOMPRESSED_SIZE);
+        assert!(budget.charge(usize::MAX, 2).is_err());
+        assert!(budget.charge(1, MAX_DECOMPRESSED_SIZE).is_ok());
+        assert!(budget.charge(1, 1).is_err());
+    }
+
+    #[test]
     fn test_decompress_run_length_cumulative_overflow() {
         let decompressor = StreamingDecompressor::new();
 
@@ -1929,15 +2072,21 @@ mod tests {
     fn test_decode_dictionary_string_rejects_non_numeric_marker_suffix() {
         // A sentinel followed by neither a digit sequence nor another sentinel is a malformed
         // marker and must error, not silently pass through (issue #333 M7).
-        let result =
-            StreamingDecompressor::decode_dictionary_string("\u{7F}not_a_number", &HashMap::new());
+        let result = StreamingDecompressor::decode_dictionary_string(
+            "\u{7F}not_a_number",
+            &HashMap::new(),
+            &mut ByteBudget::new(MAX_DECOMPRESSED_SIZE),
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_decode_dictionary_string_passes_through_non_sentinel() {
-        let result =
-            StreamingDecompressor::decode_dictionary_string("plain string", &HashMap::new());
+        let result = StreamingDecompressor::decode_dictionary_string(
+            "plain string",
+            &HashMap::new(),
+            &mut ByteBudget::new(MAX_DECOMPRESSED_SIZE),
+        );
         assert_eq!(result.unwrap(), "plain string");
     }
 }
