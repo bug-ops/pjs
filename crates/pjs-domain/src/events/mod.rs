@@ -684,6 +684,72 @@ impl EventStore for InMemoryEventStore {
     }
 }
 
+/// Event identifier for tracking and correlation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EventId(uuid::Uuid);
+
+impl EventId {
+    /// Generate new unique event ID
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+
+    /// Create from existing UUID
+    pub fn from_uuid(uuid: uuid::Uuid) -> Self {
+        Self(uuid)
+    }
+
+    /// Get inner UUID
+    pub fn inner(&self) -> uuid::Uuid {
+        self.0
+    }
+}
+
+impl std::fmt::Display for EventId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Default for EventId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// GAT-based trait for event subscribers that handle domain events
+pub trait EventSubscriber {
+    /// Future type for handling events
+    type HandleFuture<'a>: std::future::Future<Output = crate::DomainResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Handle a domain event
+    fn handle(&self, event: &DomainEvent) -> Self::HandleFuture<'_>;
+}
+
+/// Extension methods for DomainEvent
+impl DomainEvent {
+    /// Alias for [`timestamp`](Self::timestamp).
+    pub fn occurred_at(&self) -> DateTime<Utc> {
+        self.timestamp()
+    }
+
+    /// Get event metadata as key-value pairs
+    pub fn metadata(&self) -> std::collections::HashMap<String, String> {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("event_type".to_string(), self.event_type().to_string());
+        metadata.insert("session_id".to_string(), self.session_id().to_string());
+        metadata.insert("timestamp".to_string(), self.timestamp().to_rfc3339());
+
+        if let Some(stream_id) = self.stream_id() {
+            metadata.insert("stream_id".to_string(), stream_id.to_string());
+        }
+
+        metadata
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -773,71 +839,5 @@ mod tests {
             serde_json::from_str(&serialized).expect("Failed to deserialize event in test");
 
         assert_eq!(event, deserialized);
-    }
-}
-
-/// Event identifier for tracking and correlation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct EventId(uuid::Uuid);
-
-impl EventId {
-    /// Generate new unique event ID
-    pub fn new() -> Self {
-        Self(uuid::Uuid::new_v4())
-    }
-
-    /// Create from existing UUID
-    pub fn from_uuid(uuid: uuid::Uuid) -> Self {
-        Self(uuid)
-    }
-
-    /// Get inner UUID
-    pub fn inner(&self) -> uuid::Uuid {
-        self.0
-    }
-}
-
-impl std::fmt::Display for EventId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Default for EventId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// GAT-based trait for event subscribers that handle domain events
-pub trait EventSubscriber {
-    /// Future type for handling events
-    type HandleFuture<'a>: std::future::Future<Output = crate::DomainResult<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    /// Handle a domain event
-    fn handle(&self, event: &DomainEvent) -> Self::HandleFuture<'_>;
-}
-
-/// Extension methods for DomainEvent
-impl DomainEvent {
-    /// Alias for [`timestamp`](Self::timestamp).
-    pub fn occurred_at(&self) -> DateTime<Utc> {
-        self.timestamp()
-    }
-
-    /// Get event metadata as key-value pairs
-    pub fn metadata(&self) -> std::collections::HashMap<String, String> {
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("event_type".to_string(), self.event_type().to_string());
-        metadata.insert("session_id".to_string(), self.session_id().to_string());
-        metadata.insert("timestamp".to_string(), self.timestamp().to_rfc3339());
-
-        if let Some(stream_id) = self.stream_id() {
-            metadata.insert("stream_id".to_string(), stream_id.to_string());
-        }
-
-        metadata
     }
 }
