@@ -1181,7 +1181,7 @@ mod tests {
         // decays older samples) and the lifetime arithmetic mean (which
         // never decays) diverge.
         let mut durations_ms = Vec::new();
-        for sleep_ms in [15, 60, 15] {
+        for sleep_ms in [10, 10, 100] {
             let stream_id = session
                 .create_stream(JsonData::String("test".to_string()))
                 .unwrap();
