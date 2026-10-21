@@ -11,26 +11,13 @@ use crate::domain::{DomainResult, Priority};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-/// Custom serde for Priority in stream module
-mod serde_priority {
-    use crate::domain::Priority;
-    use serde::{Serialize, Serializer};
-
-    pub fn serialize<S>(priority: &Priority, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        priority.value().serialize(serializer)
-    }
-}
-
 /// Stream frame with priority and metadata
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct StreamFrame {
     /// JSON data payload
     pub data: JsonValue,
     /// Frame priority for streaming order
-    #[serde(with = "serde_priority")]
+    #[serde(with = "pjson_rs_domain::serde_support::priority")]
     pub priority: Priority,
     /// Additional metadata for processing
     pub metadata: HashMap<String, String>,
@@ -41,29 +28,26 @@ pub struct StreamFrame {
 pub enum ProcessResult {
     /// Frame processed successfully and ready to stream to the client
     Processed(StreamFrame),
-    /// Processing completed — returned when the stream is explicitly flushed
-    Complete(Vec<StreamFrame>),
-    /// Frame rejected: exceeds the configured size limit
-    Error(String),
+    /// Frame rejected: its serialized size exceeds the configured limit
+    FrameTooLarge {
+        /// Serialized size of the rejected frame in bytes
+        size: usize,
+        /// Configured [`StreamProcessorConfig::max_frame_size`]
+        limit: usize,
+    },
 }
 
 /// Stream processor configuration
 #[derive(Debug, Clone)]
-pub struct StreamConfig {
+pub struct StreamProcessorConfig {
     /// Maximum frame size in bytes
     pub max_frame_size: usize,
-    /// Enable compression
-    pub enable_compression: bool,
-    /// Priority threshold for critical frames
-    pub priority_threshold: u8,
 }
 
-impl Default for StreamConfig {
+impl Default for StreamProcessorConfig {
     fn default() -> Self {
         Self {
             max_frame_size: 1024 * 1024, // 1MB
-            enable_compression: true,
-            priority_threshold: Priority::HIGH.value(),
         }
     }
 }
@@ -71,13 +55,13 @@ impl Default for StreamConfig {
 /// Stream processor for handling PJS frames
 #[derive(Debug)]
 pub struct StreamProcessor {
-    config: StreamConfig,
+    config: StreamProcessorConfig,
     processed_count: usize,
 }
 
 impl StreamProcessor {
     /// Create new stream processor
-    pub fn new(config: StreamConfig) -> Self {
+    pub fn new(config: StreamProcessorConfig) -> Self {
         Self {
             config,
             processed_count: 0,
@@ -88,7 +72,7 @@ impl StreamProcessor {
     ///
     /// Each accepted frame immediately returns [`ProcessResult::Processed`] so
     /// callers can stream it to clients without waiting for a buffer to fill.
-    /// Returns [`ProcessResult::Error`] only when the frame exceeds the
+    /// Returns [`ProcessResult::FrameTooLarge`] only when the frame exceeds the
     /// configured size limit.
     pub fn process_frame(&mut self, frame: StreamFrame) -> DomainResult<ProcessResult> {
         let frame_size = serde_json::to_string(&frame.data)
@@ -98,10 +82,10 @@ impl StreamProcessor {
             .len();
 
         if frame_size > self.config.max_frame_size {
-            return Ok(ProcessResult::Error(format!(
-                "Frame size {} exceeds maximum {}",
-                frame_size, self.config.max_frame_size
-            )));
+            return Ok(ProcessResult::FrameTooLarge {
+                size: frame_size,
+                limit: self.config.max_frame_size,
+            });
         }
 
         self.processed_count += 1;
@@ -138,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_process_frame_returns_processed_immediately() {
-        let config = StreamConfig::default();
+        let config = StreamProcessorConfig::default();
         let mut processor = StreamProcessor::new(config);
 
         let frame = StreamFrame {
@@ -156,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_processed_result_contains_original_frame() {
-        let config = StreamConfig::default();
+        let config = StreamProcessorConfig::default();
         let mut processor = StreamProcessor::new(config);
 
         let frame = StreamFrame {
@@ -192,9 +176,8 @@ mod tests {
 
     #[test]
     fn test_oversized_frame_returns_error() {
-        let config = StreamConfig {
+        let config = StreamProcessorConfig {
             max_frame_size: 10, // very small limit
-            ..StreamConfig::default()
         };
         let mut processor = StreamProcessor::new(config);
 
@@ -205,12 +188,55 @@ mod tests {
         };
 
         let result = processor.process_frame(frame).unwrap();
-        assert!(matches!(result, ProcessResult::Error(_)));
+        match result {
+            ProcessResult::FrameTooLarge { size, limit } => {
+                assert_eq!(limit, 10);
+                assert!(size > limit);
+            }
+            other => panic!("Expected FrameTooLarge, got {other:?}"),
+        }
+    }
+
+    fn frame_with_serialized_len(len: usize) -> StreamFrame {
+        // A JSON string serializes to its content length plus two quotes.
+        StreamFrame {
+            data: JsonValue::String("a".repeat(len - 2)),
+            priority: Priority::MEDIUM,
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_frame_exactly_at_limit_is_accepted() {
+        let mut processor = StreamProcessor::new(StreamProcessorConfig { max_frame_size: 10 });
+
+        let result = processor
+            .process_frame(frame_with_serialized_len(10))
+            .unwrap();
+        assert!(matches!(result, ProcessResult::Processed(_)));
+        assert_eq!(processor.stats().processed_frames, 1);
+    }
+
+    #[test]
+    fn test_frame_one_byte_over_limit_is_rejected_and_not_counted() {
+        let mut processor = StreamProcessor::new(StreamProcessorConfig { max_frame_size: 10 });
+
+        let result = processor
+            .process_frame(frame_with_serialized_len(11))
+            .unwrap();
+        assert!(matches!(
+            result,
+            ProcessResult::FrameTooLarge {
+                size: 11,
+                limit: 10
+            }
+        ));
+        assert_eq!(processor.stats().processed_frames, 0);
     }
 
     #[test]
     fn test_multiple_frames_each_processed_immediately() {
-        let config = StreamConfig::default();
+        let config = StreamProcessorConfig::default();
         let mut processor = StreamProcessor::new(config);
 
         for i in 0..3u32 {

@@ -30,6 +30,8 @@ use alloc::{format, string::String, vec::Vec};
 
 pub mod entities;
 pub mod events;
+#[doc(hidden)]
+pub mod serde_support;
 pub mod services;
 pub mod value_objects;
 

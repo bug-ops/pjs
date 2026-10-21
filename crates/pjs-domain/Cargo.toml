@@ -24,6 +24,9 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["v4", "serde", "js"] }
 
+[lints.rust]
+unsafe_code = "forbid"
+
 [features]
 default = ["std"]
 std = ["thiserror/std"]

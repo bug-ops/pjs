@@ -9,9 +9,8 @@ use std::num::NonZeroU8;
 
 /// Type-safe priority value (1-255 range)
 ///
-/// This is a pure domain object with no serialization concerns.
-/// Custom serialization helpers are provided in `pjson_rs_domain::events::serde_priority`
-/// for domain events that need serialization.
+/// This is a pure domain object and does not implement `Serialize`/`Deserialize`
+/// itself. Types that embed it encode it as a bare `u8` (zero is rejected on decode).
 ///
 /// # Example
 /// ```
@@ -26,19 +25,19 @@ pub struct Priority(NonZeroU8);
 
 impl Priority {
     /// Critical priority - for essential data (IDs, status, core metadata)
-    pub const CRITICAL: Self = Self::new_unchecked(100);
+    pub const CRITICAL: Self = Self::new_const(100);
 
     /// High priority - for important visible data (names, titles)
-    pub const HIGH: Self = Self::new_unchecked(80);
+    pub const HIGH: Self = Self::new_const(80);
 
     /// Medium priority - for regular content
-    pub const MEDIUM: Self = Self::new_unchecked(50);
+    pub const MEDIUM: Self = Self::new_const(50);
 
     /// Low priority - for supplementary data
-    pub const LOW: Self = Self::new_unchecked(25);
+    pub const LOW: Self = Self::new_const(25);
 
     /// Background priority - for analytics, logs, etc.
-    pub const BACKGROUND: Self = Self::new_unchecked(10);
+    pub const BACKGROUND: Self = Self::new_const(10);
 
     /// Create priority with validation
     pub fn new(value: u8) -> DomainResult<Self> {
@@ -47,10 +46,12 @@ impl Priority {
             .ok_or_else(|| DomainError::InvalidPriority("Priority cannot be zero".to_string()))
     }
 
-    /// Create priority without validation (for const contexts)
-    const fn new_unchecked(value: u8) -> Self {
-        // Safety: We control all usage sites to ensure value > 0
-        unsafe { Self(NonZeroU8::new_unchecked(value)) }
+    /// Create priority in const contexts; a zero value fails const evaluation (or panics at runtime)
+    const fn new_const(value: u8) -> Self {
+        match NonZeroU8::new(value) {
+            Some(n) => Self(n),
+            None => panic!("priority must be non-zero"),
+        }
     }
 
     /// Get raw priority value
