@@ -9,12 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- GitHub Actions pinned to commit SHAs, dependabot auto-merge gated on the PR author, `cargo deny` CI job added and yanked crates denied (#550, #551, #566, #568)
+- `PjsWebSocketClient` enforces message, frame, session and per-session byte caps, evicts sessions without leaks, and escapes peer-supplied strings in logs (**BREAKING**) (#551, #568)
+- `SecurityValidator`, `ZeroCopyParser`, `BufferPool`, `SchemaAnalyzer`, `SchemaCompressor` and `DepthTracker` accept only validated configs; `JiterConfig.max_depth` is a bounded `MaxDepth`; `PoolConfig` fields are private; `CompressionConfig::validate` rejects `min_numeric_sequence_size < 3` (**BREAKING**) (#549, #568)
+- `unsafe_code` is forbidden in `pjs-domain` (#551, #568)
+- `chacha20` 0.10.2 and `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382) (#545, #568)
+
 ### Changed
 
 - `AlignedBuffer::as_mut_capacity_slice` returns `&mut [MaybeUninit<u8>]` instead of `&mut [u8]` (**BREAKING**) (#552)
+- `WebSocketRateLimiter` renamed to `ClientRateLimiter`, no alias (**BREAKING**) (#528, #568)
+- `stream::StreamConfig` renamed to `StreamProcessorConfig` without its dead fields; `ProcessResult::{Complete, Error}` replaced by `FrameTooLarge { size, limit }` (**BREAKING**) (#547, #568)
+- `StreamStats.processed_frames` removed and `StreamingDecompressor` keeps no cross-frame state (**BREAKING**) (#551, #568)
+- Serde helpers for `Priority`, `SessionId` and `StreamId` consolidated into one `pjs-domain` module with validating decode; wire format unchanged (#548, #568)
 
 ### Fixed
 
+- `StreamFormat::from_accept_header` rustdoc describes wildcard matching accurately (#529, #568)
 - Bump `rustls` to 0.23.46 and `pjs-js-client` dev deps (`handlebars`, `shell-quote`) for OSV advisories; de-flake the EMA duration test (#562)
 - Tighten `StreamingDecompressor` run-length and dictionary decompression size limits (#552)
 - **BREAKING** `SchemaAnalyzer` selects Delta/RunLength/Dictionary by exact byte savings, Delta is lossless integer-only, `CompressionConfig` drops six threshold fields (#553)
