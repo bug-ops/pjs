@@ -17,7 +17,8 @@ use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use pjson_rs::infrastructure::websocket::{
-    AxumWebSocketTransport, WsMessage, server::create_websocket_router,
+    AxumWebSocketTransport, PjsWebSocketClient, WebSocketClientConfig, WsMessage,
+    server::create_websocket_router,
 };
 use pjson_rs::security::RateLimitConfig;
 
@@ -681,4 +682,140 @@ async fn test_wire_stalled_write_stays_open_before_write_timeout() {
         elapsed,
         write_timeout
     );
+}
+
+// ---------------------------------------------------------------------------
+// PjsWebSocketClient receive caps and session bounds
+// ---------------------------------------------------------------------------
+
+/// Spawn a one-shot raw WebSocket server that sends `payload` as a single text
+/// message to the first client and then waits for it to disconnect.
+async fn spawn_one_shot_sender(payload: String) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+    tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.expect("accept");
+        let mut ws = tokio_tungstenite::accept_async(tcp)
+            .await
+            .expect("server handshake");
+        let _ = ws.send(Message::Text(payload.into())).await;
+        let _ = ws.next().await;
+    });
+    addr
+}
+
+#[tokio::test]
+async fn test_client_max_message_size_cuts_oversize_message() {
+    let addr = spawn_one_shot_sender("x".repeat(2048)).await;
+    let client =
+        PjsWebSocketClient::new(ws_url(addr))
+            .unwrap()
+            .with_config(WebSocketClientConfig {
+                max_message_size: 1024,
+                max_frame_size: 1024,
+                ..WebSocketClientConfig::default()
+            });
+
+    let outcome = timeout(Duration::from_secs(5), client.connect())
+        .await
+        .expect("connect must end once the oversize message is rejected");
+
+    assert!(
+        outcome.is_err(),
+        "oversize message must abort the connection"
+    );
+}
+
+#[tokio::test]
+async fn test_client_max_frame_size_cuts_oversize_frame_below_message_cap() {
+    let addr = spawn_one_shot_sender("x".repeat(2048)).await;
+    let client =
+        PjsWebSocketClient::new(ws_url(addr))
+            .unwrap()
+            .with_config(WebSocketClientConfig {
+                max_message_size: 1024 * 1024,
+                max_frame_size: 1024,
+                ..WebSocketClientConfig::default()
+            });
+
+    let outcome = timeout(Duration::from_secs(5), client.connect())
+        .await
+        .expect("connect must end once the oversize frame is rejected");
+
+    assert!(outcome.is_err(), "oversize frame must abort the connection");
+}
+
+#[tokio::test]
+async fn test_client_within_caps_message_is_accepted() {
+    let addr = spawn_one_shot_sender("not json".repeat(64)).await;
+    let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
+        WebSocketClientConfig {
+            max_message_size: 1024,
+            max_frame_size: 1024,
+            ..WebSocketClientConfig::default()
+        },
+    ));
+
+    let connect = tokio::spawn({
+        let client = Arc::clone(&client);
+        async move { client.connect().await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(
+        !connect.is_finished(),
+        "a message within the caps must not terminate the connection"
+    );
+    connect.abort();
+}
+
+/// The in-tree server echoes the whole `StreamInit` data back in one frame, so
+/// the default client caps must admit a payload far above the old 64 KiB.
+#[tokio::test]
+async fn test_client_default_caps_admit_large_in_tree_server_reply() {
+    let (addr, _transport) = spawn_ws_test_server().await;
+    let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap());
+    let connect = tokio::spawn({
+        let client = Arc::clone(&client);
+        async move { client.connect().await }
+    });
+
+    client
+        .request_stream(json!({"blob": "x".repeat(100 * 1024)}), None)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert!(
+        !connect.is_finished(),
+        "default caps must not sever the connection to the in-tree server"
+    );
+    connect.abort();
+}
+
+/// The in-tree server never completes a client session, so a bounded session
+/// map must evict the oldest live session rather than lock the client out.
+#[tokio::test]
+async fn test_client_never_locked_out_when_server_never_completes_sessions() {
+    let (addr, _transport) = spawn_ws_test_server().await;
+    let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
+        WebSocketClientConfig {
+            max_sessions: 2,
+            ..WebSocketClientConfig::default()
+        },
+    ));
+    let connect = tokio::spawn({
+        let client = Arc::clone(&client);
+        async move { client.connect().await }
+    });
+
+    let mut ids = Vec::new();
+    for _ in 0..5 {
+        ids.push(client.request_stream(json!({"k": 1}), None).await.unwrap());
+    }
+
+    assert!(client.get_stream_stats(&ids[0]).await.is_none());
+    assert!(client.get_stream_stats(&ids[3]).await.is_some());
+    assert!(client.get_stream_stats(&ids[4]).await.is_some());
+    connect.abort();
 }

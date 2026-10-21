@@ -11,19 +11,6 @@ use crate::domain::value_objects::{JsonPath, Priority};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::VecDeque;
 
-/// Custom serde for Priority in stream module
-mod serde_priority {
-    use crate::domain::value_objects::Priority;
-    use serde::{Serialize, Serializer};
-
-    pub fn serialize<S>(priority: &Priority, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        priority.value().serialize(serializer)
-    }
-}
-
 /// Patch operation for updating JSON structure
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct JsonPatch {
@@ -32,7 +19,7 @@ pub struct JsonPatch {
     /// Operation to apply at `path`.
     pub operation: PatchOperation,
     /// Priority assigned to this patch.
-    #[serde(with = "serde_priority")]
+    #[serde(with = "pjson_rs_domain::serde_support::priority")]
     pub priority: Priority,
 }
 
@@ -66,7 +53,7 @@ pub enum PriorityStreamFrame {
         /// Skeleton JSON value (nulls/empties for fields filled later).
         data: JsonValue,
         /// Priority of the skeleton frame.
-        #[serde(with = "serde_priority")]
+        #[serde(with = "pjson_rs_domain::serde_support::priority")]
         priority: Priority,
         /// Whether the skeleton is final or further skeletons may follow.
         complete: bool,
@@ -76,7 +63,7 @@ pub enum PriorityStreamFrame {
         /// Patches in this batch.
         patches: Vec<JsonPatch>,
         /// Priority shared by all patches in the batch.
-        #[serde(with = "serde_priority")]
+        #[serde(with = "pjson_rs_domain::serde_support::priority")]
         priority: Priority,
     },
     /// Terminal frame indicating the stream is complete.

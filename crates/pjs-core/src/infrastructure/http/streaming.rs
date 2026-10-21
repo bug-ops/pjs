@@ -44,7 +44,7 @@ const X_NDJSON: Name<'static> = Name::new_unchecked("x-ndjson");
 ///
 /// Order is the tie-break preference used when [`Accept::negotiate`] finds
 /// multiple candidates matching the same `Accept` entry at equal specificity
-/// and `q` (e.g. a bare `*/*` or `application/*`, which match every entry
+/// and `q` (e.g. a bare `*/*`, which matches every entry
 /// here equally) — [`StreamFormat::Json`] listed first preserves the
 /// permissive default fallback.
 static SUPPORTED_MEDIA_TYPES: [(MediaType<'static>, StreamFormat); 4] = [
@@ -123,7 +123,17 @@ impl StreamFormat {
     ///   `.clamp(0.0, 1.0)` exactly (not dropped; only `q=0`, non-finite, and
     ///   unparsable `q` are dropped).
     /// - Wildcard matching is restricted to exactly `*/*` and `application/*`
-    ///   (case-insensitive), which vote for [`Self::Json`] at their own `q`.
+    ///   (case-insensitive). `*/*` matches all four candidates
+    ///   (`application/json`, `text/event-stream`, `application/x-ndjson`,
+    ///   `application/octet-stream`); `application/*` matches only the three
+    ///   `application/` ones, never `text/event-stream`. Each candidate is
+    ///   first locked onto its own most specific matching entry, so a
+    ///   concrete entry for it (e.g. `application/json;q=0`) takes precedence
+    ///   over the wildcard for that candidate only. Ties resolve in
+    ///   candidate order (JSON, SSE, NDJSON, binary): a bare wildcard yields
+    ///   [`Self::Json`], `application/json;q=0, */*` yields
+    ///   [`Self::ServerSentEvents`], and `application/json;q=0, application/*`
+    ///   yields [`Self::NdJson`].
     ///   Any other range containing a `*` (e.g. `text/*`, `*/x-ndjson`) is
     ///   rejected rather than delegated to `headers_accept`'s more general
     ///   `type/*`/`*/*` matching, which is broader than this route's

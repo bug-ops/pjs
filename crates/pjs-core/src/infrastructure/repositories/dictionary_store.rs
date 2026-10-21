@@ -56,7 +56,7 @@ const TOTAL_CORPUS_BYTE_BUDGET: usize = 128 * 1024 * 1024;
 const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 
 /// Interval between periodic prunes of expired session state, mirroring the
-/// cadence `WebSocketRateLimiter`'s background cleanup uses.
+/// cadence `ClientRateLimiter`'s background cleanup uses.
 const SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Per-session state for corpus accumulation and one-time training.

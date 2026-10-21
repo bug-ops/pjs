@@ -125,7 +125,7 @@ pub(super) fn delta_plan<'a>(
     arr: &'a [JsonValue],
     config: &CompressionConfig,
 ) -> Option<DeltaPlan<'a>> {
-    if arr.len() < config.min_numeric_sequence_size.max(3) || !delta_len_within_cap(arr.len()) {
+    if arr.len() < config.min_numeric_sequence_size || !delta_len_within_cap(arr.len()) {
         return None;
     }
     let mut min: Option<(i128, &JsonValue)> = None;
@@ -208,18 +208,5 @@ mod tests {
         assert_eq!(run_saving(&JsonValue::from("x".repeat(25)), 2), None);
         assert_eq!(run_saving(&JsonValue::from("x".repeat(26)), 2), Some(1));
         assert_eq!(run_saving(&JsonValue::from("x".repeat(100)), 1), None);
-    }
-
-    #[test]
-    fn delta_plan_requires_three_elements_even_with_lower_config() {
-        let config = CompressionConfig {
-            min_numeric_sequence_size: 1,
-            ..CompressionConfig::default()
-        };
-        let arr = [
-            JsonValue::from(1_000_000_000_000u64),
-            JsonValue::from(1_000_000_000_001u64),
-        ];
-        assert!(delta_plan(&arr, &config).is_none());
     }
 }

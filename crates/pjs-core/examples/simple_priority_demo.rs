@@ -4,7 +4,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use pjson_rs::{Priority, StreamConfig, StreamFrame, StreamProcessor};
+use pjson_rs::{Priority, StreamFrame, StreamProcessor, StreamProcessorConfig};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Create stream processor
-    let config = StreamConfig::default();
+    let config = StreamProcessorConfig::default();
     let mut processor = StreamProcessor::new(config);
 
     // Create high-priority skeleton frame
@@ -114,11 +114,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     println!("   Client can render this data immediately");
                 }
-                pjson_rs::stream::ProcessResult::Complete(_) => {
-                    println!("   Stream processing completed");
-                }
-                pjson_rs::stream::ProcessResult::Error(e) => {
-                    println!("   ❌ Processing error: {e}");
+                pjson_rs::stream::ProcessResult::FrameTooLarge { size, limit } => {
+                    println!("   ❌ Frame too large: {size} bytes exceeds {limit}");
                 }
             },
             Err(e) => {

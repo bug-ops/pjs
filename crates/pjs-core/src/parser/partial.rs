@@ -42,6 +42,7 @@ use jiter::{Jiter, JiterErrorType, JsonErrorType, NumberAny, NumberInt, Peek};
 use pjson_rs_domain::value_objects::{JsonData, JsonPath};
 
 use crate::Result;
+use crate::config::security::MaxDepth;
 use crate::error::Error;
 
 mod private {
@@ -247,7 +248,7 @@ pub struct JiterConfig {
     /// Maximum nesting depth before returning [`Error::Buffer`].
     ///
     /// Applied on top of jiter's hard recursion limit. Default: 64.
-    pub max_depth: usize,
+    pub max_depth: MaxDepth,
 
     /// When `true`, also populate [`PartialParseResult::streaming_hint`].
     ///
@@ -273,7 +274,7 @@ impl Default for JiterConfig {
     fn default() -> Self {
         Self {
             max_input_size: 100 * 1024 * 1024,
-            max_depth: 64,
+            max_depth: MaxDepth::default(),
             emit_streaming_hint: true,
             allow_trailing_strings: true,
             allow_inf_nan: false,
@@ -454,7 +455,7 @@ fn count_trailing_whitespace(input: &[u8], from: usize) -> usize {
 }
 
 fn walk(jiter: &mut Jiter<'_>, depth: usize, path: &JsonPath, config: &JiterConfig) -> WalkOutcome {
-    if depth >= config.max_depth {
+    if depth >= config.max_depth.get() {
         return WalkOutcome::Hard(jiter::JiterError {
             error_type: JiterErrorType::JsonError(JsonErrorType::RecursionLimitExceeded),
             index: jiter.current_index(),
@@ -842,7 +843,7 @@ fn walk_with_peek(
     path: &JsonPath,
     config: &JiterConfig,
 ) -> WalkOutcome {
-    if depth >= config.max_depth {
+    if depth >= config.max_depth.get() {
         return WalkOutcome::Hard(jiter::JiterError {
             error_type: JiterErrorType::JsonError(JsonErrorType::RecursionLimitExceeded),
             index: jiter.current_index(),

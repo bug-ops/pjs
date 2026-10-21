@@ -1,4 +1,4 @@
-//! Rate limiting system for WebSocket connections to prevent DoS attacks
+//! Per-IP rate limiting for client connections and requests to prevent DoS attacks
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,14 @@ use std::{
 };
 use thiserror::Error;
 
-/// Hard upper bound on the number of distinct client IPs [`WebSocketRateLimiter`]
-/// tracks at once, independent of the periodic TTL-based [`WebSocketRateLimiter::cleanup_expired`]
+/// Default cap, in bytes, on a single inbound WebSocket frame or message.
+///
+/// Shared with the WebSocket client so its receive cap never undercuts what
+/// the in-tree server itself accepts and echoes back.
+pub(crate) const DEFAULT_MAX_INBOUND_FRAME_SIZE: usize = 1024 * 1024;
+
+/// Hard upper bound on the number of distinct client IPs [`ClientRateLimiter`]
+/// tracks at once, independent of the periodic TTL-based [`ClientRateLimiter::cleanup_expired`]
 /// sweep. The sweep only runs every few minutes ([`DEFAULT_CLEANUP_INTERVAL`]) and
 /// cannot by itself prevent an in-window burst of distinct IPs from growing the
 /// map unboundedly between sweeps. Once at capacity, requests from IPs not
@@ -27,7 +33,7 @@ use thiserror::Error;
 /// letting them bypass their own accumulated request count — the opposite of
 /// what this limiter exists to prevent. Reject-new instead trades that for:
 /// under a sustained attack that fills the table faster than
-/// [`WebSocketRateLimiter::cleanup_expired`] can free idle entries, new
+/// [`ClientRateLimiter::cleanup_expired`] can free idle entries, new
 /// clients are turned away (a `503`, see `RateLimitService::call` in
 /// `infrastructure::http::middleware`) until capacity frees up. This is
 /// considered the safer default — it protects already-established traffic at
@@ -35,8 +41,8 @@ use thiserror::Error;
 /// reverse.
 pub const MAX_TRACKED_CLIENTS: usize = 100_000;
 
-/// Default interval between periodic [`WebSocketRateLimiter::cleanup_expired`]
-/// sweeps spawned by [`WebSocketRateLimiter::spawn_cleanup_task`].
+/// Default interval between periodic [`ClientRateLimiter::cleanup_expired`]
+/// sweeps spawned by [`ClientRateLimiter::spawn_cleanup_task`].
 pub const DEFAULT_CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Rate limiting errors
@@ -120,7 +126,7 @@ impl Default for RateLimitConfig {
             max_requests_per_window: 100,
             window_duration: Duration::from_secs(60),
             max_connections_per_ip: 10,
-            max_frame_size: 1024 * 1024, // 1MB
+            max_frame_size: DEFAULT_MAX_INBOUND_FRAME_SIZE,
             max_messages_per_second: 30,
             burst_allowance: 5,
             write_timeout: Duration::from_secs(10),
@@ -223,12 +229,15 @@ impl ClientRateLimit {
     }
 }
 
-/// Rate limiter for WebSocket connections
+/// Per-IP tracked-client rate limiter.
+///
+/// General-purpose: shared by WebSocket connection limiting, HTTP request
+/// middleware, and accept-level TCP connection capping.
 #[derive(Debug)]
-pub struct WebSocketRateLimiter {
+pub struct ClientRateLimiter {
     config: RateLimitConfig,
     clients: Arc<DashMap<IpAddr, ClientRateLimit>>,
-    /// Guards [`WebSocketRateLimiter::spawn_cleanup_task`] so it spawns at
+    /// Guards [`ClientRateLimiter::spawn_cleanup_task`] so it spawns at
     /// most one background task per limiter even if called repeatedly (e.g.
     /// by several `RateLimitMiddleware`s sharing the same `Arc`).
     ///
@@ -242,13 +251,13 @@ pub struct WebSocketRateLimiter {
     cleanup_spawned: AtomicBool,
 }
 
-impl Default for WebSocketRateLimiter {
+impl Default for ClientRateLimiter {
     fn default() -> Self {
         Self::new(RateLimitConfig::default())
     }
 }
 
-impl WebSocketRateLimiter {
+impl ClientRateLimiter {
     /// Create new rate limiter with configuration
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
@@ -372,7 +381,7 @@ impl WebSocketRateLimiter {
             // than finding cleanup permanently disabled.
             self.cleanup_spawned.store(false, Ordering::Release);
             tracing::warn!(
-                "WebSocketRateLimiter::spawn_cleanup_task: no Tokio runtime available; \
+                "ClientRateLimiter::spawn_cleanup_task: no Tokio runtime available; \
                  periodic cleanup not started"
             );
             return;
@@ -387,7 +396,7 @@ impl WebSocketRateLimiter {
                     break;
                 };
                 limiter.cleanup_expired();
-                tracing::debug!("WebSocketRateLimiter: cleanup pass completed");
+                tracing::debug!("ClientRateLimiter: cleanup pass completed");
             }
         });
     }
@@ -565,14 +574,14 @@ pub struct RateLimitStats {
 /// `infrastructure::websocket::server`).
 #[derive(Debug)]
 pub struct RateLimitGuard {
-    rate_limiter: Arc<WebSocketRateLimiter>,
+    rate_limiter: Arc<ClientRateLimiter>,
     client_ip: IpAddr,
 }
 
 impl RateLimitGuard {
     /// Create new guard for a client connection
     pub fn new(
-        rate_limiter: Arc<WebSocketRateLimiter>,
+        rate_limiter: Arc<ClientRateLimiter>,
         client_ip: IpAddr,
     ) -> Result<Self, RateLimitError> {
         rate_limiter.check_connection(client_ip)?;
@@ -610,7 +619,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // First two requests should succeed
@@ -634,7 +643,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // Two connections should succeed
@@ -659,7 +668,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config.clone());
+        let limiter = ClientRateLimiter::new(config.clone());
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // First connection should create the client entry
@@ -685,7 +694,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // Small frame should succeed
@@ -702,7 +711,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = Arc::new(WebSocketRateLimiter::new(config));
+        let limiter = Arc::new(ClientRateLimiter::new(config));
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // Create guard
@@ -727,7 +736,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config.clone());
+        let limiter = ClientRateLimiter::new(config.clone());
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // Pre-fill tokens to test refill
@@ -758,7 +767,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip1 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let ip2 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
 
@@ -792,7 +801,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip1 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let ip2 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
 
@@ -813,7 +822,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config.clone());
+        let limiter = ClientRateLimiter::new(config.clone());
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // With 0 burst, even the first message might be throttled
@@ -860,7 +869,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // Exactly at limit should succeed
@@ -880,7 +889,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip1 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let ip2 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
 
@@ -909,7 +918,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // First request succeeds
@@ -927,8 +936,8 @@ mod tests {
 
     #[test]
     fn test_default_limiter() {
-        // Test Default implementation for WebSocketRateLimiter
-        let limiter = WebSocketRateLimiter::default();
+        // Test Default implementation for ClientRateLimiter
+        let limiter = ClientRateLimiter::default();
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // Default limiter should allow requests
@@ -948,7 +957,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip1 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let ip2 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
         let ip3 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3));
@@ -979,7 +988,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100));
 
         // Make a request
@@ -1007,7 +1016,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip1 = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         let ip2 = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
 
@@ -1036,7 +1045,7 @@ mod tests {
 
     #[test]
     fn test_close_connection_on_nonexistent_ip() {
-        let limiter = WebSocketRateLimiter::default();
+        let limiter = ClientRateLimiter::default();
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 99));
 
         // Closing connection on non-existent IP should not panic
@@ -1049,7 +1058,7 @@ mod tests {
 
     #[test]
     fn test_check_message_on_nonexistent_client() {
-        let limiter = WebSocketRateLimiter::default();
+        let limiter = ClientRateLimiter::default();
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 88));
 
         // Checking message on non-existent IP should be OK for frame size
@@ -1067,7 +1076,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = Arc::new(WebSocketRateLimiter::new(config));
+        let limiter = Arc::new(ClientRateLimiter::new(config));
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         let guard = RateLimitGuard::new(limiter.clone(), ip).unwrap();
@@ -1087,7 +1096,7 @@ mod tests {
             ..Default::default()
         };
 
-        let limiter = Arc::new(WebSocketRateLimiter::new(config));
+        let limiter = Arc::new(ClientRateLimiter::new(config));
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
 
         let guard = RateLimitGuard::new(limiter.clone(), ip).unwrap();
@@ -1099,7 +1108,7 @@ mod tests {
 
     #[test]
     fn test_capacity_cap_rejects_new_clients_when_full() {
-        let limiter = WebSocketRateLimiter::default();
+        let limiter = ClientRateLimiter::default();
 
         for i in 0..MAX_TRACKED_CLIENTS as u32 {
             let ip = IpAddr::V4(Ipv4Addr::from(i));
@@ -1142,7 +1151,7 @@ mod tests {
                 window_duration: Duration::from_secs(window_secs),
                 ..Default::default()
             };
-            let limiter = WebSocketRateLimiter::new(config);
+            let limiter = ClientRateLimiter::new(config);
             let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
             limiter.check_request(ip).unwrap();
 
@@ -1174,7 +1183,7 @@ mod tests {
                 window_duration: Duration::from_secs(window_secs),
                 ..Default::default()
             };
-            let limiter = WebSocketRateLimiter::new(config);
+            let limiter = ClientRateLimiter::new(config);
             let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
             let _ = limiter.check_request(ip); // Must not panic for any window_secs above.
@@ -1189,7 +1198,7 @@ mod tests {
             max_requests_per_window: 10,
             ..Default::default()
         };
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // Never-seen IP has its full quota remaining.
@@ -1203,7 +1212,7 @@ mod tests {
             window_duration: Duration::from_secs(60),
             ..Default::default()
         };
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         assert_eq!(limiter.remaining_for(ip), 5);
@@ -1223,7 +1232,7 @@ mod tests {
             window_duration: Duration::from_secs(60),
             ..Default::default()
         };
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         // Exhaust the quota; the second call succeeds, the third is rejected
@@ -1244,7 +1253,7 @@ mod tests {
             window_duration: Duration::from_secs(60),
             ..Default::default()
         };
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip1 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let ip2 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
 
@@ -1268,7 +1277,7 @@ mod tests {
             window_duration: Duration::from_millis(500),
             ..Default::default()
         };
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         for _ in 0..5 {
@@ -1284,7 +1293,7 @@ mod tests {
 
     #[test]
     fn test_reset_after_untracked_ip_is_zero() {
-        let limiter = WebSocketRateLimiter::default();
+        let limiter = ClientRateLimiter::default();
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         assert_eq!(limiter.reset_after(ip), Duration::ZERO);
@@ -1299,7 +1308,7 @@ mod tests {
             window_duration: Duration::from_millis(1000),
             ..Default::default()
         };
-        let limiter = WebSocketRateLimiter::new(config);
+        let limiter = ClientRateLimiter::new(config);
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         limiter.check_request(ip).unwrap();
@@ -1321,7 +1330,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_cleanup_task_is_idempotent() {
-        let limiter = Arc::new(WebSocketRateLimiter::new(RateLimitConfig {
+        let limiter = Arc::new(ClientRateLimiter::new(RateLimitConfig {
             window_duration: Duration::from_millis(1),
             ..Default::default()
         }));

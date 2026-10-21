@@ -23,60 +23,6 @@ fn default_time_provider() -> Arc<dyn TimeProvider> {
     Arc::new(SystemTimeProvider)
 }
 
-/// Custom serde for SessionId within aggregates
-mod serde_session_id {
-    use crate::domain::value_objects::SessionId;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(id: &SessionId, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        id.as_uuid().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<SessionId, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let uuid = uuid::Uuid::deserialize(deserializer)?;
-        Ok(SessionId::from_uuid(uuid))
-    }
-}
-
-/// Custom serde for HashMap<StreamId, Stream>
-mod serde_stream_map {
-    use crate::domain::{entities::Stream, value_objects::StreamId};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::collections::HashMap;
-
-    pub fn serialize<S>(map: &HashMap<StreamId, Stream>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let uuid_map: HashMap<String, &Stream> = map
-            .iter()
-            .map(|(k, v)| (k.as_uuid().to_string(), v))
-            .collect();
-        uuid_map.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<StreamId, Stream>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let uuid_map: HashMap<String, Stream> = HashMap::deserialize(deserializer)?;
-        uuid_map
-            .into_iter()
-            .map(|(k, v)| {
-                uuid::Uuid::parse_str(&k)
-                    .map(|uuid| (StreamId::from_uuid(uuid), v))
-                    .map_err(serde::de::Error::custom)
-            })
-            .collect()
-    }
-}
-
 /// Session configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
@@ -150,7 +96,7 @@ pub struct SessionStats {
 /// StreamSession aggregate root - manages multiple prioritized streams
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StreamSession {
-    #[serde(with = "serde_session_id")]
+    #[serde(with = "pjson_rs_domain::serde_support::session_id")]
     id: SessionId,
     state: SessionState,
     config: SessionConfig,
@@ -161,7 +107,7 @@ pub struct StreamSession {
     completed_at: Option<DateTime<Utc>>,
 
     // Aggregate state
-    #[serde(with = "serde_stream_map")]
+    #[serde(with = "pjson_rs_domain::serde_support::stream_map")]
     streams: HashMap<StreamId, Stream>,
     pending_events: VecDeque<DomainEvent>,
 

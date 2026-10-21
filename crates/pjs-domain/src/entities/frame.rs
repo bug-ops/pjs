@@ -8,48 +8,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Custom serde for StreamId within entities
-mod serde_stream_id {
-    use crate::value_objects::StreamId;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(id: &StreamId, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        id.as_uuid().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<StreamId, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let uuid = uuid::Uuid::deserialize(deserializer)?;
-        Ok(StreamId::from_uuid(uuid))
-    }
-}
-
-/// Custom serde for Priority within entities
-mod serde_priority {
-    use crate::value_objects::Priority;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(priority: &Priority, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        priority.value().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Priority, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u8::deserialize(deserializer)?;
-        Priority::new(value).map_err(serde::de::Error::custom)
-    }
-}
-
 /// Frame types for different stages of streaming
 ///
 /// # Wire format
@@ -75,10 +33,10 @@ pub enum FrameType {
 /// Individual frame in a priority stream
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frame {
-    #[serde(with = "serde_stream_id")]
+    #[serde(with = "crate::serde_support::stream_id")]
     stream_id: StreamId,
     frame_type: FrameType,
-    #[serde(with = "serde_priority")]
+    #[serde(with = "crate::serde_support::priority")]
     priority: Priority,
     sequence: u64,
     timestamp: DateTime<Utc>,

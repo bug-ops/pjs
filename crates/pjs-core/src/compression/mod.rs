@@ -9,6 +9,7 @@ pub mod secure;
 #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 pub mod zstd;
 
+use crate::config::{ConfigError, ValidatedCompressionConfig};
 use crate::domain::{DomainError, DomainResult};
 use savings::{decimal_digits, delta_plan, rle_net_saving, rle_runs, run_saving};
 use serde_json::{Value as JsonValue, json};
@@ -37,6 +38,9 @@ pub(crate) fn as_integer(value: &JsonValue) -> Option<i128> {
 /// self-describing in the string itself, with no positional metadata needed
 /// to reverse it (see issue #333).
 pub(crate) const DICT_SENTINEL: char = '\u{7F}';
+
+/// Shortest numeric array delta encoding can handle.
+pub(crate) const MIN_DELTA_SEQUENCE_SIZE: usize = 3;
 
 /// Configuration constants for compression algorithms
 #[derive(Debug, Clone)]
@@ -81,7 +85,7 @@ pub struct CompressionConfig {
     /// engineered to maximize sentinel-led strings can make a selected
     /// `Dictionary` strategy net-negative in the real, measured report.
     pub min_net_savings: usize,
-    /// Minimum array length for delta encoding (at least 3 is always required)
+    /// Minimum array length for delta encoding (validation requires at least 3)
     pub min_numeric_sequence_size: usize,
 }
 
@@ -93,6 +97,32 @@ impl Default for CompressionConfig {
             min_net_savings: 10,
             min_numeric_sequence_size: 3,
         }
+    }
+}
+
+impl CompressionConfig {
+    /// Validate compression configuration invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InconsistentBounds`] when `min_numeric_sequence_size`
+    /// is below 3, the minimum length delta encoding needs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::CompressionConfig;
+    ///
+    /// CompressionConfig::default().validate().expect("defaults are valid");
+    /// ```
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.min_numeric_sequence_size < MIN_DELTA_SEQUENCE_SIZE {
+            return Err(ConfigError::InconsistentBounds {
+                section: "compression",
+                message: "min_numeric_sequence_size must be >= 3",
+            });
+        }
+        Ok(())
     }
 }
 
@@ -149,14 +179,14 @@ fn signed(n: usize) -> i64 {
 impl SchemaAnalyzer {
     /// Create new schema analyzer
     pub fn new() -> Self {
-        Self {
-            config: CompressionConfig::default(),
-        }
+        Self::with_config(ValidatedCompressionConfig::default())
     }
 
-    /// Create new schema analyzer with custom configuration
-    pub fn with_config(config: CompressionConfig) -> Self {
-        Self { config }
+    /// Create new schema analyzer with a validated custom configuration
+    pub fn with_config(config: ValidatedCompressionConfig) -> Self {
+        Self {
+            config: config.into_inner(),
+        }
     }
 
     /// Analyze JSON data to determine optimal compression strategy
@@ -384,30 +414,23 @@ pub struct SchemaCompressor {
 impl SchemaCompressor {
     /// Create new compressor with automatic strategy detection
     pub fn new() -> Self {
-        let config = CompressionConfig::default();
-        Self {
-            strategy: CompressionStrategy::None,
-            analyzer: SchemaAnalyzer::with_config(config.clone()),
-            config,
-        }
+        Self::with_config(ValidatedCompressionConfig::default())
     }
 
     /// Create compressor with specific strategy
     pub fn with_strategy(strategy: CompressionStrategy) -> Self {
-        let config = CompressionConfig::default();
         Self {
             strategy,
-            analyzer: SchemaAnalyzer::with_config(config.clone()),
-            config,
+            ..Self::new()
         }
     }
 
-    /// Create compressor with custom configuration
-    pub fn with_config(config: CompressionConfig) -> Self {
+    /// Create compressor with a validated custom configuration
+    pub fn with_config(config: ValidatedCompressionConfig) -> Self {
         Self {
             strategy: CompressionStrategy::None,
             analyzer: SchemaAnalyzer::with_config(config.clone()),
-            config,
+            config: config.into_inner(),
         }
     }
 
@@ -624,6 +647,7 @@ impl Default for SchemaCompressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Validate;
     use serde_json::json;
 
     #[test]
@@ -1174,10 +1198,14 @@ mod tests {
 
     #[test]
     fn test_zero_floor_still_requires_positive_saving() {
-        let analyzer = SchemaAnalyzer::with_config(CompressionConfig {
-            min_net_savings: 0,
-            ..CompressionConfig::default()
-        });
+        let analyzer = SchemaAnalyzer::with_config(
+            CompressionConfig {
+                min_net_savings: 0,
+                ..CompressionConfig::default()
+            }
+            .validated()
+            .unwrap(),
+        );
         let data = json!({"a": "hello", "b": "world", "c": [1, 2, 3]});
         assert_eq!(analyzer.analyze(&data).unwrap(), CompressionStrategy::None);
     }
@@ -1264,5 +1292,28 @@ mod tests {
         let (strategy, wire) = round_trip(&data);
         assert_eq!(strategy, CompressionStrategy::Delta);
         assert!(wire < original_len(&data));
+    }
+
+    #[test]
+    fn test_compression_config_rejects_short_numeric_sequence() {
+        let config = CompressionConfig {
+            min_numeric_sequence_size: 2,
+            ..CompressionConfig::default()
+        };
+        assert!(matches!(
+            config.validated(),
+            Err(ConfigError::InconsistentBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn test_compression_config_accepts_zero_thresholds() {
+        let config = CompressionConfig {
+            min_string_length: 0,
+            min_frequency_count: 0,
+            min_net_savings: 0,
+            ..CompressionConfig::default()
+        };
+        assert!(config.validated().is_ok());
     }
 }
