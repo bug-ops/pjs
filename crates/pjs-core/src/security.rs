@@ -1,7 +1,7 @@
 //! Security validation utilities
 
 use crate::{
-    config::SecurityConfig,
+    config::{SecurityConfig, ValidatedSecurityConfig, security::MaxDepth},
     error::{Error, Result},
 };
 
@@ -13,7 +13,7 @@ pub use compression_bomb::{
     CompressionStats,
 };
 pub use rate_limit::{
-    RateLimitConfig, RateLimitError, RateLimitGuard, RateLimitStats, WebSocketRateLimiter,
+    ClientRateLimiter, RateLimitConfig, RateLimitError, RateLimitGuard, RateLimitStats,
 };
 
 /// Security validator with configuration-based limits
@@ -23,9 +23,24 @@ pub struct SecurityValidator {
 }
 
 impl SecurityValidator {
-    /// Create new validator with given security configuration
-    pub fn new(config: SecurityConfig) -> Self {
-        Self { config }
+    /// Create new validator from a validated security configuration.
+    ///
+    /// Requiring [`ValidatedSecurityConfig`] guarantees invariants such as
+    /// `json.max_depth <= MAX_SAFE_JSON_DEPTH` hold for every validator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::{SecurityConfig, Validate, security::SecurityValidator};
+    ///
+    /// let config = SecurityConfig::default().validated().unwrap();
+    /// let validator = SecurityValidator::new(config);
+    /// assert!(validator.validate_json_depth(10).is_ok());
+    /// ```
+    pub fn new(config: ValidatedSecurityConfig) -> Self {
+        Self {
+            config: config.into_inner(),
+        }
     }
 
     /// Validate input size against security limits
@@ -181,27 +196,24 @@ impl SecurityValidator {
 
 impl Default for SecurityValidator {
     fn default() -> Self {
-        Self::new(SecurityConfig::default())
+        Self::new(ValidatedSecurityConfig::default())
     }
 }
 
 /// JSON depth tracker for preventing stack overflow
 pub struct DepthTracker {
     current_depth: usize,
-    max_depth: usize,
+    max_depth: MaxDepth,
 }
 
 impl DepthTracker {
-    /// Create depth tracker from security config
-    pub fn from_config(config: &SecurityConfig) -> Self {
-        Self {
-            current_depth: 0,
-            max_depth: config.json.max_depth,
-        }
+    /// Create depth tracker from a validated security config
+    pub fn from_config(config: &ValidatedSecurityConfig) -> Self {
+        Self::with_max_depth(MaxDepth::from(config))
     }
 
-    /// Create a new depth tracker with custom limit
-    pub fn with_max_depth(max_depth: usize) -> Self {
+    /// Create a new depth tracker with a bounded custom limit
+    pub fn with_max_depth(max_depth: MaxDepth) -> Self {
         Self {
             current_depth: 0,
             max_depth,
@@ -210,11 +222,11 @@ impl DepthTracker {
 
     /// Enter a new nesting level (array/object)
     pub fn enter(&mut self) -> Result<()> {
-        if self.current_depth >= self.max_depth {
+        if self.current_depth >= self.max_depth.get() {
             return Err(Error::Other(format!(
                 "JSON nesting depth {} would exceed maximum allowed {}",
                 self.current_depth + 1,
-                self.max_depth
+                self.max_depth.get()
             )));
         }
         self.current_depth += 1;
@@ -236,13 +248,14 @@ impl DepthTracker {
 
 impl Default for DepthTracker {
     fn default() -> Self {
-        Self::with_max_depth(64) // Default depth limit
+        Self::with_max_depth(MaxDepth::default())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Validate;
 
     #[test]
     fn test_security_validator_default() {
@@ -255,13 +268,17 @@ mod tests {
 
     #[test]
     fn test_validate_json_depth_bytes_ignores_delimiters_in_strings() {
-        let validator = SecurityValidator::new(SecurityConfig {
-            json: crate::config::security::JsonLimits {
-                max_depth: 3,
-                ..SecurityConfig::default().json
-            },
-            ..SecurityConfig::default()
-        });
+        let validator = SecurityValidator::new(
+            SecurityConfig {
+                json: crate::config::security::JsonLimits {
+                    max_depth: 3,
+                    ..SecurityConfig::default().json
+                },
+                ..SecurityConfig::default()
+            }
+            .validated()
+            .unwrap(),
+        );
 
         // Real structural depth is 1, but the string content is packed with
         // brace/bracket bytes that a naive counter would misread as nesting.
@@ -281,13 +298,17 @@ mod tests {
 
     #[test]
     fn test_validate_json_depth_bytes_rejects_real_nesting() {
-        let validator = SecurityValidator::new(SecurityConfig {
-            json: crate::config::security::JsonLimits {
-                max_depth: 3,
-                ..SecurityConfig::default().json
-            },
-            ..SecurityConfig::default()
-        });
+        let validator = SecurityValidator::new(
+            SecurityConfig {
+                json: crate::config::security::JsonLimits {
+                    max_depth: 3,
+                    ..SecurityConfig::default().json
+                },
+                ..SecurityConfig::default()
+            }
+            .validated()
+            .unwrap(),
+        );
 
         let json = b"[[[[1]]]]"; // 4 levels deep, exceeds limit of 3
         assert!(validator.validate_json_depth_bytes(json).is_err());
@@ -295,13 +316,17 @@ mod tests {
 
     #[test]
     fn test_validate_json_depth_bytes_exactly_at_limit_is_ok() {
-        let validator = SecurityValidator::new(SecurityConfig {
-            json: crate::config::security::JsonLimits {
-                max_depth: 3,
-                ..SecurityConfig::default().json
-            },
-            ..SecurityConfig::default()
-        });
+        let validator = SecurityValidator::new(
+            SecurityConfig {
+                json: crate::config::security::JsonLimits {
+                    max_depth: 3,
+                    ..SecurityConfig::default().json
+                },
+                ..SecurityConfig::default()
+            }
+            .validated()
+            .unwrap(),
+        );
 
         let json = b"[[[1]]]"; // exactly 3 levels deep
         assert!(validator.validate_json_depth_bytes(json).is_ok());
@@ -333,13 +358,17 @@ mod tests {
 
     #[test]
     fn test_validate_json_depth_bytes_consecutive_backslashes_toggle_correctly() {
-        let validator = SecurityValidator::new(SecurityConfig {
-            json: crate::config::security::JsonLimits {
-                max_depth: 2,
-                ..SecurityConfig::default().json
-            },
-            ..SecurityConfig::default()
-        });
+        let validator = SecurityValidator::new(
+            SecurityConfig {
+                json: crate::config::security::JsonLimits {
+                    max_depth: 2,
+                    ..SecurityConfig::default().json
+                },
+                ..SecurityConfig::default()
+            }
+            .validated()
+            .unwrap(),
+        );
 
         // `\\` is an escaped backslash, not an escape of the following `"`,
         // so the string ends right after it and `,[1,2,3]]` is real
@@ -356,7 +385,7 @@ mod tests {
     #[test]
     fn test_security_validator_with_config() {
         let config = SecurityConfig::low_memory();
-        let validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // Should use low memory limits
         assert!(
@@ -397,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_depth_tracker() {
-        let mut tracker = DepthTracker::with_max_depth(64);
+        let mut tracker = DepthTracker::with_max_depth(MaxDepth::new(64).unwrap());
 
         assert_eq!(tracker.current_depth(), 0);
 
@@ -416,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_depth_tracker_limit() {
-        let mut tracker = DepthTracker::with_max_depth(2);
+        let mut tracker = DepthTracker::with_max_depth(MaxDepth::new(2).unwrap());
 
         assert!(tracker.enter().is_ok());
         assert!(tracker.enter().is_ok());
@@ -425,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_depth_tracker_from_config() {
-        let config = SecurityConfig::low_memory();
+        let config = ValidatedSecurityConfig::low_memory();
         let mut tracker = DepthTracker::from_config(&config);
 
         // Should respect config limits
@@ -438,7 +467,7 @@ mod tests {
     #[test]
     fn test_high_throughput_config() {
         let config = SecurityConfig::high_throughput();
-        let _validator = SecurityValidator::new(config.clone());
+        let _validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // High throughput should have higher limits than default
         let default_config = SecurityConfig::default();
@@ -450,7 +479,7 @@ mod tests {
     fn test_validate_array_length() {
         let config = SecurityConfig::low_memory();
         let max_len = config.json.max_array_length;
-        let validator = SecurityValidator::new(config);
+        let validator = SecurityValidator::new(config.validated().unwrap());
 
         // Valid array length
         assert!(validator.validate_array_length(100).is_ok());
@@ -470,7 +499,7 @@ mod tests {
         // Test with limit
         let config = SecurityConfig::low_memory();
         let max_keys = config.json.max_object_keys;
-        let validator = SecurityValidator::new(config);
+        let validator = SecurityValidator::new(config.validated().unwrap());
         let result = validator.validate_object_keys(max_keys + 1);
         assert!(result.is_err());
     }
@@ -485,7 +514,7 @@ mod tests {
         // Test with limit
         let config = SecurityConfig::low_memory();
         let max_str_len = config.json.max_string_length;
-        let validator = SecurityValidator::new(config);
+        let validator = SecurityValidator::new(config.validated().unwrap());
         let result = validator.validate_string_length(max_str_len + 1);
         assert!(result.is_err());
     }
@@ -500,7 +529,7 @@ mod tests {
         // Invalid frame size
         let config = SecurityConfig::low_memory();
         let max_frame = config.network.max_websocket_frame_size;
-        let validator = SecurityValidator::new(config);
+        let validator = SecurityValidator::new(config.validated().unwrap());
         let result = validator.validate_websocket_frame_size(max_frame + 1);
         assert!(result.is_err());
     }
@@ -515,7 +544,7 @@ mod tests {
         // Invalid buffer size
         let config = SecurityConfig::low_memory();
         let max_buf = config.buffers.max_buffer_size;
-        let validator = SecurityValidator::new(config);
+        let validator = SecurityValidator::new(config.validated().unwrap());
         let result = validator.validate_buffer_size(max_buf + 1);
         assert!(result.is_err());
     }
@@ -524,7 +553,7 @@ mod tests {
     fn test_validate_input_size_boundary() {
         let config = SecurityConfig::low_memory();
         let max_input = config.json.max_input_size;
-        let validator = SecurityValidator::new(config);
+        let validator = SecurityValidator::new(config.validated().unwrap());
 
         // At boundary
         assert!(validator.validate_input_size(max_input).is_ok());
@@ -538,7 +567,7 @@ mod tests {
     fn test_validate_json_depth_boundary() {
         let config = SecurityConfig::low_memory();
         let max_depth = config.json.max_depth;
-        let validator = SecurityValidator::new(config);
+        let validator = SecurityValidator::new(config.validated().unwrap());
 
         // At boundary
         assert!(validator.validate_json_depth(max_depth).is_ok());
@@ -598,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_depth_tracker_boundary_cases() {
-        let mut tracker = DepthTracker::with_max_depth(1);
+        let mut tracker = DepthTracker::with_max_depth(MaxDepth::new(1).unwrap());
 
         // Can enter once
         assert!(tracker.enter().is_ok());
@@ -618,7 +647,7 @@ mod tests {
 
     #[test]
     fn test_depth_tracker_exit_at_zero() {
-        let mut tracker = DepthTracker::with_max_depth(64);
+        let mut tracker = DepthTracker::with_max_depth(MaxDepth::new(64).unwrap());
 
         // Starting at 0
         assert_eq!(tracker.current_depth(), 0);
@@ -633,7 +662,7 @@ mod tests {
 
     #[test]
     fn test_depth_tracker_multiple_cycles() {
-        let mut tracker = DepthTracker::with_max_depth(3);
+        let mut tracker = DepthTracker::with_max_depth(MaxDepth::new(3).unwrap());
 
         // Cycle 1: enter, exit
         assert!(tracker.enter().is_ok());

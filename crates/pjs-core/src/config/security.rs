@@ -1,6 +1,6 @@
 //! Security configuration and limits
 
-use crate::config::ConfigError;
+use crate::config::{ConfigError, ValidatedSecurityConfig};
 use crate::security::compression_bomb::CompressionBombConfig;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -29,6 +29,68 @@ pub struct SecurityConfig {
 /// unreasonably large limit) from reopening the stack-exhaustion risk fixed
 /// in #456; it does not by itself guarantee safety on every stack size.
 pub const MAX_SAFE_JSON_DEPTH: usize = 512;
+
+const MAX_DEPTH_EXCEEDED: &str = "max_depth exceeds MAX_SAFE_JSON_DEPTH (sonic-rs has no internal \
+     recursion limit; excessive depth risks stack exhaustion)";
+
+/// A JSON nesting limit in `1..=`[`MAX_SAFE_JSON_DEPTH`].
+///
+/// Recursive consumers take this instead of a raw `usize`, so an unsafe limit
+/// is unrepresentable.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::config::security::{MAX_SAFE_JSON_DEPTH, MaxDepth};
+///
+/// assert!(MaxDepth::new(64).is_ok());
+/// assert!(MaxDepth::new(0).is_err());
+/// assert!(MaxDepth::new(MAX_SAFE_JSON_DEPTH + 1).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaxDepth(usize);
+
+impl MaxDepth {
+    /// Create a depth limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::MustBePositive`] for zero and
+    /// [`ConfigError::InconsistentBounds`] above [`MAX_SAFE_JSON_DEPTH`].
+    pub fn new(depth: usize) -> Result<Self, ConfigError> {
+        if depth == 0 {
+            return Err(ConfigError::MustBePositive {
+                section: "security.json",
+                field: "max_depth",
+            });
+        }
+        if depth > MAX_SAFE_JSON_DEPTH {
+            return Err(ConfigError::InconsistentBounds {
+                section: "security.json",
+                message: MAX_DEPTH_EXCEEDED,
+            });
+        }
+        Ok(Self(depth))
+    }
+
+    /// The limit as a plain number.
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl Default for MaxDepth {
+    fn default() -> Self {
+        Self(JsonLimits::default().max_depth)
+    }
+}
+
+impl From<&ValidatedSecurityConfig> for MaxDepth {
+    fn from(config: &ValidatedSecurityConfig) -> Self {
+        // A validated config guarantees `1..=MAX_SAFE_JSON_DEPTH`.
+        Self(config.json.max_depth)
+    }
+}
 
 /// JSON processing security limits
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,8 +291,7 @@ impl SecurityConfig {
         if self.json.max_depth > MAX_SAFE_JSON_DEPTH {
             return Err(ConfigError::InconsistentBounds {
                 section: "security.json",
-                message: "max_depth exceeds MAX_SAFE_JSON_DEPTH (sonic-rs has no internal \
-                           recursion limit; excessive depth risks stack exhaustion)",
+                message: MAX_DEPTH_EXCEEDED,
             });
         }
 
@@ -525,7 +586,9 @@ mod tests {
     fn test_jiter_config_default_max_depth_matches_domain_guard() {
         assert_eq!(
             pjson_rs_domain::MAX_DESERIALIZE_DEPTH,
-            crate::parser::partial::JiterConfig::default().max_depth,
+            crate::parser::partial::JiterConfig::default()
+                .max_depth
+                .get(),
             "JiterPartialParser's default max_depth should match pjs-domain's \
              MAX_DESERIALIZE_DEPTH hard ceiling"
         );
@@ -562,5 +625,16 @@ mod tests {
         assert!(config.buffer_ttl().as_secs() > 0);
         assert!(config.connection_timeout().as_secs() > 0);
         assert!(config.session_timeout().as_secs() > 0);
+    }
+
+    #[test]
+    fn test_max_depth_rejects_unsafe_values() {
+        assert!(MaxDepth::new(100_000).is_err());
+        assert!(MaxDepth::new(MAX_SAFE_JSON_DEPTH + 1).is_err());
+        assert!(MaxDepth::new(0).is_err());
+        assert_eq!(
+            MaxDepth::new(MAX_SAFE_JSON_DEPTH).unwrap().get(),
+            MAX_SAFE_JSON_DEPTH
+        );
     }
 }

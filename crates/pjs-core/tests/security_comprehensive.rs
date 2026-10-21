@@ -6,7 +6,9 @@
 //! - Memory safety validation
 //! - Input boundary testing
 
-use pjson_rs::{DepthTracker, LazyParser, SecurityConfig, SecurityValidator, ZeroCopyParser};
+use pjson_rs::{
+    DepthTracker, LazyParser, SecurityConfig, SecurityValidator, Validate, ZeroCopyParser,
+};
 
 /// Test suite for input size validation security
 #[cfg(test)]
@@ -16,7 +18,7 @@ mod input_size_tests {
     #[test]
     fn test_input_size_boundary_conditions() {
         let config = SecurityConfig::low_memory();
-        let validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // Test exact boundary
         assert!(
@@ -59,7 +61,7 @@ mod input_size_tests {
     #[test]
     fn test_gradual_size_increase() {
         let config = SecurityConfig::development(); // 50MB limit
-        let validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // Test increasing sizes up to limit
         let test_sizes = [
@@ -90,7 +92,7 @@ mod depth_tests {
     #[test]
     fn test_json_depth_attack_prevention() {
         let config = SecurityConfig::low_memory(); // Depth limit: 32
-        let validator = SecurityValidator::new(config);
+        let validator = SecurityValidator::new(config.validated().unwrap());
 
         // Test exact boundary
         assert!(validator.validate_json_depth(32).is_ok());
@@ -111,7 +113,7 @@ mod depth_tests {
 
     #[test]
     fn test_depth_tracker_security() {
-        let config = SecurityConfig::default();
+        let config = SecurityConfig::default().validated().unwrap();
         let mut tracker = DepthTracker::from_config(&config);
 
         // Test normal nesting up to limit
@@ -143,7 +145,7 @@ mod string_length_tests {
     #[test]
     fn test_string_length_boundaries() {
         let config = SecurityConfig::low_memory(); // 1MB string limit
-        let validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // Test exact boundary
         assert!(
@@ -169,7 +171,7 @@ mod array_length_tests {
     #[test]
     fn test_array_length_boundaries() {
         let config = SecurityConfig::low_memory(); // 100k array limit  
-        let validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // Test exact boundary
         assert!(
@@ -195,7 +197,7 @@ mod object_key_tests {
     #[test]
     fn test_object_key_boundaries() {
         let config = SecurityConfig::low_memory(); // 1000 key limit
-        let validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // Test exact boundary
         assert!(
@@ -277,7 +279,7 @@ mod buffer_size_tests {
     #[test]
     fn test_buffer_size_boundaries() {
         let config = SecurityConfig::low_memory(); // 10MB buffer limit
-        let validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // Test exact boundary
         assert!(
@@ -323,7 +325,7 @@ mod websocket_tests {
     #[test]
     fn test_websocket_frame_boundaries() {
         let config = SecurityConfig::low_memory(); // 1MB frame limit
-        let validator = SecurityValidator::new(config.clone());
+        let validator = SecurityValidator::new(config.clone().validated().unwrap());
 
         // Test exact boundary
         assert!(
@@ -349,7 +351,7 @@ mod integration_tests {
     #[test]
     fn test_zero_copy_parser_security() {
         let config = SecurityConfig::low_memory();
-        let mut parser = ZeroCopyParser::with_security_config(config.clone());
+        let mut parser = ZeroCopyParser::with_security_config(config.clone().validated().unwrap());
 
         // Test with valid small JSON
         let small_json = br#"{"key": "value"}"#;

@@ -4,7 +4,7 @@
 //! JSON parsing, with support for different buffer sizes and reuse strategies.
 
 use crate::{
-    config::SecurityConfig,
+    config::ValidatedSecurityConfig,
     domain::{DomainError, DomainResult},
     parser::aligned_alloc::aligned_allocator,
     security::SecurityValidator,
@@ -28,20 +28,23 @@ pub struct BufferPool {
 }
 
 /// Configuration for buffer pool behavior
+///
+/// Fields are private: every value originates from a [`ValidatedSecurityConfig`]
+/// (via `Default`, `From` or a preset), so limits and validator cannot diverge.
 #[derive(Debug, Clone)]
 pub struct PoolConfig {
     /// Maximum number of buffers per size bucket
-    pub max_buffers_per_bucket: usize,
+    max_buffers_per_bucket: usize,
     /// Maximum total memory usage in bytes
-    pub max_total_memory: usize,
+    max_total_memory: usize,
     /// How long to keep unused buffers before cleanup
-    pub buffer_ttl: Duration,
+    buffer_ttl: Duration,
     /// Enable/disable pool statistics tracking
-    pub track_stats: bool,
+    track_stats: bool,
     /// Alignment for SIMD operations (typically 32 or 64 bytes)
-    pub simd_alignment: usize,
+    simd_alignment: usize,
     /// Security validator for buffer validation
-    pub validator: SecurityValidator,
+    validator: SecurityValidator,
 }
 
 /// Standard buffer sizes for different parsing scenarios
@@ -140,7 +143,7 @@ impl BufferPool {
     }
 
     /// Create buffer pool with security configuration
-    pub fn with_security_config(security_config: SecurityConfig) -> Self {
+    pub fn with_security_config(security_config: ValidatedSecurityConfig) -> Self {
         Self::with_config(PoolConfig::from(&security_config))
     }
 
@@ -753,33 +756,33 @@ pub struct CleanupStats {
 
 impl PoolConfig {
     /// Create configuration from security config
-    pub fn from_security_config(security_config: &SecurityConfig) -> Self {
+    pub fn from_security_config(security_config: &ValidatedSecurityConfig) -> Self {
         Self::from(security_config)
     }
 
     /// Create configuration optimized for SIMD operations
     pub fn simd_optimized() -> Self {
-        let mut config = Self::from(&SecurityConfig::high_throughput());
+        let mut config = Self::from(&ValidatedSecurityConfig::high_throughput());
         config.simd_alignment = 64; // AVX-512 alignment
         config
     }
 
     /// Create configuration for low-memory environments
     pub fn low_memory() -> Self {
-        let mut config = Self::from(&SecurityConfig::low_memory());
+        let mut config = Self::from(&ValidatedSecurityConfig::low_memory());
         config.track_stats = false; // Reduce overhead
         config
     }
 
     /// Create configuration for development/testing
     pub fn development() -> Self {
-        Self::from(&SecurityConfig::development())
+        Self::from(&ValidatedSecurityConfig::development())
     }
 }
 
 impl Default for PoolConfig {
     fn default() -> Self {
-        let security_config = SecurityConfig::default();
+        let security_config = ValidatedSecurityConfig::default();
         Self {
             max_buffers_per_bucket: security_config.buffers.max_buffers_per_bucket,
             max_total_memory: security_config.buffers.max_total_memory,
@@ -791,8 +794,8 @@ impl Default for PoolConfig {
     }
 }
 
-impl From<&SecurityConfig> for PoolConfig {
-    fn from(security_config: &SecurityConfig) -> Self {
+impl From<&ValidatedSecurityConfig> for PoolConfig {
+    fn from(security_config: &ValidatedSecurityConfig) -> Self {
         Self {
             max_buffers_per_bucket: security_config.buffers.max_buffers_per_bucket,
             max_total_memory: security_config.buffers.max_total_memory,

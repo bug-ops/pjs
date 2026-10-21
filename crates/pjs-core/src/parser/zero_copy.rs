@@ -4,7 +4,7 @@
 //! providing lazy evaluation and zero-copy string extraction where possible.
 
 use crate::{
-    config::SecurityConfig,
+    config::ValidatedSecurityConfig,
     domain::{DomainError, DomainResult},
     parser::ValueType,
     security::SecurityValidator,
@@ -56,7 +56,7 @@ impl<'a> ZeroCopyParser<'a> {
     }
 
     /// Create parser with custom security configuration
-    pub fn with_security_config(security_config: SecurityConfig) -> Self {
+    pub fn with_security_config(security_config: ValidatedSecurityConfig) -> Self {
         Self {
             input: &[],
             position: 0,

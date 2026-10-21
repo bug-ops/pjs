@@ -8,6 +8,8 @@ pub mod security;
 use crate::compression::CompressionConfig;
 pub use security::SecurityConfig;
 
+use std::ops::Deref;
+
 /// Errors produced by [`PjsConfig::validate`] and its sub-config validators.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -28,6 +30,127 @@ pub enum ConfigError {
         /// Human-readable description of the violated constraint
         message: &'static str,
     },
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+impl sealed::Sealed for SecurityConfig {}
+impl sealed::Sealed for CompressionConfig {}
+
+/// A configuration type whose invariants can be checked.
+///
+/// Implemented by configs that consumers must only accept in validated form;
+/// the only way to obtain a [`Validated`] is [`Validate::validated`]. The trait
+/// is sealed, so only config types defined in this crate can implement it.
+pub trait Validate: sealed::Sealed + Sized {
+    /// Check every invariant of the configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`ConfigError`] found.
+    fn validate(&self) -> Result<(), ConfigError>;
+
+    /// Consume the config and wrap it in [`Validated`] if all invariants hold.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Validate::validate`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::config::{SecurityConfig, Validate};
+    ///
+    /// let mut config = SecurityConfig::default();
+    /// config.json.max_depth = 100_000;
+    /// assert!(config.validated().is_err());
+    /// ```
+    fn validated(self) -> Result<Validated<Self>, ConfigError> {
+        Validate::validate(&self)?;
+        Ok(Validated(self))
+    }
+}
+
+/// Proof that the wrapped config passed [`Validate::validate`].
+///
+/// The inner field is private and there is no mutable access, so holding a
+/// `Validated<T>` proves the invariants (e.g. `json.max_depth <=
+/// MAX_SAFE_JSON_DEPTH`) still hold. Consumers take this type instead of the raw
+/// config.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::config::{SecurityConfig, Validate, ValidatedSecurityConfig};
+///
+/// let config: ValidatedSecurityConfig = SecurityConfig::default().validated().unwrap();
+/// assert!(config.json.max_depth > 0);
+/// ```
+#[derive(Debug, Clone)]
+pub struct Validated<T>(T);
+
+impl<T> Validated<T> {
+    /// Unwrap the config, giving up the validation proof.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> Deref for Validated<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+/// A [`SecurityConfig`] that passed validation.
+pub type ValidatedSecurityConfig = Validated<SecurityConfig>;
+
+/// A [`CompressionConfig`] that passed validation.
+pub type ValidatedCompressionConfig = Validated<CompressionConfig>;
+
+impl Default for ValidatedSecurityConfig {
+    fn default() -> Self {
+        Self(SecurityConfig::default())
+    }
+}
+
+impl ValidatedSecurityConfig {
+    /// Validated [`SecurityConfig::high_throughput`] preset.
+    pub fn high_throughput() -> Self {
+        Self(SecurityConfig::high_throughput())
+    }
+
+    /// Validated [`SecurityConfig::low_memory`] preset.
+    pub fn low_memory() -> Self {
+        Self(SecurityConfig::low_memory())
+    }
+
+    /// Validated [`SecurityConfig::development`] preset.
+    pub fn development() -> Self {
+        Self(SecurityConfig::development())
+    }
+}
+
+impl Default for ValidatedCompressionConfig {
+    fn default() -> Self {
+        Self(CompressionConfig::default())
+    }
+}
+
+impl Validate for SecurityConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        SecurityConfig::validate(self)
+    }
+}
+
+impl Validate for CompressionConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        CompressionConfig::validate(self)
+    }
 }
 
 /// Global configuration for PJS library components
@@ -225,7 +348,7 @@ impl PjsConfig {
     /// Validate the entire configuration, including all sub-configs.
     ///
     /// Validation is fail-fast: the first error encountered is returned.
-    /// The chain order is: `streaming`, `parser`, `simd`, `security`.
+    /// The chain order is: `streaming`, `parser`, `simd`, `security`, `compression`.
     ///
     /// # Errors
     ///
@@ -243,6 +366,7 @@ impl PjsConfig {
         self.parser.validate()?;
         self.simd.validate()?;
         self.security.validate()?;
+        self.compression.validate()?;
         Ok(())
     }
 
@@ -457,7 +581,7 @@ mod tests {
             ..Default::default()
         };
 
-        let analyzer = SchemaAnalyzer::with_config(compression_config);
+        let analyzer = SchemaAnalyzer::with_config(compression_config.validated().unwrap());
 
         // Test data that should trigger dictionary compression with a zeroed floor
         let data = json!({
@@ -479,5 +603,50 @@ mod tests {
                 // Also acceptable, depends on specific data characteristics
             }
         }
+    }
+
+    #[test]
+    fn test_validated_security_config_rejects_unsafe_depth() {
+        let mut config = SecurityConfig::default();
+        config.json.max_depth = 100_000;
+        assert!(matches!(
+            config.validated(),
+            Err(ConfigError::InconsistentBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validated_security_config_rejects_zero_input_size() {
+        let mut config = SecurityConfig::default();
+        config.json.max_input_size = 0;
+        assert!(matches!(
+            config.validated(),
+            Err(ConfigError::MustBePositive {
+                field: "max_input_size",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_validated_security_config_rejects_inverted_session_id_bounds() {
+        let mut config = SecurityConfig::default();
+        config.sessions.min_session_id_length = config.sessions.max_session_id_length + 1;
+        assert!(config.validated().is_err());
+    }
+
+    #[test]
+    fn test_validated_presets_and_defaults_are_valid() {
+        for config in [
+            ValidatedSecurityConfig::default(),
+            ValidatedSecurityConfig::high_throughput(),
+            ValidatedSecurityConfig::low_memory(),
+            ValidatedSecurityConfig::development(),
+        ] {
+            config.validate().expect("preset must be valid");
+        }
+        ValidatedCompressionConfig::default()
+            .validate()
+            .expect("default must be valid");
     }
 }
