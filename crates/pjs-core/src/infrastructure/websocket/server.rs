@@ -5,7 +5,7 @@ use super::{AdaptiveStreamController, StreamOptions, WebSocketTransport, WsMessa
 use crate::{
     Result as PjsResult,
     infrastructure::bounded_channel::{self, ByteBoundedSender, byte_bounded_channel},
-    security::{RateLimitConfig, RateLimitGuard, WebSocketRateLimiter},
+    security::{ClientRateLimiter, RateLimitConfig, RateLimitGuard},
 };
 #[cfg(feature = "http-server")]
 use axum::{
@@ -181,7 +181,7 @@ pub struct AxumWebSocketTransport {
     connection_sessions: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// Per-IP rate limiter applied to upgrade requests, connection establishment,
     /// and inbound application-level messages.
-    rate_limiter: Arc<WebSocketRateLimiter>,
+    rate_limiter: Arc<ClientRateLimiter>,
     /// `Origin` allow-list applied to WebSocket upgrades, to block
     /// cross-site WebSocket hijacking (CSWSH) from browser clients. See
     /// [`Self::with_allowed_origins`].
@@ -228,7 +228,7 @@ impl AxumWebSocketTransport {
             active_connections: Arc::new(RwLock::new(Vec::new())),
             outgoing_channels: Arc::new(RwLock::new(HashMap::new())),
             connection_sessions: Arc::new(RwLock::new(HashMap::new())),
-            rate_limiter: Arc::new(WebSocketRateLimiter::new(config)),
+            rate_limiter: Arc::new(ClientRateLimiter::new(config)),
             allowed_origins: OriginAllowList::DenyAll,
         }
     }
@@ -439,11 +439,11 @@ impl AxumWebSocketTransport {
                                     match serde_json::from_str::<WsMessage>(&text) {
                                         Ok(ws_message) => {
                                             if let Err(e) = transport_clone.handle_websocket_message(Arc::clone(&connection_id_clone), ws_message).await {
-                                                error!("Failed to handle message: {}", e);
+                                                error!("Failed to handle message: {:?}", e);
                                             }
                                         }
                                         Err(e) => {
-                                            warn!("Failed to parse WebSocket message: {}", e);
+                                            warn!("Failed to parse WebSocket message: {:?}", e);
                                         }
                                     }
                                 }
@@ -715,7 +715,7 @@ impl WebSocketTransport for AxumWebSocketTransport {
                     processing_time_ms,
                 } => {
                     debug!(
-                        "Received frame ack: session={}, frame={}, time={}ms",
+                        "Received frame ack: session={:?}, frame={}, time={}ms",
                         session_id, frame_id, processing_time_ms
                     );
                     self.controller

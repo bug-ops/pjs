@@ -76,7 +76,8 @@ pub use application::{
 
 // Configuration exports
 pub use config::{
-    ConfigError, ParserConfig, PjsConfig, SecurityConfig, SimdConfig, StreamingConfig,
+    ConfigError, ParserConfig, PjsConfig, SecurityConfig, SimdConfig, StreamingConfig, Validate,
+    Validated, ValidatedCompressionConfig, ValidatedSecurityConfig,
     security::{BufferLimits, JsonLimits, NetworkLimits, RateLimitingConfig, SessionLimits},
 };
 
@@ -95,14 +96,14 @@ pub use error::{Error, Result};
 pub use infrastructure::websocket::SecureWebSocketHandler;
 pub use parser::{LazyParser, ZeroCopyParser};
 pub use security::{
-    CompressionBombConfig, CompressionBombDetector, CompressionBombProtector,
+    ClientRateLimiter, CompressionBombConfig, CompressionBombDetector, CompressionBombProtector,
     CompressionStats as BombCompressionStats, DepthTracker, RateLimitConfig, RateLimitError,
-    RateLimitGuard, RateLimitStats, SecurityValidator, WebSocketRateLimiter,
+    RateLimitGuard, RateLimitStats, SecurityValidator,
 };
 pub use stream::{
     CompressedFrame, CompressionStats, DecompressionMetadata, DecompressionStats,
-    JsonReconstructor, PriorityStreamer, ProcessResult, StreamConfig, StreamFrame, StreamProcessor,
-    StreamStats, StreamingCompressor, StreamingDecompressor,
+    JsonReconstructor, PriorityStreamer, ProcessResult, StreamFrame, StreamProcessor,
+    StreamProcessorConfig, StreamStats, StreamingCompressor, StreamingDecompressor,
 };
 
 /// Re-export commonly used types

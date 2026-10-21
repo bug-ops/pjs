@@ -14,8 +14,13 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{RwLock, mpsc};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async_with_config,
+    tungstenite::{Message, protocol::WebSocketConfig},
+};
 use tracing::{debug, error, info, warn};
+
+use crate::security::rate_limit::DEFAULT_MAX_INBOUND_FRAME_SIZE;
 use url::Url;
 
 /// Capacity of the client's outgoing message channel.
@@ -33,9 +38,72 @@ const MESSAGE_QUEUE_CAPACITY: usize = 1000;
 /// of individual message size (e.g. a large `StreamInit` payload).
 const MAX_QUEUED_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
+/// Default cap on concurrently tracked client sessions.
+const DEFAULT_MAX_SESSIONS: usize = 1024;
+
+/// Default cap, in bytes, on the data reconstructed for a single session.
+const DEFAULT_MAX_SESSION_BYTES: usize = 16 * 1024 * 1024;
+
+/// Transport and state bounds applied to untrusted server input.
+///
+/// The message and frame caps default to the in-tree server's inbound cap
+/// ([`RateLimitConfig::max_frame_size`](crate::security::RateLimitConfig::max_frame_size)),
+/// because the server answers a `StreamInit` with the whole request data in a
+/// single frame; a smaller client cap would sever the connection to it.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::infrastructure::websocket::WebSocketClientConfig;
+///
+/// let config = WebSocketClientConfig {
+///     max_message_size: 128 * 1024,
+///     ..WebSocketClientConfig::default()
+/// };
+/// assert_eq!(config.max_frame_size, 1024 * 1024);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebSocketClientConfig {
+    /// Maximum size in bytes of a complete incoming WebSocket message.
+    pub max_message_size: usize,
+    /// Maximum size in bytes of a single incoming WebSocket frame.
+    pub max_frame_size: usize,
+    /// Maximum number of sessions tracked at once.
+    ///
+    /// When the limit is reached, a new session first evicts completed
+    /// sessions and, if none are completed, the oldest session. A request
+    /// therefore never fails because of this limit, but an evicted session
+    /// stops receiving frames.
+    pub max_sessions: usize,
+    /// Maximum size in bytes of the data reconstructed for one session.
+    ///
+    /// A frame that would exceed it is rejected and its session is dropped.
+    pub max_session_bytes: usize,
+}
+
+impl Default for WebSocketClientConfig {
+    fn default() -> Self {
+        Self {
+            max_message_size: DEFAULT_MAX_INBOUND_FRAME_SIZE,
+            max_frame_size: DEFAULT_MAX_INBOUND_FRAME_SIZE,
+            max_sessions: DEFAULT_MAX_SESSIONS,
+            max_session_bytes: DEFAULT_MAX_SESSION_BYTES,
+        }
+    }
+}
+
+impl WebSocketClientConfig {
+    fn websocket_config(&self) -> WebSocketConfig {
+        WebSocketConfig::default()
+            .max_message_size(Some(self.max_message_size))
+            .max_frame_size(Some(self.max_frame_size))
+    }
+}
+
 /// WebSocket client for receiving PJS streams
 pub struct PjsWebSocketClient {
     url: Url,
+    config: WebSocketClientConfig,
     sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
     message_tx: ByteBoundedSender<String>,
     message_rx: Arc<RwLock<Option<mpsc::Receiver<Envelope<String>>>>>,
@@ -47,16 +115,129 @@ pub struct PjsWebSocketClient {
 struct ClientStreamSession {
     id: String,
     created_at: Instant,
-    received_frames: HashMap<u32, ReceivedFrame>,
+    frames_received: usize,
+    total_processing_time: Duration,
     reconstructed_data: Value,
+    reconstructed_bytes: usize,
     is_complete: bool,
 }
 
-/// Frame received by client
-#[derive(Debug, Clone)]
-struct ReceivedFrame {
-    received_at: Instant,
-    processed_at: Option<Instant>,
+impl ClientStreamSession {
+    fn new(id: String) -> Self {
+        Self {
+            id,
+            created_at: Instant::now(),
+            frames_received: 0,
+            total_processing_time: Duration::ZERO,
+            reconstructed_data: serde_json::json!({}),
+            reconstructed_bytes: json_size(&serde_json::json!({})),
+            is_complete: false,
+        }
+    }
+
+    fn record_frame(&mut self, processing_time: Duration) {
+        self.frames_received = self.frames_received.saturating_add(1);
+        self.total_processing_time = self.total_processing_time.saturating_add(processing_time);
+    }
+
+    /// Merges `payload` into the reconstructed data, refusing the frame
+    /// (without mutating anything) if the result would exceed `max_bytes`.
+    fn apply_frame(&mut self, payload: &Value, max_bytes: usize) -> PjsResult<()> {
+        let projected = match (self.reconstructed_data.as_object(), payload.as_object()) {
+            (Some(data_map), Some(payload_map)) => {
+                let mut bytes = self.reconstructed_bytes;
+                for (key, value) in payload_map {
+                    bytes = bytes.saturating_add(entry_size(key, value));
+                    if let Some(old) = data_map.get(key) {
+                        bytes = bytes.saturating_sub(entry_size(key, old));
+                    }
+                }
+                bytes
+            }
+            _ => json_size(payload),
+        };
+        if projected > max_bytes {
+            return Err(PjsError::ClientError(format!(
+                "Session {:?} exceeds the {max_bytes}-byte reconstructed data limit",
+                self.id
+            )));
+        }
+
+        match (self.reconstructed_data.as_object_mut(), payload.as_object()) {
+            (Some(data_map), Some(payload_map)) => {
+                for (key, value) in payload_map {
+                    data_map.insert(key.clone(), value.clone());
+                }
+            }
+            _ => self.reconstructed_data = payload.clone(),
+        }
+        self.reconstructed_bytes = projected;
+        Ok(())
+    }
+}
+
+/// Serialized size of `value`; saturates so a failure counts against the cap.
+fn json_size(value: &Value) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+/// Upper bound on the serialized size of one object entry: quoted key, colon,
+/// value and a separating comma.
+fn entry_size(key: &str, value: &Value) -> usize {
+    let quoted_key = serde_json::to_vec(key).map_or(usize::MAX, |bytes| bytes.len());
+    quoted_key
+        .saturating_add(2)
+        .saturating_add(json_size(value))
+}
+
+/// Removes a session from the map when dropped unless disarmed, so a
+/// cancelled `request_stream` cannot leak a slot.
+struct SessionSlotGuard {
+    sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
+    id: String,
+    armed: bool,
+}
+
+impl SessionSlotGuard {
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SessionSlotGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Ok(mut sessions) = self.sessions.try_write() {
+            sessions.remove(&self.id);
+        } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let sessions = Arc::clone(&self.sessions);
+            let id = std::mem::take(&mut self.id);
+            runtime.spawn(async move {
+                sessions.write().await.remove(&id);
+            });
+        }
+    }
+}
+
+/// Makes room for a new session: evicts completed sessions when full and,
+/// if none are completed, the oldest session.
+fn reserve_session_slot(sessions: &mut HashMap<String, ClientStreamSession>, max_sessions: usize) {
+    if sessions.len() < max_sessions {
+        return;
+    }
+    sessions.retain(|_, session| !session.is_complete);
+    while sessions.len() >= max_sessions {
+        let Some(oldest) = sessions
+            .iter()
+            .min_by_key(|(_, session)| session.created_at)
+            .map(|(id, _)| id.clone())
+        else {
+            break;
+        };
+        sessions.remove(&oldest);
+    }
 }
 
 impl PjsWebSocketClient {
@@ -69,11 +250,34 @@ impl PjsWebSocketClient {
 
         Ok(Self {
             url,
+            config: WebSocketClientConfig::default(),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             message_tx,
             message_rx: Arc::new(RwLock::new(Some(message_rx))),
             write_timeout: super::WRITE_TIMEOUT,
         })
+    }
+
+    /// Overrides the transport and state bounds applied to server input.
+    ///
+    /// Defaults to [`WebSocketClientConfig::default`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::infrastructure::websocket::{PjsWebSocketClient, WebSocketClientConfig};
+    ///
+    /// let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
+    ///     .unwrap()
+    ///     .with_config(WebSocketClientConfig {
+    ///         max_sessions: 16,
+    ///         ..WebSocketClientConfig::default()
+    ///     });
+    /// ```
+    #[must_use]
+    pub fn with_config(mut self, config: WebSocketClientConfig) -> Self {
+        self.config = config;
+        self
     }
 
     /// Overrides the deadline for a single outbound WebSocket sink write,
@@ -111,13 +315,23 @@ impl PjsWebSocketClient {
         self
     }
 
-    /// Connect to WebSocket server and start message handling
+    /// Connect to WebSocket server and start message handling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handshake fails or the connection is aborted
+    /// by a transport error, including a message or frame exceeding the
+    /// configured [`WebSocketClientConfig`] caps.
     pub async fn connect(&self) -> PjsResult<()> {
         info!("Connecting to WebSocket server: {}", self.url);
 
-        let (ws_stream, _) = connect_async(self.url.as_str())
-            .await
-            .map_err(|e| PjsError::ConnectionFailed(e.to_string()))?;
+        let (ws_stream, _) = connect_async_with_config(
+            self.url.as_str(),
+            Some(self.config.websocket_config()),
+            false,
+        )
+        .await
+        .map_err(|e| PjsError::ConnectionFailed(e.to_string()))?;
 
         info!("WebSocket connection established");
 
@@ -158,6 +372,7 @@ impl PjsWebSocketClient {
         // Handle incoming messages
         let sessions = self.sessions.clone();
         let message_tx = self.message_tx.clone();
+        let config = self.config;
         let receive_task = tokio::spawn(async move {
             while let Some(msg) = read.next().await {
                 match msg {
@@ -166,6 +381,7 @@ impl PjsWebSocketClient {
                             if let Err(e) = Self::handle_incoming_message(
                                 sessions.clone(),
                                 message_tx.clone(),
+                                config,
                                 ws_message,
                             )
                             .await
@@ -174,7 +390,7 @@ impl PjsWebSocketClient {
                             }
                         }
                         Err(e) => {
-                            warn!("Failed to parse incoming message: {}", e);
+                            warn!("Failed to parse incoming message: {:?}", e);
                         }
                     },
                     Ok(Message::Binary(data)) => {
@@ -197,27 +413,40 @@ impl PjsWebSocketClient {
                     }
                     Err(e) => {
                         error!("WebSocket error: {}", e);
-                        break;
+                        return Err(PjsError::ConnectionFailed(e.to_string()));
                     }
                 }
             }
+            Ok(())
         });
 
         // Wait for either task to complete
-        tokio::select! {
+        let outcome = tokio::select! {
             _ = send_task => {
                 debug!("Send task completed");
+                Ok(())
             }
-            _ = receive_task => {
+            result = receive_task => {
                 debug!("Receive task completed");
+                result.unwrap_or_else(|e| {
+                    Err(PjsError::ClientError(format!("Receive task failed: {e}")))
+                })
             }
-        }
+        };
 
         info!("WebSocket connection closed");
-        Ok(())
+        outcome
     }
 
-    /// Request stream initialization
+    /// Request stream initialization and return the new session id.
+    ///
+    /// When the session limit is reached, an existing session is evicted
+    /// (see [`WebSocketClientConfig::max_sessions`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request cannot be serialized or the outgoing
+    /// channel is closed.
     pub async fn request_stream(
         &self,
         data: Value,
@@ -236,25 +465,26 @@ impl PjsWebSocketClient {
         })?;
         let len = json_str.len();
 
+        {
+            let mut sessions = self.sessions.write().await;
+            reserve_session_slot(&mut sessions, self.config.max_sessions);
+            sessions.insert(
+                session_id.clone(),
+                ClientStreamSession::new(session_id.clone()),
+            );
+        }
+        let slot = SessionSlotGuard {
+            sessions: Arc::clone(&self.sessions),
+            id: session_id.clone(),
+            armed: true,
+        };
+
         self.message_tx.send(json_str, len).await.map_err(|_| {
             PjsError::ClientError(
                 "Failed to send stream request: outgoing channel closed".to_string(),
             )
         })?;
-
-        // Initialize session tracking
-        let session = ClientStreamSession {
-            id: session_id.clone(),
-            created_at: Instant::now(),
-            received_frames: HashMap::new(),
-            reconstructed_data: serde_json::json!({}),
-            is_complete: false,
-        };
-
-        self.sessions
-            .write()
-            .await
-            .insert(session_id.clone(), session);
+        slot.disarm();
 
         info!("Requested stream initialization: {}", session_id);
         Ok(session_id)
@@ -281,32 +511,15 @@ impl PjsWebSocketClient {
     pub async fn get_stream_stats(&self, session_id: &str) -> Option<StreamStats> {
         let sessions = self.sessions.read().await;
         sessions.get(session_id).map(|session| {
-            let total_frames = session.received_frames.len();
-            let processed_frames = session
-                .received_frames
-                .values()
-                .filter(|frame| frame.processed_at.is_some())
-                .count();
-
-            let avg_processing_time = if processed_frames > 0 {
-                let total_time: Duration = session
-                    .received_frames
-                    .values()
-                    .filter_map(|frame| {
-                        frame
-                            .processed_at
-                            .map(|processed| processed.duration_since(frame.received_at))
-                    })
-                    .sum();
-                Some(total_time / processed_frames as u32)
-            } else {
-                None
-            };
+            let total_frames = session.frames_received;
+            let avg_processing_time = u32::try_from(total_frames)
+                .ok()
+                .filter(|&n| n > 0)
+                .map(|n| session.total_processing_time / n);
 
             StreamStats {
                 session_id: session.id.clone(),
                 total_frames,
-                processed_frames,
                 is_complete: session.is_complete,
                 duration: session.created_at.elapsed(),
                 average_processing_time: avg_processing_time,
@@ -343,6 +556,7 @@ impl PjsWebSocketClient {
     async fn handle_incoming_message(
         sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
         message_tx: ByteBoundedSender<String>,
+        config: WebSocketClientConfig,
         message: WsMessage,
     ) -> PjsResult<()> {
         match message {
@@ -353,32 +567,24 @@ impl PjsWebSocketClient {
                 payload,
                 is_complete,
             } => {
-                debug!("Received frame {} for session {}", frame_id, session_id);
+                debug!("Received frame {} for session {:?}", frame_id, session_id);
 
                 let processing_start = Instant::now();
 
                 {
                     let mut sessions = sessions.write().await;
                     if let Some(session) = sessions.get_mut(&session_id) {
-                        // Store received frame
-                        let frame = ReceivedFrame {
-                            received_at: processing_start,
-                            processed_at: None,
-                        };
-                        session.received_frames.insert(frame_id, frame);
-
-                        // Apply frame to reconstructed data
-                        Self::apply_frame_to_data(&mut session.reconstructed_data, &payload)?;
+                        if let Err(e) = session.apply_frame(&payload, config.max_session_bytes) {
+                            sessions.remove(&session_id);
+                            return Err(e);
+                        }
 
                         if is_complete {
                             session.is_complete = true;
-                            info!("Stream completed for session {}", session_id);
+                            info!("Stream completed for session {:?}", session_id);
                         }
 
-                        // Mark as processed
-                        if let Some(frame) = session.received_frames.get_mut(&frame_id) {
-                            frame.processed_at = Some(Instant::now());
-                        }
+                        session.record_frame(processing_start.elapsed());
                     }
                 }
 
@@ -388,7 +594,8 @@ impl PjsWebSocketClient {
                 let ack_message = WsMessage::FrameAck {
                     session_id,
                     frame_id,
-                    processing_time_ms: processing_time.as_millis() as u64,
+                    processing_time_ms: u64::try_from(processing_time.as_millis())
+                        .unwrap_or(u64::MAX),
                 };
 
                 // Best-effort: dropping an ack is recoverable (the server
@@ -400,7 +607,10 @@ impl PjsWebSocketClient {
                 session_id,
                 checksum,
             } => {
-                info!("Stream completed: {} (checksum: {})", session_id, checksum);
+                info!(
+                    "Stream completed: {:?} (checksum: {:?})",
+                    session_id, checksum
+                );
 
                 let mut sessions = sessions.write().await;
                 if let Some(session) = sessions.get_mut(&session_id) {
@@ -413,7 +623,7 @@ impl PjsWebSocketClient {
                 code,
             } => {
                 error!(
-                    "Received error from server: session={:?}, error={}, code={}",
+                    "Received error from server: session={:?}, error={:?}, code={}",
                     session_id, error, code
                 );
             }
@@ -433,21 +643,6 @@ impl PjsWebSocketClient {
         }
         Ok(())
     }
-
-    fn apply_frame_to_data(data: &mut Value, payload: &Value) -> PjsResult<()> {
-        // Simple merge strategy - in production, this would be more sophisticated
-        match (data.as_object_mut(), payload.as_object()) {
-            (Some(data_map), Some(payload_map)) => {
-                for (key, value) in payload_map {
-                    data_map.insert(key.clone(), value.clone());
-                }
-            }
-            _ => {
-                *data = payload.clone();
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Stream statistics
@@ -455,15 +650,16 @@ impl PjsWebSocketClient {
 pub struct StreamStats {
     /// Identifier of the streaming session.
     pub session_id: String,
-    /// Total number of frames received from the server.
+    /// Number of frames successfully applied to the session.
+    ///
+    /// A repeated `frame_id` counts again, and frames rejected (for example
+    /// for exceeding the session data cap) are not counted.
     pub total_frames: usize,
-    /// Number of frames the client has finished processing.
-    pub processed_frames: usize,
     /// Whether the stream has been marked complete.
     pub is_complete: bool,
     /// Wall-clock duration since the session was created.
     pub duration: Duration,
-    /// Average per-frame processing duration, if any frames have been processed.
+    /// Average per-frame processing duration, if any frames have been applied.
     pub average_processing_time: Option<Duration>,
 }
 
@@ -549,13 +745,330 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_frame_to_data() {
-        let mut data = json!({"existing": "value"});
-        let payload = json!({"new": "data", "existing": "updated"});
+    fn test_client_config_default_matches_server_inbound_cap() {
+        let config = WebSocketClientConfig::default();
+        let server_cap = crate::security::RateLimitConfig::default().max_frame_size;
+        assert_eq!(config.max_message_size, server_cap);
+        assert_eq!(config.max_frame_size, server_cap);
+    }
 
-        PjsWebSocketClient::apply_frame_to_data(&mut data, &payload).unwrap();
+    #[test]
+    fn test_client_config_maps_to_transport_limits() {
+        let config = WebSocketClientConfig {
+            max_message_size: 100,
+            max_frame_size: 50,
+            ..WebSocketClientConfig::default()
+        };
+        let ws = config.websocket_config();
+        assert_eq!(ws.max_message_size, Some(100));
+        assert_eq!(ws.max_frame_size, Some(50));
+    }
 
-        assert_eq!(data["existing"], "updated");
-        assert_eq!(data["new"], "data");
+    #[tokio::test]
+    async fn test_with_config_overrides_default() {
+        let config = WebSocketClientConfig {
+            max_sessions: 3,
+            ..WebSocketClientConfig::default()
+        };
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
+            .unwrap()
+            .with_config(config);
+        assert_eq!(client.config, config);
+    }
+
+    fn session_aged(id: &str, age_secs: u64, is_complete: bool) -> ClientStreamSession {
+        let mut session = ClientStreamSession::new(id.to_string());
+        session.created_at = Instant::now() - Duration::from_secs(age_secs);
+        session.is_complete = is_complete;
+        session
+    }
+
+    #[test]
+    fn test_reserve_session_slot_evicts_completed_before_live_sessions() {
+        let mut sessions = HashMap::new();
+        sessions.insert("done".to_string(), session_aged("done", 1, true));
+        sessions.insert("old".to_string(), session_aged("old", 100, false));
+
+        reserve_session_slot(&mut sessions, 2);
+
+        assert!(!sessions.contains_key("done"));
+        assert!(sessions.contains_key("old"));
+    }
+
+    #[test]
+    fn test_reserve_session_slot_evicts_oldest_when_none_completed() {
+        let mut sessions = HashMap::new();
+        sessions.insert("oldest".to_string(), session_aged("oldest", 100, false));
+        sessions.insert("newer".to_string(), session_aged("newer", 10, false));
+
+        reserve_session_slot(&mut sessions, 2);
+
+        assert!(!sessions.contains_key("oldest"));
+        assert!(sessions.contains_key("newer"));
+    }
+
+    #[test]
+    fn test_reserve_session_slot_is_noop_below_limit() {
+        let mut sessions = HashMap::new();
+        sessions.insert("a".to_string(), session_aged("a", 1, false));
+
+        reserve_session_slot(&mut sessions, 2);
+
+        assert_eq!(sessions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_request_stream_at_capacity_evicts_oldest_instead_of_failing() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
+            .unwrap()
+            .with_config(WebSocketClientConfig {
+                max_sessions: 2,
+                ..WebSocketClientConfig::default()
+            });
+
+        let first = client.request_stream(json!({}), None).await.unwrap();
+        let second = client.request_stream(json!({}), None).await.unwrap();
+        let third = client.request_stream(json!({}), None).await.unwrap();
+
+        let sessions = client.sessions.read().await;
+        assert_eq!(sessions.len(), 2);
+        assert!(!sessions.contains_key(&first));
+        assert!(sessions.contains_key(&second));
+        assert!(sessions.contains_key(&third));
+    }
+
+    #[tokio::test]
+    async fn test_request_stream_failed_send_does_not_leak_session() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+        drop(client.message_rx.write().await.take());
+
+        assert!(client.request_stream(json!({}), None).await.is_err());
+        assert!(client.sessions.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_request_stream_cancelled_while_send_pending_does_not_leak_session() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+        let filler = "x".to_string();
+        for _ in 0..MESSAGE_QUEUE_CAPACITY {
+            client
+                .message_tx
+                .try_send(filler.clone(), filler.len())
+                .expect("channel should accept sends up to its capacity");
+        }
+
+        let pending = tokio::time::timeout(
+            Duration::from_millis(50),
+            client.request_stream(json!({}), None),
+        )
+        .await;
+
+        assert!(pending.is_err(), "send must still be waiting for capacity");
+        assert!(client.sessions.read().await.is_empty());
+    }
+
+    fn frame(session_id: &str, frame_id: u32, payload: Value) -> WsMessage {
+        WsMessage::StreamFrame {
+            session_id: session_id.to_string(),
+            frame_id,
+            priority: 1,
+            payload,
+            is_complete: false,
+        }
+    }
+
+    async fn sessions_with(id: &str) -> Arc<RwLock<HashMap<String, ClientStreamSession>>> {
+        let sessions = Arc::new(RwLock::new(HashMap::new()));
+        sessions
+            .write()
+            .await
+            .insert(id.to_string(), ClientStreamSession::new(id.to_string()));
+        sessions
+    }
+
+    fn control_channel() -> (ByteBoundedSender<String>, mpsc::Receiver<Envelope<String>>) {
+        byte_bounded_channel(MESSAGE_QUEUE_CAPACITY, MAX_QUEUED_MESSAGE_BYTES)
+    }
+
+    #[tokio::test]
+    async fn test_frame_state_is_bounded_by_counters() {
+        let sessions = sessions_with("s").await;
+        let (tx, _rx) = control_channel();
+
+        for frame_id in 0..100u32 {
+            PjsWebSocketClient::handle_incoming_message(
+                sessions.clone(),
+                tx.clone(),
+                WebSocketClientConfig::default(),
+                frame("s", frame_id, json!({"k": frame_id})),
+            )
+            .await
+            .unwrap();
+        }
+
+        let session = &sessions.read().await["s"];
+        assert_eq!(session.frames_received, 100);
+    }
+
+    #[tokio::test]
+    async fn test_session_exceeding_byte_cap_is_rejected_and_dropped() {
+        let sessions = sessions_with("s").await;
+        let (tx, _rx) = control_channel();
+        let config = WebSocketClientConfig {
+            max_session_bytes: 64,
+            ..WebSocketClientConfig::default()
+        };
+
+        PjsWebSocketClient::handle_incoming_message(
+            sessions.clone(),
+            tx.clone(),
+            config,
+            frame("s", 0, json!({"a": "small"})),
+        )
+        .await
+        .unwrap();
+        assert!(sessions.read().await.contains_key("s"));
+
+        let result = PjsWebSocketClient::handle_incoming_message(
+            sessions.clone(),
+            tx,
+            config,
+            frame("s", 1, json!({"b": "x".repeat(100)})),
+        )
+        .await;
+
+        assert!(matches!(result, Err(PjsError::ClientError(_))));
+        assert!(!sessions.read().await.contains_key("s"));
+    }
+
+    #[test]
+    fn test_apply_frame_overwriting_a_key_does_not_grow_byte_count() {
+        let mut session = ClientStreamSession::new("s".to_string());
+        session.apply_frame(&json!({"k": "aaaa"}), 1024).unwrap();
+        let after_first = session.reconstructed_bytes;
+
+        session.apply_frame(&json!({"k": "bbbb"}), 1024).unwrap();
+
+        assert_eq!(session.reconstructed_bytes, after_first);
+        assert!(session.reconstructed_bytes >= json_size(&session.reconstructed_data));
+    }
+
+    #[test]
+    fn test_apply_frame_merges_objects() {
+        let mut session = ClientStreamSession::new("s".to_string());
+        session
+            .apply_frame(&json!({"existing": "value"}), 1024)
+            .unwrap();
+        session
+            .apply_frame(&json!({"new": "data", "existing": "updated"}), 1024)
+            .unwrap();
+
+        assert_eq!(session.reconstructed_data["existing"], "updated");
+        assert_eq!(session.reconstructed_data["new"], "data");
+    }
+
+    #[tokio::test]
+    async fn test_completed_session_is_evicted_when_cap_is_reached() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
+            .unwrap()
+            .with_config(WebSocketClientConfig {
+                max_sessions: 2,
+                ..WebSocketClientConfig::default()
+            });
+        let live = client.request_stream(json!({}), None).await.unwrap();
+        let done = client.request_stream(json!({}), None).await.unwrap();
+        let (tx, _rx) = control_channel();
+        PjsWebSocketClient::handle_incoming_message(
+            client.sessions.clone(),
+            tx,
+            client.config,
+            WsMessage::StreamComplete {
+                session_id: done.clone(),
+                checksum: "c".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let fresh = client.request_stream(json!({}), None).await.unwrap();
+
+        let sessions = client.sessions.read().await;
+        assert!(sessions.contains_key(&live));
+        assert!(!sessions.contains_key(&done));
+        assert!(sessions.contains_key(&fresh));
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLogs {
+        type Writer = CapturedLogs;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_server_supplied_strings_cannot_forge_log_lines() {
+        let logs = CapturedLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let hostile = "\n\r\x1b[31m".to_string();
+        let sessions = sessions_with("s").await;
+        let (tx, _rx) = control_channel();
+        let config = WebSocketClientConfig::default();
+
+        for message in [
+            WsMessage::StreamComplete {
+                session_id: hostile.clone(),
+                checksum: hostile.clone(),
+            },
+            WsMessage::Error {
+                session_id: Some(hostile.clone()),
+                error: hostile.clone(),
+                code: 500,
+            },
+            frame(&hostile, 0, json!({})),
+        ] {
+            PjsWebSocketClient::handle_incoming_message(
+                sessions.clone(),
+                tx.clone(),
+                config,
+                message,
+            )
+            .await
+            .unwrap();
+        }
+
+        let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            !output.contains('\r'),
+            "raw CR leaked into logs: {output:?}"
+        );
+        assert!(
+            !output.contains('\x1b'),
+            "raw ESC leaked into logs: {output:?}"
+        );
+        assert_eq!(
+            output.lines().count(),
+            3,
+            "a hostile string started its own log line: {output:?}"
+        );
     }
 }

@@ -289,10 +289,6 @@ impl CompressionStats {
 /// Client-side decompressor for receiving compressed frames
 #[derive(Debug, Clone)]
 pub struct StreamingDecompressor {
-    /// Active dictionary for string decompression
-    active_dictionary: HashMap<u16, String>,
-    /// Delta base values for numeric decompression  
-    delta_bases: HashMap<String, f64>,
     /// Decompression statistics
     stats: DecompressionStats,
 }
@@ -312,8 +308,6 @@ impl StreamingDecompressor {
     /// Create new streaming decompressor
     pub fn new() -> Self {
         Self {
-            active_dictionary: HashMap::new(),
-            delta_bases: HashMap::new(),
             stats: DecompressionStats::default(),
         }
     }
@@ -324,9 +318,6 @@ impl StreamingDecompressor {
         compressed_frame: CompressedFrame,
     ) -> DomainResult<StreamFrame> {
         let start_time = std::time::Instant::now();
-
-        // Update decompression context with metadata
-        self.update_context(&compressed_frame.decompression_metadata)?;
 
         // Decompress data based on strategy
         let decompressed_data = self.decompress_data(
@@ -343,21 +334,6 @@ impl StreamingDecompressor {
             priority: compressed_frame.frame.priority,
             metadata: compressed_frame.frame.metadata,
         })
-    }
-
-    /// Update decompression context with new metadata
-    fn update_context(&mut self, metadata: &DecompressionMetadata) -> DomainResult<()> {
-        // Update dictionary
-        for (&index, string) in &metadata.dictionary_map {
-            self.active_dictionary.insert(index, string.clone());
-        }
-
-        // Update delta bases
-        for (path, &base) in &metadata.delta_bases {
-            self.delta_bases.insert(path.clone(), base);
-        }
-
-        Ok(())
     }
 
     /// Decompress data according to strategy
@@ -391,8 +367,8 @@ impl StreamingDecompressor {
     /// [`crate::compression::SchemaCompressor`]'s encoder for the marker format) — no
     /// positional metadata is needed, since a substitution is self-describing in the string
     /// itself. `dictionary` is always the *current frame's own* dictionary (its
-    /// `DecompressionMetadata::dictionary_map`), never the cross-frame accumulated
-    /// `active_dictionary` — every frame carries its complete dictionary, so a marker must
+    /// `DecompressionMetadata::dictionary_map`), never state carried over
+    /// from earlier frames — every frame carries its complete dictionary, so a marker must
     /// only ever resolve against what that same frame actually transmitted. Bounding lookups
     /// to a stale, larger dictionary from an earlier frame would let a corrupted or truncated
     /// marker resolve to a wrong-but-present string instead of erroring (issue #333 M11).
@@ -1178,9 +1154,6 @@ mod tests {
     fn test_decompressor_hybrid_strategy() {
         let mut decompressor = StreamingDecompressor::new();
 
-        // Setup delta bases
-        decompressor.delta_bases.insert("value".to_string(), 100.0);
-
         let mut string_dict = HashMap::new();
         string_dict.insert("test".to_string(), 0);
 
@@ -1861,45 +1834,6 @@ mod tests {
     }
 
     #[test]
-    fn test_update_context_updates_dictionary() {
-        let mut decompressor = StreamingDecompressor::new();
-
-        let mut metadata = DecompressionMetadata {
-            strategy: CompressionStrategy::None,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
-        };
-        metadata.dictionary_map.insert(0, "hello".to_string());
-        metadata.dictionary_map.insert(1, "world".to_string());
-
-        let result = decompressor.update_context(&metadata);
-        assert!(result.is_ok());
-        assert_eq!(decompressor.active_dictionary.len(), 2);
-        assert_eq!(
-            decompressor.active_dictionary.get(&0),
-            Some(&"hello".to_string())
-        );
-    }
-
-    #[test]
-    fn test_update_context_updates_delta_bases() {
-        let mut decompressor = StreamingDecompressor::new();
-
-        let mut metadata = DecompressionMetadata {
-            strategy: CompressionStrategy::None,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
-        };
-        metadata.delta_bases.insert("value1".to_string(), 100.0);
-        metadata.delta_bases.insert("value2".to_string(), 200.0);
-
-        let result = decompressor.update_context(&metadata);
-        assert!(result.is_ok());
-        assert_eq!(decompressor.delta_bases.len(), 2);
-        assert_eq!(decompressor.delta_bases.get("value1"), Some(&100.0));
-    }
-
-    #[test]
     fn test_decompress_dictionary_leaves_float_untouched() {
         let decompressor = StreamingDecompressor::new();
         let mut dictionary = HashMap::new();
@@ -2060,6 +1994,44 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             json!([1_100_000.0, 1_200_000.0, 1_300_000.0])
+        );
+    }
+
+    #[test]
+    fn test_decompress_frame_does_not_retain_dictionary_across_frames() {
+        let mut decompressor = StreamingDecompressor::new();
+        let frame_with = |dictionary_map: HashMap<u16, String>| CompressedFrame {
+            frame: StreamFrame {
+                data: json!({}),
+                priority: Priority::MEDIUM,
+                metadata: HashMap::new(),
+            },
+            compressed_data: CompressedData {
+                strategy: CompressionStrategy::Dictionary {
+                    dictionary: HashMap::new(),
+                },
+                compressed_size: 1,
+                data: json!({"k": "\u{7F}0"}),
+                compression_metadata: HashMap::new(),
+            },
+            decompression_metadata: DecompressionMetadata {
+                strategy: CompressionStrategy::Dictionary {
+                    dictionary: HashMap::new(),
+                },
+                dictionary_map,
+                delta_bases: HashMap::new(),
+            },
+        };
+
+        let first = decompressor
+            .decompress_frame(frame_with(HashMap::from([(0, "hello".to_string())])))
+            .unwrap();
+        assert_eq!(first.data, json!({"k": "hello"}));
+
+        assert!(
+            decompressor
+                .decompress_frame(frame_with(HashMap::new()))
+                .is_err()
         );
     }
 

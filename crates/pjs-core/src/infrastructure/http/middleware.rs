@@ -237,15 +237,15 @@ impl RateLimitConfig {
 /// Adds X-RateLimit-* headers per RFC 6585
 #[derive(Clone)]
 pub struct RateLimitMiddleware {
-    limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
+    limiter: std::sync::Arc<crate::security::rate_limit::ClientRateLimiter>,
     trusted_proxies: Option<TrustedProxyConfig>,
 }
 
 impl RateLimitMiddleware {
-    /// Build a fresh middleware with its own internal `WebSocketRateLimiter`.
+    /// Build a fresh middleware with its own internal `ClientRateLimiter`.
     ///
     /// Spawns a background task that periodically prunes expired per-IP
-    /// entries (see [`crate::security::rate_limit::WebSocketRateLimiter::spawn_cleanup_task`])
+    /// entries (see [`crate::security::rate_limit::ClientRateLimiter::spawn_cleanup_task`])
     /// if called from within a Tokio runtime; otherwise construction still
     /// succeeds, but periodic pruning is skipped with a logged warning.
     pub fn new(config: RateLimitConfig) -> Self {
@@ -256,7 +256,7 @@ impl RateLimitMiddleware {
             ..Default::default()
         };
 
-        let limiter = std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
+        let limiter = std::sync::Arc::new(crate::security::rate_limit::ClientRateLimiter::new(
             rate_limit_config,
         ));
         limiter.spawn_cleanup_task(crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL);
@@ -267,14 +267,14 @@ impl RateLimitMiddleware {
         }
     }
 
-    /// Wrap an externally constructed `WebSocketRateLimiter` (lets several middlewares share state).
+    /// Wrap an externally constructed `ClientRateLimiter` (lets several middlewares share state).
     ///
     /// Spawns a background cleanup task via
-    /// [`crate::security::rate_limit::WebSocketRateLimiter::spawn_cleanup_task`],
+    /// [`crate::security::rate_limit::ClientRateLimiter::spawn_cleanup_task`],
     /// which is a no-op if one is already running for this limiter (e.g.
     /// because another `RateLimitMiddleware` already wraps the same `Arc`).
     pub fn from_limiter(
-        limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
+        limiter: std::sync::Arc<crate::security::rate_limit::ClientRateLimiter>,
     ) -> Self {
         limiter.spawn_cleanup_task(crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL);
 
@@ -307,7 +307,7 @@ impl<S> Layer<S> for RateLimitMiddleware {
 #[derive(Clone)]
 pub struct RateLimitService<S> {
     inner: S,
-    limiter: std::sync::Arc<crate::security::rate_limit::WebSocketRateLimiter>,
+    limiter: std::sync::Arc<crate::security::rate_limit::ClientRateLimiter>,
     trusted_proxies: Option<TrustedProxyConfig>,
 }
 
@@ -392,14 +392,14 @@ where
 /// implies under a sustained capacity attack.
 ///
 /// Every other variant (in practice only `LimitExceeded`, the sole other
-/// variant [`WebSocketRateLimiter::check_request`] returns) gets `429` with a
-/// `Retry-After` derived from [`WebSocketRateLimiter::reset_after`] — the
+/// variant [`ClientRateLimiter::check_request`] returns) gets `429` with a
+/// `Retry-After` derived from [`ClientRateLimiter::reset_after`] — the
 /// real per-client sliding-window expiry, consistent with the
 /// `X-RateLimit-Reset` header `add_rate_limit_headers` attaches to the same
 /// response.
 fn rate_limit_error_response_parts(
     err: &crate::security::rate_limit::RateLimitError,
-    limiter: &crate::security::rate_limit::WebSocketRateLimiter,
+    limiter: &crate::security::rate_limit::ClientRateLimiter,
     client_ip: std::net::IpAddr,
 ) -> (StatusCode, u64, &'static str) {
     if matches!(
@@ -540,7 +540,7 @@ fn extract_forwarded_ip(
 /// Add X-RateLimit-* headers to response per RFC 6585
 fn add_rate_limit_headers(
     response: &mut Response,
-    limiter: &crate::security::rate_limit::WebSocketRateLimiter,
+    limiter: &crate::security::rate_limit::ClientRateLimiter,
     client_ip: std::net::IpAddr,
 ) {
     use std::time::SystemTime;
@@ -885,7 +885,7 @@ mod tests {
         // fast, is that `from_limiter` actually calls it: `from_limiter` is
         // the *first* caller here (not pre-empted by a manual
         // `spawn_cleanup_task` call, which would make this a no-op check).
-        let limiter = std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
+        let limiter = std::sync::Arc::new(crate::security::rate_limit::ClientRateLimiter::new(
             crate::security::rate_limit::RateLimitConfig::default(),
         ));
         assert!(!limiter.is_cleanup_task_spawned());
@@ -913,7 +913,7 @@ mod tests {
         let err = crate::security::rate_limit::RateLimitError::CapacityExceeded {
             max: crate::security::rate_limit::MAX_TRACKED_CLIENTS,
         };
-        let limiter = crate::security::rate_limit::WebSocketRateLimiter::default();
+        let limiter = crate::security::rate_limit::ClientRateLimiter::default();
         let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
         let (status, retry_after, label) = rate_limit_error_response_parts(&err, &limiter, ip);
 
@@ -932,7 +932,7 @@ mod tests {
             window_duration: std::time::Duration::from_secs(30),
             ..Default::default()
         };
-        let limiter = crate::security::rate_limit::WebSocketRateLimiter::new(config);
+        let limiter = crate::security::rate_limit::ClientRateLimiter::new(config);
         let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
 
         limiter.check_request(ip).unwrap();
@@ -976,7 +976,7 @@ mod tests {
             window_duration: Duration::from_secs(u64::MAX),
             ..Default::default()
         };
-        let limiter = crate::security::rate_limit::WebSocketRateLimiter::new(config);
+        let limiter = crate::security::rate_limit::ClientRateLimiter::new(config);
         let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
         limiter.check_request(ip).unwrap();
 
@@ -1004,7 +1004,7 @@ mod tests {
             window_duration: Duration::from_millis(200),
             ..Default::default()
         };
-        let limiter = crate::security::rate_limit::WebSocketRateLimiter::new(config);
+        let limiter = crate::security::rate_limit::ClientRateLimiter::new(config);
         let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
 
         limiter.check_request(ip).unwrap();
@@ -1023,7 +1023,7 @@ mod tests {
         // `SecureWebSocketHandler::new` sharing the same `Arc`). Wrapping it
         // again must observe the claim as already made, not attempt (or
         // need) a second spawn.
-        let limiter = std::sync::Arc::new(crate::security::rate_limit::WebSocketRateLimiter::new(
+        let limiter = std::sync::Arc::new(crate::security::rate_limit::ClientRateLimiter::new(
             crate::security::rate_limit::RateLimitConfig::default(),
         ));
         limiter.spawn_cleanup_task(crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL);

@@ -28,7 +28,7 @@ use tower::Layer;
 use tracing::{debug, error, warn};
 
 use crate::security::rate_limit::{
-    RateLimitConfig, RateLimitError, RateLimitGuard, WebSocketRateLimiter,
+    ClientRateLimiter, RateLimitConfig, RateLimitError, RateLimitGuard,
 };
 
 /// Interval between HTTP/2 keep-alive `PING` frames sent on an established
@@ -143,7 +143,7 @@ pub struct ConnectionLimits {
     /// 64 concurrent connections from a single source is still far above
     /// realistic demo or local-test load, so this is not special-cased.
     ///
-    /// Enforced by a private `WebSocketRateLimiter` instance owned by
+    /// Enforced by a private `ClientRateLimiter` instance owned by
     /// [`serve_with_limits`], independent of (and never sharing state with)
     /// any `RateLimitMiddleware` the router itself may apply. `None`
     /// disables the cap entirely — no limiter instance is constructed, no
@@ -249,7 +249,7 @@ pub async fn serve_with_limits(
     let header_read_timeout = limits.header_read_timeout;
 
     // Separate from any `RateLimitMiddleware` the router itself may apply:
-    // sharing one `Arc<WebSocketRateLimiter>` would let an accept-level IP
+    // sharing one `Arc<ClientRateLimiter>` would let an accept-level IP
     // flood saturate the middleware's tracked-client map and start
     // rejecting legitimate new clients at the HTTP layer.
     //
@@ -258,7 +258,7 @@ pub async fn serve_with_limits(
     // connection-pooling reverse proxy, see the field's doc — pays no cost
     // for it: no limiter, no cleanup task, no per-connection map entry.
     let per_ip_limiter = limits.max_connections_per_ip.map(|max_connections_per_ip| {
-        let limiter = Arc::new(WebSocketRateLimiter::new(RateLimitConfig {
+        let limiter = Arc::new(ClientRateLimiter::new(RateLimitConfig {
             max_connections_per_ip,
             ..Default::default()
         }));
@@ -288,7 +288,7 @@ pub async fn serve_with_limits(
         // `CapacityExceeded` (the limiter's own tracked-client map is full),
         // but `RateLimitError` is not `#[non_exhaustive]` so this stays
         // exhaustive-by-intent rather than by variant count — fails *open*
-        // instead of reusing `WebSocketRateLimiter`'s fail-closed default:
+        // instead of reusing `ClientRateLimiter`'s fail-closed default:
         // at accept level, fail-closed would mean total lockout of every
         // new source IP once the map fills, whereas the global
         // `max_connections` semaphore already bounds the worst case.
@@ -374,7 +374,7 @@ pub async fn serve_with_limits(
 /// Without this masking, an attacker holding a routed /64 (trivially
 /// available from many providers) could rotate addresses within that prefix
 /// to both bypass `ConnectionLimits::max_connections_per_ip` and exhaust
-/// `WebSocketRateLimiter`'s tracked-client map. This intentionally diverges
+/// `ClientRateLimiter`'s tracked-client map. This intentionally diverges
 /// from `RateLimitMiddleware`'s exact-IP keying, which governs a different
 /// (request-level) layer and is left unchanged.
 ///
