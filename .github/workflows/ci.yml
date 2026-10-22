@@ -159,12 +159,12 @@ jobs:
         run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 
       - name: Build fuzz targets
-        run: cargo fuzz build
+        run: cargo fuzz build --target x86_64-unknown-linux-gnu
 
       - name: Replay committed seeds
         run: |
           for target in $(cargo fuzz list); do
-            cargo fuzz run "$target" "fuzz/seeds/$target" -- -runs=0
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" "fuzz/seeds/$target" -- -runs=0
           done
 
   # Non-gating: time-boxed exploration, scheduled or manual only. Not part of
@@ -199,7 +199,7 @@ jobs:
       - name: Explore each target for 60 seconds
         run: |
           for target in $(cargo fuzz list); do
-            cargo fuzz run "$target" -- -max_total_time=60 "$PWD/fuzz/seeds/$target"
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=60 "$PWD/fuzz/seeds/$target"
           done
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
