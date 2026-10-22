@@ -1,0 +1,59 @@
+[package]
+name = "pjs-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+authors = ["Andrei G. <k05h31@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "cargo-fuzz targets for pjson-rs"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[dependencies.pjson-rs]
+path = "../crates/pjs-core"
+default-features = false
+features = ["compression", "partial-parse", "http-server"]
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parser_zero_copy"
+path = "fuzz_targets/parser_zero_copy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parser_partial"
+path = "fuzz_targets/parser_partial.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "secure_decompress"
+path = "fuzz_targets/secure_decompress.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "streaming_decompressor"
+path = "fuzz_targets/streaming_decompressor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ws_message_decode"
+path = "fuzz_targets/ws_message_decode.rs"
+test = false
+doc = false
+bench = false

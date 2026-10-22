@@ -14,13 +14,27 @@
 
 use pjson_rs::{
     Error as PjsError,
+    domain::SessionId,
     infrastructure::websocket::{
-        AdaptiveStreamController, AxumWebSocketTransport, StreamOptions, WebSocketTransport,
-        WsMessage,
+        AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, StreamOptions,
+        WebSocketTransport, WsMessage,
     },
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
+
+async fn create(
+    controller: &AdaptiveStreamController,
+    owner: ConnectionId,
+    data: Value,
+) -> SessionId {
+    let session_id = SessionId::new();
+    controller
+        .create_session(session_id, owner, data, StreamOptions::default())
+        .await
+        .unwrap();
+    session_id
+}
 
 // ============================================================================
 // AxumWebSocketTransport Tests
@@ -51,12 +65,9 @@ async fn test_axum_websocket_transport_controller_access() {
         "value": 123
     });
 
-    let session_id = controller
-        .create_session(data, StreamOptions::default())
-        .await
-        .unwrap();
+    let session_id = create(&controller, ConnectionId::new(), data).await;
 
-    assert!(!session_id.is_empty());
+    assert!(!session_id.as_uuid().is_nil());
 }
 
 // ============================================================================
@@ -66,7 +77,7 @@ async fn test_axum_websocket_transport_controller_access() {
 #[tokio::test]
 async fn test_websocket_transport_start_stream() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new("test-connection-1".to_string());
+    let connection = Arc::new(ConnectionId::new());
 
     let data = json!({
         "critical": {"id": 1, "status": "active"},
@@ -79,13 +90,13 @@ async fn test_websocket_transport_start_stream() {
 
     assert!(result.is_ok());
     let session_id = result.unwrap();
-    assert!(!session_id.is_empty());
+    assert!(!session_id.as_uuid().is_nil());
 }
 
 #[tokio::test]
 async fn test_websocket_transport_start_stream_with_custom_options() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new("test-connection-2".to_string());
+    let connection = Arc::new(ConnectionId::new());
 
     let data = json!({
         "data": [1, 2, 3, 4, 5]
@@ -106,10 +117,10 @@ async fn test_websocket_transport_start_stream_with_custom_options() {
 #[tokio::test]
 async fn test_websocket_transport_handle_message_stream_init() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new("test-connection-3".to_string());
+    let connection = Arc::new(ConnectionId::new());
 
     let message = WsMessage::StreamInit {
-        session_id: "test-session-init".to_string(),
+        session_id: SessionId::new(),
         data: json!({"test": "value"}),
         options: StreamOptions::default(),
     };
@@ -124,18 +135,13 @@ async fn test_websocket_transport_handle_message_frame_ack() {
     let transport = AxumWebSocketTransport::new();
     let controller = transport.controller();
 
-    // First create a session
-    let data = json!({"test": "data"});
-    let session_id = controller
-        .create_session(data, StreamOptions::default())
-        .await
-        .unwrap();
-
-    let connection = Arc::new("test-connection-4".to_string());
+    // First create a session owned by the acknowledging connection
+    let connection = Arc::new(ConnectionId::new());
+    let session_id = create(&controller, *connection, json!({"test": "data"})).await;
 
     // Send frame acknowledgment
     let message = WsMessage::FrameAck {
-        session_id: session_id.clone(),
+        session_id,
         frame_id: 0,
         processing_time_ms: 50,
     };
@@ -148,7 +154,7 @@ async fn test_websocket_transport_handle_message_frame_ack() {
 #[tokio::test]
 async fn test_websocket_transport_handle_message_ping() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new("test-connection-5".to_string());
+    let connection = Arc::new(ConnectionId::new());
 
     let message = WsMessage::Ping {
         timestamp: 1234567890,
@@ -162,10 +168,10 @@ async fn test_websocket_transport_handle_message_ping() {
 #[tokio::test]
 async fn test_websocket_transport_handle_message_error() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new("test-connection-6".to_string());
+    let connection = Arc::new(ConnectionId::new());
 
     let message = WsMessage::Error {
-        session_id: Some("test-session".to_string()),
+        session_id: Some(SessionId::new()),
         error: "Test error message".to_string(),
         code: 500,
     };
@@ -178,7 +184,7 @@ async fn test_websocket_transport_handle_message_error() {
 #[tokio::test]
 async fn test_websocket_transport_handle_message_pong() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new("test-connection-7".to_string());
+    let connection = Arc::new(ConnectionId::new());
 
     let message = WsMessage::Pong {
         timestamp: 1234567890,
@@ -193,7 +199,7 @@ async fn test_websocket_transport_handle_message_pong() {
 async fn test_websocket_transport_close_stream() {
     let transport = AxumWebSocketTransport::new();
 
-    let result = transport.close_stream("test-session-close").await;
+    let result = transport.close_stream(SessionId::new()).await;
 
     assert!(result.is_ok());
 }
@@ -203,16 +209,14 @@ async fn test_close_stream_removes_session_from_controller() {
     let transport = AxumWebSocketTransport::new();
     let controller = transport.controller();
 
-    let session_id = controller
-        .create_session(json!({"k": "v"}), StreamOptions::default())
-        .await
-        .unwrap();
+    let owner = ConnectionId::new();
+    let session_id = create(&controller, owner, json!({"k": "v"})).await;
 
-    transport.close_stream(&session_id).await.unwrap();
+    transport.close_stream(session_id).await.unwrap();
 
     // Session must be gone — subsequent operations must return InvalidSession.
     let err = controller
-        .handle_frame_ack(&session_id, 0, 10)
+        .handle_frame_ack(owner, session_id, 0, 10)
         .await
         .unwrap_err();
     assert!(
@@ -234,12 +238,9 @@ async fn test_controller_create_session() {
         "details": {"name": "test", "description": "test data"}
     });
 
-    let session_id = controller
-        .create_session(data, StreamOptions::default())
-        .await
-        .unwrap();
+    let session_id = create(&controller, ConnectionId::new(), data).await;
 
-    assert!(!session_id.is_empty());
+    assert!(!session_id.as_uuid().is_nil());
 }
 
 #[tokio::test]
@@ -251,12 +252,9 @@ async fn test_controller_start_streaming() {
         "values": [1, 2, 3]
     });
 
-    let session_id = controller
-        .create_session(data, StreamOptions::default())
-        .await
-        .unwrap();
+    let session_id = create(&controller, ConnectionId::new(), data).await;
 
-    let result = controller.start_streaming(&session_id).await;
+    let result = controller.start_streaming(session_id).await;
 
     assert!(result.is_ok());
 }
@@ -265,7 +263,7 @@ async fn test_controller_start_streaming() {
 async fn test_controller_start_streaming_invalid_session() {
     let controller = AdaptiveStreamController::new();
 
-    let result = controller.start_streaming("invalid-session-id").await;
+    let result = controller.start_streaming(SessionId::new()).await;
 
     assert!(result.is_err());
 }
@@ -274,13 +272,10 @@ async fn test_controller_start_streaming_invalid_session() {
 async fn test_controller_handle_frame_ack() {
     let controller = AdaptiveStreamController::new();
 
-    let data = json!({"test": "data"});
-    let session_id = controller
-        .create_session(data, StreamOptions::default())
-        .await
-        .unwrap();
+    let owner = ConnectionId::new();
+    let session_id = create(&controller, owner, json!({"test": "data"})).await;
 
-    let result = controller.handle_frame_ack(&session_id, 0, 50).await;
+    let result = controller.handle_frame_ack(owner, session_id, 0, 50).await;
 
     assert!(result.is_ok());
 }
@@ -289,23 +284,20 @@ async fn test_controller_handle_frame_ack() {
 async fn test_controller_handle_frame_ack_multiple() {
     let controller = AdaptiveStreamController::new();
 
-    let data = json!({"test": "data"});
-    let session_id = controller
-        .create_session(data, StreamOptions::default())
-        .await
-        .unwrap();
+    let owner = ConnectionId::new();
+    let session_id = create(&controller, owner, json!({"test": "data"})).await;
 
     // Acknowledge multiple frames
     controller
-        .handle_frame_ack(&session_id, 0, 50)
+        .handle_frame_ack(owner, session_id, 0, 50)
         .await
         .unwrap();
     controller
-        .handle_frame_ack(&session_id, 1, 60)
+        .handle_frame_ack(owner, session_id, 1, 60)
         .await
         .unwrap();
     controller
-        .handle_frame_ack(&session_id, 2, 55)
+        .handle_frame_ack(owner, session_id, 2, 55)
         .await
         .unwrap();
 
@@ -316,7 +308,9 @@ async fn test_controller_handle_frame_ack_multiple() {
 async fn test_controller_handle_frame_ack_invalid_session() {
     let controller = AdaptiveStreamController::new();
 
-    let result = controller.handle_frame_ack("invalid-session", 0, 50).await;
+    let result = controller
+        .handle_frame_ack(ConnectionId::new(), SessionId::new(), 0, 50)
+        .await;
 
     assert!(result.is_err());
 }
@@ -328,13 +322,9 @@ async fn test_controller_subscribe_frames() {
     let mut receiver = controller.subscribe_frames();
 
     // Create and start a session
-    let data = json!({"test": "data"});
-    let session_id = controller
-        .create_session(data, StreamOptions::default())
-        .await
-        .unwrap();
+    let session_id = create(&controller, ConnectionId::new(), json!({"test": "data"})).await;
 
-    controller.start_streaming(&session_id).await.unwrap();
+    controller.start_streaming(session_id).await.unwrap();
 
     // Give some time for frames to be sent
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -417,7 +407,7 @@ fn test_stream_options_deserialization() {
 #[test]
 fn test_ws_message_stream_init_serialization() {
     let message = WsMessage::StreamInit {
-        session_id: "test-123".to_string(),
+        session_id: SessionId::new(),
         data: json!({"key": "value"}),
         options: StreamOptions::default(),
     };
@@ -431,7 +421,7 @@ fn test_ws_message_stream_init_serialization() {
 #[test]
 fn test_ws_message_stream_frame_serialization() {
     let message = WsMessage::StreamFrame {
-        session_id: "test-456".to_string(),
+        session_id: SessionId::new(),
         frame_id: 5,
         priority: 200,
         payload: json!({"frame": "data"}),
@@ -448,7 +438,7 @@ fn test_ws_message_stream_frame_serialization() {
 #[test]
 fn test_ws_message_frame_ack_serialization() {
     let message = WsMessage::FrameAck {
-        session_id: "test-789".to_string(),
+        session_id: SessionId::new(),
         frame_id: 3,
         processing_time_ms: 125,
     };
@@ -463,7 +453,7 @@ fn test_ws_message_frame_ack_serialization() {
 #[test]
 fn test_ws_message_stream_complete_serialization() {
     let message = WsMessage::StreamComplete {
-        session_id: "test-complete".to_string(),
+        session_id: SessionId::new(),
         checksum: "sha256:abcd1234".to_string(),
     };
 
@@ -476,7 +466,7 @@ fn test_ws_message_stream_complete_serialization() {
 #[test]
 fn test_ws_message_error_serialization() {
     let message = WsMessage::Error {
-        session_id: Some("error-session".to_string()),
+        session_id: Some(SessionId::new()),
         error: "Connection lost".to_string(),
         code: 1006,
     };
@@ -514,10 +504,11 @@ fn test_ws_message_pong_serialization() {
 
 #[test]
 fn test_ws_message_deserialization() {
+    let id = SessionId::new();
     let json = json!({
         "type": "FrameAck",
         "data": {
-            "session_id": "test",
+            "session_id": id.as_uuid().to_string(),
             "frame_id": 1,
             "processing_time_ms": 50
         }
@@ -531,7 +522,7 @@ fn test_ws_message_deserialization() {
             frame_id,
             processing_time_ms,
         } => {
-            assert_eq!(session_id, "test");
+            assert_eq!(session_id, id);
             assert_eq!(frame_id, 1);
             assert_eq!(processing_time_ms, 50);
         }
@@ -569,34 +560,30 @@ async fn test_full_websocket_lifecycle() {
         "details": {"name": "test"}
     });
 
-    let session_id = controller
-        .create_session(data, StreamOptions::default())
-        .await
-        .unwrap();
-
-    assert!(!session_id.is_empty());
+    let owner = ConnectionId::new();
+    let session_id = create(&controller, owner, data).await;
 
     // 2. Start streaming
-    controller.start_streaming(&session_id).await.unwrap();
+    controller.start_streaming(session_id).await.unwrap();
 
     // 3. Simulate frame acknowledgments
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     controller
-        .handle_frame_ack(&session_id, 0, 30)
+        .handle_frame_ack(owner, session_id, 0, 30)
         .await
         .unwrap();
 
     controller
-        .handle_frame_ack(&session_id, 1, 35)
+        .handle_frame_ack(owner, session_id, 1, 35)
         .await
         .unwrap();
 
     // 4. Close stream — session must be removed from the controller.
-    transport.close_stream(&session_id).await.unwrap();
+    transport.close_stream(session_id).await.unwrap();
 
     let err = controller
-        .handle_frame_ack(&session_id, 0, 0)
+        .handle_frame_ack(owner, session_id, 0, 0)
         .await
         .unwrap_err();
     assert!(matches!(err, PjsError::InvalidSession(_)));
@@ -616,10 +603,7 @@ async fn test_multiple_concurrent_sessions() {
             "data": format!("test-{}", i)
         });
 
-        let session_id = controller
-            .create_session(data, StreamOptions::default())
-            .await
-            .unwrap();
+        let session_id = create(&controller, ConnectionId::new(), data).await;
 
         session_ids.push(session_id);
     }
@@ -635,7 +619,7 @@ async fn test_multiple_concurrent_sessions() {
 
     // Start streaming for all sessions
     for session_id in &session_ids {
-        controller.start_streaming(session_id).await.unwrap();
+        controller.start_streaming(*session_id).await.unwrap();
     }
 }
 
@@ -644,22 +628,24 @@ async fn test_websocket_error_handling() {
     let transport = AxumWebSocketTransport::new();
 
     // Try to close non-existent stream
-    let result = transport.close_stream("non-existent").await;
+    let result = transport.close_stream(SessionId::new()).await;
     assert!(result.is_ok()); // Should not fail, just log
 
     // Try to handle frame ack for non-existent session
     let controller = transport.controller();
-    let result = controller.handle_frame_ack("non-existent", 0, 50).await;
+    let result = controller
+        .handle_frame_ack(ConnectionId::new(), SessionId::new(), 0, 50)
+        .await;
     assert!(result.is_err());
 }
 
 #[tokio::test]
 async fn test_websocket_send_frame() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new("test-send-frame".to_string());
+    let connection = Arc::new(ConnectionId::new());
 
     let message = WsMessage::StreamFrame {
-        session_id: "test".to_string(),
+        session_id: SessionId::new(),
         frame_id: 1,
         priority: 200,
         payload: json!({"test": "data"}),

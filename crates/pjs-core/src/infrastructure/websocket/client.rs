@@ -4,12 +4,15 @@
 use super::{StreamOptions, WsMessage};
 use crate::{
     Error as PjsError, Result as PjsResult,
+    config::ConfigError,
+    domain::SessionId,
     infrastructure::bounded_channel::{ByteBoundedSender, Envelope, byte_bounded_channel},
 };
 use futures::StreamExt;
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -39,10 +42,60 @@ const MESSAGE_QUEUE_CAPACITY: usize = 1000;
 const MAX_QUEUED_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Default cap on concurrently tracked client sessions.
-const DEFAULT_MAX_SESSIONS: usize = 1024;
+const DEFAULT_MAX_SESSIONS: NonZeroUsize = NonZeroUsize::new(1024).unwrap();
+
+/// Default idle time after which a session that stopped receiving data expires.
+const DEFAULT_SESSION_IDLE_TTL: Duration = Duration::from_secs(300);
 
 /// Default cap, in bytes, on the data reconstructed for a single session.
 const DEFAULT_MAX_SESSION_BYTES: usize = 16 * 1024 * 1024;
+
+/// How long a client session may go without receiving data before it expires.
+///
+/// Always positive. Idle time is measured from the last frame applied to the
+/// session, or from its creation if none arrived. Completed sessions are
+/// frozen: late frames do not refresh them, so they expire after this time
+/// too.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::infrastructure::websocket::SessionIdleTtl;
+/// use std::time::Duration;
+///
+/// assert!(SessionIdleTtl::new(Duration::from_secs(30)).is_ok());
+/// assert!(SessionIdleTtl::new(Duration::ZERO).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionIdleTtl(Duration);
+
+impl SessionIdleTtl {
+    /// Creates an idle time-to-live.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::MustBePositive`] for a zero duration.
+    pub fn new(ttl: Duration) -> Result<Self, ConfigError> {
+        if ttl.is_zero() {
+            return Err(ConfigError::MustBePositive {
+                section: "websocket.client",
+                field: "session_idle_ttl",
+            });
+        }
+        Ok(Self(ttl))
+    }
+
+    /// The time-to-live as a plain duration.
+    pub fn as_duration(self) -> Duration {
+        self.0
+    }
+}
+
+impl Default for SessionIdleTtl {
+    fn default() -> Self {
+        Self(DEFAULT_SESSION_IDLE_TTL)
+    }
+}
 
 /// Transport and state bounds applied to untrusted server input.
 ///
@@ -70,11 +123,20 @@ pub struct WebSocketClientConfig {
     pub max_frame_size: usize,
     /// Maximum number of sessions tracked at once.
     ///
-    /// When the limit is reached, a new session first evicts completed
-    /// sessions and, if none are completed, the oldest session. A request
-    /// therefore never fails because of this limit, but an evicted session
-    /// stops receiving frames.
-    pub max_sessions: usize,
+    /// When the limit is reached, a new request first drops expired sessions,
+    /// then evicts the incomplete session that has been idle the longest (it
+    /// stops receiving frames). Completed sessions are never evicted, so a
+    /// request fails with [`PjsError::SessionLimitReached`] when every
+    /// tracked session is complete; release them with
+    /// [`PjsWebSocketClient::close_session`].
+    pub max_sessions: NonZeroUsize,
+    /// Idle time after which a session expires and is treated as unknown.
+    ///
+    /// Memory held by an expired session is released at the next
+    /// [`PjsWebSocketClient::request_stream`], at
+    /// [`PjsWebSocketClient::close_session`], or when a message arrives for
+    /// it; it is always bounded by `max_sessions` x `max_session_bytes`.
+    pub session_idle_ttl: SessionIdleTtl,
     /// Maximum size in bytes of the data reconstructed for one session.
     ///
     /// A frame that would exceed it is rejected and its session is dropped.
@@ -87,6 +149,7 @@ impl Default for WebSocketClientConfig {
             max_message_size: DEFAULT_MAX_INBOUND_FRAME_SIZE,
             max_frame_size: DEFAULT_MAX_INBOUND_FRAME_SIZE,
             max_sessions: DEFAULT_MAX_SESSIONS,
+            session_idle_ttl: SessionIdleTtl::default(),
             max_session_bytes: DEFAULT_MAX_SESSION_BYTES,
         }
     }
@@ -104,17 +167,21 @@ impl WebSocketClientConfig {
 pub struct PjsWebSocketClient {
     url: Url,
     config: WebSocketClientConfig,
-    sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
+    sessions: ClientSessions,
     message_tx: ByteBoundedSender<String>,
     message_rx: Arc<RwLock<Option<mpsc::Receiver<Envelope<String>>>>>,
     write_timeout: Duration,
 }
 
+type ClientSessions = Arc<RwLock<HashMap<SessionId, ClientStreamSession>>>;
+
 /// Client-side stream session
 #[derive(Debug)]
 struct ClientStreamSession {
-    id: String,
+    id: SessionId,
     created_at: Instant,
+    /// Last time a frame was applied to the session; freezes on completion.
+    last_activity: Instant,
     frames_received: usize,
     total_processing_time: Duration,
     reconstructed_data: Value,
@@ -123,15 +190,37 @@ struct ClientStreamSession {
 }
 
 impl ClientStreamSession {
-    fn new(id: String) -> Self {
+    fn new(id: SessionId) -> Self {
+        let now = Instant::now();
         Self {
             id,
-            created_at: Instant::now(),
+            created_at: now,
+            last_activity: now,
             frames_received: 0,
             total_processing_time: Duration::ZERO,
             reconstructed_data: serde_json::json!({}),
             reconstructed_bytes: json_size(&serde_json::json!({})),
             is_complete: false,
+        }
+    }
+
+    fn is_expired(&self, now: Instant, ttl: SessionIdleTtl) -> bool {
+        now.saturating_duration_since(self.last_activity) > ttl.as_duration()
+    }
+
+    fn stats(&self) -> StreamStats {
+        let total_frames = self.frames_received;
+        let average_processing_time = u32::try_from(total_frames)
+            .ok()
+            .filter(|&n| n > 0)
+            .map(|n| self.total_processing_time / n);
+
+        StreamStats {
+            session_id: self.id,
+            total_frames,
+            is_complete: self.is_complete,
+            duration: self.created_at.elapsed(),
+            average_processing_time,
         }
     }
 
@@ -158,7 +247,7 @@ impl ClientStreamSession {
         };
         if projected > max_bytes {
             return Err(PjsError::ClientError(format!(
-                "Session {:?} exceeds the {max_bytes}-byte reconstructed data limit",
+                "Session {} exceeds the {max_bytes}-byte reconstructed data limit",
                 self.id
             )));
         }
@@ -193,8 +282,8 @@ fn entry_size(key: &str, value: &Value) -> usize {
 /// Removes a session from the map when dropped unless disarmed, so a
 /// cancelled `request_stream` cannot leak a slot.
 struct SessionSlotGuard {
-    sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
-    id: String,
+    sessions: ClientSessions,
+    id: SessionId,
     armed: bool,
 }
 
@@ -213,7 +302,7 @@ impl Drop for SessionSlotGuard {
             sessions.remove(&self.id);
         } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let sessions = Arc::clone(&self.sessions);
-            let id = std::mem::take(&mut self.id);
+            let id = self.id;
             runtime.spawn(async move {
                 sessions.write().await.remove(&id);
             });
@@ -221,23 +310,52 @@ impl Drop for SessionSlotGuard {
     }
 }
 
-/// Makes room for a new session: evicts completed sessions when full and,
-/// if none are completed, the oldest session.
-fn reserve_session_slot(sessions: &mut HashMap<String, ClientStreamSession>, max_sessions: usize) {
-    if sessions.len() < max_sessions {
-        return;
+/// Returns the session unless it has expired; expired sessions read as unknown.
+fn live_session<'a>(
+    sessions: &'a HashMap<SessionId, ClientStreamSession>,
+    id: &SessionId,
+    ttl: SessionIdleTtl,
+    now: Instant,
+) -> Option<&'a ClientStreamSession> {
+    sessions
+        .get(id)
+        .filter(|session| !session.is_expired(now, ttl))
+}
+
+/// Makes room for a new session.
+///
+/// When full, drops expired sessions; if the map is still full, evicts the incomplete
+/// session that has been idle the longest. Completed sessions are never
+/// evicted.
+///
+/// # Errors
+///
+/// Returns [`PjsError::SessionLimitReached`] when the map is full and every
+/// session is complete.
+fn reserve_session_slot(
+    sessions: &mut HashMap<SessionId, ClientStreamSession>,
+    max_sessions: NonZeroUsize,
+    ttl: SessionIdleTtl,
+    now: Instant,
+) -> PjsResult<()> {
+    if sessions.len() < max_sessions.get() {
+        return Ok(());
     }
-    sessions.retain(|_, session| !session.is_complete);
-    while sessions.len() >= max_sessions {
-        let Some(oldest) = sessions
+    sessions.retain(|_, session| !session.is_expired(now, ttl));
+    while sessions.len() >= max_sessions.get() {
+        let oldest_idle = sessions
             .iter()
-            .min_by_key(|(_, session)| session.created_at)
-            .map(|(id, _)| id.clone())
-        else {
-            break;
+            .filter(|(_, session)| !session.is_complete)
+            .min_by_key(|(_, session)| session.last_activity)
+            .map(|(id, _)| *id);
+        let Some(id) = oldest_idle else {
+            return Err(PjsError::SessionLimitReached {
+                limit: max_sessions,
+            });
         };
-        sessions.remove(&oldest);
+        sessions.remove(&id);
     }
+    Ok(())
 }
 
 impl PjsWebSocketClient {
@@ -266,11 +384,12 @@ impl PjsWebSocketClient {
     ///
     /// ```
     /// use pjson_rs::infrastructure::websocket::{PjsWebSocketClient, WebSocketClientConfig};
+    /// use std::num::NonZeroUsize;
     ///
     /// let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
     ///     .unwrap()
     ///     .with_config(WebSocketClientConfig {
-    ///         max_sessions: 16,
+    ///         max_sessions: NonZeroUsize::new(16).unwrap(),
     ///         ..WebSocketClientConfig::default()
     ///     });
     /// ```
@@ -440,23 +559,26 @@ impl PjsWebSocketClient {
 
     /// Request stream initialization and return the new session id.
     ///
-    /// When the session limit is reached, an existing session is evicted
-    /// (see [`WebSocketClientConfig::max_sessions`]).
+    /// The id is chosen here and adopted by the server, so it is also the key
+    /// of every later frame for this stream. When the session limit is
+    /// reached, expired sessions are dropped and then the incomplete session
+    /// idle the longest is evicted (see [`WebSocketClientConfig::max_sessions`]).
     ///
     /// # Errors
     ///
-    /// Returns an error if the request cannot be serialized or the outgoing
-    /// channel is closed.
+    /// Returns [`PjsError::SessionLimitReached`] if every tracked session is
+    /// complete, or a client error if the request cannot be serialized or the
+    /// outgoing channel is closed.
     pub async fn request_stream(
         &self,
         data: Value,
         options: Option<StreamOptions>,
-    ) -> PjsResult<String> {
-        let session_id = uuid::Uuid::new_v4().to_string();
+    ) -> PjsResult<SessionId> {
+        let session_id = SessionId::new();
         let options = options.unwrap_or_default();
 
         let message = WsMessage::StreamInit {
-            session_id: session_id.clone(),
+            session_id,
             data,
             options,
         };
@@ -467,15 +589,17 @@ impl PjsWebSocketClient {
 
         {
             let mut sessions = self.sessions.write().await;
-            reserve_session_slot(&mut sessions, self.config.max_sessions);
-            sessions.insert(
-                session_id.clone(),
-                ClientStreamSession::new(session_id.clone()),
-            );
+            reserve_session_slot(
+                &mut sessions,
+                self.config.max_sessions,
+                self.config.session_idle_ttl,
+                Instant::now(),
+            )?;
+            sessions.insert(session_id, ClientStreamSession::new(session_id));
         }
         let slot = SessionSlotGuard {
             sessions: Arc::clone(&self.sessions),
-            id: session_id.clone(),
+            id: session_id,
             armed: true,
         };
 
@@ -490,40 +614,67 @@ impl PjsWebSocketClient {
         Ok(session_id)
     }
 
-    /// Get current reconstructed data for session
-    pub async fn get_current_data(&self, session_id: &str) -> PjsResult<Option<Value>> {
+    /// Applies `read` to the session unless it is unknown or expired.
+    async fn read_live<T>(
+        &self,
+        session_id: SessionId,
+        read: impl FnOnce(&ClientStreamSession) -> T,
+    ) -> Option<T> {
         let sessions = self.sessions.read().await;
-        Ok(sessions
-            .get(session_id)
-            .map(|session| session.reconstructed_data.clone()))
+        live_session(
+            &sessions,
+            &session_id,
+            self.config.session_idle_ttl,
+            Instant::now(),
+        )
+        .map(read)
     }
 
-    /// Check if stream is complete
-    pub async fn is_stream_complete(&self, session_id: &str) -> bool {
-        let sessions = self.sessions.read().await;
-        sessions
-            .get(session_id)
-            .map(|session| session.is_complete)
+    /// Get current reconstructed data for session.
+    ///
+    /// `None` for unknown and expired sessions.
+    pub async fn get_current_data(&self, session_id: SessionId) -> PjsResult<Option<Value>> {
+        Ok(self
+            .read_live(session_id, |session| session.reconstructed_data.clone())
+            .await)
+    }
+
+    /// Check if stream is complete.
+    ///
+    /// Returns `false` for unknown sessions and for expired ones, even if the
+    /// session had completed before it expired, so a caller polling for
+    /// completion should bound the wait. Read the data with
+    /// [`Self::close_session`] before the idle time passes.
+    pub async fn is_stream_complete(&self, session_id: SessionId) -> bool {
+        self.read_live(session_id, |session| session.is_complete)
+            .await
             .unwrap_or(false)
     }
 
-    /// Get stream statistics
-    pub async fn get_stream_stats(&self, session_id: &str) -> Option<StreamStats> {
-        let sessions = self.sessions.read().await;
-        sessions.get(session_id).map(|session| {
-            let total_frames = session.frames_received;
-            let avg_processing_time = u32::try_from(total_frames)
-                .ok()
-                .filter(|&n| n > 0)
-                .map(|n| session.total_processing_time / n);
+    /// Get stream statistics; `None` for unknown and expired sessions.
+    pub async fn get_stream_stats(&self, session_id: SessionId) -> Option<StreamStats> {
+        self.read_live(session_id, ClientStreamSession::stats).await
+    }
 
-            StreamStats {
-                session_id: session.id.clone(),
-                total_frames,
-                is_complete: session.is_complete,
-                duration: session.created_at.elapsed(),
-                average_processing_time: avg_processing_time,
-            }
+    /// Stops tracking a session and returns what it reconstructed.
+    ///
+    /// Frees the session's slot, including a completed one that the session
+    /// limit never evicts. Returns `None` for unknown and expired sessions.
+    /// The server is not told: it may keep streaming, and later frames for
+    /// the id are ignored.
+    pub async fn close_session(&self, session_id: SessionId) -> Option<ClosedSession> {
+        self.close_session_at(session_id, Instant::now()).await
+    }
+
+    async fn close_session_at(&self, session_id: SessionId, now: Instant) -> Option<ClosedSession> {
+        let session = self.sessions.write().await.remove(&session_id)?;
+        if session.is_expired(now, self.config.session_idle_ttl) {
+            return None;
+        }
+        let stats = session.stats();
+        Some(ClosedSession {
+            data: session.reconstructed_data,
+            stats,
         })
     }
 
@@ -553,8 +704,23 @@ impl PjsWebSocketClient {
         }
     }
 
+    /// Removes `session_id` if it has expired, so it reads as unknown.
+    fn drop_if_expired(
+        sessions: &mut HashMap<SessionId, ClientStreamSession>,
+        session_id: &SessionId,
+        config: WebSocketClientConfig,
+        now: Instant,
+    ) {
+        if sessions
+            .get(session_id)
+            .is_some_and(|session| session.is_expired(now, config.session_idle_ttl))
+        {
+            sessions.remove(session_id);
+        }
+    }
+
     async fn handle_incoming_message(
-        sessions: Arc<RwLock<HashMap<String, ClientStreamSession>>>,
+        sessions: ClientSessions,
         message_tx: ByteBoundedSender<String>,
         config: WebSocketClientConfig,
         message: WsMessage,
@@ -567,25 +733,33 @@ impl PjsWebSocketClient {
                 payload,
                 is_complete,
             } => {
-                debug!("Received frame {} for session {:?}", frame_id, session_id);
+                debug!("Received frame {} for session {}", frame_id, session_id);
 
                 let processing_start = Instant::now();
 
-                {
+                let applied = {
                     let mut sessions = sessions.write().await;
-                    if let Some(session) = sessions.get_mut(&session_id) {
-                        if let Err(e) = session.apply_frame(&payload, config.max_session_bytes) {
-                            sessions.remove(&session_id);
-                            return Err(e);
+                    Self::drop_if_expired(&mut sessions, &session_id, config, processing_start);
+                    match sessions.get_mut(&session_id) {
+                        Some(session) if !session.is_complete => {
+                            if let Err(e) = session.apply_frame(&payload, config.max_session_bytes)
+                            {
+                                sessions.remove(&session_id);
+                                return Err(e);
+                            }
+                            if is_complete {
+                                session.is_complete = true;
+                                info!("Stream completed for session {}", session_id);
+                            }
+                            session.last_activity = processing_start;
+                            session.record_frame(processing_start.elapsed());
+                            true
                         }
-
-                        if is_complete {
-                            session.is_complete = true;
-                            info!("Stream completed for session {:?}", session_id);
-                        }
-
-                        session.record_frame(processing_start.elapsed());
+                        _ => false,
                     }
+                };
+                if !applied {
+                    return Ok(());
                 }
 
                 let processing_time = processing_start.elapsed();
@@ -608,13 +782,18 @@ impl PjsWebSocketClient {
                 checksum,
             } => {
                 info!(
-                    "Stream completed: {:?} (checksum: {:?})",
+                    "Stream completed: {} (checksum: {:?})",
                     session_id, checksum
                 );
 
+                let now = Instant::now();
                 let mut sessions = sessions.write().await;
-                if let Some(session) = sessions.get_mut(&session_id) {
+                Self::drop_if_expired(&mut sessions, &session_id, config, now);
+                if let Some(session) = sessions.get_mut(&session_id)
+                    && !session.is_complete
+                {
                     session.is_complete = true;
+                    session.last_activity = now;
                 }
             }
             WsMessage::Error {
@@ -622,9 +801,13 @@ impl PjsWebSocketClient {
                 error,
                 code,
             } => {
+                let removed = match session_id {
+                    Some(id) => sessions.write().await.remove(&id).is_some(),
+                    None => false,
+                };
                 error!(
-                    "Received error from server: session={:?}, error={:?}, code={}",
-                    session_id, error, code
+                    "Received error from server: session={:?}, error={:?}, code={}, session_removed={}",
+                    session_id, error, code, removed
                 );
             }
             WsMessage::Ping { timestamp } => {
@@ -649,7 +832,7 @@ impl PjsWebSocketClient {
 #[derive(Debug, Clone)]
 pub struct StreamStats {
     /// Identifier of the streaming session.
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Number of frames successfully applied to the session.
     ///
     /// A repeated `frame_id` counts again, and frames rejected (for example
@@ -661,6 +844,15 @@ pub struct StreamStats {
     pub duration: Duration,
     /// Average per-frame processing duration, if any frames have been applied.
     pub average_processing_time: Option<Duration>,
+}
+
+/// A session removed by [`PjsWebSocketClient::close_session`].
+#[derive(Debug, Clone)]
+pub struct ClosedSession {
+    /// Data reconstructed from the frames applied to the session.
+    pub data: Value,
+    /// Statistics as of the moment the session was closed.
+    pub stats: StreamStats,
 }
 
 #[cfg(test)]
@@ -689,8 +881,6 @@ mod tests {
         let data = json!({"test": "data"});
 
         let session_id = client.request_stream(data, None).await.unwrap();
-        assert!(!session_id.is_empty());
-
         let sessions = client.sessions.read().await;
         assert!(sessions.contains_key(&session_id));
     }
@@ -767,7 +957,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_config_overrides_default() {
         let config = WebSocketClientConfig {
-            max_sessions: 3,
+            max_sessions: NonZeroUsize::new(3).unwrap(),
             ..WebSocketClientConfig::default()
         };
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
@@ -776,58 +966,142 @@ mod tests {
         assert_eq!(client.config, config);
     }
 
-    fn session_aged(id: &str, age_secs: u64, is_complete: bool) -> ClientStreamSession {
-        let mut session = ClientStreamSession::new(id.to_string());
-        session.created_at = Instant::now() - Duration::from_secs(age_secs);
+    fn session_idle_since(last_activity: Instant, is_complete: bool) -> ClientStreamSession {
+        let mut session = ClientStreamSession::new(SessionId::new());
+        session.last_activity = last_activity;
         session.is_complete = is_complete;
         session
     }
 
-    #[test]
-    fn test_reserve_session_slot_evicts_completed_before_live_sessions() {
-        let mut sessions = HashMap::new();
-        sessions.insert("done".to_string(), session_aged("done", 1, true));
-        sessions.insert("old".to_string(), session_aged("old", 100, false));
+    fn max(n: usize) -> NonZeroUsize {
+        NonZeroUsize::new(n).unwrap()
+    }
 
-        reserve_session_slot(&mut sessions, 2);
-
-        assert!(!sessions.contains_key("done"));
-        assert!(sessions.contains_key("old"));
+    fn sessions_of(
+        entries: impl IntoIterator<Item = ClientStreamSession>,
+    ) -> HashMap<SessionId, ClientStreamSession> {
+        entries
+            .into_iter()
+            .map(|session| (session.id, session))
+            .collect()
     }
 
     #[test]
-    fn test_reserve_session_slot_evicts_oldest_when_none_completed() {
-        let mut sessions = HashMap::new();
-        sessions.insert("oldest".to_string(), session_aged("oldest", 100, false));
-        sessions.insert("newer".to_string(), session_aged("newer", 10, false));
+    fn test_session_idle_ttl_rejects_zero() {
+        assert!(matches!(
+            SessionIdleTtl::new(Duration::ZERO),
+            Err(ConfigError::MustBePositive { .. })
+        ));
+        assert_eq!(
+            SessionIdleTtl::new(Duration::from_secs(7))
+                .unwrap()
+                .as_duration(),
+            Duration::from_secs(7)
+        );
+    }
 
-        reserve_session_slot(&mut sessions, 2);
+    #[test]
+    fn test_is_expired_uses_injected_now_and_strict_comparison() {
+        let ttl = SessionIdleTtl::new(Duration::from_secs(10)).unwrap();
+        let base = Instant::now();
+        let session = session_idle_since(base, false);
 
-        assert!(!sessions.contains_key("oldest"));
-        assert!(sessions.contains_key("newer"));
+        assert!(!session.is_expired(base, ttl));
+        assert!(!session.is_expired(base + Duration::from_secs(10), ttl));
+        assert!(session.is_expired(base + Duration::from_secs(11), ttl));
+    }
+
+    #[test]
+    fn test_reserve_session_slot_evicts_incomplete_session_idle_longest() {
+        let ttl = SessionIdleTtl::default();
+        let base = Instant::now();
+        let idle_longest = session_idle_since(base, false);
+        let recent = session_idle_since(base + Duration::from_secs(10), false);
+        let (idle_id, recent_id) = (idle_longest.id, recent.id);
+        let mut sessions = sessions_of([idle_longest, recent]);
+
+        reserve_session_slot(&mut sessions, max(2), ttl, base + Duration::from_secs(11)).unwrap();
+
+        assert!(!sessions.contains_key(&idle_id));
+        assert!(sessions.contains_key(&recent_id));
+    }
+
+    #[test]
+    fn test_reserve_session_slot_never_evicts_completed_sessions() {
+        let ttl = SessionIdleTtl::default();
+        let base = Instant::now();
+        let done = session_idle_since(base, true);
+        let live = session_idle_since(base + Duration::from_secs(10), false);
+        let (done_id, live_id) = (done.id, live.id);
+        let mut sessions = sessions_of([done, live]);
+
+        reserve_session_slot(&mut sessions, max(2), ttl, base + Duration::from_secs(11)).unwrap();
+
+        assert!(sessions.contains_key(&done_id));
+        assert!(!sessions.contains_key(&live_id));
+    }
+
+    #[test]
+    fn test_reserve_session_slot_errors_when_every_session_is_complete() {
+        let ttl = SessionIdleTtl::default();
+        let base = Instant::now();
+        let mut sessions = sessions_of([
+            session_idle_since(base, true),
+            session_idle_since(base, true),
+        ]);
+
+        let result = reserve_session_slot(&mut sessions, max(2), ttl, base);
+
+        assert!(matches!(
+            result,
+            Err(PjsError::SessionLimitReached { limit }) if limit == max(2)
+        ));
+        assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn test_reserve_session_slot_drops_expired_sessions_first() {
+        let ttl = SessionIdleTtl::new(Duration::from_secs(10)).unwrap();
+        let base = Instant::now();
+        let expired_done = session_idle_since(base, true);
+        let fresh = session_idle_since(base + Duration::from_secs(20), false);
+        let fresh_id = fresh.id;
+        let mut sessions = sessions_of([expired_done, fresh]);
+
+        reserve_session_slot(&mut sessions, max(2), ttl, base + Duration::from_secs(25)).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions.contains_key(&fresh_id));
     }
 
     #[test]
     fn test_reserve_session_slot_is_noop_below_limit() {
-        let mut sessions = HashMap::new();
-        sessions.insert("a".to_string(), session_aged("a", 1, false));
+        let base = Instant::now();
+        let mut sessions = sessions_of([session_idle_since(base, false)]);
 
-        reserve_session_slot(&mut sessions, 2);
+        reserve_session_slot(&mut sessions, max(2), SessionIdleTtl::default(), base).unwrap();
 
         assert_eq!(sessions.len(), 1);
     }
 
     #[tokio::test]
-    async fn test_request_stream_at_capacity_evicts_oldest_instead_of_failing() {
+    async fn test_request_stream_at_capacity_evicts_idle_longest_instead_of_failing() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
             .unwrap()
             .with_config(WebSocketClientConfig {
-                max_sessions: 2,
+                max_sessions: max(2),
                 ..WebSocketClientConfig::default()
             });
 
         let first = client.request_stream(json!({}), None).await.unwrap();
         let second = client.request_stream(json!({}), None).await.unwrap();
+        client
+            .sessions
+            .write()
+            .await
+            .get_mut(&second)
+            .unwrap()
+            .last_activity += Duration::from_secs(1);
         let third = client.request_stream(json!({}), None).await.unwrap();
 
         let sessions = client.sessions.read().await;
@@ -867,9 +1141,9 @@ mod tests {
         assert!(client.sessions.read().await.is_empty());
     }
 
-    fn frame(session_id: &str, frame_id: u32, payload: Value) -> WsMessage {
+    fn frame(session_id: SessionId, frame_id: u32, payload: Value) -> WsMessage {
         WsMessage::StreamFrame {
-            session_id: session_id.to_string(),
+            session_id,
             frame_id,
             priority: 1,
             payload,
@@ -877,12 +1151,12 @@ mod tests {
         }
     }
 
-    async fn sessions_with(id: &str) -> Arc<RwLock<HashMap<String, ClientStreamSession>>> {
+    async fn sessions_with(id: SessionId) -> ClientSessions {
         let sessions = Arc::new(RwLock::new(HashMap::new()));
         sessions
             .write()
             .await
-            .insert(id.to_string(), ClientStreamSession::new(id.to_string()));
+            .insert(id, ClientStreamSession::new(id));
         sessions
     }
 
@@ -890,60 +1164,74 @@ mod tests {
         byte_bounded_channel(MESSAGE_QUEUE_CAPACITY, MAX_QUEUED_MESSAGE_BYTES)
     }
 
+    async fn deliver(
+        sessions: &ClientSessions,
+        tx: &ByteBoundedSender<String>,
+        config: WebSocketClientConfig,
+        message: WsMessage,
+    ) -> PjsResult<()> {
+        PjsWebSocketClient::handle_incoming_message(sessions.clone(), tx.clone(), config, message)
+            .await
+    }
+
+    fn complete(session_id: SessionId) -> WsMessage {
+        WsMessage::StreamComplete {
+            session_id,
+            checksum: "c".to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn test_frame_state_is_bounded_by_counters() {
-        let sessions = sessions_with("s").await;
+        let id = SessionId::new();
+        let sessions = sessions_with(id).await;
         let (tx, _rx) = control_channel();
 
         for frame_id in 0..100u32 {
-            PjsWebSocketClient::handle_incoming_message(
-                sessions.clone(),
-                tx.clone(),
+            deliver(
+                &sessions,
+                &tx,
                 WebSocketClientConfig::default(),
-                frame("s", frame_id, json!({"k": frame_id})),
+                frame(id, frame_id, json!({"k": frame_id})),
             )
             .await
             .unwrap();
         }
 
-        let session = &sessions.read().await["s"];
+        let session = &sessions.read().await[&id];
         assert_eq!(session.frames_received, 100);
     }
 
     #[tokio::test]
     async fn test_session_exceeding_byte_cap_is_rejected_and_dropped() {
-        let sessions = sessions_with("s").await;
+        let id = SessionId::new();
+        let sessions = sessions_with(id).await;
         let (tx, _rx) = control_channel();
         let config = WebSocketClientConfig {
             max_session_bytes: 64,
             ..WebSocketClientConfig::default()
         };
 
-        PjsWebSocketClient::handle_incoming_message(
-            sessions.clone(),
-            tx.clone(),
-            config,
-            frame("s", 0, json!({"a": "small"})),
-        )
-        .await
-        .unwrap();
-        assert!(sessions.read().await.contains_key("s"));
+        deliver(&sessions, &tx, config, frame(id, 0, json!({"a": "small"})))
+            .await
+            .unwrap();
+        assert!(sessions.read().await.contains_key(&id));
 
-        let result = PjsWebSocketClient::handle_incoming_message(
-            sessions.clone(),
-            tx,
+        let result = deliver(
+            &sessions,
+            &tx,
             config,
-            frame("s", 1, json!({"b": "x".repeat(100)})),
+            frame(id, 1, json!({"b": "x".repeat(100)})),
         )
         .await;
 
         assert!(matches!(result, Err(PjsError::ClientError(_))));
-        assert!(!sessions.read().await.contains_key("s"));
+        assert!(!sessions.read().await.contains_key(&id));
     }
 
     #[test]
     fn test_apply_frame_overwriting_a_key_does_not_grow_byte_count() {
-        let mut session = ClientStreamSession::new("s".to_string());
+        let mut session = ClientStreamSession::new(SessionId::new());
         session.apply_frame(&json!({"k": "aaaa"}), 1024).unwrap();
         let after_first = session.reconstructed_bytes;
 
@@ -955,7 +1243,7 @@ mod tests {
 
     #[test]
     fn test_apply_frame_merges_objects() {
-        let mut session = ClientStreamSession::new("s".to_string());
+        let mut session = ClientStreamSession::new(SessionId::new());
         session
             .apply_frame(&json!({"existing": "value"}), 1024)
             .unwrap();
@@ -968,34 +1256,157 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_completed_session_is_evicted_when_cap_is_reached() {
+    async fn test_full_cap_of_completed_sessions_returns_typed_error_and_close_frees_a_slot() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws")
             .unwrap()
             .with_config(WebSocketClientConfig {
-                max_sessions: 2,
+                max_sessions: max(2),
                 ..WebSocketClientConfig::default()
             });
-        let live = client.request_stream(json!({}), None).await.unwrap();
-        let done = client.request_stream(json!({}), None).await.unwrap();
+        let first = client.request_stream(json!({}), None).await.unwrap();
+        let second = client.request_stream(json!({}), None).await.unwrap();
         let (tx, _rx) = control_channel();
-        PjsWebSocketClient::handle_incoming_message(
-            client.sessions.clone(),
-            tx,
+        for id in [first, second] {
+            deliver(&client.sessions, &tx, client.config, complete(id))
+                .await
+                .unwrap();
+        }
+
+        let refused = client.request_stream(json!({}), None).await;
+        assert!(matches!(refused, Err(PjsError::SessionLimitReached { .. })));
+        assert!(client.is_stream_complete(first).await);
+
+        assert!(client.close_session(first).await.is_some());
+        let fresh = client.request_stream(json!({}), None).await.unwrap();
+        let sessions = client.sessions.read().await;
+        assert!(sessions.contains_key(&second));
+        assert!(sessions.contains_key(&fresh));
+    }
+
+    #[tokio::test]
+    async fn test_completed_session_ignores_late_frames_and_repeated_completion() {
+        let id = SessionId::new();
+        let sessions = sessions_with(id).await;
+        let (tx, mut rx) = control_channel();
+        let config = WebSocketClientConfig::default();
+        deliver(&sessions, &tx, config, frame(id, 0, json!({"a": 1})))
+            .await
+            .unwrap();
+        deliver(&sessions, &tx, config, complete(id)).await.unwrap();
+        rx.try_recv().expect("the live frame is acknowledged");
+        let (frozen_activity, frozen_frames) = {
+            let guard = sessions.read().await;
+            (guard[&id].last_activity, guard[&id].frames_received)
+        };
+
+        deliver(&sessions, &tx, config, frame(id, 1, json!({"late": true})))
+            .await
+            .unwrap();
+        deliver(&sessions, &tx, config, complete(id)).await.unwrap();
+
+        let guard = sessions.read().await;
+        assert_eq!(guard[&id].last_activity, frozen_activity);
+        assert_eq!(guard[&id].frames_received, frozen_frames);
+        assert_eq!(guard[&id].reconstructed_data, json!({"a": 1}));
+        assert!(rx.try_recv().is_err(), "a late frame must not be acked");
+    }
+
+    #[tokio::test]
+    async fn test_frame_for_unknown_session_is_not_acked() {
+        let sessions: ClientSessions = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, mut rx) = control_channel();
+
+        deliver(
+            &sessions,
+            &tx,
+            WebSocketClientConfig::default(),
+            frame(SessionId::new(), 0, json!({})),
+        )
+        .await
+        .unwrap();
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_expired_session_reads_as_unknown_and_is_dropped_on_incoming_path() {
+        let id = SessionId::new();
+        let sessions = sessions_with(id).await;
+        let config = WebSocketClientConfig::default();
+        let ttl = config.session_idle_ttl;
+        let later = Instant::now() + ttl.as_duration() + Duration::from_secs(1);
+
+        {
+            let guard = sessions.read().await;
+            assert!(live_session(&guard, &id, ttl, Instant::now()).is_some());
+            assert!(live_session(&guard, &id, ttl, later).is_none());
+        }
+
+        PjsWebSocketClient::drop_if_expired(&mut *sessions.write().await, &id, config, later);
+        assert!(sessions.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_close_session_returns_data_and_stats_or_none() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+        let id = client.request_stream(json!({}), None).await.unwrap();
+        let (tx, _rx) = control_channel();
+        deliver(
+            &client.sessions,
+            &tx,
             client.config,
-            WsMessage::StreamComplete {
-                session_id: done.clone(),
-                checksum: "c".to_string(),
+            frame(id, 0, json!({"a": 1})),
+        )
+        .await
+        .unwrap();
+
+        let closed = client.close_session(id).await.expect("known session");
+
+        assert_eq!(closed.data, json!({"a": 1}));
+        assert_eq!(closed.stats.session_id, id);
+        assert_eq!(closed.stats.total_frames, 1);
+        assert!(client.close_session(id).await.is_none());
+        assert!(client.close_session(SessionId::new()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_close_session_of_expired_session_is_none_and_frees_the_slot() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+        let id = client.request_stream(json!({}), None).await.unwrap();
+        let ttl = client.config.session_idle_ttl.as_duration();
+        let later = Instant::now() + ttl + Duration::from_secs(1);
+
+        assert!(client.close_session_at(id, later).await.is_none());
+        assert!(client.sessions.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_server_error_with_session_id_removes_that_session() {
+        let id = SessionId::new();
+        let other = SessionId::new();
+        let sessions = sessions_with(id).await;
+        sessions
+            .write()
+            .await
+            .insert(other, ClientStreamSession::new(other));
+        let (tx, _rx) = control_channel();
+
+        deliver(
+            &sessions,
+            &tx,
+            WebSocketClientConfig::default(),
+            WsMessage::Error {
+                session_id: Some(id),
+                error: "rejected".to_string(),
+                code: 409,
             },
         )
         .await
         .unwrap();
 
-        let fresh = client.request_stream(json!({}), None).await.unwrap();
-
-        let sessions = client.sessions.read().await;
-        assert!(sessions.contains_key(&live));
-        assert!(!sessions.contains_key(&done));
-        assert!(sessions.contains_key(&fresh));
+        let guard = sessions.read().await;
+        assert!(!guard.contains_key(&id));
+        assert!(guard.contains_key(&other));
     }
 
     #[derive(Clone, Default)]
@@ -1030,30 +1441,24 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
         let hostile = "\n\r\x1b[31m".to_string();
-        let sessions = sessions_with("s").await;
+        let id = SessionId::new();
+        let sessions = sessions_with(id).await;
         let (tx, _rx) = control_channel();
         let config = WebSocketClientConfig::default();
 
         for message in [
             WsMessage::StreamComplete {
-                session_id: hostile.clone(),
+                session_id: id,
                 checksum: hostile.clone(),
             },
             WsMessage::Error {
-                session_id: Some(hostile.clone()),
+                session_id: Some(id),
                 error: hostile.clone(),
                 code: 500,
             },
-            frame(&hostile, 0, json!({})),
+            frame(id, 0, json!({})),
         ] {
-            PjsWebSocketClient::handle_incoming_message(
-                sessions.clone(),
-                tx.clone(),
-                config,
-                message,
-            )
-            .await
-            .unwrap();
+            deliver(&sessions, &tx, config, message).await.unwrap();
         }
 
         let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();

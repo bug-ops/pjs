@@ -3,7 +3,7 @@
 //!
 //! Each submodule is meant to be used through `#[serde(with = "...")]`:
 //! `Priority` travels as a `u8` (validated on decode), `SessionId`/`StreamId`
-//! as a UUID, and maps keyed by `StreamId` use the UUID string as the key.
+//! as a UUID. Stream collections are encoded by `entities::StreamMap`.
 
 /// `Priority` as a bare `u8`; decoding rejects values that `Priority::new` refuses.
 pub mod priority {
@@ -104,36 +104,26 @@ pub mod option_stream_id {
     }
 }
 
-/// `HashMap<StreamId, Stream>` keyed by the UUID string.
-pub mod stream_map {
-    use crate::{entities::Stream, value_objects::StreamId};
+/// `Option<SessionId>` as an optional UUID.
+///
+/// Pair with `#[serde(default)]` so a missing field decodes to `None`.
+pub mod option_session_id {
+    use crate::value_objects::SessionId;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::collections::HashMap;
 
-    /// Serializes the map with UUID-string keys.
+    /// Serializes the id as an optional UUID.
     pub fn serialize<S: Serializer>(
-        map: &HashMap<StreamId, Stream>,
+        id: &Option<SessionId>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        let raw: HashMap<String, &Stream> = map
-            .iter()
-            .map(|(k, v)| (k.as_uuid().to_string(), v))
-            .collect();
-        raw.serialize(serializer)
+        id.map(|i| i.as_uuid()).serialize(serializer)
     }
 
-    /// Deserializes a UUID-string keyed map, rejecting malformed keys.
+    /// Deserializes an optional UUID into an `Option<SessionId>`.
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<HashMap<StreamId, Stream>, D::Error> {
-        HashMap::<String, Stream>::deserialize(deserializer)?
-            .into_iter()
-            .map(|(k, v)| {
-                uuid::Uuid::parse_str(&k)
-                    .map(|uuid| (StreamId::from_uuid(uuid), v))
-                    .map_err(serde::de::Error::custom)
-            })
-            .collect()
+    ) -> Result<Option<SessionId>, D::Error> {
+        Ok(Option::<uuid::Uuid>::deserialize(deserializer)?.map(SessionId::from_uuid))
     }
 }
 
@@ -155,6 +145,8 @@ mod tests {
         stream: StreamId,
         #[serde(with = "super::option_stream_id")]
         opt: Option<StreamId>,
+        #[serde(with = "super::option_session_id", default)]
+        opt_session: Option<SessionId>,
     }
 
     fn sample() -> Wire {
@@ -164,6 +156,7 @@ mod tests {
             session: SessionId::new(),
             stream: StreamId::new(),
             opt: Some(StreamId::new()),
+            opt_session: Some(SessionId::new()),
         }
     }
 
@@ -176,6 +169,10 @@ mod tests {
         assert_eq!(json["session"], w.session.as_uuid().to_string());
         assert_eq!(json["stream"], w.stream.as_uuid().to_string());
         assert_eq!(json["opt"], w.opt.unwrap().as_uuid().to_string());
+        assert_eq!(
+            json["opt_session"],
+            w.opt_session.unwrap().as_uuid().to_string()
+        );
     }
 
     #[test]
@@ -193,6 +190,17 @@ mod tests {
         assert!(json["opt"].is_null());
         let back: Wire = serde_json::from_value(json).unwrap();
         assert_eq!(back, w);
+    }
+
+    #[test]
+    fn option_session_id_round_trips_null_and_tolerates_missing_field() {
+        let mut w = sample();
+        w.opt_session = None;
+        let mut json = serde_json::to_value(&w).unwrap();
+        assert!(json["opt_session"].is_null());
+        assert_eq!(serde_json::from_value::<Wire>(json.clone()).unwrap(), w);
+        json.as_object_mut().unwrap().remove("opt_session");
+        assert_eq!(serde_json::from_value::<Wire>(json).unwrap(), w);
     }
 
     #[test]

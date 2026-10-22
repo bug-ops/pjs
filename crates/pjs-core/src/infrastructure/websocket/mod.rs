@@ -4,14 +4,16 @@
 //! and backpressure handling for optimal client performance.
 
 use crate::{
-    Error as PjsError, Result as PjsResult, StreamFrame, domain::Priority, security::RateLimitGuard,
+    Error as PjsError, Result as PjsResult, StreamFrame,
+    domain::{Priority, SessionId},
+    security::RateLimitGuard,
 };
 use futures::{Sink, SinkExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     future::Future,
     sync::Arc,
     time::{Duration, Instant},
@@ -27,7 +29,9 @@ pub mod security;
 pub mod server;
 
 #[cfg(feature = "websocket-client")]
-pub use client::{PjsWebSocketClient, StreamStats, WebSocketClientConfig};
+pub use client::{
+    ClosedSession, PjsWebSocketClient, SessionIdleTtl, StreamStats, WebSocketClientConfig,
+};
 pub use security::SecureWebSocketHandler;
 #[cfg(feature = "http-server")]
 pub use server::{AxumWebSocketTransport, create_websocket_router};
@@ -62,6 +66,7 @@ pub use server::{AxumWebSocketTransport, create_websocket_router};
 /// (`http-server` vs. none) and can't easily share a single definition —
 /// an intentional change to one's default should be mirrored in the other
 /// unless a divergence is deliberate.
+#[cfg(feature = "websocket-client")]
 pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Writes `message` to `sink`, aborting the write if it does not complete
@@ -114,6 +119,7 @@ mod write_timeout_tests {
         );
     }
 
+    #[cfg(feature = "websocket-client")]
     #[tokio::test]
     async fn test_send_with_write_timeout_succeeds_on_ready_sink() {
         let mut sink = futures::sink::drain();
@@ -123,14 +129,55 @@ mod write_timeout_tests {
     }
 }
 
-/// WebSocket message types for PJS streaming
+/// Identity of one accepted WebSocket connection.
+///
+/// Generated server-side and never sent on the wire. Sessions record the
+/// connection that created them, and the frame broadcast is tagged with it, so
+/// a connection only ever receives and acknowledges its own sessions.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::infrastructure::websocket::ConnectionId;
+///
+/// let a = ConnectionId::new();
+/// assert_eq!(a, a);
+/// assert_ne!(a, ConnectionId::new());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionId(Uuid);
+
+impl ConnectionId {
+    /// Generates a fresh random connection id.
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for ConnectionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for ConnectionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// WebSocket message types for PJS streaming.
+///
+/// Session ids travel as UUID strings. A peer may send any textual UUID form,
+/// but the server always echoes the canonical lowercase hyphenated form.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum WsMessage {
     /// Stream initialization request
     StreamInit {
-        /// Identifier of the WebSocket session.
-        session_id: String,
+        /// Identifier of the WebSocket session, chosen by the requesting peer.
+        #[serde(with = "pjson_rs_domain::serde_support::session_id")]
+        session_id: SessionId,
         /// Source JSON payload to be streamed.
         data: Value,
         /// Per-stream options controlling framing and compression.
@@ -139,7 +186,8 @@ pub enum WsMessage {
     /// Stream frame with priority data
     StreamFrame {
         /// Identifier of the WebSocket session.
-        session_id: String,
+        #[serde(with = "pjson_rs_domain::serde_support::session_id")]
+        session_id: SessionId,
         /// Monotonic frame index within the session.
         frame_id: u32,
         /// Priority assigned to this frame.
@@ -152,7 +200,8 @@ pub enum WsMessage {
     /// Client acknowledgment of frame
     FrameAck {
         /// Identifier of the WebSocket session.
-        session_id: String,
+        #[serde(with = "pjson_rs_domain::serde_support::session_id")]
+        session_id: SessionId,
         /// Index of the frame being acknowledged.
         frame_id: u32,
         /// Time the client took to process the frame, in milliseconds.
@@ -161,14 +210,16 @@ pub enum WsMessage {
     /// Stream completion signal
     StreamComplete {
         /// Identifier of the WebSocket session.
-        session_id: String,
+        #[serde(with = "pjson_rs_domain::serde_support::session_id")]
+        session_id: SessionId,
         /// SHA-256 checksum of the concatenated frame payloads.
         checksum: String,
     },
     /// Error message
     Error {
         /// Identifier of the WebSocket session, if known.
-        session_id: Option<String>,
+        #[serde(default, with = "pjson_rs_domain::serde_support::option_session_id")]
+        session_id: Option<SessionId>,
         /// Human-readable error description.
         error: String,
         /// Numeric error code.
@@ -215,7 +266,7 @@ impl Default for StreamOptions {
 /// This type is intentionally distinct from the domain-layer
 /// [`crate::domain::aggregates::StreamSession`] aggregate. The WebSocket
 /// transport maintains an ephemeral, transport-local session model with raw
-/// `String` identifiers and an in-memory `HashMap` keyed off
+/// [`SessionId`] identifiers and an in-memory `HashMap` keyed off
 /// [`AdaptiveStreamController`]; it does **not** share state with the
 /// `StreamRepositoryGat`-backed domain session created by
 /// `POST /pjs/sessions`. Sessions created over WebSocket cannot be addressed
@@ -227,7 +278,7 @@ impl Default for StreamOptions {
 #[derive(Debug)]
 pub struct WebSocketStreamSession {
     /// Transport-local session identifier.
-    pub id: String,
+    pub id: SessionId,
     /// Instant the session was created.
     pub created_at: Instant,
     /// Streaming options negotiated for this session.
@@ -242,12 +293,22 @@ pub struct WebSocketStreamSession {
     pub client_metrics: ClientMetrics,
     /// Rate-limit guard scoped to this session, if installed.
     pub rate_limit_guard: Option<RateLimitGuard>,
+    /// Connection that created the session; the only one allowed to receive
+    /// its frames and acknowledge them.
+    owner: ConnectionId,
     /// Handle to abort the per-session frame-streaming task on teardown.
     ///
     /// Not `pub`: only ever set and read within this module, which keeps
     /// this session-lifecycle detail out of the public struct-literal
     /// surface.
     stream_task: Option<tokio::task::AbortHandle>,
+}
+
+impl WebSocketStreamSession {
+    /// Connection that created this session.
+    pub fn owner(&self) -> ConnectionId {
+        self.owner
+    }
 }
 
 /// Client performance metrics for adaptive streaming
@@ -313,7 +374,7 @@ pub trait WebSocketTransport: Send + Sync {
     type Connection: Send + Sync;
 
     /// Future type for starting stream
-    type StartStreamFuture<'a>: Future<Output = PjsResult<String>> + Send + 'a
+    type StartStreamFuture<'a>: Future<Output = PjsResult<SessionId>> + Send + 'a
     where
         Self: 'a;
 
@@ -363,18 +424,45 @@ pub trait WebSocketTransport: Send + Sync {
     ) -> Self::HandleMessageFuture<'_>;
 
     /// Close streaming session
-    fn close_stream(&self, session_id: &str) -> Self::CloseStreamFuture<'_>;
+    fn close_stream(&self, session_id: SessionId) -> Self::CloseStreamFuture<'_>;
 }
 
-/// Adaptive streaming controller
+/// Why [`AdaptiveStreamController::create_session`] refused a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CreateSessionError {
+    /// A session with this id already exists and was left untouched.
+    #[error("session {0} already exists")]
+    AlreadyExists(SessionId),
+}
+
+impl From<CreateSessionError> for PjsError {
+    fn from(error: CreateSessionError) -> Self {
+        PjsError::InvalidSession(error.to_string())
+    }
+}
+
+/// One event on the frame broadcast: the connection that owns the session, the
+/// session, and the message.
+///
+/// The message is shared behind an [`Arc`] so every subscribed connection gets
+/// a cheap handle instead of a deep copy of the payload; receivers compare the
+/// owner tag and drop events that belong to other connections.
+pub type FrameEvent = (ConnectionId, SessionId, Arc<WsMessage>);
+
+/// Adaptive streaming controller.
+///
+/// Owns the transport-local sessions and the frame broadcast. Every session
+/// records the [`ConnectionId`] that created it; frames are tagged with that
+/// owner and acknowledgments are accepted only from it.
 pub struct AdaptiveStreamController {
-    sessions: Arc<RwLock<HashMap<String, WebSocketStreamSession>>>,
-    frame_tx: broadcast::Sender<(String, WsMessage)>,
+    sessions: Arc<RwLock<HashMap<SessionId, WebSocketStreamSession>>>,
+    frame_tx: broadcast::Sender<FrameEvent>,
 }
 
 impl AdaptiveStreamController {
     /// Create an empty controller with no active sessions.
     pub fn new() -> Self {
+        // TODO(#570): shared broadcast lag drops other connections' frames
         let (frame_tx, _) = broadcast::channel(1000);
 
         Self {
@@ -383,17 +471,54 @@ impl AdaptiveStreamController {
         }
     }
 
-    /// Create new streaming session
-    pub async fn create_session(&self, data: Value, options: StreamOptions) -> PjsResult<String> {
-        let session_id = Uuid::new_v4().to_string();
+    /// Create a streaming session under `session_id`, owned by `owner`.
+    ///
+    /// An existing session is never overwritten: its id may already be routed
+    /// to another connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CreateSessionError::AlreadyExists`] if `session_id` is already in use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::domain::SessionId;
+    /// use pjson_rs::infrastructure::websocket::{
+    ///     AdaptiveStreamController, ConnectionId, StreamOptions,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// # #[tokio::main] async fn main() {
+    /// let controller = AdaptiveStreamController::new();
+    /// let id = SessionId::new();
+    /// let owner = ConnectionId::new();
+    /// controller
+    ///     .create_session(id, owner, json!({}), StreamOptions::default())
+    ///     .await
+    ///     .unwrap();
+    /// // The id is taken; a second connection cannot claim it.
+    /// assert!(controller
+    ///     .create_session(id, ConnectionId::new(), json!({}), StreamOptions::default())
+    ///     .await
+    ///     .is_err());
+    /// # }
+    /// ```
+    pub async fn create_session(
+        &self,
+        session_id: SessionId,
+        owner: ConnectionId,
+        data: Value,
+        options: StreamOptions,
+    ) -> Result<(), CreateSessionError> {
         let plan = vec![StreamFrame {
-            data: data.clone(),
+            data,
             priority: Priority::HIGH,
-            metadata: std::collections::HashMap::new(),
+            metadata: HashMap::new(),
         }]; // Simplified for now
 
         let session = WebSocketStreamSession {
-            id: session_id.clone(),
+            id: session_id,
             created_at: Instant::now(),
             options,
             plan,
@@ -401,35 +526,37 @@ impl AdaptiveStreamController {
             acknowledged_frames: Vec::new(),
             client_metrics: ClientMetrics::default(),
             rate_limit_guard: None, // Will be set when connection is established
-            stream_task: None,      // Set when streaming starts
+            owner,
+            stream_task: None, // Set when streaming starts
         };
 
-        self.sessions
-            .write()
-            .await
-            .insert(session_id.clone(), session);
+        match self.sessions.write().await.entry(session_id) {
+            Entry::Occupied(_) => return Err(CreateSessionError::AlreadyExists(session_id)),
+            Entry::Vacant(slot) => {
+                slot.insert(session);
+            }
+        }
 
         info!("Created streaming session: {}", session_id);
-        Ok(session_id)
+        Ok(())
     }
 
     /// Start streaming frames for session
-    pub async fn start_streaming(&self, session_id: &str) -> PjsResult<()> {
+    pub async fn start_streaming(&self, session_id: SessionId) -> PjsResult<()> {
         let mut sessions = self.sessions.write().await;
         let session = sessions
-            .get_mut(session_id)
+            .get_mut(&session_id)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
 
         // Start streaming task
-        let session_id = session_id.to_string();
+        let owner = session.owner;
         let frame_tx = self.frame_tx.clone();
         let plan = session.plan.clone();
 
-        let task_session_id = session_id.clone();
         let sessions_for_task = self.sessions.clone();
         let handle = tokio::spawn(async move {
             if let Err(e) =
-                Self::stream_frames(task_session_id, plan, frame_tx, sessions_for_task).await
+                Self::stream_frames(owner, session_id, plan, frame_tx, sessions_for_task).await
             {
                 error!("Error streaming frames: {}", e);
             }
@@ -460,10 +587,11 @@ impl AdaptiveStreamController {
     }
 
     async fn stream_frames(
-        session_id: String,
+        owner: ConnectionId,
+        session_id: SessionId,
         plan: Vec<StreamFrame>, // Simplified for now
-        frame_tx: broadcast::Sender<(String, WsMessage)>,
-        sessions: Arc<RwLock<HashMap<String, WebSocketStreamSession>>>,
+        frame_tx: broadcast::Sender<FrameEvent>,
+        sessions: Arc<RwLock<HashMap<SessionId, WebSocketStreamSession>>>,
     ) -> Result<(), PjsError> {
         let mut frames_data = Vec::new();
 
@@ -474,14 +602,14 @@ impl AdaptiveStreamController {
             frames_data.push(payload_bytes);
 
             let ws_message = WsMessage::StreamFrame {
-                session_id: session_id.clone(),
+                session_id,
                 frame_id: frame_id as u32,
                 priority: frame.priority.value(),
                 payload: frame.data.clone(),
                 is_complete: frame_id == (plan.len() - 1),
             };
 
-            if let Err(e) = frame_tx.send((session_id.clone(), ws_message)) {
+            if let Err(e) = frame_tx.send((owner, session_id, Arc::new(ws_message))) {
                 error!("Failed to send frame {}: {}", frame_id, e);
                 break;
             }
@@ -497,24 +625,31 @@ impl AdaptiveStreamController {
 
         // Send completion message with calculated checksum
         let complete_message = WsMessage::StreamComplete {
-            session_id: session_id.clone(),
+            session_id,
             checksum: calculate_stream_checksum(&frames_data),
         };
 
-        let _ = frame_tx.send((session_id, complete_message));
+        let _ = frame_tx.send((owner, session_id, Arc::new(complete_message)));
         Ok(())
     }
 
-    /// Handle frame acknowledgment
+    /// Handle frame acknowledgment from `owner`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PjsError::InvalidSession`] if the session does not exist or
+    /// belongs to another connection; the metrics are left untouched.
     pub async fn handle_frame_ack(
         &self,
-        session_id: &str,
+        owner: ConnectionId,
+        session_id: SessionId,
         frame_id: u32,
         processing_time_ms: u64,
     ) -> PjsResult<()> {
         let mut sessions = self.sessions.write().await;
         let session = sessions
-            .get_mut(session_id)
+            .get_mut(&session_id)
+            .filter(|session| session.owner == owner)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
 
         session.acknowledged_frames.push(frame_id);
@@ -540,20 +675,23 @@ impl AdaptiveStreamController {
         Ok(())
     }
 
-    /// Get subscriber for frame events
-    pub fn subscribe_frames(&self) -> broadcast::Receiver<(String, WsMessage)> {
+    /// Get subscriber for frame events.
+    ///
+    /// Receives events of every connection; compare the [`ConnectionId`] tag
+    /// to select the ones that belong to you.
+    pub fn subscribe_frames(&self) -> broadcast::Receiver<FrameEvent> {
         self.frame_tx.subscribe()
     }
 
     /// Set rate limit guard for a session
     pub async fn set_rate_limit_guard(
         &self,
-        session_id: &str,
+        session_id: SessionId,
         guard: RateLimitGuard,
     ) -> PjsResult<()> {
         let mut sessions = self.sessions.write().await;
         let session = sessions
-            .get_mut(session_id)
+            .get_mut(&session_id)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
 
         session.rate_limit_guard = Some(guard);
@@ -561,10 +699,14 @@ impl AdaptiveStreamController {
     }
 
     /// Validate message against rate limits
-    pub async fn validate_message(&self, session_id: &str, frame_size: usize) -> PjsResult<()> {
+    pub async fn validate_message(
+        &self,
+        session_id: SessionId,
+        frame_size: usize,
+    ) -> PjsResult<()> {
         let sessions = self.sessions.read().await;
         let session = sessions
-            .get(session_id)
+            .get(&session_id)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
 
         if let Some(guard) = &session.rate_limit_guard {
@@ -584,20 +726,28 @@ impl AdaptiveStreamController {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// # use pjson_rs::infrastructure::websocket::{AdaptiveStreamController, StreamOptions};
-    /// # use serde_json::json;
+    /// ```
+    /// use pjson_rs::domain::SessionId;
+    /// use pjson_rs::infrastructure::websocket::{
+    ///     AdaptiveStreamController, ConnectionId, StreamOptions,
+    /// };
+    /// use serde_json::json;
+    ///
     /// # #[tokio::main] async fn main() {
     /// let controller = AdaptiveStreamController::new();
-    /// let id = controller.create_session(json!({}), StreamOptions::default()).await.unwrap();
-    /// assert!(controller.remove_session(&id).await);
+    /// let id = SessionId::new();
+    /// controller
+    ///     .create_session(id, ConnectionId::new(), json!({}), StreamOptions::default())
+    ///     .await
+    ///     .unwrap();
+    /// assert!(controller.remove_session(id).await);
     /// // Idempotent — second call is a no-op:
-    /// assert!(!controller.remove_session(&id).await);
+    /// assert!(!controller.remove_session(id).await);
     /// # }
     /// ```
-    pub async fn remove_session(&self, session_id: &str) -> bool {
+    pub async fn remove_session(&self, session_id: SessionId) -> bool {
         let mut sessions = self.sessions.write().await;
-        let removed = sessions.remove(session_id);
+        let removed = sessions.remove(&session_id);
         match &removed {
             Some(session) => {
                 if let Some(abort_handle) = &session.stream_task {
@@ -608,6 +758,48 @@ impl AdaptiveStreamController {
             None => debug!("remove_session called on unknown id: {}", session_id),
         }
         removed.is_some()
+    }
+
+    /// Remove every session created by `owner`, aborting their streaming tasks.
+    ///
+    /// Returns the number of sessions removed. Used when a connection closes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::domain::SessionId;
+    /// use pjson_rs::infrastructure::websocket::{
+    ///     AdaptiveStreamController, ConnectionId, StreamOptions,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// # #[tokio::main] async fn main() {
+    /// let controller = AdaptiveStreamController::new();
+    /// let (a, b) = (ConnectionId::new(), ConnectionId::new());
+    /// for owner in [a, a, b] {
+    ///     controller
+    ///         .create_session(SessionId::new(), owner, json!({}), StreamOptions::default())
+    ///         .await
+    ///         .unwrap();
+    /// }
+    /// assert_eq!(controller.remove_sessions_owned_by(a).await, 2);
+    /// assert_eq!(controller.remove_sessions_owned_by(a).await, 0);
+    /// # }
+    /// ```
+    pub async fn remove_sessions_owned_by(&self, owner: ConnectionId) -> usize {
+        let mut sessions = self.sessions.write().await;
+        let before = sessions.len();
+        sessions.retain(|id, session| {
+            if session.owner != owner {
+                return true;
+            }
+            if let Some(abort_handle) = &session.stream_task {
+                abort_handle.abort();
+            }
+            debug!("Removed session {} of closed connection {}", id, owner);
+            false
+        });
+        before - sessions.len()
     }
 
     /// Clean up expired sessions
@@ -656,37 +848,63 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    async fn new_session(
+        controller: &AdaptiveStreamController,
+        owner: ConnectionId,
+        data: Value,
+    ) -> SessionId {
+        let session_id = SessionId::new();
+        controller
+            .create_session(session_id, owner, data, StreamOptions::default())
+            .await
+            .unwrap();
+        session_id
+    }
+
     #[tokio::test]
     async fn test_create_session() {
         let controller = AdaptiveStreamController::new();
+        let owner = ConnectionId::new();
         let data = json!({
             "critical": {"id": 1, "status": "active"},
             "details": {"name": "test", "description": "test data"}
         });
 
-        let session_id = controller
-            .create_session(data, StreamOptions::default())
-            .await
-            .unwrap();
-
-        assert!(!session_id.is_empty());
+        let session_id = new_session(&controller, owner, data).await;
 
         let sessions = controller.sessions.read().await;
-        assert!(sessions.contains_key(&session_id));
+        assert_eq!(sessions[&session_id].owner(), owner);
+    }
+
+    #[tokio::test]
+    async fn test_create_session_rejects_duplicate_id_and_keeps_first() {
+        let controller = AdaptiveStreamController::new();
+        let first_owner = ConnectionId::new();
+        let session_id = new_session(&controller, first_owner, json!({"v": 1})).await;
+
+        let result = controller
+            .create_session(
+                session_id,
+                ConnectionId::new(),
+                json!({"v": 2}),
+                StreamOptions::default(),
+            )
+            .await;
+
+        assert_eq!(result, Err(CreateSessionError::AlreadyExists(session_id)));
+        let sessions = controller.sessions.read().await;
+        assert_eq!(sessions[&session_id].owner(), first_owner);
+        assert_eq!(sessions[&session_id].plan[0].data, json!({"v": 1}));
     }
 
     #[tokio::test]
     async fn test_frame_acknowledgment() {
         let controller = AdaptiveStreamController::new();
-        let data = json!({"test": "data"});
-
-        let session_id = controller
-            .create_session(data, StreamOptions::default())
-            .await
-            .unwrap();
+        let owner = ConnectionId::new();
+        let session_id = new_session(&controller, owner, json!({"test": "data"})).await;
 
         controller
-            .handle_frame_ack(&session_id, 0, 50)
+            .handle_frame_ack(owner, session_id, 0, 50)
             .await
             .unwrap();
 
@@ -696,6 +914,86 @@ mod tests {
         assert_eq!(session.client_metrics.average_processing_time_ms, 50.0);
     }
 
+    #[tokio::test]
+    async fn test_frame_ack_from_non_owner_is_rejected_and_metrics_unchanged() {
+        let controller = AdaptiveStreamController::new();
+        let owner = ConnectionId::new();
+        let session_id = new_session(&controller, owner, json!({})).await;
+
+        let result = controller
+            .handle_frame_ack(ConnectionId::new(), session_id, 0, 50)
+            .await;
+
+        assert!(matches!(result, Err(PjsError::InvalidSession(_))));
+        let sessions = controller.sessions.read().await;
+        let session = &sessions[&session_id];
+        assert!(session.acknowledged_frames.is_empty());
+        assert_eq!(session.client_metrics.frames_acknowledged, 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_sessions_owned_by_removes_only_that_owners_sessions() {
+        let controller = AdaptiveStreamController::new();
+        let (a, b) = (ConnectionId::new(), ConnectionId::new());
+        let a1 = new_session(&controller, a, json!({})).await;
+        let a2 = new_session(&controller, a, json!({})).await;
+        let b1 = new_session(&controller, b, json!({})).await;
+
+        assert_eq!(controller.remove_sessions_owned_by(a).await, 2);
+
+        let sessions = controller.sessions.read().await;
+        assert!(!sessions.contains_key(&a1) && !sessions.contains_key(&a2));
+        assert!(sessions.contains_key(&b1));
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_tags_frames_with_owner() {
+        let controller = AdaptiveStreamController::new();
+        let owner = ConnectionId::new();
+        let session_id = new_session(&controller, owner, json!({"k": "v"})).await;
+        let mut frames_rx = controller.subscribe_frames();
+
+        controller.start_streaming(session_id).await.unwrap();
+
+        let (tagged_owner, tagged_session, message) =
+            tokio::time::timeout(Duration::from_secs(2), frames_rx.recv())
+                .await
+                .expect("a frame must be broadcast")
+                .unwrap();
+        assert_eq!(tagged_owner, owner);
+        assert_eq!(tagged_session, session_id);
+        assert!(matches!(*message, WsMessage::StreamFrame { .. }));
+    }
+
+    #[test]
+    fn test_error_message_without_session_id_field_decodes_to_none() {
+        let decoded: WsMessage =
+            serde_json::from_str(r#"{"type":"Error","data":{"error":"x","code":1}}"#).unwrap();
+        assert!(matches!(
+            decoded,
+            WsMessage::Error {
+                session_id: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_ws_message_session_id_round_trips_as_canonical_uuid() {
+        let id = SessionId::new();
+        let message = WsMessage::FrameAck {
+            session_id: id,
+            frame_id: 3,
+            processing_time_ms: 1,
+        };
+        let value = serde_json::to_value(&message).unwrap();
+        assert_eq!(value["data"]["session_id"], id.as_uuid().to_string());
+        assert!(serde_json::from_str::<WsMessage>(
+            r#"{"type":"FrameAck","data":{"session_id":"not-a-uuid","frame_id":0,"processing_time_ms":0}}"#
+        )
+        .is_err());
+    }
+
     /// Proves `remove_session` actually stops the streaming task rather
     /// than merely dropping the session's bookkeeping entry: a long plan
     /// is aborted before it can send every frame or the completion
@@ -703,10 +1001,8 @@ mod tests {
     #[tokio::test]
     async fn test_remove_session_aborts_streaming_task_before_completion() {
         let controller = AdaptiveStreamController::new();
-        let session_id = controller
-            .create_session(json!({"test": "data"}), StreamOptions::default())
-            .await
-            .unwrap();
+        let session_id =
+            new_session(&controller, ConnectionId::new(), json!({"test": "data"})).await;
 
         // Long enough (10ms/frame) that the task is still far from done
         // when we abort it immediately below.
@@ -724,8 +1020,8 @@ mod tests {
 
         let mut frames_rx = controller.subscribe_frames();
 
-        controller.start_streaming(&session_id).await.unwrap();
-        assert!(controller.remove_session(&session_id).await);
+        controller.start_streaming(session_id).await.unwrap();
+        assert!(controller.remove_session(session_id).await);
 
         // Drain whatever the task managed to emit before the abort took
         // effect, for a window far shorter than the full 200-frame plan
@@ -735,7 +1031,7 @@ mod tests {
         let drain_deadline = tokio::time::Instant::now() + Duration::from_millis(300);
         while tokio::time::Instant::now() < drain_deadline {
             match tokio::time::timeout(Duration::from_millis(20), frames_rx.recv()).await {
-                Ok(Ok((_, WsMessage::StreamComplete { .. }))) => {
+                Ok(Ok((_, _, message))) if matches!(*message, WsMessage::StreamComplete { .. }) => {
                     saw_complete = true;
                     break;
                 }
@@ -792,10 +1088,8 @@ mod tests {
     #[tokio::test]
     async fn test_stream_frames_completes_promptly_under_malicious_client_metrics() {
         let controller = AdaptiveStreamController::new();
-        let session_id = controller
-            .create_session(json!({"test": "data"}), StreamOptions::default())
-            .await
-            .unwrap();
+        let session_id =
+            new_session(&controller, ConnectionId::new(), json!({"test": "data"})).await;
 
         {
             let mut sessions = controller.sessions.write().await;
@@ -807,17 +1101,16 @@ mod tests {
         }
 
         let mut frames_rx = controller.subscribe_frames();
-        controller.start_streaming(&session_id).await.unwrap();
+        controller.start_streaming(session_id).await.unwrap();
 
         let result = tokio::time::timeout(MAX_ADAPTIVE_FRAME_DELAY * 2, async {
             loop {
-                match frames_rx
+                let (_, sid, message) = frames_rx
                     .recv()
                     .await
-                    .expect("channel must not close early")
-                {
-                    (sid, WsMessage::StreamComplete { .. }) if sid == session_id => break,
-                    _ => continue,
+                    .expect("channel must not close early");
+                if sid == session_id && matches!(*message, WsMessage::StreamComplete { .. }) {
+                    break;
                 }
             }
         })

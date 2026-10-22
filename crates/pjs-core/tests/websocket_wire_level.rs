@@ -16,6 +16,8 @@ use tokio::net::TcpListener;
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+use pjson_rs::Error as PjsError;
+use pjson_rs::domain::SessionId;
 use pjson_rs::infrastructure::websocket::{
     AxumWebSocketTransport, PjsWebSocketClient, WebSocketClientConfig, WsMessage,
     server::create_websocket_router,
@@ -60,6 +62,77 @@ async fn spawn_ws_test_server_with(
 
 fn ws_url(addr: SocketAddr) -> String {
     format!("ws://{addr}/ws")
+}
+
+type TestSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn connect(addr: SocketAddr) -> TestSocket {
+    connect_async(ws_url(addr))
+        .await
+        .expect("WebSocket handshake failed")
+        .0
+}
+
+fn stream_init(session_id: &str, data: serde_json::Value) -> Message {
+    let init = json!({
+        "type": "StreamInit",
+        "data": {
+            "session_id": session_id,
+            "data": data,
+            "options": {
+                "max_frame_size": 65536,
+                "client_fps": null,
+                "compression": false,
+                "priority_mapping": null
+            }
+        }
+    });
+    Message::Text(init.to_string().into())
+}
+
+/// Reads the next text message as a `WsMessage`, failing on timeout.
+async fn next_ws_message(ws: &mut TestSocket) -> WsMessage {
+    loop {
+        let msg = timeout(Duration::from_secs(5), ws.next())
+            .await
+            .expect("timed out waiting for a message")
+            .expect("stream ended")
+            .expect("WebSocket error");
+        if let Message::Text(text) = msg {
+            return serde_json::from_str(&text).expect("server sent an undecodable message");
+        }
+    }
+}
+
+/// Reads until a protocol-level Pong, tolerating text `Error` replies queued before it.
+async fn expect_pong(ws: &mut TestSocket, payload: &[u8]) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            match ws
+                .next()
+                .await
+                .expect("stream ended")
+                .expect("WebSocket error")
+            {
+                Message::Pong(received) => {
+                    assert_eq!(received.as_ref(), payload, "pong payload must echo ping");
+                    return;
+                }
+                Message::Text(_) => continue,
+                other => panic!("expected Pong, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for pong - server may have crashed");
+}
+
+/// Asserts that no text frame arrives within `window`.
+async fn assert_silent(ws: &mut TestSocket, window: Duration) {
+    if let Ok(Some(Ok(Message::Text(text)))) = timeout(window, ws.next()).await {
+        panic!("unexpected message: {text}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -132,27 +205,17 @@ async fn test_wire_stream_init_yields_frame() {
         .await
         .expect("WebSocket handshake failed");
 
-    // The server ignores the client-supplied session_id and generates a fresh one.
-    let init = json!({
-        "type": "StreamInit",
-        "data": {
-            "session_id": "client-supplied-ignored",
-            "data": {
-                "critical": {"id": 1},
-                "metadata": {"ts": "2026-04-28"}
-            },
-            "options": {
-                "max_frame_size": 65536,
-                "client_fps": null,
-                "compression": false,
-                "priority_mapping": null
-            }
-        }
-    });
+    // The server adopts the client-supplied session_id.
+    let client_id = SessionId::new();
+    let init = stream_init(
+        &client_id.as_uuid().to_string(),
+        json!({
+            "critical": {"id": 1},
+            "metadata": {"ts": "2026-04-28"}
+        }),
+    );
 
-    ws.send(Message::Text(init.to_string().into()))
-        .await
-        .expect("send StreamInit");
+    ws.send(init).await.expect("send StreamInit");
 
     // Collect messages until we find a StreamFrame or time out.
     let mut received_stream_frame = false;
@@ -164,7 +227,7 @@ async fn test_wire_stream_init_yields_frame() {
                 && let Ok(WsMessage::StreamFrame { session_id, .. }) =
                     serde_json::from_str::<WsMessage>(&text)
             {
-                assert!(!session_id.is_empty(), "session_id must be non-empty");
+                assert_eq!(session_id, client_id, "server must echo the client's id");
                 received_stream_frame = true;
                 break;
             }
@@ -234,7 +297,7 @@ async fn test_wire_invalid_json_does_not_crash() {
         .await
         .expect("WebSocket handshake failed");
 
-    // Send garbage JSON — server should log a warning and stay alive.
+    // Send garbage JSON - server should reject it and stay alive.
     ws.send(Message::Text("{ this is not valid json ::: }".into()))
         .await
         .expect("send invalid JSON");
@@ -244,19 +307,172 @@ async fn test_wire_invalid_json_does_not_crash() {
         .await
         .expect("send probe ping");
 
-    // Expect a Pong — confirms the server is still alive.
-    let frame = timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("timed out — server may have crashed on invalid JSON")
-        .expect("stream ended unexpectedly")
-        .expect("WebSocket error");
+    // Expect a Pong - confirms the server is still alive.
+    expect_pong(&mut ws, b"probe").await;
+}
 
-    match frame {
-        Message::Pong(payload) => {
-            assert_eq!(payload.as_ref(), b"probe", "pong payload must echo ping");
-        }
-        other => panic!("expected Pong, got {:?}", other),
+/// Undecodable input is answered with a fixed-message 400 `Error`, never
+/// serde's error text, which would echo attacker-chosen content.
+#[tokio::test]
+async fn test_wire_malformed_message_gets_fixed_400_reply() {
+    let (addr, _transport) = spawn_ws_test_server().await;
+    let mut ws = connect(addr).await;
+
+    ws.send(Message::Text(
+        r#"{"type":"FrameAck","data":{"session_id":"sneaky-<script>","frame_id":0,"processing_time_ms":0}}"#
+            .into(),
+    ))
+    .await
+    .expect("send malformed message");
+
+    match next_ws_message(&mut ws).await {
+        WsMessage::Error {
+            session_id: None,
+            error,
+            code: 400,
+        } => assert!(
+            !error.contains("sneaky"),
+            "reply must not echo input: {error}"
+        ),
+        other => panic!("expected a 400 Error reply, got {other:?}"),
     }
+}
+
+/// The nil UUID is refused with a 400 and creates no session.
+#[tokio::test]
+async fn test_wire_nil_session_id_is_rejected_with_400() {
+    let (addr, _transport) = spawn_ws_test_server().await;
+    let mut ws = connect(addr).await;
+
+    ws.send(stream_init(&uuid::Uuid::nil().to_string(), json!({"k": 1})))
+        .await
+        .expect("send StreamInit");
+
+    assert!(matches!(
+        next_ws_message(&mut ws).await,
+        WsMessage::Error { code: 400, .. }
+    ));
+    assert_silent(&mut ws, Duration::from_millis(300)).await;
+}
+
+/// Another connection must never receive frames of a session it does not own.
+#[tokio::test]
+async fn test_wire_frames_are_routed_only_to_the_owning_connection() {
+    let (addr, _transport) = spawn_ws_test_server().await;
+    let mut owner = connect(addr).await;
+    let mut bystander = connect(addr).await;
+    let id = SessionId::new();
+
+    // A pong proves the bystander's connection loop runs, i.e. it is subscribed.
+    bystander
+        .send(Message::Ping(b"ready".to_vec().into()))
+        .await
+        .expect("send ping");
+    expect_pong(&mut bystander, b"ready").await;
+
+    owner
+        .send(stream_init(&id.as_uuid().to_string(), json!({"secret": 1})))
+        .await
+        .expect("send StreamInit");
+
+    assert!(matches!(
+        next_ws_message(&mut owner).await,
+        WsMessage::StreamFrame { session_id, .. } if session_id == id
+    ));
+    assert_silent(&mut bystander, Duration::from_millis(500)).await;
+}
+
+/// A second `StreamInit` for a live id is refused with a 409 and leaves the
+/// first session, and its owner's stream, untouched.
+#[tokio::test]
+async fn test_wire_duplicate_session_id_is_rejected_with_409() {
+    let (addr, _transport) = spawn_ws_test_server().await;
+    let mut first = connect(addr).await;
+    let mut second = connect(addr).await;
+    let id = SessionId::new();
+    let uuid = id.as_uuid().to_string();
+
+    first
+        .send(stream_init(&uuid, json!({"owner": "first"})))
+        .await
+        .expect("send first StreamInit");
+    assert!(matches!(
+        next_ws_message(&mut first).await,
+        WsMessage::StreamFrame { .. }
+    ));
+
+    second
+        .send(stream_init(&uuid, json!({"owner": "second"})))
+        .await
+        .expect("send duplicate StreamInit");
+
+    assert!(matches!(
+        next_ws_message(&mut second).await,
+        WsMessage::Error { session_id: Some(rejected), code: 409, .. } if rejected == id
+    ));
+    assert_silent(&mut second, Duration::from_millis(300)).await;
+}
+
+/// Closing a connection removes exactly the sessions it owns.
+#[tokio::test]
+async fn test_wire_disconnect_removes_only_the_connections_own_sessions() {
+    let (addr, transport) = spawn_ws_test_server().await;
+    let mut leaving = connect(addr).await;
+    let mut staying = connect(addr).await;
+    let (leaving_id, staying_id) = (SessionId::new(), SessionId::new());
+    for (ws, id) in [(&mut leaving, leaving_id), (&mut staying, staying_id)] {
+        ws.send(stream_init(&id.as_uuid().to_string(), json!({"k": 1})))
+            .await
+            .expect("send StreamInit");
+        next_ws_message(ws).await;
+    }
+
+    leaving
+        .send(Message::Close(None))
+        .await
+        .expect("send Close");
+    let controller = transport.controller();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while controller.validate_message(leaving_id, 0).await.is_ok() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the leaving connection's session to be removed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(controller.validate_message(staying_id, 0).await.is_ok());
+}
+
+/// A `FrameAck` for a session the sender does not own gets no reply and does
+/// not disturb the sender's connection or the owner's session.
+#[tokio::test]
+async fn test_wire_non_owner_frame_ack_is_ignored() {
+    let (addr, transport) = spawn_ws_test_server().await;
+    let mut owner = connect(addr).await;
+    let mut intruder = connect(addr).await;
+    let id = SessionId::new();
+    owner
+        .send(stream_init(&id.as_uuid().to_string(), json!({"k": 1})))
+        .await
+        .expect("send StreamInit");
+    next_ws_message(&mut owner).await;
+
+    let ack = json!({
+        "type": "FrameAck",
+        "data": {"session_id": id.as_uuid().to_string(), "frame_id": 0, "processing_time_ms": 1}
+    });
+    intruder
+        .send(Message::Text(ack.to_string().into()))
+        .await
+        .expect("send FrameAck");
+    intruder
+        .send(Message::Ping(b"alive".to_vec().into()))
+        .await
+        .expect("send ping");
+
+    expect_pong(&mut intruder, b"alive").await;
+    assert!(transport.controller().validate_message(id, 0).await.is_ok());
 }
 
 /// Verify that inbound application frames are subject to per-connection rate
@@ -282,7 +498,8 @@ async fn test_wire_inbound_messages_rate_limited() {
         .expect("WebSocket handshake failed");
 
     // First inbound frame consumes the only token. Use a benign payload that
-    // will not parse as a WsMessage so no streaming side-effects occur.
+    // will not parse as a WsMessage so no streaming side-effects occur
+    // (it is answered with a 400 Error reply).
     ws.send(Message::Text("{}".into()))
         .await
         .expect("send first frame");
@@ -396,21 +613,13 @@ async fn test_wire_max_frame_size_boundary_is_exact() {
         .await
         .expect("send frame at exactly max_frame_size");
 
-    // Probe with a protocol-level ping — a Pong confirms the connection
+    // Probe with a protocol-level ping - a Pong confirms the connection
     // survived the exactly-at-limit frame instead of being torn down.
     ws.send(Message::Ping(b"probe".to_vec().into()))
         .await
         .expect("send probe ping");
 
-    let frame = timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("timed out — a frame at exactly max_frame_size must not close the connection")
-        .expect("stream ended unexpectedly")
-        .expect("WebSocket error");
-    match frame {
-        Message::Pong(payload) => assert_eq!(payload.as_ref(), b"probe"),
-        other => panic!("expected Pong, got {:?}", other),
-    }
+    expect_pong(&mut ws, b"probe").await;
 }
 
 /// Companion to the boundary-success test above: a frame one byte over
@@ -543,7 +752,7 @@ async fn test_wire_stalled_write_times_out_and_closes_connection() {
     let init = json!({
         "type": "StreamInit",
         "data": {
-            "session_id": "ignored",
+            "session_id": SessionId::new().as_uuid().to_string(),
             "data": big_data,
             "options": {
                 "max_frame_size": 64 * 1024 * 1024,
@@ -611,7 +820,7 @@ async fn test_wire_stalled_write_stays_open_before_write_timeout() {
     let init = json!({
         "type": "StreamInit",
         "data": {
-            "session_id": "ignored",
+            "session_id": SessionId::new().as_uuid().to_string(),
             "data": big_data,
             "options": {
                 "max_frame_size": 64 * 1024 * 1024,
@@ -793,14 +1002,83 @@ async fn test_client_default_caps_admit_large_in_tree_server_reply() {
     connect.abort();
 }
 
-/// The in-tree server never completes a client session, so a bounded session
-/// map must evict the oldest live session rather than lock the client out.
+/// Two real clients on one server each receive only their own stream.
 #[tokio::test]
-async fn test_client_never_locked_out_when_server_never_completes_sessions() {
+async fn test_two_clients_receive_only_their_own_streams() {
+    let (addr, _transport) = spawn_ws_test_server().await;
+    let mut clients = Vec::new();
+    for _ in 0..2 {
+        let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap());
+        let connect = tokio::spawn({
+            let client = Arc::clone(&client);
+            async move { client.connect().await }
+        });
+        clients.push((client, connect));
+    }
+
+    let mut ids = Vec::new();
+    for (n, (client, _)) in clients.iter().enumerate() {
+        ids.push(
+            client
+                .request_stream(json!({"owner": n}), None)
+                .await
+                .unwrap(),
+        );
+    }
+    for (n, (client, _)) in clients.iter().enumerate() {
+        wait_until_complete(client, ids[n]).await;
+        assert_eq!(
+            client.get_current_data(ids[n]).await.unwrap(),
+            Some(json!({"owner": n}))
+        );
+        assert_eq!(
+            client.get_stream_stats(ids[n]).await.unwrap().total_frames,
+            1
+        );
+    }
+    for (_, connect) in &clients {
+        connect.abort();
+    }
+}
+
+async fn wait_until_complete(client: &PjsWebSocketClient, id: SessionId) {
+    timeout(Duration::from_secs(5), async {
+        while !client.is_stream_complete(id).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("stream must complete");
+}
+
+/// Regression for #563: the server adopts the client's session id, so the
+/// client's session actually receives its data and completes.
+#[tokio::test]
+async fn test_client_session_receives_data_from_in_tree_server() {
+    let (addr, _transport) = spawn_ws_test_server().await;
+    let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap());
+    let connect = tokio::spawn({
+        let client = Arc::clone(&client);
+        async move { client.connect().await }
+    });
+    let data = json!({"k": 1, "nested": {"a": [1, 2, 3]}});
+
+    let id = client.request_stream(data.clone(), None).await.unwrap();
+    wait_until_complete(&client, id).await;
+
+    assert_eq!(client.get_current_data(id).await.unwrap(), Some(data));
+    assert!(client.get_stream_stats(id).await.unwrap().total_frames >= 1);
+    connect.abort();
+}
+
+/// Completed sessions are never evicted by the cap: a full set of completed
+/// sessions refuses new requests until one is released with `close_session`.
+#[tokio::test]
+async fn test_client_full_of_completed_sessions_refuses_until_one_is_closed() {
     let (addr, _transport) = spawn_ws_test_server().await;
     let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
         WebSocketClientConfig {
-            max_sessions: 2,
+            max_sessions: std::num::NonZeroUsize::new(2).unwrap(),
             ..WebSocketClientConfig::default()
         },
     ));
@@ -809,13 +1087,18 @@ async fn test_client_never_locked_out_when_server_never_completes_sessions() {
         async move { client.connect().await }
     });
 
-    let mut ids = Vec::new();
-    for _ in 0..5 {
-        ids.push(client.request_stream(json!({"k": 1}), None).await.unwrap());
-    }
+    let first = client.request_stream(json!({"k": 1}), None).await.unwrap();
+    let second = client.request_stream(json!({"k": 2}), None).await.unwrap();
+    wait_until_complete(&client, first).await;
+    wait_until_complete(&client, second).await;
 
-    assert!(client.get_stream_stats(&ids[0]).await.is_none());
-    assert!(client.get_stream_stats(&ids[3]).await.is_some());
-    assert!(client.get_stream_stats(&ids[4]).await.is_some());
+    assert!(matches!(
+        client.request_stream(json!({}), None).await,
+        Err(PjsError::SessionLimitReached { .. })
+    ));
+    let closed = client.close_session(first).await.expect("first is tracked");
+    assert_eq!(closed.data, json!({"k": 1}));
+    client.request_stream(json!({}), None).await.unwrap();
+    assert!(client.is_stream_complete(second).await);
     connect.abort();
 }

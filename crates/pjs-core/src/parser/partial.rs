@@ -7,7 +7,7 @@
 //! The concrete implementation [`JiterPartialParser`] drives the `jiter` crate's
 //! per-token public API (`peek`, `known_array`, `known_object`, `known_str`,
 //! `known_number`, `known_bool`, `known_null`, `array_step`, `next_key`) plus
-//! `current_index()` for cursor tracking.
+//! `Tokens::index()` for cursor tracking.
 //!
 //! # Status: not yet wired into production
 //!
@@ -287,7 +287,7 @@ impl Default for JiterConfig {
 /// Internally drives `Jiter` token-by-token via the **public per-token API**
 /// (`peek`, `known_array`, `known_object`, `array_step`, `next_key`,
 /// `known_str`, `known_number`, `known_bool`, `known_null`) plus
-/// `current_index()` for cursor tracking. The `next_value` / `known_value` /
+/// `Tokens::index()` for cursor tracking. The `next_value` / `known_value` /
 /// `next_skip` family is **never** called — those methods hardcode
 /// `PartialMode::Off` and would error on the very truncation we tolerate.
 ///
@@ -349,6 +349,7 @@ impl PartialJsonParser for JiterPartialParser {
         if self.config.allow_trailing_strings {
             jiter = jiter.with_allow_partial_strings();
         }
+        let mut jiter = Tokens::new(jiter, input.len());
 
         let path = JsonPath::root();
         let outcome = walk(&mut jiter, 0, &path, &self.config);
@@ -407,14 +408,14 @@ enum WalkOutcome {
     /// A structurally complete value was produced.
     Complete {
         value: JsonData,
-        /// `current_index()` after the value's last byte.
+        /// `Tokens::index()` after the value's last byte.
         cursor: usize,
         diagnostics: Vec<ParseDiagnostic>,
     },
     /// Truncation was tolerated mid-structure.
     Truncated {
         partial: JsonData,
-        /// `current_index()` at the start of the failing token (before the
+        /// `Tokens::index()` at the start of the failing token (before the
         /// call that errored).
         cursor: usize,
         diagnostics: Vec<ParseDiagnostic>,
@@ -447,6 +448,46 @@ fn is_eof_value(e: &jiter::JiterError) -> bool {
     )
 }
 
+/// A [`Jiter`] together with the length of its input.
+///
+/// The walker reads positions only through [`Tokens::index`], which never
+/// exceeds the input length, so every cursor it produces (and hence
+/// `PartialParseResult::consumed`) is in bounds by construction. Needed
+/// because jiter in partial-string mode steps over the closing quote that a
+/// truncated string lacks, leaving `current_index()` one past the end.
+///
+/// `Deref` exposes the raw `Jiter` for token reads; never call
+/// `current_index()` through it, use [`Tokens::index`].
+struct Tokens<'a> {
+    jiter: Jiter<'a>,
+    len: usize,
+}
+
+impl<'a> Tokens<'a> {
+    fn new(jiter: Jiter<'a>, len: usize) -> Self {
+        Self { jiter, len }
+    }
+
+    /// Current byte offset, clamped to the input length.
+    fn index(&self) -> usize {
+        self.jiter.current_index().min(self.len)
+    }
+}
+
+impl<'a> std::ops::Deref for Tokens<'a> {
+    type Target = Jiter<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.jiter
+    }
+}
+
+impl std::ops::DerefMut for Tokens<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.jiter
+    }
+}
+
 fn count_trailing_whitespace(input: &[u8], from: usize) -> usize {
     input[from..]
         .iter()
@@ -454,15 +495,20 @@ fn count_trailing_whitespace(input: &[u8], from: usize) -> usize {
         .count()
 }
 
-fn walk(jiter: &mut Jiter<'_>, depth: usize, path: &JsonPath, config: &JiterConfig) -> WalkOutcome {
+fn walk(
+    jiter: &mut Tokens<'_>,
+    depth: usize,
+    path: &JsonPath,
+    config: &JiterConfig,
+) -> WalkOutcome {
     if depth >= config.max_depth.get() {
         return WalkOutcome::Hard(jiter::JiterError {
             error_type: JiterErrorType::JsonError(JsonErrorType::RecursionLimitExceeded),
-            index: jiter.current_index(),
+            index: jiter.index(),
         });
     }
 
-    let pre = jiter.current_index();
+    let pre = jiter.index();
 
     let peek = match jiter.peek() {
         Ok(p) => p,
@@ -480,7 +526,7 @@ fn walk(jiter: &mut Jiter<'_>, depth: usize, path: &JsonPath, config: &JiterConf
         Peek::Null => match jiter.known_null() {
             Ok(()) => WalkOutcome::Complete {
                 value: JsonData::Null,
-                cursor: jiter.current_index(),
+                cursor: jiter.index(),
                 diagnostics: vec![],
             },
             Err(e) if is_partial_tolerated(&e) => WalkOutcome::Truncated {
@@ -493,7 +539,7 @@ fn walk(jiter: &mut Jiter<'_>, depth: usize, path: &JsonPath, config: &JiterConf
         Peek::True | Peek::False => match jiter.known_bool(peek) {
             Ok(b) => WalkOutcome::Complete {
                 value: JsonData::Bool(b),
-                cursor: jiter.current_index(),
+                cursor: jiter.index(),
                 diagnostics: vec![],
             },
             Err(e) if is_partial_tolerated(&e) => WalkOutcome::Truncated {
@@ -508,12 +554,12 @@ fn walk(jiter: &mut Jiter<'_>, depth: usize, path: &JsonPath, config: &JiterConf
         Peek::Array => {
             // M1 fix: capture cursor BEFORE calling known_array (peek does not
             // consume the `[` byte; known_array advances past it).
-            let pre_open = jiter.current_index();
+            let pre_open = jiter.index();
             walk_array(jiter, depth + 1, path, config, pre_open)
         }
         Peek::Object => {
             // M1 fix: same pattern for `{`.
-            let pre_open = jiter.current_index();
+            let pre_open = jiter.index();
             walk_object(jiter, depth + 1, path, config, pre_open)
         }
         _ => {
@@ -526,14 +572,14 @@ fn walk(jiter: &mut Jiter<'_>, depth: usize, path: &JsonPath, config: &JiterConf
     }
 }
 
-fn walk_string(jiter: &mut Jiter<'_>, pre_open: usize, _config: &JiterConfig) -> WalkOutcome {
+fn walk_string(jiter: &mut Tokens<'_>, pre_open: usize, _config: &JiterConfig) -> WalkOutcome {
     match jiter.known_str() {
         Ok(s) => {
             // M2 fix: copy &str to owned String before any further jiter call.
             let owned = s.to_owned();
             WalkOutcome::Complete {
                 value: JsonData::String(owned),
-                cursor: jiter.current_index(),
+                cursor: jiter.index(),
                 diagnostics: vec![],
             }
         }
@@ -558,11 +604,11 @@ fn walk_string(jiter: &mut Jiter<'_>, pre_open: usize, _config: &JiterConfig) ->
     }
 }
 
-fn walk_number(jiter: &mut Jiter<'_>, peek: Peek, pre: usize, path: &JsonPath) -> WalkOutcome {
+fn walk_number(jiter: &mut Tokens<'_>, peek: Peek, pre: usize, path: &JsonPath) -> WalkOutcome {
     match jiter.known_number(peek) {
         Ok(NumberAny::Int(NumberInt::Int(i))) => WalkOutcome::Complete {
             value: JsonData::Integer(i),
-            cursor: jiter.current_index(),
+            cursor: jiter.index(),
             diagnostics: vec![],
         },
         Ok(NumberAny::Int(NumberInt::BigInt(b))) => {
@@ -575,7 +621,7 @@ fn walk_number(jiter: &mut Jiter<'_>, peek: Peek, pre: usize, path: &JsonPath) -
                 .expect("BigInt produces parseable decimal for f64::from_str");
             WalkOutcome::Complete {
                 value: JsonData::Float(converted),
-                cursor: jiter.current_index(),
+                cursor: jiter.index(),
                 diagnostics: vec![ParseDiagnostic::BigIntLossyConversion {
                     path: path.clone(),
                     original,
@@ -585,7 +631,7 @@ fn walk_number(jiter: &mut Jiter<'_>, peek: Peek, pre: usize, path: &JsonPath) -
         }
         Ok(NumberAny::Float(f)) => WalkOutcome::Complete {
             value: JsonData::Float(f),
-            cursor: jiter.current_index(),
+            cursor: jiter.index(),
             diagnostics: vec![],
         },
         Err(e)
@@ -615,7 +661,7 @@ fn walk_number(jiter: &mut Jiter<'_>, peek: Peek, pre: usize, path: &JsonPath) -
 }
 
 fn walk_array(
-    jiter: &mut Jiter<'_>,
+    jiter: &mut Tokens<'_>,
     depth: usize,
     path: &JsonPath,
     config: &JiterConfig,
@@ -627,7 +673,7 @@ fn walk_array(
         Ok(None) => {
             return WalkOutcome::Complete {
                 value: JsonData::Array(vec![]),
-                cursor: jiter.current_index(),
+                cursor: jiter.index(),
                 diagnostics: vec![],
             };
         }
@@ -693,7 +739,7 @@ fn walk_array(
             Ok(None) => {
                 return WalkOutcome::Complete {
                     value: JsonData::Array(items),
-                    cursor: jiter.current_index(),
+                    cursor: jiter.index(),
                     diagnostics: all_diagnostics,
                 };
             }
@@ -710,7 +756,7 @@ fn walk_array(
 }
 
 fn walk_object(
-    jiter: &mut Jiter<'_>,
+    jiter: &mut Tokens<'_>,
     depth: usize,
     path: &JsonPath,
     config: &JiterConfig,
@@ -722,7 +768,7 @@ fn walk_object(
         Ok(None) => {
             return WalkOutcome::Complete {
                 value: JsonData::Object(HashMap::new()),
-                cursor: jiter.current_index(),
+                cursor: jiter.index(),
                 diagnostics: vec![],
             };
         }
@@ -808,7 +854,7 @@ fn walk_object(
 
         // Advance to the next key.
         // M2 fix: the &str returned by next_key() borrows from jiter.tape.
-        // Call .to_owned() first (releasing the borrow), then current_index().
+        // Call .to_owned() first (releasing the borrow), then index().
         match jiter.next_key() {
             Ok(Some(k)) => {
                 let owned_key = k.to_owned(); // borrow released
@@ -819,7 +865,7 @@ fn walk_object(
             Ok(None) => {
                 return WalkOutcome::Complete {
                     value: JsonData::Object(map),
-                    cursor: jiter.current_index(),
+                    cursor: jiter.index(),
                     diagnostics: all_diagnostics,
                 };
             }
@@ -837,7 +883,7 @@ fn walk_object(
 
 /// Dispatch a pre-peeked value through the walker without calling `peek()` again.
 fn walk_with_peek(
-    jiter: &mut Jiter<'_>,
+    jiter: &mut Tokens<'_>,
     peek: Peek,
     depth: usize,
     path: &JsonPath,
@@ -846,17 +892,17 @@ fn walk_with_peek(
     if depth >= config.max_depth.get() {
         return WalkOutcome::Hard(jiter::JiterError {
             error_type: JiterErrorType::JsonError(JsonErrorType::RecursionLimitExceeded),
-            index: jiter.current_index(),
+            index: jiter.index(),
         });
     }
 
-    let pre = jiter.current_index();
+    let pre = jiter.index();
 
     match peek {
         Peek::Null => match jiter.known_null() {
             Ok(()) => WalkOutcome::Complete {
                 value: JsonData::Null,
-                cursor: jiter.current_index(),
+                cursor: jiter.index(),
                 diagnostics: vec![],
             },
             Err(e) if is_partial_tolerated(&e) => WalkOutcome::Truncated {
@@ -869,7 +915,7 @@ fn walk_with_peek(
         Peek::True | Peek::False => match jiter.known_bool(peek) {
             Ok(b) => WalkOutcome::Complete {
                 value: JsonData::Bool(b),
-                cursor: jiter.current_index(),
+                cursor: jiter.index(),
                 diagnostics: vec![],
             },
             Err(e) if is_partial_tolerated(&e) => WalkOutcome::Truncated {
@@ -882,11 +928,11 @@ fn walk_with_peek(
         Peek::String => walk_string(jiter, pre, config),
         p if p.is_num() => walk_number(jiter, peek, pre, path),
         Peek::Array => {
-            let pre_open = jiter.current_index();
+            let pre_open = jiter.index();
             walk_array(jiter, depth + 1, path, config, pre_open)
         }
         Peek::Object => {
-            let pre_open = jiter.current_index();
+            let pre_open = jiter.index();
             walk_object(jiter, depth + 1, path, config, pre_open)
         }
         _ => WalkOutcome::Hard(jiter::JiterError {
@@ -969,6 +1015,61 @@ mod tests {
 
     fn parser() -> JiterPartialParser {
         JiterPartialParser::default()
+    }
+
+    // --- cursor invariant: consumed never exceeds the input ---
+
+    #[test]
+    fn test_open_string_value_keeps_consumed_within_input() {
+        let input = b"{\"k\":\"abc";
+        let r = parser().parse_partial(input).unwrap();
+        assert!(r.consumed <= input.len());
+        assert!(!r.is_complete);
+    }
+
+    #[test]
+    fn test_open_top_level_string_does_not_panic() {
+        let input = b"\":[2,3";
+        let r = parser().parse_partial(input).unwrap();
+        assert!(r.consumed <= input.len());
+    }
+
+    #[test]
+    fn test_every_prefix_of_sample_documents_respects_consumed_bound() {
+        let docs: [&[u8]; 4] = [
+            br#"{"k":"abc","n":[1,2.5,{"x":"y\u00e9z"}],"t":true}"#,
+            br#"["a","b\n",[],{},null,-1e3]"#,
+            b"\"plain \\\"quoted\\\" text\"",
+            br#"{"a":{"b":{"c":"deep"}}}"#,
+        ];
+        for doc in docs {
+            for end in 0..=doc.len() {
+                let prefix = &doc[..end];
+                if let Ok(r) = parser().parse_partial(prefix) {
+                    assert!(r.consumed <= prefix.len(), "{prefix:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_short_inputs_over_structural_alphabet_never_panic_or_overrun() {
+        const ALPHABET: &[u8] = b"{}[],:\"\\a1 ";
+        let mut input = Vec::new();
+        fn visit(input: &mut Vec<u8>, depth: usize) {
+            if let Ok(r) = JiterPartialParser::default().parse_partial(input) {
+                assert!(r.consumed <= input.len(), "{input:?}");
+            }
+            if depth == 0 {
+                return;
+            }
+            for &b in ALPHABET {
+                input.push(b);
+                visit(input, depth - 1);
+                input.pop();
+            }
+        }
+        visit(&mut input, 5);
     }
 
     // --- §7.6 edge inputs ---
