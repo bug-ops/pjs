@@ -56,6 +56,16 @@ pub enum Error {
     #[error("Invalid session: {0}")]
     InvalidSession(String),
 
+    /// Every client session slot is taken by a completed session
+    #[error(
+        "Session limit of {limit} reached and every tracked session is complete; \
+         close one with `close_session`"
+    )]
+    SessionLimitReached {
+        /// Configured maximum number of tracked sessions
+        limit: std::num::NonZeroUsize,
+    },
+
     /// Invalid URL error
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
@@ -195,7 +205,10 @@ impl Error {
             | Self::SemanticTypeMismatch { .. } => "validation",
             Self::Buffer(_) | Self::Memory(_) => "memory",
             Self::Io(_) | Self::ConnectionFailed(_) => "network",
-            Self::ClientError(_) | Self::InvalidSession(_) | Self::InvalidUrl(_) => "client",
+            Self::ClientError(_)
+            | Self::InvalidSession(_)
+            | Self::SessionLimitReached { .. }
+            | Self::InvalidUrl(_) => "client",
             Self::Utf8(_) => "encoding",
             Self::SecurityError(_) => "security",
             Self::CompressionError(_) => "compression",
@@ -280,6 +293,15 @@ mod tests {
         ));
         assert!(matches!(Error::utf8("invalid utf8"), Error::Utf8(_)));
         assert!(matches!(Error::other("unknown"), Error::Other(_)));
+    }
+
+    #[test]
+    fn test_session_limit_reached_is_a_client_error() {
+        let err = Error::SessionLimitReached {
+            limit: std::num::NonZeroUsize::new(4).unwrap(),
+        };
+        assert_eq!(err.category(), "client");
+        assert!(err.to_string().contains('4'));
     }
 
     #[test]

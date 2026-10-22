@@ -55,6 +55,16 @@ fn stream_session_rejects_malformed_stream_map_key() {
 }
 
 #[test]
+fn stream_session_rejects_stream_filed_under_another_id() {
+    let (session, stream_uuid) = session_with_stream();
+    let mut value = serde_json::to_value(&session).unwrap();
+    let streams = value["streams"].as_object_mut().unwrap();
+    let entry = streams.remove(&stream_uuid).unwrap();
+    streams.insert(uuid::Uuid::new_v4().to_string(), entry);
+    assert!(serde_json::from_value::<StreamSession>(value).is_err());
+}
+
+#[test]
 fn stream_session_rejects_malformed_session_id() {
     let (session, _) = session_with_stream();
     let mut value = serde_json::to_value(&session).unwrap();

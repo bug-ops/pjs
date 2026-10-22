@@ -16,8 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SecurityValidator`, `ZeroCopyParser`, `BufferPool`, `SchemaAnalyzer`, `SchemaCompressor` and `DepthTracker` accept only validated configs; `JiterConfig.max_depth` is a bounded `MaxDepth`; `PoolConfig` fields are private; `CompressionConfig::validate` rejects `min_numeric_sequence_size < 3` (**BREAKING**) (#549, #568)
 - `unsafe_code` is forbidden in `pjs-domain` (#551, #568)
 - `chacha20` 0.10.2 and `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382) (#545, #568)
+- WebSocket server forwards frames only to the connection that owns the session and rejects `FrameAck` from non-owners; previously every client received every client's frames (#569, #563, #577)
+- `JiterPartialParser::parse_partial` no longer returns `consumed > input.len()` or panics on input truncated inside an open string (#577)
+
+### Added
+
+- `PjsWebSocketClient` session idle TTL (`SessionIdleTtl`), `close_session` returning `ClosedSession`, and `Error::SessionLimitReached` when every session is complete (#565, #577)
+- Standalone `fuzz/` crate with five cargo-fuzz targets, committed seeds, a gating CI build and seed replay, and a scheduled exploratory job (#564, #577)
 
 ### Changed
+
+- **BREAKING** WebSocket sessions are keyed by `SessionId`; the server adopts the client's `session_id`, answers duplicates with 409 and malformed ids with 400, and `create_session` returns `CreateSessionError` (#563, #577)
+- **BREAKING** `WebSocketClientConfig::max_sessions` is a `NonZeroUsize`; completed client sessions are frozen and the oldest-idle incomplete session is evicted at the cap (#565, #577)
+- **BREAKING** `serde_support::stream_map` replaced by `StreamMap`, which rejects mismatched, malformed and duplicate keys on decode; wire format unchanged (#567, #577)
 
 - `AlignedBuffer::as_mut_capacity_slice` returns `&mut [MaybeUninit<u8>]` instead of `&mut [u8]` (**BREAKING**) (#552)
 - `WebSocketRateLimiter` renamed to `ClientRateLimiter`, no alias (**BREAKING**) (#528, #568)

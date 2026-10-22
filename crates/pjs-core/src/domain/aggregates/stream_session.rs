@@ -3,7 +3,7 @@
 use crate::domain::{
     DomainError, DomainResult,
     entities::{
-        Frame, Stream,
+        Frame, Stream, StreamMap,
         frame::FramePatch,
         stream::{StreamConfig, StreamState},
     },
@@ -107,8 +107,7 @@ pub struct StreamSession {
     completed_at: Option<DateTime<Utc>>,
 
     // Aggregate state
-    #[serde(with = "pjson_rs_domain::serde_support::stream_map")]
-    streams: HashMap<StreamId, Stream>,
+    streams: StreamMap,
     pending_events: VecDeque<DomainEvent>,
 
     // Session metadata
@@ -190,7 +189,7 @@ impl StreamSession {
             updated_at: now,
             expires_at,
             completed_at: None,
-            streams: HashMap::new(),
+            streams: StreamMap::new(),
             pending_events: VecDeque::new(),
             client_info: None,
             user_agent: None,
@@ -260,13 +259,13 @@ impl StreamSession {
     }
 
     /// Get all streams
-    pub fn streams(&self) -> &HashMap<StreamId, Stream> {
+    pub fn streams(&self) -> &StreamMap {
         &self.streams
     }
 
     /// Get stream by ID
     pub fn stream(&self, stream_id: StreamId) -> Option<&Stream> {
-        self.streams.get(&stream_id)
+        self.streams.get(stream_id)
     }
 
     /// Update configuration of a child stream through the aggregate root.
@@ -283,7 +282,7 @@ impl StreamSession {
     ) -> DomainResult<()> {
         let stream = self
             .streams
-            .get_mut(&stream_id)
+            .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
 
         stream.update_config(config)?;
@@ -333,7 +332,7 @@ impl StreamSession {
     ) -> DomainResult<Vec<(FramePatch, Priority)>> {
         let stream = self
             .streams
-            .get(&stream_id)
+            .get(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
 
         stream.extract_prioritized_patches(priority_threshold)
@@ -365,7 +364,7 @@ impl StreamSession {
     ) -> DomainResult<Vec<Frame>> {
         let stream = self
             .streams
-            .get_mut(&stream_id)
+            .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
 
         let bytes_before = stream.stats().total_bytes;
@@ -433,7 +432,7 @@ impl StreamSession {
         );
         let stream_id = stream.id();
 
-        self.streams.insert(stream_id, stream);
+        self.streams.insert(stream);
         self.stats.total_streams += 1;
         self.stats.active_streams += 1;
         self.update_timestamp();
@@ -487,7 +486,7 @@ impl StreamSession {
     pub fn start_stream(&mut self, stream_id: StreamId) -> DomainResult<()> {
         let stream = self
             .streams
-            .get_mut(&stream_id)
+            .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
 
         stream.start_streaming()?;
@@ -506,7 +505,7 @@ impl StreamSession {
     pub fn complete_stream(&mut self, stream_id: StreamId) -> DomainResult<()> {
         let stream = self
             .streams
-            .get_mut(&stream_id)
+            .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
 
         stream.complete()?;
@@ -552,7 +551,7 @@ impl StreamSession {
     pub fn fail_stream(&mut self, stream_id: StreamId, error: String) -> DomainResult<()> {
         let stream = self
             .streams
-            .get_mut(&stream_id)
+            .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
 
         stream.fail(error.clone())?;
@@ -632,7 +631,7 @@ impl StreamSession {
                 // log below is defensive/future-proofing against a state no
                 // current caller can construct, not a live path.
                 match stream.extract_prioritized_patches(priority_threshold) {
-                    Ok(patches) => Some((*stream_id, patches)),
+                    Ok(patches) => Some((stream_id, patches)),
                     Err(error) => {
                         tracing::debug!(
                             session_id = %self.id,
@@ -713,7 +712,7 @@ impl StreamSession {
         // #506.
         let mut candidates: Vec<(Priority, StreamId, Vec<FramePatch>)> = Vec::new();
         for (stream_id, patches) in extracted {
-            let Some(stream) = self.streams.get(&stream_id) else {
+            let Some(stream) = self.streams.get(stream_id) else {
                 continue;
             };
             if !matches!(stream.state(), StreamState::Streaming) {
@@ -744,7 +743,7 @@ impl StreamSession {
             if !keep[i] {
                 continue;
             }
-            let Some(stream) = self.streams.get_mut(&stream_id) else {
+            let Some(stream) = self.streams.get_mut(stream_id) else {
                 continue;
             };
             let Ok(frame) = stream.finalize_patch_frame(priority, frame_patches) else {
@@ -793,11 +792,11 @@ impl StreamSession {
                     .streams
                     .iter()
                     .filter(|(_, stream)| stream.is_active())
-                    .map(|(id, _)| *id)
+                    .map(|(id, _)| id)
                     .collect();
 
                 for stream_id in active_stream_ids {
-                    if let Some(stream) = self.streams.get_mut(&stream_id) {
+                    if let Some(stream) = self.streams.get_mut(stream_id) {
                         let _ = stream.cancel(); // Best effort
                     }
                 }
@@ -833,12 +832,9 @@ impl StreamSession {
         self.update_timestamp();
 
         // Force cancel all streams with timeout reason
-        for stream in self.streams.values_mut() {
+        for mut stream in self.streams.drain() {
             let _ = stream.cancel(); // Best effort cleanup
         }
-
-        // Clear stream collections for memory cleanup
-        self.streams.clear();
 
         // Emit timeout event
         self.add_event(DomainEvent::SessionTimedOut {

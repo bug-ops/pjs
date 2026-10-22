@@ -1,9 +1,13 @@
 //! WebSocket server implementation for Axum
 
 #[cfg(feature = "http-server")]
-use super::{AdaptiveStreamController, StreamOptions, WebSocketTransport, WsMessage};
+use super::{
+    AdaptiveStreamController, ConnectionId, CreateSessionError, StreamOptions, WebSocketTransport,
+    WsMessage,
+};
 use crate::{
-    Result as PjsResult,
+    Error as PjsError, Result as PjsResult,
+    domain::SessionId,
     infrastructure::bounded_channel::{self, ByteBoundedSender, byte_bounded_channel},
     security::{ClientRateLimiter, RateLimitConfig, RateLimitGuard},
 };
@@ -16,7 +20,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use futures::StreamExt;
+use futures::{StreamExt, stream::SplitSink};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
@@ -26,7 +30,31 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, warn};
-use uuid;
+
+/// `Error` reply code for a request the server cannot parse or accept.
+const CODE_BAD_REQUEST: u16 = 400;
+
+/// `Error` reply code for a `StreamInit` whose session id is already in use.
+const CODE_CONFLICT: u16 = 409;
+
+/// Fixed reply text for undecodable input. Never built from the decode error:
+/// that text echoes attacker-chosen content back to the peer.
+const MALFORMED_MESSAGE: &str = "malformed message";
+
+/// Fixed reply text for a `StreamInit` carrying the nil UUID.
+const NIL_SESSION_ID: &str = "nil session id is not allowed";
+
+/// Fixed reply text for a `StreamInit` whose id belongs to an existing session.
+const DUPLICATE_SESSION_ID: &str = "session id already in use";
+
+/// Builds an `Error` reply with a fixed, non-echoing message.
+fn error_reply(session_id: Option<SessionId>, code: u16, error: &'static str) -> WsMessage {
+    WsMessage::Error {
+        session_id,
+        error: error.to_owned(),
+        code,
+    }
+}
 
 /// Capacity of each per-connection outgoing message channel.
 ///
@@ -172,13 +200,9 @@ impl OriginAllowList {
 pub struct AxumWebSocketTransport {
     controller: Arc<AdaptiveStreamController>,
     /// Active connection IDs for tracking open sockets
-    active_connections: Arc<RwLock<Vec<String>>>,
+    active_connections: Arc<RwLock<Vec<ConnectionId>>>,
     /// Per-connection outgoing senders; keyed by connection ID
-    outgoing_channels: Arc<RwLock<HashMap<String, ByteBoundedSender<String>>>>,
-    /// Streaming session IDs created by each connection (via `StreamInit`),
-    /// so [`Self::handle_socket`]'s teardown can abort the right sessions'
-    /// streaming tasks when the connection closes.
-    connection_sessions: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    outgoing_channels: Arc<RwLock<HashMap<ConnectionId, ByteBoundedSender<String>>>>,
     /// Per-IP rate limiter applied to upgrade requests, connection establishment,
     /// and inbound application-level messages.
     rate_limiter: Arc<ClientRateLimiter>,
@@ -227,7 +251,6 @@ impl AxumWebSocketTransport {
             controller,
             active_connections: Arc::new(RwLock::new(Vec::new())),
             outgoing_channels: Arc::new(RwLock::new(HashMap::new())),
-            connection_sessions: Arc::new(RwLock::new(HashMap::new())),
             rate_limiter: Arc::new(ClientRateLimiter::new(config)),
             allowed_origins: OriginAllowList::DenyAll,
         }
@@ -351,11 +374,8 @@ impl AxumWebSocketTransport {
             }
         };
 
-        let connection_id = uuid::Uuid::new_v4().to_string();
-        self.active_connections
-            .write()
-            .await
-            .push(connection_id.clone());
+        let connection_id = ConnectionId::new();
+        self.active_connections.write().await.push(connection_id);
 
         let frame_rx = self.controller.subscribe_frames();
 
@@ -365,13 +385,13 @@ impl AxumWebSocketTransport {
         self.outgoing_channels
             .write()
             .await
-            .insert(connection_id.clone(), outgoing_tx);
+            .insert(connection_id, outgoing_tx);
 
         let (mut sender, mut receiver) = socket.split();
 
         // Spawn single task to handle both sending and receiving
         let transport_clone = self.clone();
-        let connection_id_clone = Arc::new(connection_id.clone());
+        let connection_id_shared = Arc::new(connection_id);
         let guard_for_task = guard.clone();
         let websocket_task = {
             let mut frame_rx = frame_rx;
@@ -380,11 +400,14 @@ impl AxumWebSocketTransport {
                     tokio::select! {
                         // Handle frames from stream controller. Match on the full
                         // Result so Lagged is logged-and-skipped while Closed
-                        // ends the loop instead of busy-spinning.
+                        // ends the loop instead of busy-spinning. The broadcast
+                        // carries every connection's frames; only the owner's
+                        // are forwarded.
                         recv_result = frame_rx.recv() => {
                             match recv_result {
-                                Ok((_session_id, message)) => {
-                                    match serde_json::to_string(&message) {
+                                Ok((owner, _session_id, _)) if owner != connection_id => {}
+                                Ok((_, _session_id, message)) => {
+                                    match serde_json::to_string(message.as_ref()) {
                                         Ok(json_str) => {
                                             if let Err(e) = super::send_with_write_timeout(&mut sender, Message::Text(json_str.into()), write_timeout).await {
                                                 error!("Failed to send message to client: {}", e);
@@ -438,12 +461,17 @@ impl AxumWebSocketTransport {
                                     }
                                     match serde_json::from_str::<WsMessage>(&text) {
                                         Ok(ws_message) => {
-                                            if let Err(e) = transport_clone.handle_websocket_message(Arc::clone(&connection_id_clone), ws_message).await {
+                                            if let Err(e) = transport_clone.handle_websocket_message(Arc::clone(&connection_id_shared), ws_message).await {
                                                 error!("Failed to handle message: {:?}", e);
                                             }
                                         }
                                         Err(e) => {
                                             warn!("Failed to parse WebSocket message: {:?}", e);
+                                            let reply = error_reply(None, CODE_BAD_REQUEST, MALFORMED_MESSAGE);
+                                            if let Err(e) = send_reply(&mut sender, &reply, write_timeout).await {
+                                                error!("Failed to send error reply to client: {}", e);
+                                                break;
+                                            }
                                         }
                                     }
                                 }
@@ -502,25 +530,20 @@ impl AxumWebSocketTransport {
         // guard's connection counter is decremented when the last Arc<Guard>
         // is dropped (here and when the spawned task ends).
         self.outgoing_channels.write().await.remove(&connection_id);
-        let mut connections = self.active_connections.write().await;
-        connections.retain(|conn_id| *conn_id != connection_id);
-        drop(connections);
-        drop(guard);
 
         // Abort every streaming task this connection started — otherwise a
         // session's frame-streaming task keeps running (and its abort
         // handle stays unreachable) after the client that requested it has
-        // disconnected.
-        if let Some(session_ids) = self
-            .connection_sessions
-            .write()
-            .await
-            .remove(&connection_id)
-        {
-            for session_id in session_ids {
-                self.controller.remove_session(&session_id).await;
-            }
-        }
+        // disconnected. Done before the connection record is removed, so a
+        // connection reported as gone no longer owns any session.
+        self.controller
+            .remove_sessions_owned_by(connection_id)
+            .await;
+
+        let mut connections = self.active_connections.write().await;
+        connections.retain(|conn_id| *conn_id != connection_id);
+        drop(connections);
+        drop(guard);
 
         info!("WebSocket connection closed for {}", client_ip);
     }
@@ -541,16 +564,12 @@ impl AxumWebSocketTransport {
     ///
     /// Thin wrapper around [`WebSocketTransport::handle_message`] that
     /// forwards the axum socket loop's already-shared `connection_id`; all
-    /// message handling, including `connection_sessions` tracking for
-    /// `StreamInit`, lives in `handle_message` itself. `connection_sessions`
-    /// entries are drained only by [`Self::handle_socket`]'s teardown,
-    /// keyed by the same connection id — nothing else in this type removes
-    /// them, so a caller that drives [`WebSocketTransport::handle_message`]
-    /// directly, bypassing `handle_socket`, leaves its sessions in that map
-    /// until the connection id happens to be reused or the process exits.
+    /// message handling lives in `handle_message` itself. Sessions record their
+    /// owning connection, and [`Self::handle_socket`]'s teardown removes the
+    /// sessions that connection owns.
     async fn handle_websocket_message(
         &self,
-        connection_id: Arc<String>,
+        connection_id: Arc<ConnectionId>,
         message: WsMessage,
     ) -> PjsResult<()> {
         debug!(
@@ -559,6 +578,36 @@ impl AxumWebSocketTransport {
         );
         self.handle_message(connection_id, message).await
     }
+
+    /// Queues a fixed-message `Error` reply for `connection`.
+    ///
+    /// Goes through [`WebSocketTransport::send_frame`], which never blocks, so
+    /// it is safe to call from the connection's own message-handling path.
+    async fn reply_error(
+        &self,
+        connection: &Arc<ConnectionId>,
+        session_id: Option<SessionId>,
+        code: u16,
+        error: &'static str,
+    ) {
+        let reply = error_reply(session_id, code, error);
+        if let Err(e) = self.send_frame(Arc::clone(connection), reply).await {
+            warn!(
+                "Failed to queue error reply for connection {}: {}",
+                connection, e
+            );
+        }
+    }
+}
+
+/// Serializes `reply` and writes it straight to the socket.
+async fn send_reply(
+    sender: &mut SplitSink<WebSocket, Message>,
+    reply: &WsMessage,
+    write_timeout: Duration,
+) -> Result<(), String> {
+    let json = serde_json::to_string(reply).map_err(|e| format!("serialize failed: {e}"))?;
+    super::send_with_write_timeout(sender, Message::Text(json.into()), write_timeout).await
 }
 
 impl Default for AxumWebSocketTransport {
@@ -568,10 +617,10 @@ impl Default for AxumWebSocketTransport {
 }
 
 impl WebSocketTransport for AxumWebSocketTransport {
-    type Connection = String; // Use connection ID instead of WebSocket
+    type Connection = ConnectionId; // Use connection ID instead of WebSocket
 
     type StartStreamFuture<'a>
-        = impl Future<Output = PjsResult<String>> + Send + 'a
+        = impl Future<Output = PjsResult<SessionId>> + Send + 'a
     where
         Self: 'a;
 
@@ -592,13 +641,16 @@ impl WebSocketTransport for AxumWebSocketTransport {
 
     fn start_stream(
         &self,
-        _connection: Arc<Self::Connection>,
+        connection: Arc<Self::Connection>,
         data: Value,
         options: StreamOptions,
     ) -> Self::StartStreamFuture<'_> {
         async move {
-            let session_id = self.controller.create_session(data, options).await?;
-            self.controller.start_streaming(&session_id).await?;
+            let session_id = SessionId::new();
+            self.controller
+                .create_session(session_id, *connection, data, options)
+                .await?;
+            self.controller.start_streaming(session_id).await?;
             Ok(session_id)
         }
     }
@@ -678,13 +730,17 @@ impl WebSocketTransport for AxumWebSocketTransport {
         }
     }
 
-    /// The `StreamInit` arm records the created session under `connection`
-    /// in `connection_sessions` so [`Self::handle_socket`]'s teardown can
-    /// abort it on disconnect. Nothing else drains that map: a caller that
-    /// drives this method directly, bypassing `handle_socket` (e.g. a test,
-    /// or a future non-axum trait caller), leaves its session's entry there
-    /// indefinitely — [`WebSocketTransport::close_stream`] removes the
-    /// session from the controller but does not touch `connection_sessions`.
+    /// The `StreamInit` arm adopts the peer's session id and records
+    /// `connection` as its owner, so [`Self::handle_socket`]'s teardown can
+    /// abort it on disconnect. A nil or already used id is answered with an
+    /// `Error` reply (400 and 409) and returned as an error; the existing
+    /// session is untouched. `FrameAck`s are accepted from the owner only.
+    ///
+    /// Session ids are chosen by the peer and share one namespace across
+    /// connections, so they must be random (UUID v4). A peer using predictable
+    /// ids can have them taken by another connection for as long as that
+    /// connection lives or up to `SESSION_MAX_AGE`: an availability risk, not
+    /// a confidentiality one, since routing and acks are owner-checked.
     fn handle_message(
         &self,
         connection: Arc<Self::Connection>,
@@ -692,18 +748,35 @@ impl WebSocketTransport for AxumWebSocketTransport {
     ) -> Self::HandleMessageFuture<'_> {
         async move {
             match message {
-                WsMessage::StreamInit { data, options, .. } => {
-                    let session_id = self.controller.create_session(data, options).await?;
-                    // Tracked before `start_streaming` so a session that was
-                    // successfully created is still reachable for cleanup
-                    // even if `start_streaming` itself returns an error.
-                    self.connection_sessions
-                        .write()
+                WsMessage::StreamInit {
+                    session_id,
+                    data,
+                    options,
+                } => {
+                    if session_id.as_uuid().is_nil() {
+                        self.reply_error(&connection, None, CODE_BAD_REQUEST, NIL_SESSION_ID)
+                            .await;
+                        return Err(PjsError::InvalidSession(NIL_SESSION_ID.to_owned()));
+                    }
+                    // TODO(#571): no cap on sessions per connection; remove_sessions_owned_by scans all sessions
+                    match self
+                        .controller
+                        .create_session(session_id, *connection, data, options)
                         .await
-                        .entry((*connection).clone())
-                        .or_default()
-                        .push(session_id.clone());
-                    self.controller.start_streaming(&session_id).await?;
+                    {
+                        Ok(()) => {}
+                        Err(e @ CreateSessionError::AlreadyExists(_)) => {
+                            self.reply_error(
+                                &connection,
+                                Some(session_id),
+                                CODE_CONFLICT,
+                                DUPLICATE_SESSION_ID,
+                            )
+                            .await;
+                            return Err(e.into());
+                        }
+                    }
+                    self.controller.start_streaming(session_id).await?;
                     info!(
                         "Created new streaming session for connection {}",
                         connection.as_ref()
@@ -719,7 +792,7 @@ impl WebSocketTransport for AxumWebSocketTransport {
                         session_id, frame_id, processing_time_ms
                     );
                     self.controller
-                        .handle_frame_ack(&session_id, frame_id, processing_time_ms)
+                        .handle_frame_ack(*connection, session_id, frame_id, processing_time_ms)
                         .await?;
                 }
                 WsMessage::Ping { timestamp } => {
@@ -731,16 +804,15 @@ impl WebSocketTransport for AxumWebSocketTransport {
                     error,
                     code,
                 } => {
-                    // `session_id` and `error` are both arbitrary
-                    // client-supplied strings with no length validation on
-                    // this path — log only their lengths (plus the
-                    // connection id for correlation), never the values
-                    // themselves, at WARN (see #415 S1: unbounded WARN
+                    // `error` is an arbitrary client-supplied string with no
+                    // length validation on this path — log only its length
+                    // (plus the connection id for correlation), never the
+                    // value itself, at WARN (see #415 S1: unbounded WARN
                     // amplification from a single rate-limited connection).
                     warn!(
-                        "Received error from client on connection {}: session_id_len={:?}, code={}, error_len={}",
+                        "Received error from client on connection {}: session_id={:?}, code={}, error_len={}",
                         connection.as_ref(),
-                        session_id.as_deref().map(str::len),
+                        session_id,
                         code,
                         error.len()
                     );
@@ -756,11 +828,10 @@ impl WebSocketTransport for AxumWebSocketTransport {
         }
     }
 
-    fn close_stream(&self, session_id: &str) -> Self::CloseStreamFuture<'_> {
-        let session_id = session_id.to_string();
+    fn close_stream(&self, session_id: SessionId) -> Self::CloseStreamFuture<'_> {
         async move {
             info!("Closing stream session: {}", session_id);
-            self.controller.remove_session(&session_id).await;
+            self.controller.remove_session(session_id).await;
             Ok(())
         }
     }
@@ -792,50 +863,158 @@ mod tests {
             "metadata": {"created": "2024-01-15T12:00:00Z"}
         });
 
-        let session_id = transport
-            .controller
-            .create_session(data, StreamOptions::default())
-            .await
-            .unwrap();
-        assert!(!session_id.is_empty());
-
-        // Test starting stream
+        let session_id = SessionId::new();
         transport
             .controller
-            .start_streaming(&session_id)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_handle_message_stream_init_tracks_connection_session() {
-        // Regression test for #415: `WebSocketTransport::handle_message`'s
-        // `StreamInit` arm used to create a session without recording it in
-        // `connection_sessions`, so a caller driving the transport through
-        // the trait directly (bypassing `handle_socket`) got a session that
-        // was never associated with its connection for cleanup. Assert the
-        // association exists after calling `handle_message` directly.
-        let transport = AxumWebSocketTransport::new();
-        let connection = Arc::new("conn-x".to_string());
-
-        transport
-            .handle_message(
-                connection.clone(),
-                WsMessage::StreamInit {
-                    session_id: "ignored-client-supplied-id".to_string(),
-                    data: json!({"test": "value"}),
-                    options: StreamOptions::default(),
-                },
+            .create_session(
+                session_id,
+                ConnectionId::new(),
+                data,
+                StreamOptions::default(),
             )
             .await
             .unwrap();
 
-        let sessions = transport.connection_sessions.read().await;
-        let tracked = sessions
-            .get(connection.as_ref())
-            .expect("connection_sessions must have an entry for this connection");
-        assert_eq!(tracked.len(), 1);
-        assert!(!tracked[0].is_empty());
+        // Test starting stream
+        transport
+            .controller
+            .start_streaming(session_id)
+            .await
+            .unwrap();
+    }
+
+    fn stream_init(session_id: SessionId) -> WsMessage {
+        WsMessage::StreamInit {
+            session_id,
+            data: json!({"test": "value"}),
+            options: StreamOptions::default(),
+        }
+    }
+
+    async fn register_outgoing(
+        transport: &AxumWebSocketTransport,
+        connection: ConnectionId,
+    ) -> tokio::sync::mpsc::Receiver<bounded_channel::Envelope<String>> {
+        let (tx, rx) =
+            byte_bounded_channel::<String>(OUTGOING_QUEUE_CAPACITY, MAX_QUEUED_OUTGOING_BYTES);
+        transport
+            .outgoing_channels
+            .write()
+            .await
+            .insert(connection, tx);
+        rx
+    }
+
+    fn reply_code(envelope: bounded_channel::Envelope<String>) -> u16 {
+        match serde_json::from_str::<WsMessage>(&envelope.into_inner()).unwrap() {
+            WsMessage::Error { code, .. } => code,
+            other => panic!("expected an Error reply, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_message_stream_init_adopts_client_id_and_records_owner() {
+        let transport = AxumWebSocketTransport::new();
+        let connection = Arc::new(ConnectionId::new());
+        let session_id = SessionId::new();
+
+        transport
+            .handle_message(connection.clone(), stream_init(session_id))
+            .await
+            .unwrap();
+
+        let sessions = transport.controller.sessions.read().await;
+        assert_eq!(sessions[&session_id].owner(), *connection);
+    }
+
+    #[tokio::test]
+    async fn test_handle_message_duplicate_stream_init_is_rejected_with_409() {
+        let transport = AxumWebSocketTransport::new();
+        let first = Arc::new(ConnectionId::new());
+        let second = Arc::new(ConnectionId::new());
+        let mut second_rx = register_outgoing(&transport, *second).await;
+        let session_id = SessionId::new();
+        transport
+            .handle_message(first.clone(), stream_init(session_id))
+            .await
+            .unwrap();
+
+        let result = transport
+            .handle_message(second, stream_init(session_id))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(reply_code(second_rx.try_recv().unwrap()), CODE_CONFLICT);
+        let sessions = transport.controller.sessions.read().await;
+        assert_eq!(sessions[&session_id].owner(), *first);
+    }
+
+    #[tokio::test]
+    async fn test_handle_message_nil_stream_init_is_rejected_with_400() {
+        let transport = AxumWebSocketTransport::new();
+        let connection = Arc::new(ConnectionId::new());
+        let mut rx = register_outgoing(&transport, *connection).await;
+        let nil = SessionId::from_uuid(uuid::Uuid::nil());
+
+        let result = transport.handle_message(connection, stream_init(nil)).await;
+
+        assert!(result.is_err());
+        assert_eq!(reply_code(rx.try_recv().unwrap()), CODE_BAD_REQUEST);
+        assert!(transport.controller.sessions.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_message_frame_ack_from_non_owner_is_rejected() {
+        let transport = AxumWebSocketTransport::new();
+        let owner = Arc::new(ConnectionId::new());
+        let session_id = SessionId::new();
+        transport
+            .handle_message(owner, stream_init(session_id))
+            .await
+            .unwrap();
+
+        let result = transport
+            .handle_message(
+                Arc::new(ConnectionId::new()),
+                WsMessage::FrameAck {
+                    session_id,
+                    frame_id: 0,
+                    processing_time_ms: 5,
+                },
+            )
+            .await;
+
+        assert!(result.is_err());
+        let sessions = transport.controller.sessions.read().await;
+        assert!(sessions[&session_id].acknowledged_frames.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_reinitialising_a_cleaned_up_id_routes_only_to_the_new_owner() {
+        let transport = AxumWebSocketTransport::new();
+        let (old_owner, new_owner) = (ConnectionId::new(), ConnectionId::new());
+        let session_id = SessionId::new();
+        transport
+            .handle_message(Arc::new(old_owner), stream_init(session_id))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        transport
+            .controller
+            .cleanup_expired_sessions(Duration::ZERO)
+            .await;
+        let mut frames_rx = transport.controller.subscribe_frames();
+
+        transport
+            .handle_message(Arc::new(new_owner), stream_init(session_id))
+            .await
+            .unwrap();
+
+        let (owner, id, _) = tokio::time::timeout(Duration::from_secs(2), frames_rx.recv())
+            .await
+            .expect("the new session must stream")
+            .unwrap();
+        assert_eq!((owner, id), (new_owner, session_id));
     }
 
     #[tokio::test]
@@ -877,14 +1056,14 @@ mod tests {
         // `MAX_QUEUED_OUTGOING_BYTES` must be dropped even though the
         // channel is nowhere near its message-count capacity.
         let transport = AxumWebSocketTransport::new();
-        let connection_id = "test-connection".to_string();
+        let connection_id = ConnectionId::new();
         let (tx, mut rx) =
             byte_bounded_channel::<String>(OUTGOING_QUEUE_CAPACITY, MAX_QUEUED_OUTGOING_BYTES);
         transport
             .outgoing_channels
             .write()
             .await
-            .insert(connection_id.clone(), tx);
+            .insert(connection_id, tx);
 
         let connection = Arc::new(connection_id);
         let oversized_message = WsMessage::Error {
@@ -915,14 +1094,14 @@ mod tests {
         // sender and the only consumer) moot; the sender is still cloned
         // out of the lock before sending for lock hygiene.
         let transport = AxumWebSocketTransport::new();
-        let connection_id = "test-connection".to_string();
+        let connection_id = ConnectionId::new();
         let (tx, mut rx) =
             byte_bounded_channel::<String>(OUTGOING_QUEUE_CAPACITY, MAX_QUEUED_OUTGOING_BYTES);
         transport
             .outgoing_channels
             .write()
             .await
-            .insert(connection_id.clone(), tx);
+            .insert(connection_id, tx);
 
         let connection = Arc::new(connection_id);
         for _ in 0..OUTGOING_QUEUE_CAPACITY {

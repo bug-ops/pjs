@@ -54,6 +54,7 @@ jobs:
               - 'crates/pjs-domain/**'
               - 'crates/pjs-wasm/**'
               - 'crates/pjs-demo/**'
+              - 'fuzz/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -114,6 +115,100 @@ jobs:
 
       - name: Print sccache stats
         run: sccache --show-stats
+
+  # ── Fuzz targets ─────────────────────────────────────────────────────────
+  # Gating: lint, build every target and replay the committed seeds
+  # deterministically (-runs=0). Coverage-guided exploration lives in the
+  # non-gating fuzz-explore job below.
+  fuzz:
+    name: Fuzz Targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [changes]
+    permissions:
+      contents: read
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "fuzz"
+          workspaces: fuzz
+          cache-on-failure: true
+
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz
+
+      - name: Check formatting
+        run: cargo +nightly fmt --manifest-path fuzz/Cargo.toml --check
+
+      - name: Run clippy
+        run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build fuzz targets
+        run: cargo fuzz build --target x86_64-unknown-linux-gnu
+
+      - name: Replay committed seeds
+        run: |
+          for target in $(cargo fuzz list); do
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" "fuzz/seeds/$target" -- -runs=0
+          done
+
+  # Non-gating: time-boxed exploration, scheduled or manual only. Not part of
+  # ci-success, so a finding never blocks a merge; it uploads the crashing
+  # input for triage.
+  fuzz-explore:
+    name: Fuzz Explore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "fuzz"
+          workspaces: fuzz
+          cache-on-failure: true
+
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz
+
+      - name: Explore each target for 60 seconds
+        run: |
+          for target in $(cargo fuzz list); do
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=60 "$PWD/fuzz/seeds/$target"
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ── Tier 2a: build + archive ─────────────────────────────────────────────
   # Compiles tests and archives them with nextest --no-run.
@@ -708,6 +803,12 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
+      # fuzz/ is a separate workspace; its CI-only deps include NCSA (libfuzzer-sys),
+      # which the root license allow-list does not cover, so licenses are skipped here.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: fuzz/Cargo.toml
+          command: check advisories bans sources
 
   # ── Single gate for branch protection ────────────────────────────────────
   # ── JS Client Tests ──────────────────────────────────────────────────────
@@ -756,6 +857,7 @@ jobs:
     needs:
       - changes
       - quality
+      - fuzz
       - build
       - test
       - doctest
@@ -783,6 +885,7 @@ jobs:
             fi
           }
           check quality                   "${{ needs.quality.result }}"
+          check fuzz                      "${{ needs.fuzz.result }}"
           check build                     "${{ needs.build.result }}"
           check test                      "${{ needs.test.result }}"
           check doctest                   "${{ needs.doctest.result }}"

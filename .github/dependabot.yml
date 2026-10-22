@@ -29,6 +29,31 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
+  # Fuzz crate (standalone workspace, not covered by the root manifest)
+  - package-ecosystem: "cargo"
+    directory: "/fuzz"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Etc/GMT-0"
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
