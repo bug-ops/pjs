@@ -328,20 +328,22 @@ pub async fn serve_with_limits(
             // `header_read_timeout` only arms once >=1 byte classifies the
             // connection as H1, so a client that never sends anything was
             // otherwise bounded solely by `max_connection_duration` (300s
-            // default). `readable()` is readiness-only and consumes no
-            // bytes, so hyper still sees the full stream afterward; this
-            // check is protocol-agnostic and applies to h1 and h2 alike.
+            // default). `peek` waits for a real byte (tokio >=1.54 reports
+            // accepted sockets as readable up front, so `readable()` no longer
+            // does) and consumes nothing, so hyper still sees the full stream;
+            // this check is protocol-agnostic and applies to h1 and h2 alike.
             //
             // Residual, not fully closed: a client that sends exactly one
             // byte matching the H2 preface, then stalls, still passes this
-            // gate (`readable()` only requires *some* data to have arrived)
+            // gate (`peek` only requires *some* data to have arrived)
             // and rides out the full `max_connection_duration` before
             // `ReadVersion` itself gives up — this raises the attacker's
             // cost from 0 bytes to 1 byte, it does not add a timer to
             // `ReadVersion`. `max_connections_per_ip` and `max_connections`
             // still bound that window.
+            let mut first_byte = [0u8; 1];
             if let Some(timeout) = header_read_timeout
-                && tokio::time::timeout(timeout, stream.readable())
+                && tokio::time::timeout(timeout, stream.peek(&mut first_byte))
                     .await
                     .is_err()
             {

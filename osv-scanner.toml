@@ -8,3 +8,7 @@ reason = "pyo3 is an optional dep of jiter (python feature) never activated in t
 [[IgnoredVulns]]
 id = "GHSA-chgr-c6px-7xpp"
 reason = "pyo3 is an optional dep of jiter (python feature) never activated in this project; vulnerable code is never compiled"
+
+[[IgnoredVulns]]
+id = "GHSA-qwgh-2vcv-g2f7"
+reason = "block-buffer 0.10.4 is pinned by digest 0.10 via sha1 (axum, tungstenite); fix needs 0.12.1; bug needs a panic inside the hashing closure, which sha1 never does"

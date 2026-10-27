@@ -1,0 +1,5 @@
+# OSV Scanner configuration (applies to fuzz/Cargo.lock)
+
+[[IgnoredVulns]]
+id = "GHSA-qwgh-2vcv-g2f7"
+reason = "block-buffer 0.10.4 is pinned by digest 0.10 via sha1 (axum, tungstenite); fix needs 0.12.1; bug needs a panic inside the hashing closure, which sha1 never does"
