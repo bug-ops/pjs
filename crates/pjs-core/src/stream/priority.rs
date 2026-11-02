@@ -135,20 +135,18 @@ impl PriorityStreamer {
         for patch in patches {
             if patch.priority != current_priority && !current_batch.is_empty() {
                 plan.frames.push_back(PriorityStreamFrame::Patch {
-                    patches: current_batch,
+                    patches: std::mem::take(&mut current_batch),
                     priority: current_priority,
                 });
-                current_batch = Vec::new();
             }
             current_priority = patch.priority;
             current_batch.push(patch);
 
             if current_batch.len() >= self.config.max_patch_size {
                 plan.frames.push_back(PriorityStreamFrame::Patch {
-                    patches: current_batch,
+                    patches: std::mem::take(&mut current_batch),
                     priority: current_priority,
                 });
-                current_batch = Vec::new();
             }
         }
 
