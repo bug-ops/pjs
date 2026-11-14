@@ -863,7 +863,7 @@ mod tests {
         assert!(criteria.states.is_some());
         let states = criteria.states.unwrap();
         assert_eq!(states.len(), 2);
-        assert!(states.contains(&"active".to_string()));
+        assert!(states.iter().any(|s| s == "active"));
     }
 
     #[test]

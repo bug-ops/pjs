@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SecurityValidator`, `ZeroCopyParser`, `BufferPool`, `SchemaAnalyzer`, `SchemaCompressor` and `DepthTracker` accept only validated configs; `JiterConfig.max_depth` is a bounded `MaxDepth`; `PoolConfig` fields are private; `CompressionConfig::validate` rejects `min_numeric_sequence_size < 3` (**BREAKING**) (#549, #568)
 - `unsafe_code` is forbidden in `pjs-domain` (#551, #568)
 - `chacha20` 0.10.2 and `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382) (#545, #568)
+- `rustix` 1.1.6 (RUSTSEC-2026-0486) (#587)
 - WebSocket server forwards frames only to the connection that owns the session and rejects `FrameAck` from non-owners; previously every client received every client's frames (#569, #563, #577)
 - `JiterPartialParser::parse_partial` no longer returns `consumed > input.len()` or panics on input truncated inside an open string (#577)
 
