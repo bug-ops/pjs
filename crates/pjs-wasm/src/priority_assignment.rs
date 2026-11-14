@@ -308,8 +308,8 @@ mod tests {
     #[test]
     fn default_config_creation() {
         let config = PriorityConfig::default();
-        assert!(config.critical_fields.contains(&"id".to_string()));
-        assert!(config.high_fields.contains(&"name".to_string()));
+        assert!(config.critical_fields.iter().any(|i| i == "id"));
+        assert!(config.high_fields.iter().any(|i| i == "name"));
         assert_eq!(config.large_array_threshold, 100);
     }
 
@@ -317,10 +317,10 @@ mod tests {
     fn config_modification() {
         let mut config = PriorityConfig::new();
         config.add_critical_field("custom_id".to_string());
-        assert!(config.critical_fields.contains(&"custom_id".to_string()));
+        assert!(config.critical_fields.iter().any(|i| i == "custom_id"));
 
         config.add_high_field("display_name".to_string());
-        assert!(config.high_fields.contains(&"display_name".to_string()));
+        assert!(config.high_fields.iter().any(|i| i == "display_name"));
     }
 
     #[test]

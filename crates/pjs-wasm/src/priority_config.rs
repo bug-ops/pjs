@@ -208,7 +208,7 @@ mod tests {
         let config = builder.build_internal();
 
         // Default config should have standard critical fields
-        assert!(config.critical_fields.contains(&"id".to_string()));
+        assert!(config.critical_fields.iter().any(|i| i == "id"));
     }
 
     #[test]
@@ -222,10 +222,10 @@ mod tests {
             .set_large_string_threshold(5000)
             .build_internal();
 
-        assert!(config.critical_fields.contains(&"custom_id".to_string()));
-        assert!(config.high_fields.contains(&"display_name".to_string()));
-        assert!(config.low_patterns.contains(&"debug".to_string()));
-        assert!(config.background_patterns.contains(&"trace".to_string()));
+        assert!(config.critical_fields.iter().any(|i| i == "custom_id"));
+        assert!(config.high_fields.iter().any(|i| i == "display_name"));
+        assert!(config.low_patterns.iter().any(|i| i == "debug"));
+        assert!(config.background_patterns.iter().any(|i| i == "trace"));
         assert_eq!(config.large_array_threshold, 200);
         assert_eq!(config.large_string_threshold, 5000);
     }
