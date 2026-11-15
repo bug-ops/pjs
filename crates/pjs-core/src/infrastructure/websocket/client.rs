@@ -184,7 +184,26 @@ pub struct PjsWebSocketClient {
 
 type ClientSessions = Arc<RwLock<HashMap<SessionId, ClientStreamSession>>>;
 
-type ReceiverSlot = Arc<Mutex<Option<mpsc::Receiver<Envelope<String>>>>>;
+type ReceiverSlot = Arc<Mutex<Option<Outbox>>>;
+
+/// Outgoing queue that outlives a connection.
+///
+/// `pending` is the message taken off the channel but not yet written
+/// successfully; it stays here until its write completes, so a failed,
+/// timed-out or cancelled write leaves it for the next connection.
+struct Outbox {
+    receiver: mpsc::Receiver<Envelope<String>>,
+    pending: Option<Envelope<String>>,
+}
+
+impl Outbox {
+    fn new(receiver: mpsc::Receiver<Envelope<String>>) -> Self {
+        Self {
+            receiver,
+            pending: None,
+        }
+    }
+}
 
 /// Exclusive use of the outgoing message receiver for one connection.
 ///
@@ -192,23 +211,23 @@ type ReceiverSlot = Arc<Mutex<Option<mpsc::Receiver<Envelope<String>>>>>;
 /// connection and the next `connect` can send them.
 struct ReceiverLease {
     slot: ReceiverSlot,
-    receiver: Option<mpsc::Receiver<Envelope<String>>>,
+    outbox: Option<Outbox>,
 }
 
 impl ReceiverLease {
     fn acquire(slot: &ReceiverSlot) -> PjsResult<Self> {
-        let receiver = slot
+        let outbox = slot
             .lock()
             .take()
             .ok_or_else(|| PjsError::ClientError("Client already connected".to_string()))?;
         Ok(Self {
             slot: Arc::clone(slot),
-            receiver: Some(receiver),
+            outbox: Some(outbox),
         })
     }
 
-    fn receiver_mut(&mut self) -> PjsResult<&mut mpsc::Receiver<Envelope<String>>> {
-        self.receiver
+    fn outbox_mut(&mut self) -> PjsResult<&mut Outbox> {
+        self.outbox
             .as_mut()
             .ok_or_else(|| PjsError::ClientError("Receiver lease already released".to_string()))
     }
@@ -216,8 +235,8 @@ impl ReceiverLease {
 
 impl Drop for ReceiverLease {
     fn drop(&mut self) {
-        if let Some(receiver) = self.receiver.take() {
-            *self.slot.lock() = Some(receiver);
+        if let Some(outbox) = self.outbox.take() {
+            *self.slot.lock() = Some(outbox);
         }
     }
 }
@@ -409,24 +428,34 @@ fn reserve_session_slot(
 ///
 /// Messages are already serialized when queued (see `request_stream` and
 /// `handle_incoming_message`), so the byte-budget accounting there matches the
-/// bytes held here; `split` keeps the budget charged until the write completes.
+/// bytes held here. A message stays in `outbox.pending`, with its budget
+/// charged, until its write succeeds: after an error or a cancellation it is
+/// sent first on the next connection (at-least-once: a write cancelled just
+/// after reaching the socket may be sent twice).
 ///
 /// # Errors
 ///
 /// Returns [`PjsError::ConnectionFailed`] when a write fails or times out.
-async fn send_loop<W>(
-    mut write: W,
-    outgoing: &mut mpsc::Receiver<Envelope<String>>,
-    write_timeout: Duration,
-) -> PjsResult<()>
+async fn send_loop<W>(mut write: W, outbox: &mut Outbox, write_timeout: Duration) -> PjsResult<()>
 where
     W: Sink<Message, Error = WsError> + Unpin,
 {
-    while let Some(envelope) = outgoing.recv().await {
-        let (json_str, _budget_permit) = envelope.split();
+    loop {
+        if outbox.pending.is_none() {
+            let Some(envelope) = outbox.receiver.recv().await else {
+                return Ok(());
+            };
+            outbox.pending = Some(envelope);
+        }
+        let Some(envelope) = outbox.pending.as_ref() else {
+            continue;
+        };
+        // The envelope stays in `outbox` (budget still charged) until the write
+        // succeeds; a copy goes to the socket so a failure or cancellation
+        // cannot lose the message.
         if let Err(e) = super::send_with_write_timeout(
             &mut write,
-            Message::Text(json_str.into()),
+            Message::text(envelope.as_str()),
             write_timeout,
         )
         .await
@@ -434,8 +463,8 @@ where
             error!("Failed to send message: {}", e);
             return Err(PjsError::ConnectionFailed(e));
         }
+        outbox.pending = None;
     }
-    Ok(())
 }
 
 /// Reads server messages and applies them until the server closes the socket.
@@ -511,7 +540,7 @@ impl PjsWebSocketClient {
             config: WebSocketClientConfig::default(),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             message_tx,
-            message_rx: Arc::new(Mutex::new(Some(message_rx))),
+            message_rx: Arc::new(Mutex::new(Some(Outbox::new(message_rx)))),
             write_timeout: super::WRITE_TIMEOUT,
         })
     }
@@ -638,7 +667,7 @@ impl PjsWebSocketClient {
         let (write, read) = ws_stream.split();
 
         let outcome = tokio::select! {
-            result = send_loop(write, lease.receiver_mut()?, self.write_timeout) => {
+            result = send_loop(write, lease.outbox_mut()?, self.write_timeout) => {
                 debug!("Send half finished");
                 result
             }
@@ -1482,13 +1511,16 @@ mod tests {
     }
 
     async fn queued_messages(client: &PjsWebSocketClient) -> Vec<WsMessage> {
-        let mut receiver = client.message_rx.lock().take().expect("receiver present");
+        let mut outbox = client.message_rx.lock().take().expect("outbox present");
         let mut messages = Vec::new();
-        while let Ok(envelope) = receiver.try_recv() {
-            let (json_str, _permit) = envelope.split();
-            messages.push(serde_json::from_str(&json_str).expect("valid message"));
+        while let Some(envelope) = outbox
+            .pending
+            .take()
+            .or_else(|| outbox.receiver.try_recv().ok())
+        {
+            messages.push(serde_json::from_str(&envelope).expect("valid message"));
         }
-        *client.message_rx.lock() = Some(receiver);
+        *client.message_rx.lock() = Some(outbox);
         messages
     }
 
@@ -1612,15 +1644,64 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_loop_reports_write_failure_as_connection_failed() {
-        let (tx, mut rx) = byte_bounded_channel(4, 1024);
+        let (tx, rx) = byte_bounded_channel(4, 1024);
+        let mut outbox = Outbox::new(rx);
         tx.send("hello".to_string(), 5).await.unwrap();
         let failing_sink = Box::pin(futures::sink::unfold((), |(), _message: Message| async {
             Err::<(), WsError>(WsError::ConnectionClosed)
         }));
 
-        let result = send_loop(failing_sink, &mut rx, Duration::from_secs(1)).await;
+        let result = send_loop(failing_sink, &mut outbox, Duration::from_secs(1)).await;
 
         assert!(matches!(result, Err(PjsError::ConnectionFailed(_))));
+    }
+
+    #[tokio::test]
+    async fn test_send_loop_failed_write_keeps_message_for_next_connection() {
+        let (tx, rx) = byte_bounded_channel(4, 1024);
+        let mut outbox = Outbox::new(rx);
+        tx.send("hello".to_string(), 5).await.unwrap();
+        let failing_sink = Box::pin(futures::sink::unfold((), |(), _message: Message| async {
+            Err::<(), WsError>(WsError::ConnectionClosed)
+        }));
+        assert!(
+            send_loop(failing_sink, &mut outbox, Duration::from_secs(1))
+                .await
+                .is_err()
+        );
+        drop(tx);
+
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recording_sink = Box::pin(futures::sink::unfold(
+            Arc::clone(&written),
+            |written, message: Message| async move {
+                written.lock().unwrap().push(message);
+                Ok::<_, WsError>(written)
+            },
+        ));
+        send_loop(recording_sink, &mut outbox, Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(*written.lock().unwrap(), vec![Message::text("hello")]);
+    }
+
+    #[tokio::test]
+    async fn test_send_loop_cancelled_write_keeps_message_for_next_connection() {
+        let (tx, rx) = byte_bounded_channel(4, 1024);
+        let mut outbox = Outbox::new(rx);
+        tx.send("hello".to_string(), 5).await.unwrap();
+        let stalled_sink = Box::pin(futures::sink::unfold((), |(), _message: Message| {
+            std::future::pending::<Result<(), WsError>>()
+        }));
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(50),
+            send_loop(stalled_sink, &mut outbox, Duration::from_secs(60)),
+        )
+        .await;
+        assert!(cancelled.is_err(), "send half is cancelled mid-write");
+
+        assert_eq!(outbox.pending.as_deref().map(String::as_str), Some("hello"));
     }
 
     #[test]
