@@ -1851,7 +1851,7 @@ mod tests {
     /// must not surface `SessionPagination::new()`'s `DomainError::InvalidInput`
     /// (which the HTTP layer maps to a 500). The handler must clamp both
     /// before they reach the repository. Uses the real
-    /// `GatInMemoryStreamRepository` so `SessionPagination::validate()` actually runs.
+    /// `GatInMemoryStreamRepository` so the handler's pagination clamping is exercised end to end.
     #[tokio::test]
     async fn test_search_sessions_limit_zero_and_excessive_offset_do_not_error() {
         use crate::infrastructure::GatInMemoryStreamRepository;

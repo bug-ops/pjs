@@ -109,21 +109,9 @@ fn release_corpus_bytes(corpus_bytes_in_flight: &AtomicUsize, amount: usize) {
     if amount == 0 {
         return;
     }
-    // A manual CAS loop rather than `AtomicUsize::update`/`try_update`
-    // (stable since Rust 1.95): the workspace MSRV is 1.89.
-    let mut current = corpus_bytes_in_flight.load(Ordering::Relaxed);
-    loop {
-        let new = current.saturating_sub(amount);
-        match corpus_bytes_in_flight.compare_exchange_weak(
-            current,
-            new,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return,
-            Err(observed) => current = observed,
-        }
-    }
+    corpus_bytes_in_flight.update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        current.saturating_sub(amount)
+    });
 }
 
 /// RAII guard releasing a fixed, pre-captured byte amount back to the
