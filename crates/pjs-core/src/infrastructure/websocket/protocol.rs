@@ -15,6 +15,52 @@ use std::{collections::HashMap, time::Duration};
 /// `Error` code the server sends when a session id is already live on the connection.
 pub(crate) const CODE_CONFLICT: u16 = 409;
 
+/// A fixed server `Error` reply: a code and a non-echoing text.
+///
+/// The single definition of the plan and stream failure replies, shared by the
+/// server (rejections at `StreamInit`) and the controller (mid-stream drops).
+#[cfg(feature = "websocket-server")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FixedError {
+    pub(super) code: u16,
+    pub(super) reason: &'static str,
+}
+
+#[cfg(feature = "websocket-server")]
+impl FixedError {
+    /// One message exceeds the connection's outgoing byte budget.
+    pub(super) const FRAME_EXCEEDS_BUDGET: Self = Self {
+        code: 413,
+        reason: "frame exceeds the outgoing byte budget",
+    };
+    /// The document's plan exceeds the plan limits (frames, bytes, path depth).
+    pub(super) const PLAN_TOO_LARGE: Self = Self {
+        code: 413,
+        reason: "stream plan too large",
+    };
+    /// The connection already holds the most plan bytes it may.
+    pub(super) const PLAN_BUDGET_EXHAUSTED: Self = Self {
+        code: 429,
+        reason: "connection plan budget exhausted",
+    };
+    /// A planned message could not be serialized (a server fault, not the
+    /// client's request).
+    pub(super) const PLAN_UNSERIALIZABLE: Self = Self {
+        code: 500,
+        reason: "stream plan could not be built",
+    };
+    /// One frame waited too long for room in the connection's channel.
+    pub(super) const STREAM_STALLED: Self = Self {
+        code: 408,
+        reason: "stream stalled",
+    };
+    /// The stream outlived its absolute deadline.
+    pub(super) const STREAM_DEADLINE_EXCEEDED: Self = Self {
+        code: 408,
+        reason: "stream deadline exceeded",
+    };
+}
+
 /// Default deadline for a single outbound WebSocket sink write.
 ///
 /// Writing to the sink blocks until the peer's TCP receive buffer drains;
@@ -499,10 +545,6 @@ impl<'de> Deserialize<'de> for WirePatch {
 /// [`PatchError::ExpectedObject`] / [`PatchError::ExpectedArray`] /
 /// [`PatchError::ExpectedString`] when the target has the wrong kind for the op.
 #[cfg(any(feature = "websocket-client", test))]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into the client by the A2d change")
-)]
 pub(crate) fn apply_patch(state: &mut Value, patch: &WirePatch) -> Result<(), PatchError> {
     let (WirePatch::Set { path, .. }
     | WirePatch::Merge { path, .. }
@@ -557,10 +599,6 @@ pub(crate) fn apply_patch(state: &mut Value, patch: &WirePatch) -> Result<(), Pa
 }
 
 #[cfg(any(feature = "websocket-client", test))]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into the client by the A2d change")
-)]
 fn resolve<'a>(state: &'a mut Value, path: &[WireSegment]) -> Result<&'a mut Value, PatchError> {
     let mut node = state;
     for segment in path {
@@ -581,32 +619,47 @@ fn resolve<'a>(state: &'a mut Value, path: &[WireSegment]) -> Result<&'a mut Val
     Ok(node)
 }
 
-/// Stream configuration options.
+/// Stream configuration options, carried by `StreamInit`.
 ///
-/// The server applies none of these fields: a `StreamInit` is accepted only
-/// when its options equal [`StreamOptions::default`], and any other value is
-/// answered with an `Error` message (code 400) and no stream. The fields stay
-/// on the wire so existing peers, which always send `options`, keep working.
+/// The server validates them when it creates the session: `max_frame_size`
+/// must be at least 1024 and `client_fps` must not be zero, otherwise the
+/// request is answered with an `Error` message (code 400) and no stream.
 ///
 /// `priority_mapping` values are validated [`Priority`] values on the wire:
-/// decoding rejects an entry that [`Priority::new`] refuses.
+/// decoding rejects an entry that [`Priority::new`] refuses. Top-level keys
+/// with a mapping stream first (highest priority first); other keys, and a
+/// non-object document, use [`Priority::HIGH`].
 ///
 /// # Examples
 ///
 /// ```
-/// use pjson_rs::infrastructure::websocket::StreamOptions;
+/// use pjson_rs::infrastructure::websocket::{Framing, StreamOptions};
 ///
-/// assert_eq!(StreamOptions::default(), StreamOptions::default());
-/// let custom = StreamOptions { compression: false, ..StreamOptions::default() };
-/// assert_ne!(custom, StreamOptions::default());
+/// assert_eq!(StreamOptions::default().framing, Framing::Merge);
+/// let split = StreamOptions {
+///     framing: Framing::Patch,
+///     max_frame_size: 16 * 1024,
+///     ..StreamOptions::default()
+/// };
+/// assert_ne!(split, StreamOptions::default());
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamOptions {
-    /// Maximum frame size in bytes
+    /// Largest message the server sends, in bytes (at least 1024).
+    ///
+    /// The limit covers the whole message, envelope included. A piece that
+    /// cannot be split further (a single top-level entry under
+    /// [`Framing::Merge`]) may exceed it and then travels alone.
     pub max_frame_size: usize,
-    /// Client processing capability (frames per second)
+    /// Client processing capability in frames per second (never zero).
+    ///
+    /// Sets a floor of `1 / fps` seconds between frames while the plan has at
+    /// most `30 * fps` frames; longer plans shrink the delay so that pacing
+    /// adds at most 30 seconds in total.
     pub client_fps: Option<u32>,
-    /// Enable compression
+    /// Accepted with either value and currently without effect: the wire
+    /// format carries text frames and the WebSocket stack in use implements no
+    /// per-message compression.
     pub compression: bool,
     /// Custom priority mapping
     #[serde(default, with = "option_priority_map")]

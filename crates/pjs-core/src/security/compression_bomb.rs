@@ -13,6 +13,7 @@ use thiserror::Error;
 
 /// Errors related to compression bomb detection
 #[derive(Error, Debug, Clone)]
+#[non_exhaustive]
 pub enum CompressionBombError {
     /// Decompressed/compressed ratio exceeded the configured maximum.
     #[error("Compression ratio exceeded: {ratio:.2}x > {max_ratio:.2}x")]

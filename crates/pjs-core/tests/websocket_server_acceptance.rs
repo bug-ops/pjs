@@ -160,11 +160,11 @@ async fn test_stream_complete_carries_no_checksum() {
 }
 
 #[tokio::test]
-async fn test_stream_init_non_default_options_rejected_with_400_and_no_frames() {
+async fn test_stream_init_invalid_options_rejected_with_400_and_no_frames() {
     let mut ws = connect(spawn_server().await).await;
     let session = SessionId::new().to_string();
     let mut options = default_options();
-    options["max_frame_size"] = json!(1024);
+    options["max_frame_size"] = json!(1023);
     ws.send(init_with(&session, options))
         .await
         .expect("send init");
@@ -172,7 +172,7 @@ async fn test_stream_init_non_default_options_rejected_with_400_and_no_frames() 
     let reply = next_json(&mut ws).await;
     assert_eq!(kind(&reply), "Error", "{reply}");
     assert_eq!(reply["data"]["code"], json!(400));
-    assert_eq!(reply["data"]["error"], json!("unsupported stream options"));
+    assert_eq!(reply["data"]["error"], json!("invalid stream options"));
 
     let followup = timeout(Duration::from_millis(300), ws.next()).await;
     assert!(

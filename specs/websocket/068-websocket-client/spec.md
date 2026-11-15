@@ -58,7 +58,7 @@ Feature gate: `websocket-client` (deps `tokio-tungstenite`, `url`); builds witho
 | `max_session_bytes` (`NonZeroUsize`, serialized JSON size) | 16 MiB |
 | write timeout | 10 s (`WRITE_TIMEOUT`), unvalidated |
 
-The message/frame caps equal the server's inbound cap so the client does not sever a connection to the in-tree server, which answers `StreamInit` with the whole request data in one frame. `SessionIdleTtl::new(Duration::ZERO)` returns `ConfigError::MustBePositive`.
+The message/frame caps equal the server's inbound cap so the client does not sever a connection to the in-tree server, which splits a payload into frames of at most the requested `max_frame_size` (default 64 KiB; one top-level entry above it travels alone) and never sends a message above the 16 MiB outgoing budget. `SessionIdleTtl::new(Duration::ZERO)` returns `ConfigError::MustBePositive`.
 
 ### FR-002 Connect
 

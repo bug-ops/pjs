@@ -717,7 +717,12 @@ mod tests {
         assert!(context.start_stream(1024).is_ok());
 
         // Third stream exceeds limit.
-        assert!(context.start_stream(1024).is_err());
+        assert!(matches!(
+            context.start_stream(1024),
+            Err(Error::CompressionBomb(
+                CompressionBombError::TooManyStreams { active: 2, max: 2 }
+            ))
+        ));
 
         context.finish_stream();
         assert!(context.start_stream(1024).is_ok());

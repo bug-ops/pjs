@@ -34,6 +34,8 @@ pub trait LazyParser<'a> {
     fn reset(&mut self);
 }
 
+#[cold]
+#[inline(never)]
 fn security_violation(error: crate::Error) -> DomainError {
     DomainError::SecurityViolation(crate::error::ErrorChain(&error).to_string())
 }
@@ -699,6 +701,22 @@ impl<'a> Default for ZeroCopyParser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_security_violation_carries_the_error_chain_text() {
+        let mut config = crate::SecurityConfig::default();
+        config.json.max_string_length = 4;
+        let config = crate::Validate::validated(config).unwrap();
+        let mut parser = ZeroCopyParser::with_security_config(config);
+
+        let error = parser.parse_lazy(br#""hello world""#).unwrap_err();
+
+        assert!(
+            matches!(&error, DomainError::SecurityViolation(m)
+                if m == "String length 11 exceeds maximum allowed 4"),
+            "{error:?}"
+        );
+    }
 
     #[test]
     fn test_parse_string() {

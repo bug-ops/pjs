@@ -9,7 +9,7 @@ tags:
   - server
   - security
 created: 2026-11-15
-status: partial
+status: implemented
 priority: P2
 related:
   - "[[constitution]]"
@@ -23,6 +23,7 @@ related:
 code:
   - crates/pjs-core/src/infrastructure/websocket/controller.rs
   - crates/pjs-core/src/infrastructure/websocket/protocol.rs
+  - crates/pjs-core/src/infrastructure/websocket/planner.rs
   - crates/pjs-core/src/infrastructure/websocket/mod.rs
   - crates/pjs-core/src/infrastructure/websocket/server.rs
   - crates/pjs-core/src/infrastructure/websocket/security.rs
@@ -34,7 +35,7 @@ verified: 2026-11-15
 # WebSocket server transport: upgrade, ownership, caps and TTL
 
 > [!info] Status
-> `partial`: transport hardening (origin check, rate limits, frame caps, write timeout, bounded queues, per-connection session ownership and cleanup) is implemented and covered by wire-level tests. Delivery semantics are minimal: every session is a single-frame plan and only default `StreamOptions` are accepted (real planner: #624). Message formats are in [[067-websocket-wire-protocol/spec|067]].
+> `implemented`: transport hardening (origin check, rate limits, frame caps, write timeout, bounded queues, per-connection session ownership and cleanup) and the stream planner (`planner.rs`: priority-ordered multi-frame plans honouring `StreamOptions`, per-connection plan budget, pacing and stream deadlines; #624) are in place and covered by tests. Message formats are in [[067-websocket-wire-protocol/spec|067]].
 
 ## Overview
 
@@ -42,7 +43,7 @@ verified: 2026-11-15
 
 **Goal.** `AxumWebSocketTransport` upgrades requests at an axum route, tracks connections, and routes frames only to the owning connection.
 
-**Out of scope.** Priority-ordered multi-frame plans (#624), HTTP session integration (the WebSocket session model is disjoint from `StreamSession`, issue #239).
+**Out of scope.** Heuristic priorities for keys without a mapping (they get `Priority::HIGH`), HTTP session integration (the WebSocket session model is disjoint from `StreamSession`, issue #239).
 
 Feature gates: `websocket-server` (= `http-server`); the server module and `SecureWebSocketHandler` are gated by `websocket-server`, not `http-server` (#598). `websocket-client` adds the client ([[068-websocket-client/spec|068]]).
 
@@ -86,11 +87,18 @@ Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitCo
 
 ### FR-006 Session ownership
 
-`StreamInit` shall be handled as: nil UUID answers `Error{400, "nil session id is not allowed"}`; non-default `StreamOptions` answer `Error{400, "unsupported stream options"}` and create no session; otherwise `create_session(session_id, owner = connection, data, options)`. A duplicate id on the same connection answers `Error{session_id, 409, "session id already in use"}` and leaves the existing session untouched; a connection already holding the cap of live sessions (`with_max_sessions_per_connection`, default 64; defence in depth: the default per-IP rate limit (30 msg/s, burst 5) stops a burst at about 35 messages, but a paced client can still reach 64 live sessions, only when its sessions stay live for more than about 2 s (completed sessions stop being live earlier) or the rate limit is raised, #631) answers `Error{session_id, 429, "too many live sessions on this connection"}`. On success the streaming task starts. `FrameAck` and `StreamCancel` act only on a session of the sending connection (unknown ids are ignored). Session ids are peer-chosen and scoped to the connection: two connections may use the same id without interacting (#572, #571). A session stops being live before its `StreamComplete` is queued, so the id can be reused as soon as the peer sees it.
+`StreamInit` shall be handled as: nil UUID answers `Error{400, "nil session id is not allowed"}`; otherwise `create_session(session_id, owner = connection, data, options)`, which validates the options, plans the stream and registers the session. Invalid options (`max_frame_size` below 1024, `client_fps` 0) answer `Error{400, "invalid stream options"}`; a rejected plan answers `Error{429, "connection plan budget exhausted"}` (`PlanError::ConnectionBudgetExhausted`, transient: retry once other sessions finish), `Error{413, "frame exceeds the outgoing byte budget"}` (`UnitExceedsBudget`) or `Error{413, "stream plan too large"}` (`TooManyFrames`, `PlanBytesExceeded`, `PathTooDeep`). No session is created on any of these. A duplicate id on the same connection answers `Error{session_id, 409, "session id already in use"}` and leaves the existing session untouched; a connection already holding the cap of live sessions (`with_max_sessions_per_connection`, default 64; defence in depth: the default per-IP rate limit (30 msg/s, burst 5) stops a burst at about 35 messages, but a paced client can still reach 64 live sessions, only when its sessions stay live for more than about 2 s (completed sessions stop being live earlier) or the rate limit is raised, #631) answers `Error{session_id, 429, "too many live sessions on this connection"}`. On success the streaming task starts. `FrameAck` and `StreamCancel` act only on a session of the sending connection (unknown ids are ignored). Session ids are peer-chosen and scoped to the connection: two connections may use the same id without interacting (#572, #571). A session stops being live before its `StreamComplete` is queued, so the id can be reused as soon as the peer sees it.
 
 ### FR-007 Streaming task
 
-`start_streaming` shall spawn a task that sends each plan frame as `WsMessage::StreamFrame` into the owner's outgoing channel, sleeping `recommended_frame_delay` between frames (10 ms normally; 0.5 x average ack time when average exceeds 100 ms, clamped to 1 s), then sends `StreamComplete` (see 067). A supervising task logs panics; a repeated start is a no-op. A frame that exceeds the 16 MiB outgoing byte budget ends the session and the peer receives `Error{413}`. The plan today is a single frame with `Priority::HIGH` carrying the full `StreamInit.data` (`is_complete: true`); the planner is tracked in #624.
+`start_streaming` shall spawn a task that sends the session's pre-serialised plan messages (a `StreamFrame` per frame under merge framing, a `StreamPatch` per frame under patch framing) into the owner's outgoing channel in plan order, then sends `StreamComplete` (see 067). A supervising task logs panics; a repeated start is a no-op.
+
+- Delay after each frame: `min(max(adaptive, 1 / client_fps), 30 s / frames)`, where `adaptive` is `recommended_frame_delay` (10 ms normally; 0.5 x average ack time when the average exceeds 100 ms, clamped to 1 s). Total pacing is therefore at most 30 s; `client_fps` is a floor only while the plan has at most `30 * fps` frames.
+- A single enqueue that waits longer than 30 s for channel room (`STREAM_STALL_TIMEOUT`) ends the session and sends a best-effort `Error{408, "stream stalled"}`. The timeout is per enqueue, so many sessions sharing one channel on a slow link can see false positives while still progressing; the write timeout (FR-008) is what detects a dead peer.
+- The whole stream has an absolute deadline of `120 s + plan_bytes / 64 KiB/s`; exceeding it ends the session with a best-effort `Error{408, "stream deadline exceeded"}`.
+- Both 408 paths remove the session and no `StreamComplete` follows. A frame above the 16 MiB outgoing byte budget ends the session with `Error{413}`.
+
+The planner is specified in FR-011.
 
 ### FR-008 Outgoing path and backpressure
 
@@ -98,15 +106,27 @@ Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitCo
 
 ### FR-009 Session TTL sweep
 
-`with_rate_limit_config` shall spawn a task that every 60 s calls `cleanup_expired_sessions(3600 s)`, aborting streaming tasks of sessions older than one hour; it holds only a `Weak<AdaptiveStreamController>` and exits when the controller is dropped. The constructors do not panic outside a Tokio runtime (#602). `AdaptiveStreamController::remove_session(id)` is idempotent and returns whether it removed anything.
+`with_rate_limit_config` shall spawn a task that every 60 s calls `cleanup_expired_sessions(3600 s)`, aborting streaming tasks of sessions older than one hour (in practice streaming sessions end earlier through the FR-007 deadline, so the sweep is a backstop); it holds only a `Weak<AdaptiveStreamController>` and exits when the controller is dropped. The constructors do not panic outside a Tokio runtime (#602). `AdaptiveStreamController::remove_session(id)` is idempotent and returns whether it removed anything.
 
 ### FR-010 Standalone security helper
 
 `SecureWebSocketHandler` (`new`, `with_default_security`, `with_high_traffic_security`, `with_low_resource_security`, `check_upgrade_request`, `create_connection_guard`, `validate_message`, `security_stats`, `force_cleanup`) shall wrap a `ClientRateLimiter` for callers who build their own upgrade handler. It is not used by `AxumWebSocketTransport`, which owns its own limiter.
 
+### FR-011 Stream planner and plan budget
+
+At session creation the server shall plan the stream (`planner.rs`, `plan_stream`) into pre-serialised messages.
+
+- Merge framing: an object root is split by top-level key into frames holding entries of one priority; an entry above the limit travels alone; a scalar, array or `{}` root is one frame.
+- Patch framing: an object root becomes `merge([], {...})` batches (no root `set`); `{}` and scalar roots are one `set([], v)`. A value too big for a frame becomes `set(path, empty)` plus `merge`/`append`/`append_str` batches, recursing into children that do not fit. Values nested deeper than the envelope allows (123 levels) are decomposed further; a document needing paths over 128 segments is rejected (`PlanError::PathTooDeep`).
+- Priority of a unit is `priority_mapping[top-level key]`, else `Priority::HIGH`. Frames are ordered by priority descending, stable within a priority, and each frame holds one priority.
+- Limits: frame limit `L = min(max_frame_size, 16 MiB) - 256` (envelope reserve); at most `MAX_PLAN_FRAMES` = 4096 frames; plan bytes at most `2 * |data| + 4096 * 256`; a single message above the 16 MiB outgoing budget is `PlanError::UnitExceedsBudget`.
+- Plan budget: each live session reserves its whole plan size (`unsent_plan_bytes`, summed per connection in `live_plan_bytes`). The reservation is released frame by frame as frames are handed to the outgoing channel, and fully on every removal path (complete, cancel, detach, stall, deadline, sweep). The budget is `max(16 MiB, 2 * inbound max_frame_size + 4096 * 256)` for the transport and 16 MiB for a default controller; a plan that does not fit is `ConnectionBudgetExhausted`. Per-connection memory is bounded by the budget of live plans plus 16 MiB queued.
+
+**Behaviour change (breaking).** Under merge framing with default options an object payload above about 64 KiB now arrives in several `StreamFrame`s and only the last has `is_complete: true`; clients must shallow-merge top-level keys. Previously the whole payload was one frame.
+
 ## Non-Functional Requirements
 
-- NFR-SEC-001: bounded memory per connection: 1000 queued messages and 16 MiB queued bytes (`MAX_QUEUED_OUTGOING_BYTES`), budget held until the write completes (`Envelope::split`).
+- NFR-SEC-001: bounded memory per connection: 1000 queued messages and 16 MiB queued bytes (`MAX_QUEUED_OUTGOING_BYTES`), budget held until the write completes (`Envelope::split`); live plans are additionally bounded by the plan budget (FR-011).
 - NFR-SEC-002: inbound cap default 1 MiB (`DEFAULT_MAX_INBOUND_FRAME_SIZE`); `low_resource` 256 KiB.
 - NFR-SEC-003: error replies use fixed text; decode errors are never echoed; client-supplied `Error.error` is logged by length only.
 - NFR-REL-001: a stalled peer is disconnected after `write_timeout`.
@@ -114,7 +134,7 @@ Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitCo
 
 ## Data Model
 
-`ConnectionId(Uuid)`, `WsMessage`, `StreamOptions`, `ClientMetrics` (EMA alpha 0.3), `AdaptiveStreamController` (connections keyed by `ConnectionId`, each holding its outgoing channel and its sessions keyed by `SessionId`), `CreateSessionError { AlreadyExists, TooManySessions }`, `AxumWebSocketTransport`, `SecureWebSocketHandler`. `WebSocketStreamSession` is crate-private and the `WebSocketTransport` trait, `subscribe_frames` and `FrameEvent` were removed (#601, #570).
+`ConnectionId(Uuid)`, `WsMessage`, `StreamOptions`, `ClientMetrics` (EMA alpha 0.3), `AdaptiveStreamController` (connections keyed by `ConnectionId`, each holding its outgoing channel and its sessions keyed by `SessionId`), `CreateSessionError { AlreadyExists, TooManySessions, InvalidOptions(StreamOptionsError), PlanRejected(PlanError) }` (`#[non_exhaustive]`; converts into `Error::SessionAlreadyExists`, `TooManySessions`, `InvalidStreamOptions`, `PlanRejected`), `AxumWebSocketTransport`, `SecureWebSocketHandler`. `WebSocketStreamSession` is crate-private and the `WebSocketTransport` trait, `subscribe_frames` and `FrameEvent` were removed (#601, #570).
 
 ## Edge Cases and Errors
 
@@ -126,8 +146,13 @@ Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitCo
 | Inbound frame over cap | rejected at transport, or close 1008 at application check |
 | Malformed text | `Error` 400, connection stays |
 | Nil or duplicate session id | `Error` 400 or 409; existing session untouched |
-| Non-default `StreamOptions` | `Error` 400, no session |
-| Live-session cap reached | `Error` 429 |
+| Invalid `StreamOptions` | `Error` 400 `invalid stream options`, no session |
+| Plan over the connection plan budget | `Error` 429 `connection plan budget exhausted`, no session |
+| Plan or frame too large / too deep | `Error` 413 (`stream plan too large` or `frame exceeds the outgoing byte budget`), no session |
+| Planned message could not be serialized (server fault, not expected) | `Error` 500 `stream plan could not be built`, no session |
+| Live-session cap reached | `Error` 429 `too many live sessions on this connection` |
+| Stream stalled or past deadline | best-effort `Error` 408, session removed, no `StreamComplete` |
+| Server-to-client message kind sent by a client | ignored, debug log, no reply |
 | Server shutdown | close frame 1001 |
 | Slow/stalled reader | stalls only its own sessions; disconnect after write timeout |
 | Connection closes | its sessions and tasks removed |
@@ -145,7 +170,9 @@ Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitCo
 
 ## Open Questions
 
-- #624: single-frame plan; a real priority planner honouring `StreamOptions` is not implemented.
+- Heuristic priorities for keys without a `priority_mapping` entry are not computed (`Priority::HIGH`).
+- `compression` has no effect (no permessage-deflate in tungstenite 0.29/0.30).
+- Client-side `StreamPatch` handling is specified by the client change ([[068-websocket-client/spec|068]]), not here.
 - Rustdoc elsewhere (`serve.rs`, `streams.rs`) names `/pjs/ws/{session_id}`; the crate route is `/ws`, and the demo mounts `/ws/{session_id}` itself ([[029-websocket-stream-session-binding/spec|029]]).
 
 ## See Also

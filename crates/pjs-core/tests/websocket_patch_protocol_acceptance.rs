@@ -4,6 +4,7 @@
 //!
 //! Patch content is asserted on the JSON wire form, so these tests pin the
 //! frozen grammar rather than the Rust field layout of `WirePatch`.
+#![cfg(any(feature = "websocket-client", feature = "websocket-server"))]
 
 use pjson_rs::domain::Priority;
 use pjson_rs::infrastructure::websocket::{Framing, StreamOptions, WsMessage};

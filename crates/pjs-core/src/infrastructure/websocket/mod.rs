@@ -10,6 +10,8 @@
 pub mod client;
 #[cfg(feature = "websocket-server")]
 pub mod controller;
+#[cfg(feature = "websocket-server")]
+mod planner;
 mod protocol;
 #[cfg(feature = "websocket-server")]
 pub mod security;

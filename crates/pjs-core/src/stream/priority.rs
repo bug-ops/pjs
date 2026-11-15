@@ -176,17 +176,12 @@ impl PriorityStreamer {
         Ok(plan)
     }
 
-    /// Whether `JsonPath` can encode `key` as an object member segment.
-    fn is_encodable_key(key: &str) -> bool {
-        JsonPath::root().append_key(key).is_ok()
-    }
-
     /// Whether the root cannot be rebuilt from path-addressed patches alone:
     /// a scalar root has no path-addressable children, and an object root with
     /// a key `JsonPath` cannot encode has no patch that could carry that key.
     fn needs_root_set(json: &JsonValue) -> bool {
         match json {
-            JsonValue::Object(map) => map.keys().any(|key| !Self::is_encodable_key(key)),
+            JsonValue::Object(map) => map.keys().any(|key| !JsonPath::is_valid_key(key)),
             JsonValue::Array(_) => false,
             _ => true,
         }
@@ -230,7 +225,7 @@ impl PriorityStreamer {
                 let skeleton = map
                     .iter()
                     .map(|(key, v)| {
-                        let value = if Self::is_encodable_key(key) {
+                        let value = if JsonPath::is_valid_key(key) {
                             Self::skeletonize_arrays(v)
                         } else {
                             v.clone()
@@ -427,6 +422,24 @@ mod tests {
     use super::*;
     use crate::stream::reconstruction::JsonReconstructor;
     use serde_json::json;
+
+    #[test]
+    fn test_needs_root_set_follows_the_shared_key_rule() {
+        for key in ["", "a.b", "a[0]", "a]"] {
+            assert!(
+                PriorityStreamer::needs_root_set(&json!({ key: 1 })),
+                "{key:?}"
+            );
+            assert!(JsonPath::root().append_key(key).is_err(), "{key:?}");
+        }
+        for key in ["ok", "0", "with space"] {
+            assert!(
+                !PriorityStreamer::needs_root_set(&json!({ key: 1 })),
+                "{key:?}"
+            );
+            assert!(JsonPath::root().append_key(key).is_ok(), "{key:?}");
+        }
+    }
 
     /// Runs `payload` through `PriorityStreamer::analyze()` and applies every
     /// produced frame to a fresh `JsonReconstructor`, returning the reconstructed

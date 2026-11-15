@@ -18,69 +18,90 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 
 /// Which configured limit an [`Error::LimitExceeded`] refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LimitKind {
     /// Raw input size in bytes
-    #[error("Input size")]
     InputSize,
     /// JSON nesting depth
-    #[error("JSON nesting depth")]
     JsonDepth,
     /// Number of elements in an array
-    #[error("Array length")]
     ArrayLength,
     /// Number of keys in an object
-    #[error("Object key count")]
     ObjectKeys,
     /// String length
-    #[error("String length")]
     StringLength,
     /// WebSocket frame size in bytes
-    #[error("WebSocket frame size")]
     WebSocketFrameSize,
     /// Pooled buffer size in bytes
-    #[error("Buffer size")]
     BufferSize,
     /// Reconstructed data held for one client session, in bytes
-    #[error("Reconstructed session data size")]
     SessionBytes,
 }
 
+impl fmt::Display for LimitKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InputSize => "Input size",
+            Self::JsonDepth => "JSON nesting depth",
+            Self::ArrayLength => "Array length",
+            Self::ObjectKeys => "Object key count",
+            Self::StringLength => "String length",
+            Self::WebSocketFrameSize => "WebSocket frame size",
+            Self::BufferSize => "Buffer size",
+            Self::SessionBytes => "Reconstructed session data size",
+        })
+    }
+}
+
 /// Compression codec an error refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CodecKind {
     /// No compression (bytes stored verbatim)
-    #[error("identity")]
     Identity,
     /// Raw deflate (RFC 1951)
-    #[error("deflate")]
     Deflate,
     /// Gzip (RFC 1952)
-    #[error("gzip")]
     Gzip,
     /// Brotli
-    #[error("brotli")]
     Brotli,
     /// Zstandard with a trained dictionary
-    #[error("zstd")]
     Zstd,
 }
 
+impl fmt::Display for CodecKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Identity => "identity",
+            Self::Deflate => "deflate",
+            Self::Gzip => "gzip",
+            Self::Brotli => "brotli",
+            Self::Zstd => "zstd",
+        })
+    }
+}
+
 /// Codec operation that failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CodecOperation {
     /// Dictionary training
-    #[error("train")]
     Train,
     /// Compression
-    #[error("compress")]
     Compress,
     /// Decompression
-    #[error("decompress")]
     Decompress,
+}
+
+impl fmt::Display for CodecOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Train => "train",
+            Self::Compress => "compress",
+            Self::Decompress => "decompress",
+        })
+    }
 }
 
 /// Why a session id was rejected.
@@ -138,8 +159,11 @@ pub enum DictionaryError {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PatchError {
-    /// An object has no member with this key
-    #[error("key `{0}` not found")]
+    /// An object has no member with this key.
+    ///
+    /// The key comes from the peer, so `Display` omits it: log lines never
+    /// carry peer-chosen text.
+    #[error("key not found")]
     KeyNotFound(String),
     /// An array index is past the end
     #[error("index {index} is out of bounds for length {len}")]
@@ -233,6 +257,9 @@ pub enum PlanError {
         /// Wire maximum
         max: usize,
     },
+    /// A planned message could not be serialized (a server fault)
+    #[error("a planned message could not be serialized")]
+    Unserializable,
     /// The connection's live plan budget is exhausted
     #[error("connection plan budget exhausted: {live} live + {requested} requested > {max}")]
     ConnectionBudgetExhausted {
@@ -263,11 +290,30 @@ pub enum PlanError {
 /// assert!(error.source().unwrap().is::<serde_json::Error>());
 /// ```
 ///
-/// The enum is not `Clone` and is `#[non_exhaustive]`:
+/// The enum is not `Clone`:
 ///
 /// ```compile_fail
 /// fn assert_clone<T: Clone>() {}
 /// assert_clone::<pjson_rs::Error>();
+/// ```
+///
+/// It is `#[non_exhaustive]`, so a match outside the crate needs a wildcard arm:
+///
+/// ```compile_fail
+/// fn name(error: pjson_rs::Error) -> &'static str {
+///     match error {
+///         pjson_rs::Error::ChannelClosed => "closed",
+///     }
+/// }
+/// ```
+///
+/// ```
+/// fn name(error: pjson_rs::Error) -> &'static str {
+///     match error {
+///         pjson_rs::Error::ChannelClosed => "closed",
+///         _ => "other",
+///     }
+/// }
 /// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -401,10 +447,6 @@ pub enum Error {
     /// The stream plan was refused
     #[error("Stream plan rejected")]
     PlanRejected(#[from] PlanError),
-
-    /// The stream options in a request are not supported
-    #[error("Unsupported stream options")]
-    UnsupportedStreamOptions,
 }
 
 impl Error {
@@ -470,8 +512,7 @@ impl Error {
             | Self::UnknownSession(_)
             | Self::SessionAlreadyExists(_)
             | Self::TooManySessions { .. }
-            | Self::PlanRejected(_)
-            | Self::UnsupportedStreamOptions => "client",
+            | Self::PlanRejected(_) => "client",
         }
     }
 }

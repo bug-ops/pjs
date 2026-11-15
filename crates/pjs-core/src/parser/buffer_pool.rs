@@ -1326,6 +1326,23 @@ mod tests {
     }
 
     #[test]
+    fn test_oversized_buffer_security_violation_carries_the_error_chain_text() {
+        let mut security = crate::SecurityConfig::default();
+        security.buffers.max_buffer_size = 4096;
+        let pool = BufferPool::with_security_config(crate::Validate::validated(security).unwrap());
+
+        let Err(error) = pool.acquire(BufferSize::Medium) else {
+            panic!("an oversized buffer must be refused");
+        };
+
+        assert!(
+            matches!(&error, DomainError::SecurityViolation(m)
+                if m == "Buffer size 8192 exceeds maximum allowed 4096"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn test_memory_limit_enforcement() {
         let config = PoolConfig {
             max_total_memory: 1024, // Very small limit

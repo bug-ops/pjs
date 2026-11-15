@@ -73,7 +73,10 @@ fn stream_init(id: &str, data: Value, options: Value) -> Message {
     )
 }
 
-async fn next_json(ws: &mut TestSocket, wait: Duration) -> Option<Value> {
+async fn next_json<S>(ws: &mut S, wait: Duration) -> Option<Value>
+where
+    S: futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
     loop {
         match timeout(wait, ws.next()).await {
             Err(_) | Ok(None) => return None,
@@ -231,40 +234,73 @@ async fn test_stream_init_connection_plan_budget_over_wire_replies_429_until_ses
         ..RateLimitConfig::default()
     });
     let addr = spawn_server(transport).await;
-    let mut ws = connect(addr).await;
+    let (mut sink, mut incoming) = connect(addr).await.split();
     let payload = json!({"b": "x".repeat(900_000)});
     let mut options = legacy_options();
     options["framing"] = json!("patch");
     options["client_fps"] = json!(1);
-    let total = 30_u64;
+    let total = 60_u64;
 
-    for n in 0..total {
-        ws.send(stream_init(
-            &session_id(100 + n),
-            payload.clone(),
-            options.clone(),
-        ))
-        .await
-        .unwrap();
-    }
-    let mut rejected = Vec::new();
-    while let Some(message) = next_json(&mut ws, Duration::from_millis(700)).await {
-        if message["type"] == "Error" {
-            assert_ne!(message["data"]["code"], 413, "{message}");
-            assert_eq!(message["data"]["code"], 429, "{message}");
-            assert_eq!(message["data"]["error"], "connection plan budget exhausted");
-            rejected.push(message["data"]["session_id"].clone());
+    // Send while reading: a client that stops reading for as long as the burst
+    // takes would trip the server's write timeout on a loaded machine.
+    let sender = tokio::spawn({
+        let (payload, options) = (payload.clone(), options.clone());
+        async move {
+            for n in 0..total {
+                sink.send(stream_init(
+                    &session_id(100 + n),
+                    payload.clone(),
+                    options.clone(),
+                ))
+                .await
+                .expect("send StreamInit");
+            }
+            sink
         }
-    }
+    });
+    // Every init resolves to exactly one first reply: an Error (rejected) or
+    // its first StreamPatch (accepted). Waiting for all of them is bounded by
+    // a generous deadline instead of a fixed silence window.
+    let mut rejected = Vec::new();
+    let mut accepted_ids = std::collections::HashSet::new();
+    timeout(Duration::from_secs(90), async {
+        while rejected.len() + accepted_ids.len() < total as usize {
+            let message = next_json(&mut incoming, Duration::from_secs(60))
+                .await
+                .expect("the server closed before answering every StreamInit");
+            let id = message["data"]["session_id"].clone();
+            if message["type"] == "Error" {
+                assert_ne!(message["data"]["code"], 413, "{message}");
+                assert_eq!(message["data"]["code"], 429, "{message}");
+                assert_eq!(message["data"]["error"], "connection plan budget exhausted");
+                rejected.push(id);
+            } else if message["type"] == "StreamPatch" {
+                accepted_ids.insert(id.to_string());
+            }
+        }
+    })
+    .await
+    .expect("every StreamInit gets a first reply");
 
-    let accepted = total as usize - rejected.len();
+    let mut sink = sender.await.expect("sender task");
+
+    // Frames of accepted sessions are released progressively, so the exact
+    // split depends on speed. Lower bound: admission only ever gets easier
+    // with release, so at least the sessions that fit 16 MiB (about 18) are
+    // accepted. Non-empty rejections: 60 x 0.9 MB exceeds the budget plus any
+    // release a 1 fps session can achieve while the burst is sent.
     assert!(
-        (15..=24).contains(&accepted),
-        "{accepted} sessions of ~0.9 MB fit a 16 MiB connection budget"
+        accepted_ids.len() >= 15,
+        "{} sessions of ~0.9 MB must fit a 16 MiB connection budget",
+        accepted_ids.len()
+    );
+    assert!(
+        !rejected.is_empty(),
+        "60 x 0.9 MB cannot fit a 16 MiB budget plus slow release"
     );
 
     for n in 0..total {
-        ws.send(Message::Text(
+        sink.send(Message::Text(
             json!({"type": "StreamCancel", "data": {"session_id": session_id(100 + n)}})
                 .to_string()
                 .into(),
@@ -273,11 +309,11 @@ async fn test_stream_init_connection_plan_budget_over_wire_replies_429_until_ses
         .unwrap();
     }
     let fresh = session_id(999);
-    ws.send(stream_init(&fresh, payload, options))
+    sink.send(stream_init(&fresh, payload, options))
         .await
         .unwrap();
     let first_for_fresh = loop {
-        let message = next_json(&mut ws, Duration::from_secs(10))
+        let message = next_json(&mut incoming, Duration::from_secs(30))
             .await
             .expect("a reply for the fresh session");
         if message["data"]["session_id"] == json!(fresh) {
