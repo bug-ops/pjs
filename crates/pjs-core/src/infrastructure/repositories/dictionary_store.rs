@@ -18,6 +18,7 @@ use crate::{
         DomainError,
         ports::dictionary_store::{DictionaryFuture, DictionaryStore},
     },
+    error::{DictionaryError, ErrorChain},
     security::CompressionBombDetector,
 };
 
@@ -359,7 +360,7 @@ impl InMemoryDictionaryStore {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::CompressionError`] if the bomb detector rejects `dict.len()`.
+    /// Returns [`Error::InvalidDictionary`] if the bomb detector rejects `dict.len()`.
     ///
     /// # Examples
     ///
@@ -392,10 +393,8 @@ impl InMemoryDictionaryStore {
         // underlying logic — "reject if byte count exceeds the configured cap" — is
         // equally applicable to dictionary blobs.
         self.bomb_detector
-            .validate_pre_decompression(dict.len())
-            .map_err(|e| {
-                Error::CompressionError(format!("dictionary rejected by bomb detector: {e}"))
-            })?;
+            .check_compressed_size(dict.len())
+            .map_err(|e| Error::InvalidDictionary(DictionaryError::Rejected(e)))?;
 
         let state = self.session_state(session_id);
 
@@ -418,9 +417,12 @@ impl InMemoryDictionaryStore {
 }
 
 fn into_domain_error(error: Error) -> DomainError {
+    let chain = ErrorChain(&error).to_string();
     match error {
-        Error::CompressionError(message) => DomainError::CompressionError(message),
-        other => DomainError::Logic(other.to_string()),
+        Error::Codec { .. } | Error::CodecUnavailable { .. } | Error::InvalidDictionary(_) => {
+            DomainError::CompressionError(chain)
+        }
+        _ => DomainError::Logic(chain),
     }
 }
 
@@ -584,6 +586,32 @@ impl DictionaryStore for InMemoryDictionaryStore {
 mod tests {
     use super::*;
     use pjson_rs_domain::value_objects::SessionId;
+
+    #[test]
+    fn test_into_domain_error_keeps_codec_cause_and_classifies_compression() {
+        let error = Error::Codec {
+            codec: crate::error::CodecKind::Zstd,
+            operation: crate::error::CodecOperation::Train,
+            source: std::io::Error::other("samples too uniform"),
+        };
+
+        let DomainError::CompressionError(message) = into_domain_error(error) else {
+            panic!("codec failures map to DomainError::CompressionError");
+        };
+
+        assert!(message.contains("samples too uniform"), "{message}");
+    }
+
+    #[test]
+    fn test_into_domain_error_other_errors_become_logic_with_chain() {
+        let error = Error::from(serde_json::from_str::<serde_json::Value>("{").unwrap_err());
+
+        let DomainError::Logic(message) = into_domain_error(error) else {
+            panic!("non-compression errors map to DomainError::Logic");
+        };
+
+        assert!(message.contains("EOF"), "{message}");
+    }
 
     fn make_store() -> InMemoryDictionaryStore {
         InMemoryDictionaryStore::new(Arc::new(CompressionBombDetector::default()), 64 * 1024)

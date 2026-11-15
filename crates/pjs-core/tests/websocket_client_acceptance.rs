@@ -73,7 +73,7 @@ async fn test_connect_second_concurrent_call_fails_with_client_error() {
         .await
         .expect("second concurrent connect must fail fast, not block");
     assert!(
-        matches!(second, Err(PjsError::ClientError(_))),
+        matches!(second, Err(PjsError::AlreadyConnected)),
         "{second:?}"
     );
     first.abort();
@@ -86,7 +86,7 @@ async fn test_connect_unreachable_server_fails_with_connection_failed() {
     drop(listener);
     let result = client(addr).connect().await;
     assert!(
-        matches!(result, Err(PjsError::ConnectionFailed(_))),
+        matches!(result, Err(PjsError::ConnectionFailed { .. })),
         "{result:?}"
     );
 }

@@ -21,7 +21,8 @@
 
 use crate::{
     Error, Result,
-    security::{CompressionBombDetector, CompressionStats},
+    error::{CodecKind, CodecOperation},
+    security::{CompressionBombDetector, CompressionBombError, CompressionStats},
 };
 #[cfg(feature = "compression")]
 use std::io::Write;
@@ -78,6 +79,46 @@ pub enum ByteCodec {
     /// Requires `feature = "compression"` on a non-`wasm32` target.
     #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     ZstdDict(std::sync::Arc<crate::compression::zstd::ZstdDictionary>),
+}
+
+impl ByteCodec {
+    #[cfg(not(feature = "compression"))]
+    fn kind(&self) -> CodecKind {
+        match self {
+            Self::None => CodecKind::Identity,
+            Self::Deflate => CodecKind::Deflate,
+            Self::Gzip => CodecKind::Gzip,
+            Self::Brotli => CodecKind::Brotli,
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            Self::ZstdDict(_) => CodecKind::Zstd,
+        }
+    }
+}
+
+#[cfg(feature = "compression")]
+fn encode_error(codec: CodecKind, source: std::io::Error) -> Error {
+    Error::Codec {
+        codec,
+        operation: CodecOperation::Compress,
+        source,
+    }
+}
+
+/// Classifies a decoder read failure: a bomb guard trip travels through the
+/// reader as a typed `CompressionBombError` inside the `io::Error`; any other
+/// failure is a corrupt or truncated input.
+fn decode_error(codec: CodecKind, source: std::io::Error) -> Error {
+    match source
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<CompressionBombError>())
+    {
+        Some(bomb) => Error::CompressionBomb(bomb.clone()),
+        None => Error::Codec {
+            codec,
+            operation: CodecOperation::Decompress,
+            source,
+        },
+    }
 }
 
 /// Quality knob for byte-level codecs.
@@ -244,9 +285,9 @@ impl SecureCompressor {
                 use flate2::write::DeflateEncoder;
                 let mut enc = DeflateEncoder::new(Vec::new(), self.quality.flate2_level());
                 enc.write_all(data)
-                    .map_err(|e| Error::CompressionError(format!("deflate encode: {e}")))?;
+                    .map_err(|e| encode_error(CodecKind::Deflate, e))?;
                 enc.finish()
-                    .map_err(|e| Error::CompressionError(format!("deflate finish: {e}")))
+                    .map_err(|e| encode_error(CodecKind::Deflate, e))
             }
 
             #[cfg(feature = "compression")]
@@ -254,9 +295,8 @@ impl SecureCompressor {
                 use flate2::write::GzEncoder;
                 let mut enc = GzEncoder::new(Vec::new(), self.quality.flate2_level());
                 enc.write_all(data)
-                    .map_err(|e| Error::CompressionError(format!("gzip encode: {e}")))?;
-                enc.finish()
-                    .map_err(|e| Error::CompressionError(format!("gzip finish: {e}")))
+                    .map_err(|e| encode_error(CodecKind::Gzip, e))?;
+                enc.finish().map_err(|e| encode_error(CodecKind::Gzip, e))
             }
 
             #[cfg(feature = "compression")]
@@ -267,7 +307,7 @@ impl SecureCompressor {
                 };
                 let mut out = Vec::new();
                 brotli::BrotliCompress(&mut Cursor::new(data), &mut out, &params)
-                    .map_err(|e| Error::CompressionError(format!("brotli encode: {e}")))?;
+                    .map_err(|e| encode_error(CodecKind::Brotli, e))?;
                 Ok(out)
             }
 
@@ -277,9 +317,11 @@ impl SecureCompressor {
             }
 
             #[cfg(not(feature = "compression"))]
-            ByteCodec::Deflate | ByteCodec::Gzip | ByteCodec::Brotli => Err(
-                Error::CompressionError("feature `compression` is not enabled".into()),
-            ),
+            ByteCodec::Deflate | ByteCodec::Gzip | ByteCodec::Brotli => {
+                Err(Error::CodecUnavailable {
+                    codec: self.codec.kind(),
+                })
+            }
         }
     }
 
@@ -295,7 +337,7 @@ impl SecureCompressor {
         // Macro-free helper: executes the read loop with any `impl Read` decoder.
         // Avoids boxing across a lifetime boundary by keeping decoder + protector in one scope.
         macro_rules! run {
-            ($decoder:expr) => {{
+            ($decoder:expr, $kind:expr) => {{
                 let compressed_size = data.len();
                 let mut out = Vec::new();
                 let result = if let Some(d) = depth {
@@ -326,26 +368,32 @@ impl SecureCompressor {
                     }
                     Err(e) => {
                         warn!("Decompression failed: {}", e);
-                        Err(Error::SecurityError(format!(
-                            "Protected decompression failed: {}",
-                            e
-                        )))
+                        Err(decode_error($kind, e))
                     }
                 }
             }};
         }
 
         match codec {
-            ByteCodec::None => run!(Cursor::new(data)),
+            ByteCodec::None => run!(Cursor::new(data), CodecKind::Identity),
 
             #[cfg(feature = "compression")]
-            ByteCodec::Deflate => run!(flate2::read::DeflateDecoder::new(Cursor::new(data))),
+            ByteCodec::Deflate => run!(
+                flate2::read::DeflateDecoder::new(Cursor::new(data)),
+                CodecKind::Deflate
+            ),
 
             #[cfg(feature = "compression")]
-            ByteCodec::Gzip => run!(flate2::read::GzDecoder::new(Cursor::new(data))),
+            ByteCodec::Gzip => run!(
+                flate2::read::GzDecoder::new(Cursor::new(data)),
+                CodecKind::Gzip
+            ),
 
             #[cfg(feature = "compression")]
-            ByteCodec::Brotli => run!(brotli::Decompressor::new(Cursor::new(data), 4096)),
+            ByteCodec::Brotli => run!(
+                brotli::Decompressor::new(Cursor::new(data), 4096),
+                CodecKind::Brotli
+            ),
 
             // ZstdDict uses the streaming decoder so every decompressed byte
             // passes through the CompressionBombProtector's read loop (run!).
@@ -357,14 +405,16 @@ impl SecureCompressor {
                     Cursor::new(data),
                     dict.as_bytes(),
                 )
-                .map_err(|e| Error::CompressionError(format!("zstd decoder init: {e}")))?;
-                run!(decoder)
+                .map_err(|e| decode_error(CodecKind::Zstd, e))?;
+                run!(decoder, CodecKind::Zstd)
             }
 
             #[cfg(not(feature = "compression"))]
-            ByteCodec::Deflate | ByteCodec::Gzip | ByteCodec::Brotli => Err(
-                Error::CompressionError("feature `compression` is not enabled".into()),
-            ),
+            ByteCodec::Deflate | ByteCodec::Gzip | ByteCodec::Brotli => {
+                Err(Error::CodecUnavailable {
+                    codec: codec.kind(),
+                })
+            }
         }
     }
 
@@ -409,10 +459,11 @@ impl SecureDecompressionContext {
         compressed_size: usize,
     ) -> Result<crate::security::CompressionBombProtector<Cursor<Vec<u8>>>> {
         if self.active_streams >= self.max_concurrent_streams {
-            return Err(Error::SecurityError(format!(
-                "Too many concurrent decompression streams: {}/{}",
-                self.active_streams, self.max_concurrent_streams
-            )));
+            return Err(CompressionBombError::TooManyStreams {
+                active: self.active_streams,
+                max: self.max_concurrent_streams,
+            }
+            .into());
         }
 
         let cursor = Cursor::new(Vec::new());
@@ -666,7 +717,12 @@ mod tests {
         assert!(context.start_stream(1024).is_ok());
 
         // Third stream exceeds limit.
-        assert!(context.start_stream(1024).is_err());
+        assert!(matches!(
+            context.start_stream(1024),
+            Err(Error::CompressionBomb(
+                CompressionBombError::TooManyStreams { active: 2, max: 2 }
+            ))
+        ));
 
         context.finish_stream();
         assert!(context.start_stream(1024).is_ok());

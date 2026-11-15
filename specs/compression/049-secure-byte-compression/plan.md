@@ -48,7 +48,7 @@ A private `run!` macro executes the same read loop for every decoder type so no 
 | Function | Precondition | Postcondition | Notes |
 |---|---|---|---|
 | `compress` | `data.len() <= max_compressed_size` | decodable by `decompress_protected` with the same codec | `ZstdDict` requires the same dictionary |
-| `decompress_protected` | `compressed.data.len() <= max_compressed_size` | output <= `max_decompressed_size` and ratio <= `max_ratio`, else `SecurityError` | streaming, bounded memory aside from output `Vec` |
+| `decompress_protected` | `compressed.data.len() <= max_compressed_size` | output <= `max_decompressed_size` and ratio <= `max_ratio`, else `Error::CompressionBomb`; corrupt input is `Error::Codec{..Decompress}` | streaming, bounded memory aside from output `Vec` |
 | `decompress_nested(.., depth)` | `depth <= max_compression_depth` | as above | depth is caller-asserted |
 | `ZstdDictionary::from_bytes` | none | `1 <= len <= 112 KiB`, magic present | only constructor besides `train` |
 | `ZstdDictCompressor::decompress` | none | output <= `max_output` | not bomb-protected |
@@ -59,4 +59,4 @@ Unit: `compression/secure.rs` (37), `compression/zstd.rs` (9, plus doc-tests). F
 
 ## Security notes
 
-Defence relies on spec 050 limits. Zstd dictionaries are size- and magic-checked; decoder initialisation errors are mapped to `CompressionError`.
+Defence relies on spec 050 limits. Zstd dictionaries are size- and magic-checked; decoder initialisation errors are mapped to `Error::Codec` (`Train`/`Decompress`); dictionary problems to `Error::InvalidDictionary`.

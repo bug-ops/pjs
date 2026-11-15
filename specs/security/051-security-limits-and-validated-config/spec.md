@@ -70,7 +70,7 @@ Status: done.
 Status: done.
 
 ### FR-006 Validator methods
-`SecurityValidator` shall provide `validate_input_size`, `validate_json_depth(depth)`, `validate_json_depth_bytes(&[u8])`, `validate_array_length`, `validate_object_keys`, `validate_string_length`, `validate_session_id`, `validate_websocket_frame_size`, `validate_buffer_size`; each compares against the matching limit with `>` and returns `crate::Error::Other(String)` on violation. `validate_session_id` also requires every char to be ASCII alphanumeric, `-` or `_`.
+`SecurityValidator` shall provide `validate_input_size`, `validate_json_depth(depth)`, `validate_json_depth_bytes(&[u8])`, `validate_array_length`, `validate_object_keys`, `validate_string_length`, `validate_session_id`, `validate_websocket_frame_size`, `validate_buffer_size`; each compares against the matching limit with `>` and returns `crate::Error::LimitExceeded { kind: LimitKind, actual: u64, max: u64 }` on violation (`DepthTracker::enter` included); `validate_session_id` returns `Error::InvalidSessionId(SessionIdViolation::{TooShort, TooLong, InvalidCharacter, Nil})`. `validate_session_id` also requires every char to be ASCII alphanumeric, `-` or `_`.
 Status: done.
 
 ### FR-007 Byte-level depth scan
@@ -106,9 +106,9 @@ Types listed in the Scope callout; `ConfigError { MustBePositive{section, field}
 | `max_depth = 0` | `MustBePositive{security.json, max_depth}` |
 | `max_depth = 513` | `InconsistentBounds` |
 | `min_session_id_length > max` | `InconsistentBounds{security.sessions}` |
-| any limit exceeded in a validator method | `Error::Other("... exceeds maximum allowed ...")` (not `Error::SecurityError`) |
+| any limit exceeded in a validator method | `Error::LimitExceeded { kind, actual, max }` |
 | unmatched `}` in byte scan | depth saturates at 0 |
-| session id with other characters | `Error::Other("Session ID contains invalid characters ...")` |
+| session id with other characters | `Error::InvalidSessionId(SessionIdViolation::InvalidCharacter)` |
 
 ## Success Criteria
 
@@ -124,7 +124,7 @@ Types listed in the Scope callout; `ConfigError { MustBePositive{section, field}
 
 1. Not read anywhere in production (by grep over `crates/pjs-core/src`): `network.{max_concurrent_connections, max_requests_per_second, rate_limiting, compression_bomb}`, `sessions.{max_streams_per_session, session_timeout_secs, max_session_data_size}`, `buffers.max_pool_size`, `max_http_payload_size`. `validate_session_id`, `validate_websocket_frame_size`, `DepthTracker` and `validate_json_depth_bytes` have no production callers (CHANGELOG records the removal of the parsers that called the byte scan). `ZeroCopyParser` now enforces `max_array_length`, `max_object_keys` and `max_string_length` (#613).
 2. Resolved (#614): `validate` rejects zero for every limit, count and timeout and checks `max_buffer_size <= max_total_memory`, `max_websocket_frame_size <= json.max_input_size` and `max_session_data_size <= max_total_memory`.
-3. Violations return `Error::Other(String)` rather than a typed security error (#599).
+3. Resolved by #599: violations are typed `Error::LimitExceeded` / `Error::InvalidSessionId`.
 4. `SecurityConfig` and its sub-structs have public fields and `Deserialize`, so invalid values are representable until `validated()` is called; only the wrapper types make them unreachable by consumers.
 5. `Validated<T>::into_inner` gives up the proof and the inner value is then mutable; re-validation is the caller's job.
 6. `Duration`-like fields are raw `u64` seconds (`*_secs`), sizes raw `usize`.

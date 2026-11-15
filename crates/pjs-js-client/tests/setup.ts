@@ -4,6 +4,11 @@
  * Global test configuration and mocks for PJS client tests.
  */
 
+import { TextDecoder, TextEncoder } from 'node:util';
+
+// jsdom does not expose the Node text codecs the HTTP transport relies on.
+Object.assign(globalThis, { TextDecoder, TextEncoder });
+
 // Mock WebSocket for Node.js environment
 global.WebSocket = class MockWebSocket extends EventTarget {
   static CONNECTING = 0;

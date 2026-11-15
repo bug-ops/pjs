@@ -153,7 +153,9 @@ impl BufferPool {
         self.config
             .validator
             .validate_buffer_size(size as usize)
-            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
+            .map_err(|e| {
+                DomainError::SecurityViolation(crate::error::ErrorChain(&e).to_string())
+            })?;
 
         // Check if we would exceed total memory limit
         let current_usage = self.current_memory_usage().unwrap_or(0);
@@ -1321,6 +1323,23 @@ mod tests {
         let pool = global_buffer_pool();
         let buffer = pool.acquire(BufferSize::Medium);
         assert!(buffer.is_ok());
+    }
+
+    #[test]
+    fn test_oversized_buffer_security_violation_carries_the_error_chain_text() {
+        let mut security = crate::SecurityConfig::default();
+        security.buffers.max_buffer_size = 4096;
+        let pool = BufferPool::with_security_config(crate::Validate::validated(security).unwrap());
+
+        let Err(error) = pool.acquire(BufferSize::Medium) else {
+            panic!("an oversized buffer must be refused");
+        };
+
+        assert!(
+            matches!(&error, DomainError::SecurityViolation(m)
+                if m == "Buffer size 8192 exceeds maximum allowed 4096"),
+            "{error:?}"
+        );
     }
 
     #[test]

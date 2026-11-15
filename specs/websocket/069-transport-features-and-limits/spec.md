@@ -98,8 +98,12 @@ See [[062-http-serve-connection-limits/spec|062]]: header timeout 10 s, duration
 | Outgoing queue (server and client) | 1000 messages, 16 MiB | `OUTGOING_QUEUE_CAPACITY`, `MAX_QUEUED_OUTGOING_BYTES`, `MESSAGE_QUEUE_CAPACITY`, `MAX_QUEUED_MESSAGE_BYTES` |
 | Live sessions per connection (server) | 64 default; `429` above | `DEFAULT_MAX_SESSIONS_PER_CONNECTION`, `with_max_sessions_per_connection` |
 | Client sessions | 1024 default (`NonZeroUsize`); 16 MiB per session | `WebSocketClientConfig` |
-| Session sweep | every 60 s, max age 3600 s | `SESSION_CLEANUP_INTERVAL`, `SESSION_MAX_AGE` |
-| Adaptive delay | 10 ms fast; 0.5 x avg ack ms if avg > 100 ms; max 1 s | `ClientMetrics`, `MAX_ADAPTIVE_FRAME_DELAY` |
+| Session sweep | every 60 s, max age 3600 s (backstop; streams end earlier via the deadline) | `SESSION_CLEANUP_INTERVAL`, `SESSION_MAX_AGE` |
+| Plan frames / bytes | 4096 frames; `2 * data + 4096 * 256` bytes; envelope reserve 256 B; min `max_frame_size` 1024 | `MAX_PLAN_FRAMES`, `ENVELOPE_RESERVE`, `MIN_FRAME_SIZE` (`planner.rs`) |
+| Connection plan budget | `max(16 MiB, 2 * inbound max_frame_size + 4096 * 256)`; default controller 16 MiB | `connection_plan_budget_for`, `DEFAULT_CONNECTION_PLAN_BUDGET` |
+| Patch path depth | 128 segments (planner value depth 123) | `MAX_PATCH_PATH_DEPTH` |
+| Stream stall / deadline / pacing | 30 s per enqueue; `120 s + plan_bytes / 64 KiB/s`; total pacing 30 s | `STREAM_STALL_TIMEOUT`, `STREAM_GRACE`, `MIN_STREAM_THROUGHPUT`, `PACING_BUDGET` |
+| Adaptive delay | 10 ms fast; 0.5 x avg ack ms if avg > 100 ms; max 1 s (then raised to the `client_fps` floor and capped at 30 s / frames) | `ClientMetrics`, `MAX_ADAPTIVE_FRAME_DELAY`, `paced_delay` |
 | Client sessions | 1024; idle TTL 300 s; 16 MiB per session | `WebSocketClientConfig` |
 
 ### FR-005 Re-export surface

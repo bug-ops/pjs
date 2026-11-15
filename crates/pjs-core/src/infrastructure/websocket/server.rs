@@ -1,12 +1,16 @@
 //! WebSocket server implementation for Axum
 
 use super::{
-    AdaptiveStreamController, ConnectionId, CreateSessionError, StreamOptions, WsMessage,
-    controller::spawn_task, protocol::CODE_CONFLICT, send_with_write_timeout,
+    AdaptiveStreamController, ConnectionId, CreateSessionError, WriteFailure, WsMessage,
+    controller::{connection_plan_budget_for, spawn_task},
+    planner::MAX_QUEUED_OUTGOING_BYTES,
+    protocol::{CODE_CONFLICT, FixedError},
+    send_with_write_timeout,
 };
 use crate::{
     Error as PjsError, Result as PjsResult,
     domain::SessionId,
+    error::{ErrorChain, PlanError, SessionIdViolation},
     infrastructure::{
         bounded_channel::{self, byte_bounded_channel},
         http::ShutdownSignal,
@@ -56,11 +60,25 @@ const CODE_TOO_MANY_SESSIONS: u16 = 429;
 /// Fixed reply text for a `StreamInit` over the per-connection session cap.
 const TOO_MANY_SESSIONS: &str = "too many live sessions on this connection";
 
-/// Fixed reply text for a `StreamInit` carrying non-default stream options.
-const UNSUPPORTED_STREAM_OPTIONS: &str = "unsupported stream options";
+/// Fixed reply text for a `StreamInit` whose stream options fail validation.
+const INVALID_STREAM_OPTIONS: &str = "invalid stream options";
 
 /// Fixed reply text for a `StreamInit` whose id belongs to an existing session.
 const DUPLICATE_SESSION_ID: &str = "session id already in use";
+
+/// Reply for a rejected plan: the connection budget is transient (429), a
+/// document over the limits is permanent for that document (413), and a plan
+/// that cannot be serialized is a server fault (500).
+fn plan_rejection_reply(error: PlanError) -> FixedError {
+    match error {
+        PlanError::ConnectionBudgetExhausted { .. } => FixedError::PLAN_BUDGET_EXHAUSTED,
+        PlanError::UnitExceedsBudget { .. } => FixedError::FRAME_EXCEEDS_BUDGET,
+        PlanError::TooManyFrames { .. }
+        | PlanError::PlanBytesExceeded { .. }
+        | PlanError::PathTooDeep { .. } => FixedError::PLAN_TOO_LARGE,
+        PlanError::Unserializable => FixedError::PLAN_UNSERIALIZABLE,
+    }
+}
 
 /// Builds an `Error` reply with a fixed, non-echoing message.
 fn error_reply(session_id: Option<SessionId>, code: u16, error: &'static str) -> WsMessage {
@@ -81,16 +99,6 @@ fn error_reply(session_id: Option<SessionId>, code: u16, error: &'static str) ->
 /// many large frames is capped well before it could reach
 /// `OUTGOING_QUEUE_CAPACITY * max_frame_size`.
 const OUTGOING_QUEUE_CAPACITY: usize = 1000;
-
-/// Cumulative byte budget for a single connection's outgoing message
-/// channel, on top of [`OUTGOING_QUEUE_CAPACITY`]'s message-count bound.
-///
-/// Without this, `OUTGOING_QUEUE_CAPACITY` alone bounds queue depth but
-/// not queued bytes: at the default 16 MiB `max_websocket_frame_size`, a
-/// fully-queued connection could hold up to `1000 * 16 MiB` ≈ 16 GiB.
-/// 16 MiB keeps worst-case per-connection queued memory a small,
-/// predictable constant regardless of individual message size.
-const MAX_QUEUED_OUTGOING_BYTES: usize = 16 * 1024 * 1024;
 
 /// How often the background sweep started by the first WebSocket upgrade checks for streaming
 /// sessions older than [`SESSION_MAX_AGE`].
@@ -256,7 +264,10 @@ impl AxumWebSocketTransport {
     /// ```
     pub fn with_rate_limit_config(config: RateLimitConfig) -> Self {
         Self {
-            controller: Arc::new(AdaptiveStreamController::new()),
+            controller: Arc::new(
+                AdaptiveStreamController::new()
+                    .with_connection_plan_budget(connection_plan_budget_for(config.max_frame_size)),
+            ),
             rate_limiter: Arc::new(ClientRateLimiter::new(config)),
             allowed_origins: OriginAllowList::DenyAll,
             shutdown: None,
@@ -363,7 +374,10 @@ impl AxumWebSocketTransport {
     /// the builder methods compose in any order.
     fn rebuild_controller(&mut self) {
         let mut controller = AdaptiveStreamController::new()
-            .with_max_sessions_per_connection(self.max_sessions_per_connection);
+            .with_max_sessions_per_connection(self.max_sessions_per_connection)
+            .with_connection_plan_budget(connection_plan_budget_for(
+                self.rate_limiter.config().max_frame_size,
+            ));
         if let Some(signal) = &self.shutdown {
             controller = controller.with_shutdown(signal.clone());
         }
@@ -557,7 +571,8 @@ impl AxumWebSocketTransport {
         if let Err(e) = self.send_frame(connection, reply).await {
             warn!(
                 "Failed to queue error reply for connection {}: {}",
-                connection, e
+                connection,
+                ErrorChain(&e)
             );
         }
     }
@@ -636,21 +651,7 @@ impl AxumWebSocketTransport {
                 if session_id.as_uuid().is_nil() {
                     self.reply_error(connection, None, CODE_BAD_REQUEST, NIL_SESSION_ID)
                         .await;
-                    return Err(PjsError::InvalidSession(NIL_SESSION_ID.to_owned()));
-                }
-                // The server streams one frame and applies none of the options,
-                // so anything but the default would be silently ignored.
-                if options != StreamOptions::default() {
-                    self.reply_error(
-                        connection,
-                        Some(session_id),
-                        CODE_BAD_REQUEST,
-                        UNSUPPORTED_STREAM_OPTIONS,
-                    )
-                    .await;
-                    return Err(PjsError::InvalidSession(
-                        UNSUPPORTED_STREAM_OPTIONS.to_owned(),
-                    ));
+                    return Err(PjsError::InvalidSessionId(SessionIdViolation::Nil));
                 }
                 match self
                     .controller
@@ -678,6 +679,22 @@ impl AxumWebSocketTransport {
                         .await;
                         return Err(e.into());
                     }
+                    Err(e @ CreateSessionError::InvalidOptions(_)) => {
+                        self.reply_error(
+                            connection,
+                            Some(session_id),
+                            CODE_BAD_REQUEST,
+                            INVALID_STREAM_OPTIONS,
+                        )
+                        .await;
+                        return Err(e.into());
+                    }
+                    Err(e @ CreateSessionError::PlanRejected(plan_error)) => {
+                        let reply = plan_rejection_reply(plan_error);
+                        self.reply_error(connection, Some(session_id), reply.code, reply.reason)
+                            .await;
+                        return Err(e.into());
+                    }
                 }
                 self.controller
                     .start_streaming(connection, session_id)
@@ -698,7 +715,10 @@ impl AxumWebSocketTransport {
                     .handle_frame_ack(connection, session_id, frame_id, processing_time_ms)
                     .await
                 {
-                    debug!("Ignored frame ack for connection {connection}: {e}");
+                    debug!(
+                        "Ignored frame ack for connection {connection}: {}",
+                        ErrorChain(&e)
+                    );
                 }
             }
             WsMessage::StreamCancel { session_id } => {
@@ -731,8 +751,16 @@ impl AxumWebSocketTransport {
                     error.len()
                 );
             }
-            _ => {
-                warn!("Unhandled message type from connection {connection}");
+            // Server-to-client messages: a client sending them gets no reply
+            // (no amplification); a new variant must be classified here.
+            WsMessage::StreamFrame { .. }
+            | WsMessage::StreamPatch { .. }
+            | WsMessage::StreamComplete { .. }
+            | WsMessage::Pong { .. } => {
+                debug!(
+                    "Ignored server-bound message {} from connection {connection}",
+                    message.kind()
+                );
             }
         }
         Ok(())
@@ -883,7 +911,8 @@ impl ConnectionLoop<'_> {
                         {
                             debug!(
                                 "Rejected message from connection {}: {}",
-                                self.connection_id, e
+                                self.connection_id,
+                                ErrorChain(&e)
                             );
                         }
                         ControlFlow::Continue(())
@@ -939,14 +968,24 @@ impl ConnectionLoop<'_> {
     }
 }
 
+/// Why [`send_reply`] failed.
+#[derive(Debug, thiserror::Error)]
+enum ReplyFailure {
+    #[error("serialize failed: {0}")]
+    Serialize(#[from] serde_json::Error),
+    #[error(transparent)]
+    Write(#[from] WriteFailure<axum::Error>),
+}
+
 /// Serializes `reply` and writes it straight to the socket.
 async fn send_reply(
     sender: &mut SplitSink<WebSocket, Message>,
     reply: &WsMessage,
     write_timeout: Duration,
-) -> Result<(), String> {
-    let json = serde_json::to_string(reply).map_err(|e| format!("serialize failed: {e}"))?;
-    send_with_write_timeout(sender, Message::Text(json.into()), write_timeout).await
+) -> Result<(), ReplyFailure> {
+    let json = serde_json::to_string(reply)?;
+    send_with_write_timeout(sender, Message::Text(json.into()), write_timeout).await?;
+    Ok(())
 }
 
 /// Helper function to create WebSocket router for Axum
@@ -1087,7 +1126,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_message_non_default_options_are_rejected_with_400_and_no_session() {
+    async fn test_handle_message_invalid_options_are_rejected_with_400_and_no_session() {
         let transport = AxumWebSocketTransport::new();
         let connection = ConnectionId::new();
         let mut rx = register_outgoing(&transport, connection);
@@ -1095,7 +1134,7 @@ mod tests {
             session_id: SessionId::new(),
             data: json!({}),
             options: StreamOptions {
-                compression: false,
+                max_frame_size: 100,
                 ..StreamOptions::default()
             },
         };
@@ -1105,7 +1144,7 @@ mod tests {
         assert!(result.is_err());
         let reply = serde_json::from_str::<WsMessage>(&rx.try_recv().unwrap().into_inner());
         assert!(
-            matches!(&reply, Ok(WsMessage::Error { code: 400, error, .. }) if error == UNSUPPORTED_STREAM_OPTIONS),
+            matches!(&reply, Ok(WsMessage::Error { code: 400, error, .. }) if error == INVALID_STREAM_OPTIONS),
             "{reply:?}"
         );
         assert_eq!(transport.controller.session_count(connection), 0);

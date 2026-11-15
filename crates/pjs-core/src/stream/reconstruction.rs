@@ -5,6 +5,7 @@
 
 use crate::Result;
 use crate::domain::value_objects::{JsonPath, PathSegment};
+use crate::error::PatchError;
 use crate::stream::priority::{JsonPatch, PatchOperation, PriorityStreamFrame};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
@@ -150,9 +151,7 @@ impl JsonReconstructor {
         }
 
         // Navigate to parent and set the target field
-        let target_key = path
-            .last_key()
-            .ok_or_else(|| crate::Error::Other("Invalid path for set operation".to_string()))?;
+        let target_key = path.last_key().ok_or(PatchError::NoTargetKey)?;
 
         let parent = self.get_parent_mut(path)?;
 
@@ -165,16 +164,18 @@ impl JsonReconstructor {
                     if index < arr.len() {
                         arr[index] = value;
                     } else {
-                        return Err(crate::Error::Other("Array index out of bounds".to_string()));
+                        return Err(PatchError::IndexOutOfBounds {
+                            index,
+                            len: arr.len(),
+                        }
+                        .into());
                     }
                 } else {
-                    return Err(crate::Error::Other("Invalid array index".to_string()));
+                    return Err(PatchError::NotAnIndex.into());
                 }
             }
             _ => {
-                return Err(crate::Error::Other(
-                    "Cannot set field on non-object/array".to_string(),
-                ));
+                return Err(PatchError::NotAContainer.into());
             }
         }
 
@@ -190,9 +191,7 @@ impl JsonReconstructor {
                 arr.extend(values);
             }
             _ => {
-                return Err(crate::Error::Other(
-                    "Cannot append to non-array".to_string(),
-                ));
+                return Err(PatchError::ExpectedArray.into());
             }
         }
 
@@ -201,9 +200,7 @@ impl JsonReconstructor {
 
     /// Remove value at specified path
     fn remove_at_path(&mut self, path: &JsonPath) -> Result<()> {
-        let target_key = path
-            .last_key()
-            .ok_or_else(|| crate::Error::Other("Invalid path for remove operation".to_string()))?;
+        let target_key = path.last_key().ok_or(PatchError::NoTargetKey)?;
 
         let parent = self.get_parent_mut(path)?;
 
@@ -219,9 +216,7 @@ impl JsonReconstructor {
                 }
             }
             _ => {
-                return Err(crate::Error::Other(
-                    "Cannot remove from non-object/array".to_string(),
-                ));
+                return Err(PatchError::NotAContainer.into());
             }
         }
 
@@ -244,22 +239,23 @@ impl JsonReconstructor {
                     if let JsonValue::Object(map) = current {
                         current = map
                             .get_mut(key)
-                            .ok_or_else(|| crate::Error::Other(format!("Key not found: {key}")))?;
+                            .ok_or_else(|| PatchError::KeyNotFound(key.clone()))?;
                     } else {
-                        return Err(crate::Error::Other("Expected object".to_string()));
+                        return Err(PatchError::ExpectedObject.into());
                     }
                 }
                 PathSegment::Index(idx) => {
                     if let JsonValue::Array(arr) = current {
-                        current = arr.get_mut(*idx).ok_or_else(|| {
-                            crate::Error::Other(format!("Index out of bounds: {idx}"))
-                        })?;
+                        let len = arr.len();
+                        current = arr
+                            .get_mut(*idx)
+                            .ok_or(PatchError::IndexOutOfBounds { index: *idx, len })?;
                     } else {
-                        return Err(crate::Error::Other("Expected array".to_string()));
+                        return Err(PatchError::ExpectedArray.into());
                     }
                 }
                 _ => {
-                    return Err(crate::Error::Other("Unsupported path segment".to_string()));
+                    return Err(PatchError::UnsupportedSegment.into());
                 }
             }
         }
@@ -277,22 +273,23 @@ impl JsonReconstructor {
                     if let JsonValue::Object(map) = current {
                         current = map
                             .get_mut(key)
-                            .ok_or_else(|| crate::Error::Other(format!("Key not found: {key}")))?;
+                            .ok_or_else(|| PatchError::KeyNotFound(key.clone()))?;
                     } else {
-                        return Err(crate::Error::Other("Expected object".to_string()));
+                        return Err(PatchError::ExpectedObject.into());
                     }
                 }
                 PathSegment::Index(idx) => {
                     if let JsonValue::Array(arr) = current {
-                        current = arr.get_mut(*idx).ok_or_else(|| {
-                            crate::Error::Other(format!("Index out of bounds: {idx}"))
-                        })?;
+                        let len = arr.len();
+                        current = arr
+                            .get_mut(*idx)
+                            .ok_or(PatchError::IndexOutOfBounds { index: *idx, len })?;
                     } else {
-                        return Err(crate::Error::Other("Expected array".to_string()));
+                        return Err(PatchError::ExpectedArray.into());
                     }
                 }
                 _ => {
-                    return Err(crate::Error::Other("Unsupported path segment".to_string()));
+                    return Err(PatchError::UnsupportedSegment.into());
                 }
             }
         }

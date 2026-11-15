@@ -1,11 +1,12 @@
 //! WebSocket client implementation for PJS streaming
 
 #[cfg(feature = "websocket-client")]
-use super::{StreamOptions, WsMessage};
+use super::{Framing, StreamOptions, WireSegment, WriteFailure, WsMessage};
 use crate::{
     Error as PjsError, Result as PjsResult,
     config::ConfigError,
     domain::SessionId,
+    error::{ErrorChain, LimitKind},
     infrastructure::bounded_channel::{ByteBoundedSender, Envelope, byte_bounded_channel},
 };
 use futures::{Sink, Stream, StreamExt};
@@ -25,7 +26,7 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
-use super::protocol::CODE_CONFLICT;
+use super::protocol::{CODE_CONFLICT, WirePatch, apply_patch};
 use crate::security::rate_limit::DEFAULT_MAX_INBOUND_FRAME_SIZE;
 use url::Url;
 
@@ -217,10 +218,7 @@ struct ReceiverLease {
 
 impl ReceiverLease {
     fn acquire(slot: &ReceiverSlot) -> PjsResult<Self> {
-        let outbox = slot
-            .lock()
-            .take()
-            .ok_or_else(|| PjsError::ClientError("Client already connected".to_string()))?;
+        let outbox = slot.lock().take().ok_or(PjsError::AlreadyConnected)?;
         Ok(Self {
             slot: Arc::clone(slot),
             outbox: Some(outbox),
@@ -228,9 +226,7 @@ impl ReceiverLease {
     }
 
     fn outbox_mut(&mut self) -> PjsResult<&mut Outbox> {
-        self.outbox
-            .as_mut()
-            .ok_or_else(|| PjsError::ClientError("Receiver lease already released".to_string()))
+        self.outbox.as_mut().ok_or(PjsError::ChannelClosed)
     }
 }
 
@@ -301,22 +297,16 @@ impl ClientStreamSession {
     fn apply_frame(&mut self, payload: &Value, max_bytes: usize) -> PjsResult<()> {
         let projected = match (self.reconstructed_data.as_object(), payload.as_object()) {
             (Some(data_map), Some(payload_map)) => {
-                let mut bytes = self.reconstructed_bytes;
-                for (key, value) in payload_map {
-                    bytes = bytes.saturating_add(entry_size(key, value));
-                    if let Some(old) = data_map.get(key) {
-                        bytes = bytes.saturating_sub(entry_size(key, old));
-                    }
-                }
-                bytes
+                merged_bytes(self.reconstructed_bytes, Some(data_map), payload_map)
             }
             _ => json_size(payload),
         };
         if projected > max_bytes {
-            return Err(PjsError::ClientError(format!(
-                "Session {} exceeds the {max_bytes}-byte reconstructed data limit",
-                self.id
-            )));
+            return Err(PjsError::limit_exceeded(
+                LimitKind::SessionBytes,
+                projected,
+                max_bytes,
+            ));
         }
 
         match (self.reconstructed_data.as_object_mut(), payload.as_object()) {
@@ -330,6 +320,87 @@ impl ClientStreamSession {
         self.reconstructed_bytes = projected;
         Ok(())
     }
+
+    /// Applies `patches` in order, accounting each against `max_bytes` before it
+    /// is applied. On error the state may be partly modified; the caller drops
+    /// the session.
+    fn apply_patches(&mut self, patches: &[WirePatch], max_bytes: usize) -> PjsResult<()> {
+        for patch in patches {
+            let projected = self.project_patch_bytes(patch);
+            if projected > max_bytes {
+                return Err(PjsError::limit_exceeded(
+                    LimitKind::SessionBytes,
+                    projected,
+                    max_bytes,
+                ));
+            }
+            apply_patch(&mut self.reconstructed_data, patch)?;
+            self.reconstructed_bytes = projected;
+        }
+        Ok(())
+    }
+
+    /// Upper bound on `reconstructed_bytes` after `patch` applies; an
+    /// unresolvable path is counted as new content, `apply_patch` rejects it.
+    fn project_patch_bytes(&self, patch: &WirePatch) -> usize {
+        let bytes = self.reconstructed_bytes;
+        let data = &self.reconstructed_data;
+        match patch {
+            WirePatch::Set { path, value } => match path.0.split_last() {
+                None => json_size(value),
+                Some((WireSegment::Key(key), parent)) => {
+                    let old = lookup(data, parent)
+                        .and_then(Value::as_object)
+                        .and_then(|map| map.get(key));
+                    bytes
+                        .saturating_add(entry_size(key, value))
+                        .saturating_sub(old.map_or(0, |old| entry_size(key, old)))
+                }
+                Some((WireSegment::Index(_), _)) => {
+                    let old = lookup(data, &path.0).map_or(0, json_size);
+                    bytes.saturating_add(json_size(value)).saturating_sub(old)
+                }
+            },
+            WirePatch::Merge { path, entries } => merged_bytes(
+                bytes,
+                lookup(data, &path.0).and_then(Value::as_object),
+                entries,
+            ),
+            WirePatch::Append { values, .. } => values.iter().fold(bytes, |acc, value| {
+                acc.saturating_add(json_size(value)).saturating_add(1)
+            }),
+            WirePatch::AppendStr { text, .. } => {
+                bytes.saturating_add(str_json_size(text).saturating_sub(2))
+            }
+        }
+    }
+}
+
+/// Bytes after inserting `entries` into `existing` (`None` when the target is
+/// not an object): each entry adds its size and removes the one it replaces.
+fn merged_bytes(
+    base: usize,
+    existing: Option<&serde_json::Map<String, Value>>,
+    entries: &serde_json::Map<String, Value>,
+) -> usize {
+    let mut bytes = base;
+    for (key, value) in entries {
+        bytes = bytes.saturating_add(entry_size(key, value));
+        if let Some(old) = existing.and_then(|map| map.get(key)) {
+            bytes = bytes.saturating_sub(entry_size(key, old));
+        }
+    }
+    bytes
+}
+
+/// Read-only counterpart of a patch path resolution.
+fn lookup<'a>(state: &'a Value, path: &[WireSegment]) -> Option<&'a Value> {
+    path.iter()
+        .try_fold(state, |node, segment| match (node, segment) {
+            (Value::Object(map), WireSegment::Key(key)) => map.get(key),
+            (Value::Array(items), WireSegment::Index(index)) => items.get(*index),
+            _ => None,
+        })
 }
 
 /// Serialized size of `value`; saturates so a failure counts against the cap.
@@ -340,10 +411,14 @@ fn json_size(value: &Value) -> usize {
 /// Upper bound on the serialized size of one object entry: quoted key, colon,
 /// value and a separating comma.
 fn entry_size(key: &str, value: &Value) -> usize {
-    let quoted_key = serde_json::to_vec(key).map_or(usize::MAX, |bytes| bytes.len());
-    quoted_key
+    str_json_size(key)
         .saturating_add(2)
         .saturating_add(json_size(value))
+}
+
+/// Serialized size of `text` as a quoted, escaped JSON string.
+fn str_json_size(text: &str) -> usize {
+    serde_json::to_vec(text).map_or(usize::MAX, |bytes| bytes.len())
 }
 
 /// Removes the session from the map; used as a drop guard so a cancelled
@@ -417,7 +492,8 @@ fn reserve_session_slot(
 ///
 /// # Errors
 ///
-/// Returns [`PjsError::ConnectionFailed`] when a write fails or times out.
+/// Returns [`PjsError::Transport`] when a write fails and
+/// [`PjsError::WriteTimeout`] when it times out.
 async fn send_loop<W>(mut write: W, outbox: &mut Outbox, write_timeout: Duration) -> PjsResult<()>
 where
     W: Sink<Message, Error = WsError> + Unpin,
@@ -443,7 +519,10 @@ where
         .await
         {
             error!("Failed to send message: {}", e);
-            return Err(PjsError::ConnectionFailed(e));
+            return Err(match e {
+                WriteFailure::Sink(source) => PjsError::Transport(Box::new(source)),
+                WriteFailure::Stalled(timeout) => PjsError::WriteTimeout { timeout },
+            });
         }
         outbox.pending = None;
     }
@@ -476,7 +555,7 @@ fn redacted_url(url: &Url) -> String {
 ///
 /// # Errors
 ///
-/// Returns [`PjsError::ConnectionFailed`] on a transport error.
+/// Returns [`PjsError::Transport`] on a transport error.
 async fn receive_loop<R>(
     mut read: R,
     sessions: ClientSessions,
@@ -498,7 +577,7 @@ where
                     )
                     .await
                     {
-                        error!("Failed to handle incoming message: {}", e);
+                        error!("Failed to handle incoming message: {}", ErrorChain(&e));
                     }
                 }
                 Err(e) => {
@@ -531,7 +610,7 @@ where
             }
             Err(e) => {
                 error!("WebSocket error: {}", e);
-                return Err(PjsError::ConnectionFailed(e.to_string()));
+                return Err(PjsError::Transport(Box::new(e)));
             }
         }
     }
@@ -541,7 +620,7 @@ where
 impl PjsWebSocketClient {
     /// Create new WebSocket client
     pub fn new(url: impl AsRef<str>) -> PjsResult<Self> {
-        let url = Url::parse(url.as_ref()).map_err(|e| PjsError::InvalidUrl(e.to_string()))?;
+        let url = Url::parse(url.as_ref()).map_err(|e| PjsError::InvalidUrl(Box::new(e)))?;
 
         let (message_tx, message_rx) =
             byte_bounded_channel(MESSAGE_QUEUE_CAPACITY, MAX_QUEUED_MESSAGE_BYTES);
@@ -631,11 +710,12 @@ impl PjsWebSocketClient {
     ///
     /// # Errors
     ///
-    /// Returns [`PjsError::ClientError`] if a connection is already active,
-    /// [`PjsError::ConnectionFailed`] if the handshake fails, a write fails or
-    /// times out, or the connection is aborted by a transport error (including
-    /// a message or frame exceeding the configured [`WebSocketClientConfig`]
-    /// caps).
+    /// Returns [`PjsError::AlreadyConnected`] if a connection is already
+    /// active, [`PjsError::ConnectionFailed`] if the handshake fails,
+    /// [`PjsError::WriteTimeout`] if a write times out, or
+    /// [`PjsError::Transport`] if a write fails or the connection is aborted by
+    /// a transport error (including a message or frame exceeding the
+    /// configured [`WebSocketClientConfig`] caps).
     ///
     /// # Examples
     ///
@@ -674,7 +754,10 @@ impl PjsWebSocketClient {
             false,
         )
         .await
-        .map_err(|e| PjsError::ConnectionFailed(e.to_string()))?;
+        .map_err(|e| PjsError::ConnectionFailed {
+            url: redacted_url(&self.url),
+            source: Box::new(e),
+        })?;
 
         info!("WebSocket connection established");
 
@@ -707,9 +790,11 @@ impl PjsWebSocketClient {
     /// reached, expired sessions are dropped and then the incomplete session
     /// idle the longest is evicted (see [`WebSocketClientConfig::max_sessions`]).
     ///
-    /// The server applies none of the [`StreamOptions`] fields: it accepts only
-    /// `None` or [`StreamOptions::default`] and answers any other value with an
-    /// `Error` message (code 400) and no stream.
+    /// `None` requests [`Framing::Patch`], which this client reconstructs, so
+    /// arbitrarily large documents stream in bounded frames. `Some(options)` is
+    /// sent verbatim; [`StreamOptions::default`] is [`Framing::Merge`], the
+    /// encoding peers that predate patch framing understand. The server rejects
+    /// invalid options with an `Error` message (code 400) and no stream.
     ///
     /// # Errors
     ///
@@ -722,16 +807,17 @@ impl PjsWebSocketClient {
         options: Option<StreamOptions>,
     ) -> PjsResult<SessionId> {
         let session_id = SessionId::new();
-        let options = options.unwrap_or_default();
+        let options = options.unwrap_or_else(|| StreamOptions {
+            framing: Framing::Patch,
+            ..StreamOptions::default()
+        });
 
         let message = WsMessage::StreamInit {
             session_id,
             data,
             options,
         };
-        let json_str = serde_json::to_string(&message).map_err(|e| {
-            PjsError::ClientError(format!("Failed to serialize stream request: {e}"))
-        })?;
+        let json_str = serde_json::to_string(&message)?;
         let len = json_str.len();
 
         {
@@ -749,11 +835,10 @@ impl PjsWebSocketClient {
             remove_session_slot,
         );
 
-        self.message_tx.send(json_str, len).await.map_err(|_| {
-            PjsError::ClientError(
-                "Failed to send stream request: outgoing channel closed".to_string(),
-            )
-        })?;
+        self.message_tx
+            .send(json_str, len)
+            .await
+            .map_err(|_| PjsError::ChannelClosed)?;
         DropGuard::dismiss(slot);
 
         info!("Requested stream initialization: {}", session_id);
@@ -876,6 +961,59 @@ impl PjsWebSocketClient {
         }
     }
 
+    /// Applies one data frame to its live session through `apply` and
+    /// acknowledges it; a failed `apply` drops the session and returns the error.
+    /// Frames for unknown, expired or completed sessions are ignored unacked.
+    async fn apply_and_ack(
+        sessions: &ClientSessions,
+        message_tx: &ByteBoundedSender<String>,
+        config: WebSocketClientConfig,
+        (session_id, frame_id, is_complete): (SessionId, u32, bool),
+        apply: impl FnOnce(&mut ClientStreamSession) -> PjsResult<()>,
+    ) -> PjsResult<()> {
+        debug!("Received frame {} for session {}", frame_id, session_id);
+
+        let processing_start = Instant::now();
+
+        let applied = {
+            let mut sessions = sessions.write().await;
+            Self::drop_if_expired(&mut sessions, &session_id, config, processing_start);
+            match sessions.get_mut(&session_id) {
+                Some(session) if !session.is_complete => {
+                    if let Err(e) = apply(session) {
+                        sessions.remove(&session_id);
+                        return Err(e);
+                    }
+                    if is_complete {
+                        session.is_complete = true;
+                        info!("Stream completed for session {}", session_id);
+                    }
+                    session.last_activity = processing_start;
+                    session.record_frame(processing_start.elapsed());
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !applied {
+            return Ok(());
+        }
+
+        let processing_time = processing_start.elapsed();
+
+        let ack_message = WsMessage::FrameAck {
+            session_id,
+            frame_id,
+            processing_time_ms: u64::try_from(processing_time.as_millis()).unwrap_or(u64::MAX),
+        };
+
+        // Best-effort: dropping an ack is recoverable (the server
+        // can re-send or time out the frame); stalling the whole
+        // read loop is not. See `try_send_control_message`'s doc.
+        Self::try_send_control_message(message_tx, &ack_message, "frame acknowledgment");
+        Ok(())
+    }
+
     async fn handle_incoming_message(
         sessions: ClientSessions,
         message_tx: ByteBoundedSender<String>,
@@ -890,50 +1028,30 @@ impl PjsWebSocketClient {
                 payload,
                 is_complete,
             } => {
-                debug!("Received frame {} for session {}", frame_id, session_id);
-
-                let processing_start = Instant::now();
-
-                let applied = {
-                    let mut sessions = sessions.write().await;
-                    Self::drop_if_expired(&mut sessions, &session_id, config, processing_start);
-                    match sessions.get_mut(&session_id) {
-                        Some(session) if !session.is_complete => {
-                            if let Err(e) =
-                                session.apply_frame(&payload, config.max_session_bytes.get())
-                            {
-                                sessions.remove(&session_id);
-                                return Err(e);
-                            }
-                            if is_complete {
-                                session.is_complete = true;
-                                info!("Stream completed for session {}", session_id);
-                            }
-                            session.last_activity = processing_start;
-                            session.record_frame(processing_start.elapsed());
-                            true
-                        }
-                        _ => false,
-                    }
-                };
-                if !applied {
-                    return Ok(());
-                }
-
-                let processing_time = processing_start.elapsed();
-
-                // Send acknowledgment
-                let ack_message = WsMessage::FrameAck {
-                    session_id,
-                    frame_id,
-                    processing_time_ms: u64::try_from(processing_time.as_millis())
-                        .unwrap_or(u64::MAX),
-                };
-
-                // Best-effort: dropping an ack is recoverable (the server
-                // can re-send or time out the frame); stalling the whole
-                // read loop is not. See `try_send_control_message`'s doc.
-                Self::try_send_control_message(&message_tx, &ack_message, "frame acknowledgment");
+                Self::apply_and_ack(
+                    &sessions,
+                    &message_tx,
+                    config,
+                    (session_id, frame_id, is_complete),
+                    |session| session.apply_frame(&payload, config.max_session_bytes.get()),
+                )
+                .await?;
+            }
+            WsMessage::StreamPatch {
+                session_id,
+                frame_id,
+                priority: _,
+                patches,
+                is_complete,
+            } => {
+                Self::apply_and_ack(
+                    &sessions,
+                    &message_tx,
+                    config,
+                    (session_id, frame_id, is_complete),
+                    |session| session.apply_patches(&patches, config.max_session_bytes.get()),
+                )
+                .await?;
             }
             WsMessage::StreamComplete { session_id } => {
                 info!("Stream completed: {}", session_id);
@@ -1382,7 +1500,13 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(PjsError::ClientError(_))));
+        assert!(matches!(
+            result,
+            Err(PjsError::LimitExceeded {
+                kind: LimitKind::SessionBytes,
+                ..
+            })
+        ));
         assert!(!sessions.read().await.contains_key(&id));
     }
 
@@ -1396,6 +1520,48 @@ mod tests {
 
         assert_eq!(session.reconstructed_bytes, after_first);
         assert!(session.reconstructed_bytes >= json_size(&session.reconstructed_data));
+    }
+
+    fn patch(value: Value) -> WirePatch {
+        serde_json::from_value(value).expect("valid wire patch")
+    }
+
+    #[test]
+    fn test_apply_patches_tracked_bytes_bound_the_real_size() {
+        let mut session = ClientStreamSession::new(SessionId::new());
+        let patches = [
+            json!(["merge", [], {"a": "xx", "list": [1], "n": {"k": 1}}]),
+            json!(["append", ["list"], [2, 3]]),
+            json!(["set", ["n", "k"], "longer value"]),
+            json!(["set", ["list", 0], 1000]),
+            json!(["merge", ["n"], {"k": 7, "z": null}]),
+            json!(["append_str", ["a"], "\"quoted\""]),
+        ]
+        .map(patch);
+
+        session.apply_patches(&patches, 1 << 20).unwrap();
+
+        assert_eq!(
+            session.reconstructed_data,
+            json!({"a": "xx\"quoted\"", "list": [1000, 2, 3], "n": {"k": 7, "z": null}})
+        );
+        assert!(session.reconstructed_bytes >= json_size(&session.reconstructed_data));
+    }
+
+    #[test]
+    fn test_apply_patches_refuses_patch_that_would_exceed_cap_without_applying_it() {
+        let mut session = ClientStreamSession::new(SessionId::new());
+        let small = patch(json!(["merge", [], {"k": "v"}]));
+        let big = patch(json!(["append_str", ["k"], "y".repeat(100)]));
+        session.apply_patches(&[small], 64).unwrap();
+
+        let result = session.apply_patches(&[big], 64);
+
+        assert!(
+            matches!(result, Err(PjsError::LimitExceeded { .. })),
+            "{result:?}"
+        );
+        assert_eq!(session.reconstructed_data, json!({"k": "v"}));
     }
 
     #[test]
@@ -1669,7 +1835,7 @@ mod tests {
 
         let result = send_loop(failing_sink, &mut outbox, Duration::from_secs(1)).await;
 
-        assert!(matches!(result, Err(PjsError::ConnectionFailed(_))));
+        assert!(matches!(result, Err(PjsError::Transport(_))));
     }
 
     #[tokio::test]
@@ -1727,7 +1893,7 @@ mod tests {
         let lease = ReceiverLease::acquire(&client.message_rx).unwrap();
         assert!(matches!(
             ReceiverLease::acquire(&client.message_rx),
-            Err(PjsError::ClientError(_))
+            Err(PjsError::AlreadyConnected)
         ));
         drop(lease);
         assert!(ReceiverLease::acquire(&client.message_rx).is_ok());

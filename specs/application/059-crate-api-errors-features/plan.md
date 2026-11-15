@@ -38,7 +38,7 @@ flowchart TD
 - Root re-exports flatten the most used types across layers; the full paths remain public (`pjson_rs::domain::...`, `pjson_rs::application::...`).
 - Two crates: `pjson-rs-domain` (WASM-safe, no tokio) and `pjson-rs` (this crate); `pjs-wasm` depends only on the former, so the `http-server` stack never reaches wasm builds.
 - Features are additive marker or dependency toggles; the optional-dependency set is exactly what each module needs (`http-server` carries the whole axum stack).
-- `Error` is one flat enum with `String` payloads and a `category()` helper for metrics labels; domain and application errors stay separate types.
+- `Error` is one flat `#[non_exhaustive]` enum with typed payloads and `source()` chains, plus a `category()` helper for metrics labels; domain and application errors stay separate types.
 - `mimalloc` is the only allocator feature; registration lives in `global_alloc.rs` only.
 
 ## Public API surface
@@ -48,13 +48,13 @@ See spec FR-002 to FR-004. Feature-gated root items: `SecureWebSocketHandler` (`
 
 | Function | Preconditions | Postconditions | Undefined or caller-risk |
 |---|---|---|---|
-| `Error::category()` | none | one of nine static labels | stable strings, not `non_exhaustive` |
-| `Error::from(io::Error)` | none | `Error::Io(msg)` | source lost |
-| `Error::is_validation_error()` | none | true for `SchemaValidation`, `SemanticTypeMismatch`, `InvalidFrame` | `SessionLimitReached` is a client error |
+| `Error::category()` | none | one of six static labels (`json`, `validation`, `security`, `network`, `compression`, `client`) | stable strings |
+| `Error::from(serde_json::Error)` | none | `Error::Serialization` keeping the source | no `From<io::Error>`/`From<Utf8Error>` |
+| `Error::is_validation_error()` | none | true for `InvalidSessionId`, `InvalidStreamOptions`, `Patch` | `SessionLimitReached` is a client error |
 | `global_allocator_name()` | none | `"mimalloc"` or `"system"` | reflects compile-time feature only |
 
 ## Testing strategy
-- Unit tests in `error.rs` (constructors, classification, categories, display, conversions, clone).
+- Unit tests in `error.rs` (constructors, classification, categories, display, conversions, source chains).
 - Doc-test for `global_allocator_name`.
 - CI (`.github/workflows/ci.yml`): `quality` (fmt, clippy `--all-features`), `build`/`test` (3 OS x 2 allocators), `doctest`, `docs`, `coverage`, fuzz jobs, `security-deny`, `security-osv`.
 - Per-feature matrix runs in CI (`feature-matrix` job, #615).

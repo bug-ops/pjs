@@ -45,7 +45,7 @@ fn validate_key(key: &str) -> DomainResult<()> {
     if key.is_empty() {
         return Err(DomainError::InvalidPath("Key cannot be empty".to_string()));
     }
-    if key.contains('.') || key.contains('[') || key.contains(']') {
+    if !JsonPath::is_valid_key(key) {
         return Err(DomainError::InvalidPath(format!(
             "Key '{key}' contains invalid characters"
         )));
@@ -103,6 +103,21 @@ impl JsonPath {
             }
         }
         Ok(Self { segments })
+    }
+
+    /// Whether `key` can be a key segment, i.e. whether [`Self::append_key`]
+    /// accepts it. Allocation-free, for hot paths that only need the verdict.
+    ///
+    /// # Examples
+    /// ```
+    /// use pjson_rs_domain::value_objects::JsonPath;
+    ///
+    /// assert!(JsonPath::is_valid_key("users"));
+    /// assert!(!JsonPath::is_valid_key("a.b"));
+    /// assert!(!JsonPath::is_valid_key(""));
+    /// ```
+    pub fn is_valid_key(key: &str) -> bool {
+        !key.is_empty() && !key.contains(['.', '[', ']'])
     }
 
     /// Append a key segment, producing a new path.
@@ -325,6 +340,34 @@ impl<'de> Deserialize<'de> for JsonPath {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_valid_key_agrees_with_append_key() {
+        for key in [
+            "",
+            ".",
+            "a.b",
+            "[",
+            "]",
+            "a[0]",
+            "x]",
+            "k",
+            "key with space",
+            "ключ",
+            "日本語",
+            "emoji😀",
+            "$",
+            "a-b_c",
+            "..",
+            "\u{0}",
+        ] {
+            assert_eq!(
+                JsonPath::is_valid_key(key),
+                JsonPath::root().append_key(key).is_ok(),
+                "key {key:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_valid_paths() {

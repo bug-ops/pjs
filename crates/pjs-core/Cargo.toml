@@ -94,6 +94,9 @@ compression = ["dep:brotli", "dep:flate2", "dep:zstd"]
 partial-parse = ["dep:jiter"]
 schema-validation = ["dep:regex"]
 
+# Exact f64 round-trip in serde_json parsing (unifies across the whole build)
+float-roundtrip = ["serde_json/float_roundtrip"]
+
 # Infrastructure features
 http-server = [
     "dep:async-stream",

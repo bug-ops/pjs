@@ -89,7 +89,7 @@ Status: done. `ByteCodec::ZstdDict` decode counts bytes via the bomb detector; `
 
 | Case | Behaviour |
 |------|-----------|
-| < 8 training samples | `Error::CompressionError` |
+| < 8 training samples | `Error::InvalidDictionary(DictionaryError::InsufficientSamples { provided, required })` |
 | Dictionary > 112 KiB | rejected by `ZstdDictionary::from_bytes` |
 | Not yet trained (< `N_TRAIN` samples) | HTTP 404 |
 | Malformed `session_id` | `PjsError::InvalidSessionId` -> 400 |

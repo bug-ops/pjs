@@ -12,7 +12,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.13"
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = "1"
 
 [dependencies.pjson-rs]
 path = "../crates/pjs-core"
@@ -21,6 +21,11 @@ features = ["compression", "partial-parse", "http-server", "websocket-server"]
 
 [workspace]
 members = ["."]
+
+[lib]
+name = "pjs_fuzz"
+path = "src/lib.rs"
+doc = false
 
 [[bin]]
 name = "parser_zero_copy"
@@ -53,6 +58,13 @@ bench = false
 [[bin]]
 name = "ws_message_decode"
 path = "fuzz_targets/ws_message_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zstd_dict_codec"
+path = "fuzz_targets/zstd_dict_codec.rs"
 test = false
 doc = false
 bench = false

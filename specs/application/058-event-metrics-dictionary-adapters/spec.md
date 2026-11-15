@@ -80,7 +80,7 @@ Status: implemented, not wired.
 ### FR-007 Dictionary store training
 `InMemoryDictionaryStore::new(Arc<CompressionBombDetector>, target_dict_size)` (adapter: feature `compression`, not wasm) shall implement `DictionaryStore`. `train_if_ready(session, sample)` shall: return early if the dictionary exists; under the session's corpus mutex append the sample only if `corpus.len() < N_TRAIN` (32), `sample.len() <= 1 MiB` and the global reservation stays within `TOTAL_CORPUS_BYTE_BUDGET` (128 MiB), otherwise skip it; once 32 samples exist, snapshot the corpus and train once through `OnceCell::get_or_try_init` inside `spawn_blocking` using `ZstdDictCompressor::train(snapshot, target)`; validate the result with `CompressionBombDetector::validate_pre_decompression`; release the byte reservation through a drop guard (also on cancellation). `target_dict_size` is clamped to `MAX_DICT_SIZE` (112 KiB). PR #222, #360.
 `get_dictionary(session)` returns `Ok(Some(Arc<TrainedDictionary>))` after training, else `Ok(None)`, and refreshes `last_access`.
-`register(session, dict)` shall validate the dictionary size with the bomb detector (`Error::CompressionError` on rejection) and set it if none exists.
+`register(session, dict)` shall validate the dictionary size with the bomb detector (`Error::InvalidDictionary(DictionaryError::Rejected)` on rejection) and set it if none exists.
 
 ### FR-008 Dictionary eviction
 Session state shall be evicted after `SESSION_TTL` = 30 min of inactivity by a background task spawned in `new` when a Tokio runtime is present (interval `SESSION_CLEANUP_INTERVAL` = 5 min, holds only `Weak` references so it stops when the store drops); without a runtime a `warn!` is logged and no task starts. `cleanup_expired(ttl)` runs one pass manually and resynchronizes the global byte counter. `release_corpus_bytes` saturates instead of wrapping.
@@ -102,8 +102,8 @@ Session state shall be evicted after `SESSION_TTL` = 30 min of inactivity by a b
 | log above 10 000 | trimmed to 9 000 oldest-first |
 | sample above 1 MiB | skipped |
 | corpus budget exhausted | sample skipped, `debug!` |
-| training failure | `Err(CompressionError)`; reservation released |
-| `register` of oversized dictionary | `Err(CompressionError)` |
+| training failure | `Err(Error::Codec { codec: Zstd, operation: Train, .. })`; reservation released |
+| `register` of oversized dictionary | `Err(Error::InvalidDictionary(DictionaryError::Rejected))` |
 | `train_if_ready` without Tokio runtime | works; eviction task not started |
 
 ## 7. Success Criteria

@@ -28,7 +28,7 @@ Spec: [[039-partial-json-jiter-parser/spec|039]]. Index: [[MOC-specs]].
 ```mermaid
 flowchart TD
   In["&[u8]"] --> G{"len > max_input_size?"}
-  G -->|yes| EB["Error::Buffer"]
+  G -->|yes| EB["Error::LimitExceeded(InputSize)"]
   G -->|no| W{"all whitespace?"}
   W -->|yes| E0["empty result, consumed 0"]
   W -->|no| J["Jiter (+allow_inf_nan, +allow_partial_strings)"]
@@ -58,7 +58,7 @@ Helpers: `walk_string`, `walk_number`, `walk_array`, `walk_object`, `walk_with_p
 
 | Function | Preconditions | Postconditions | Undefined / notes |
 |---|---|---|---|
-| `parse_partial(input)` | none (any bytes) | `Ok(r)` implies `r.consumed <= input.len()`; `r.is_complete` implies `consumed == input.len()` | `Err(Buffer)` above `max_input_size`; `Err(InvalidJson)` for hard syntax errors and depth overflow |
+| `parse_partial(input)` | none (any bytes) | `Ok(r)` implies `r.consumed <= input.len()`; `r.is_complete` implies `consumed == input.len()` | `Err(LimitExceeded{InputSize})` above `max_input_size`; `Err(InvalidJson)` for hard syntax errors and depth overflow |
 | `parse_partial` on prefix `P` of a valid document `D` | `P` is a prefix of `D` | no error except truncated numbers `1.`/`1e` | the unparsed tail is `&input[consumed..]` |
 | `JiterConfig::default()` | none | 100 MiB, depth 64, hints on, partial strings on, inf/nan off | |
 | `streaming_hint` | `emit_streaming_hint` and container root | every leaf path in exactly one of the two vectors | tentative choice is hash-order dependent when objects have several keys |

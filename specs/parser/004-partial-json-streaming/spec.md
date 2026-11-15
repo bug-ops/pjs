@@ -41,7 +41,7 @@ verified: 2026-11-15
 ## Functional requirements
 
 ### FR-001: Partial result carrying parsed fields and unparsed tail
-Status: done (different shape, see drift). Code: `parser/partial.rs::PartialJsonParser::parse_partial`. Returns the largest structurally complete prefix; `consumed == 0` with `JsonData::Null` when nothing is recoverable. Truncation alone is not an error; `Error::InvalidJson` for syntactically invalid input, `Error::Buffer` when `input.len() > JiterConfig::max_input_size` (default 100 MiB) or nesting exceeds `max_depth` (default 64, equals `MaxDepth::default()`).
+Status: done (different shape, see drift). Code: `parser/partial.rs::PartialJsonParser::parse_partial`. Returns the largest structurally complete prefix; `consumed == 0` with `JsonData::Null` when nothing is recoverable. Truncation alone is not an error; `Error::InvalidJson` for syntactically invalid input, `Error::LimitExceeded { kind: InputSize, .. }` when `input.len() > JiterConfig::max_input_size` (default 100 MiB); nesting beyond `max_depth` (default 64, equals `MaxDepth::default()`) is `Error::InvalidJson`.
 
 ### FR-002: Mergeable with continuation frames in stream reconstruction
 Status: open. `StreamingHint { stable_paths, tentative_paths }` is produced for the reconstruction path but nothing under `crates/pjs-core/src/stream/` consumes it (`rg partial crates/pjs-core/src/stream` is empty).

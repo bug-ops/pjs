@@ -48,7 +48,7 @@ verified: 2026-11-15
 
 ## Feature flags
 
-- `compression` (default) enables `flate2`, `brotli`, `zstd`. Without it, `ByteCodec::{Deflate, Gzip, Brotli}` exist but `compress`/`decompress_*` return `Error::CompressionError("feature `compression` is not enabled")`.
+- `compression` (default) enables `flate2`, `brotli`, `zstd`. Without it, `ByteCodec::{Deflate, Gzip, Brotli}` exist but `compress`/`decompress_*` return `Error::CodecUnavailable { codec }`.
 - `ByteCodec::ZstdDict` and `compression::zstd` require `compression` and `not(target_arch = "wasm32")`.
 
 ## Functional Requirements
@@ -66,7 +66,7 @@ Status: done.
 Status: done.
 
 ### FR-004 Protected decompress
-`decompress_protected` shall check the compressed size against `max_compressed_size`, then decode with the codec stored in the `SecureCompressedData` through `CompressionBombDetector::protect_reader` using `read_to_end`, and finally run `validate_result(compressed_len, output_len)`. Any read or limit error shall surface as `Error::SecurityError("Protected decompression failed: ...")`.
+`decompress_protected` shall check the compressed size against `max_compressed_size`, then decode with the codec stored in the `SecureCompressedData` through `CompressionBombDetector::protect_reader` using `read_to_end`, and finally run `validate_result(compressed_len, output_len)`. A bomb or limit failure shall surface as `Error::CompressionBomb(CompressionBombError)`; corrupt codec input shall surface as `Error::Codec { operation: Decompress, .. }` (not a security error).
 Status: done.
 
 ### FR-005 Nested decompress
@@ -78,7 +78,7 @@ Status: done. The depth is caller-supplied; the compressor does not detect nesti
 Status: done.
 
 ### FR-007 Zstd dictionary type
-`ZstdDictionary::from_bytes` shall reject an empty blob, a blob longer than `MAX_DICT_SIZE` (112 KiB), and a blob not starting with the zstd dictionary magic `0xEC30A437` (bytes `37 A4 30 EC`), using `Error::CompressionError`. The inner bytes are private, so a held `ZstdDictionary` always satisfies the invariant.
+`ZstdDictionary::from_bytes` shall reject an empty blob, a blob longer than `MAX_DICT_SIZE` (112 KiB), and a blob not starting with the zstd dictionary magic `0xEC30A437` (bytes `37 A4 30 EC`), using `Error::InvalidDictionary(DictionaryError::{Size, BadMagic})`. The inner bytes are private, so a held `ZstdDictionary` always satisfies the invariant.
 Status: done.
 
 ### FR-008 Zstd training
@@ -90,7 +90,7 @@ Status: done.
 Status: done.
 
 ### FR-010 Decompression context scaffold
-`SecureDecompressionContext::start_stream(compressed_size)` shall fail with `Error::SecurityError` when `active_streams >= max_concurrent_streams`, otherwise increment the counter and return a protector over an empty in-memory cursor; `finish_stream` decrements (saturating at 0); `stats()` reports depth, active and max.
+`SecureDecompressionContext::start_stream(compressed_size)` shall fail with `Error::CompressionBomb(CompressionBombError::TooManyStreams { active, max })` when `active_streams >= max_concurrent_streams`, otherwise increment the counter and return a protector over an empty in-memory cursor; `finish_stream` decrements (saturating at 0); `stats()` reports depth, active and max.
 Status: partial. The returned reader is an empty cursor and `current_depth` is never changed, so this is a concurrency-count scaffold only (per its own doc).
 
 ## Non-Functional Requirements
@@ -107,13 +107,13 @@ Status: partial. The returned reader is an empty cursor and `current_depth` is n
 
 | Case | Result |
 |---|---|
-| Codec tag mismatch on decode | decoder error wrapped as `SecurityError("Protected decompression failed ...")` (`test_codec_mismatch_returns_error`) |
+| Codec tag mismatch on decode | `Error::Codec { operation: Decompress, .. }` (`test_codec_mismatch_returns_error`) |
 | Raw deflate has no magic | mismatch may not fail cleanly, relies on the codec tag |
-| Input larger than `max_compressed_size` | `SecurityError` before any encode/decode |
-| Output exceeds size or ratio | `SecurityError` from protector or `validate_result` |
-| Fewer than 8 training samples | `CompressionError("zstd: insufficient samples")` |
-| Dictionary invalid | `CompressionError("zstd: ...")` |
-| `compression` feature off, non-`None` codec | `CompressionError("feature `compression` is not enabled")` |
+| Input larger than `max_compressed_size` | `Error::CompressionBomb(CompressedSizeExceeded { size, max_size })` before any encode/decode |
+| Output exceeds size or ratio | `Error::CompressionBomb` from protector or `validate_result` |
+| Fewer than 8 training samples | `Error::InvalidDictionary(DictionaryError::InsufficientSamples { provided, required })` |
+| Dictionary invalid | `Error::InvalidDictionary(Size | BadMagic)`; libzstd training failure `Error::Codec { codec: Zstd, operation: Train, .. }` |
+| `compression` feature off, non-`None` codec | `Error::CodecUnavailable { codec }` |
 
 ## Success Criteria
 
@@ -133,7 +133,6 @@ Status: partial. The returned reader is an empty cursor and `current_depth` is n
 4. Protector checks run every `check_interval_bytes`, so a single read can overshoot the limit by up to one read buffer before the next check; the final `validate_result` still catches the total.
 5. The `DictionaryStore` port is feature-independent and uses `TrainedDictionary` and `DomainResult` (#605); `ZstdDictionary` holds a `TrainedDictionary` plus the zstd magic check.
 6. `ByteCodec::ZstdDict` is not fuzzed (#575, open).
-7. `Error::CompressionError` and `SecurityError` carry `String` (#599).
 
 ## See Also
 

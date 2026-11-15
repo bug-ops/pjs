@@ -195,7 +195,8 @@ export enum PJSEvent {
   SkeletonReady = 'skeleton_ready',
   PatchApplied = 'patch_applied',
   StreamComplete = 'stream_complete',
-  ProgressUpdate = 'progress_update'
+  ProgressUpdate = 'progress_update',
+  ServerShutdown = 'server_shutdown'
 }
 
 /**
@@ -231,6 +232,7 @@ export interface PJSEventData {
     totalTime: number;
   };
   [PJSEvent.ProgressUpdate]: ProgressInfo;
+  [PJSEvent.ServerShutdown]: Record<string, never>;
 }
 
 // Utility Types
@@ -288,7 +290,8 @@ export enum PJSErrorType {
   TimeoutError = 'TIMEOUT_ERROR',
   ConfigurationError = 'CONFIGURATION_ERROR',
   InitializationError = 'INITIALIZATION_ERROR',
-  StreamError = 'STREAM_ERROR'
+  StreamError = 'STREAM_ERROR',
+  ServerShutdown = 'SERVER_SHUTDOWN'
 }
 
 /**

@@ -53,19 +53,19 @@ verified: 2026-11-15
 Status: done.
 
 ### FR-002 Pre-decompression gate
-`validate_pre_decompression(n)` shall fail with `Error::SecurityError` when `n > max_compressed_size`; it does not look at `max_decompressed_size`.
+`validate_pre_decompression(n)` shall fail with `Error::CompressionBomb(CompressedSizeExceeded { size, max_size })` when `n > max_compressed_size`; it does not look at `max_decompressed_size`.
 Status: done.
 
 ### FR-003 Streaming protector
-`CompressionBombProtector::read` shall add bytes read to the decompressed total and, every `check_interval_bytes`, fail with `io::ErrorKind::InvalidData` if the total exceeds `max_decompressed_size` or the ratio `decompressed/compressed` (when both non-zero) exceeds `max_ratio`.
+`CompressionBombProtector::read` shall add bytes read to the decompressed total and, every `check_interval_bytes`, fail with an `io::ErrorKind::InvalidData` error wrapping the typed `CompressionBombError` (downcastable via `get_ref`) if the total exceeds `max_decompressed_size` or the ratio `decompressed/compressed` (when both non-zero) exceeds `max_ratio`.
 Status: done. Overshoot is bounded by one read call plus the interval.
 
 ### FR-004 Depth
-`with_depth` / `protect_nested_reader` shall return `Error::SecurityError` (message of `CompressionBombError::DepthExceeded`) when `depth > max_compression_depth`.
+`with_depth` / `protect_nested_reader` shall return `Error::CompressionBomb(CompressionBombError::DepthExceeded)` when `depth > max_compression_depth`.
 Status: done.
 
 ### FR-005 Post-hoc validation
-`validate_result(compressed, decompressed)` shall fail with `SizeExceeded` or `RatioExceeded` text inside `Error::SecurityError`.
+`validate_result(compressed, decompressed)` shall fail with `Error::CompressionBomb(SizeExceeded | RatioExceeded)`.
 Status: done.
 
 ### FR-006 Statistics
@@ -119,7 +119,7 @@ Status: done.
 
 ## Edge Cases and Errors
 
-`RateLimitError`: `LimitExceeded{limit, window}`, `ConnectionLimitExceeded{current, max}`, `FrameSizeExceeded{size, max}`, `CapacityExceeded{max}`. `CompressionBombError`: `RatioExceeded`, `SizeExceeded`, `DepthExceeded`; surfaced only as strings inside `crate::Error::SecurityError`.
+`RateLimitError`: `LimitExceeded{limit, window}`, `ConnectionLimitExceeded{current, max}`, `FrameSizeExceeded{size, max}`, `CapacityExceeded{max}`. `CompressionBombError`: `RatioExceeded`, `SizeExceeded`, `DepthExceeded`, `CompressedSizeExceeded{size,max_size}`, `TooManyStreams{active,max}`; surfaced as `crate::Error::CompressionBomb(CompressionBombError)`.
 
 | Case | Behaviour |
 |---|---|
@@ -142,7 +142,7 @@ Status: done.
 
 1. Two parallel configs exist: `security::RateLimitConfig` (used by the limiter) and `config::security::RateLimitingConfig` inside `SecurityConfig.network`; the latter and `NetworkLimits.compression_bomb` are not read by any limiter or detector (grep: no consumers outside `config/`). `[NEEDS CLARIFICATION: intended wiring]`.
 2. `CompressionBombConfig` has `validate()` (#627), also run by `SecurityConfig::validate`: it rejects non-finite or non-positive `max_ratio`, zero `max_decompressed_size`/`max_compressed_size` (`ConfigError::MustBePositive`) and `check_interval_bytes > max_decompressed_size` (`ConfigError::InconsistentBounds`). `RateLimitConfig` remains `Deserialize`-able with no validation.
-3. `CompressionBombError` is flattened into `Error::SecurityError(String)`; callers cannot match variants (#599).
+3. Resolved by #599: `CompressionBombError` is carried typed inside `Error::CompressionBomb`.
 4. `CompressionBombDetector` has one production caller: `InMemoryDictionaryStore` uses `validate_pre_decompression` as a dictionary size gate. `SecureCompressor` decode paths have none ([[049-secure-byte-compression/spec|spec 049]]).
 5. `RateLimitConfig.write_timeout` lives in the rate-limit config but is a WebSocket sink concern; the WebSocket module has an independent `WRITE_TIMEOUT` constant (documented as needing manual mirroring).
 6. A `ClientRateLimit.requests` is a `Vec` with `retain` on each request: O(window count) per call.

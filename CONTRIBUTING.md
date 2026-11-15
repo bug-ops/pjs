@@ -169,7 +169,7 @@ cargo fuzz run ws_message_decode fuzz/seeds/ws_message_decode -- -runs=0
 cargo fuzz run ws_message_decode -- -max_total_time=60 "$PWD/fuzz/seeds/ws_message_decode"
 ```
 
-The fuzz crate enables `serde_json/float_roundtrip`, and feature unification turns it on for `pjson-rs` inside the fuzz build as well, so fuzzing does not exercise the production float parsing path.
+The fuzz crate builds without `serde_json/float_roundtrip`, so it runs the production float parsing path; `ws_message_decode` therefore compares round trips with a 1-ULP float tolerance (`approx_eq` in the `pjs_fuzz` library, `fuzz/src/lib.rs`). The opt-in `float-roundtrip` feature is covered by `crates/pjs-core/tests/float_roundtrip.rs`.
 
 Seeds are tiny hand-written inputs under `fuzz/seeds/<target>/`. Do not commit crash artifacts or generated corpora; file an issue for a crash instead. CI replays seeds on every relevant change (`fuzz` job) and explores each target for 60 seconds on the weekly schedule and on manual dispatch (`fuzz-explore` job, non-gating).
 

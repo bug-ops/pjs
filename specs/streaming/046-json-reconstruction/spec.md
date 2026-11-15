@@ -71,7 +71,7 @@ Status: done.
 Status: done.
 
 ### FR-009 Error type
-All failures shall be `crate::Error::Other(String)` with messages such as `Key not found: k`, `Index out of bounds: n`, `Expected object`, `Expected array`, `Cannot append to non-array`, `Invalid path for set operation`.
+All failures shall be `crate::Error::Patch(PatchError)` with variants `KeyNotFound(String)`, `IndexOutOfBounds { index, len }`, `NotAnIndex`, `ExpectedObject`, `ExpectedArray`, `NotAContainer`, `NoTargetKey`, `UnsupportedSegment`.
 Status: done (stringly typed; see Open Questions).
 
 ## Non-Functional Requirements
@@ -102,13 +102,13 @@ Status: done (stringly typed; see Open Questions).
 ## Agent Boundaries
 
 - Always: keep application strictly ordered; add a test for each new path shape.
-- Ask first: adding out-of-order buffering, rollback, or changing `Error::Other` into a typed enum (#599 tracks `Error` typing).
+- Ask first: adding out-of-order buffering, rollback, or changing the `PatchError` variants.
 - Never: panic on malformed patches; silently swallow errors that lose data.
 
 ## Open Questions
 
 1. Counters `frames_processed: u32` / `patches_applied: u32` use unchecked `+=`.
-2. Errors are strings; callers cannot match on cause (related: #599).
+2. Resolved by #599: errors are typed `PatchError` variants.
 3. `Skeleton.complete` is ignored, so "skeleton may continue in later frames" has no effect.
 4. `Replace` and `Set` are indistinguishable in behaviour.
 5. `Instant` times make `ReconstructionStats` non-`Serialize`; fine for local use only.

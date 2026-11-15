@@ -13,7 +13,10 @@
 //! Available only when `feature = "compression"` is enabled and the target is
 //! not `wasm32`.
 
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    error::{CodecKind, CodecOperation, DictionaryError},
+};
 use pjson_rs_domain::value_objects::{MAX_TRAINED_DICTIONARY_BYTES, TrainedDictionary};
 
 /// Maximum permitted dictionary size in bytes (112 KiB).
@@ -38,6 +41,17 @@ pub const N_TRAIN: usize = 32;
 /// repetitive JSON-like workloads. Pass an explicit level to
 /// [`ZstdDictCompressor::compress_with_level`] if you need to tune it.
 pub const DEFAULT_LEVEL: i32 = 3;
+
+/// libzstd's hard minimum number of training samples.
+const MIN_TRAIN_SAMPLES: usize = 8;
+
+fn zstd_error(operation: CodecOperation, source: std::io::Error) -> Error {
+    Error::Codec {
+        codec: CodecKind::Zstd,
+        operation,
+        source,
+    }
+}
 
 /// zstd dictionary magic bytes (little-endian `0xEC30A437`).
 const ZSTD_MAGIC: [u8; 4] = [0x37, 0xA4, 0x30, 0xEC];
@@ -80,15 +94,13 @@ impl ZstdDictionary {
     /// Private constructor — the single enforcement point for the type invariant.
     fn new_checked(bytes: Vec<u8>) -> Result<Self> {
         let dictionary = TrainedDictionary::from_bytes(bytes)
-            .map_err(|e| Error::CompressionError(format!("zstd: {e}")))?;
+            .map_err(|e| Error::InvalidDictionary(DictionaryError::Size(e)))?;
         Self::with_magic_checked(dictionary)
     }
 
     fn with_magic_checked(dictionary: TrainedDictionary) -> Result<Self> {
         if !dictionary.as_bytes().starts_with(&ZSTD_MAGIC) {
-            return Err(Error::CompressionError(
-                "zstd: invalid dictionary magic (expected 0xEC30A437)".into(),
-            ));
+            return Err(Error::InvalidDictionary(DictionaryError::BadMagic));
         }
         Ok(Self(dictionary))
     }
@@ -99,7 +111,7 @@ impl ZstdDictionary {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::CompressionError`] if:
+    /// Returns [`Error::InvalidDictionary`] if:
     /// - `bytes` is empty
     /// - `bytes.len() > MAX_DICT_SIZE`
     /// - the first four bytes are not the zstd dictionary magic `0xEC30A437`
@@ -209,9 +221,8 @@ impl ZstdDictCompressor {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::CompressionError`] if:
-    /// - `samples.len() < 8` (libzstd hard minimum)
-    /// - libzstd training itself fails (e.g., samples too small or too uniform)
+    /// Returns [`Error::InvalidDictionary`] if `samples.len() < 8` (libzstd hard minimum), and
+    /// [`Error::Codec`] if libzstd training itself fails (e.g., samples too small or too uniform).
     ///
     /// # Examples
     ///
@@ -239,14 +250,16 @@ impl ZstdDictCompressor {
     pub fn train(samples: &[Vec<u8>], max_dict_size: usize) -> Result<ZstdDictionary> {
         // Libzstd requires ≥ 8 samples; reject early with a clear message.
         if samples.len() < 8 {
-            return Err(Error::CompressionError(format!(
-                "zstd: insufficient samples ({} provided, need >= 8)",
-                samples.len()
-            )));
+            return Err(Error::InvalidDictionary(
+                DictionaryError::InsufficientSamples {
+                    provided: samples.len(),
+                    required: MIN_TRAIN_SAMPLES,
+                },
+            ));
         }
         let cap = max_dict_size.min(MAX_DICT_SIZE);
         let bytes = zstd::dict::from_samples(samples, cap)
-            .map_err(|e| Error::CompressionError(format!("zstd: train: {e}")))?;
+            .map_err(|e| zstd_error(CodecOperation::Train, e))?;
         // Defence-in-depth: re-check even if libzstd honoured the size cap.
         ZstdDictionary::new_checked(bytes)
     }
@@ -255,7 +268,7 @@ impl ZstdDictCompressor {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::CompressionError`] on libzstd failure.
+    /// Returns [`Error::Codec`] on libzstd failure.
     ///
     /// # Examples
     ///
@@ -282,7 +295,7 @@ impl ZstdDictCompressor {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::CompressionError`] on libzstd failure.
+    /// Returns [`Error::Codec`] on libzstd failure.
     ///
     /// # Examples
     ///
@@ -302,10 +315,10 @@ impl ZstdDictCompressor {
     pub fn compress_with_level(data: &[u8], dict: &ZstdDictionary, level: i32) -> Result<Vec<u8>> {
         // TODO(#144 follow-up): per-session compressor cache once benchmarks justify it.
         let mut compressor = zstd::bulk::Compressor::with_dictionary(level, dict.as_bytes())
-            .map_err(|e| Error::CompressionError(format!("zstd: compressor init: {e}")))?;
+            .map_err(|e| zstd_error(CodecOperation::Compress, e))?;
         compressor
             .compress(data)
-            .map_err(|e| Error::CompressionError(format!("zstd: compress: {e}")))
+            .map_err(|e| zstd_error(CodecOperation::Compress, e))
     }
 
     /// Decompress `data` using the dictionary, capping output at `max_output` bytes.
@@ -317,7 +330,7 @@ impl ZstdDictCompressor {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::CompressionError`] on libzstd failure.
+    /// Returns [`Error::Codec`] on libzstd failure.
     ///
     /// # Examples
     ///
@@ -338,10 +351,10 @@ impl ZstdDictCompressor {
     /// ```
     pub fn decompress(data: &[u8], dict: &ZstdDictionary, max_output: usize) -> Result<Vec<u8>> {
         let mut decompressor = zstd::bulk::Decompressor::with_dictionary(dict.as_bytes())
-            .map_err(|e| Error::CompressionError(format!("zstd: decompressor init: {e}")))?;
+            .map_err(|e| zstd_error(CodecOperation::Decompress, e))?;
         decompressor
             .decompress(data, max_output)
-            .map_err(|e| Error::CompressionError(format!("zstd: decompress: {e}")))
+            .map_err(|e| zstd_error(CodecOperation::Decompress, e))
     }
 }
 
@@ -384,10 +397,15 @@ mod tests {
     fn test_train_insufficient_samples_error() {
         let samples = make_samples(3);
         let err = ZstdDictCompressor::train(&samples, MAX_DICT_SIZE).unwrap_err();
-        let msg = err.to_string();
         assert!(
-            msg.contains("insufficient samples"),
-            "error should mention insufficient samples: {msg}"
+            matches!(
+                err,
+                Error::InvalidDictionary(DictionaryError::InsufficientSamples {
+                    provided: 3,
+                    required: 8
+                })
+            ),
+            "{err:?}"
         );
     }
 

@@ -15,7 +15,7 @@ status: moc
 > [!abstract]
 > Map of Content for all PJS specifications. Specs 001-037 were originally written as issue-driven specs and were re-verified against the code on 2026-11-15; specs 038-079 document existing functionality as built (living specs). Status values: `implemented`, `partial`, `draft`, `obsolete`.
 
-Counts across 79 spec folders: 53 implemented, 21 partial, 0 draft, 5 obsolete.
+Counts across 79 spec folders: 54 implemented, 20 partial, 0 draft, 5 obsolete.
 
 ## Project Foundation
 
@@ -102,7 +102,7 @@ Counts across 79 spec folders: 53 implemented, 21 partial, 0 draft, 5 obsolete.
 | 063 | [[063-http-streaming-negotiation/spec\|HTTP frame streaming and `Accept` negotiation]] | implemented | P2 | #511 |
 | 064 | [[064-http-axum-extension/spec\|`PjsExtension`: bolt-on PJS routes for existing axum apps]] | partial | P3 |  |
 | 065 | [[065-http-prometheus-metrics/spec\|Prometheus `/metrics` endpoint]] | partial | P3 |  |
-| 066 | [[066-websocket-server-transport/spec\|WebSocket server transport: upgrade, ownership, caps and TTL]] | partial | P2 |  |
+| 066 | [[066-websocket-server-transport/spec\|WebSocket server transport: upgrade, ownership, caps and TTL]] | implemented | P2 |  |
 | 067 | [[067-websocket-wire-protocol/spec\|WebSocket wire protocol (`WsMessage`)]] | implemented | P2 |  |
 | 068 | [[068-websocket-client/spec\|`PjsWebSocketClient`: client sessions, caps and TTL]] | partial | P2 |  |
 | 069 | [[069-transport-features-and-limits/spec\|Transport feature flags and limits catalog]] | implemented | P3 |  |
@@ -154,6 +154,5 @@ Specs whose work is not complete (`draft` or `partial`); see each Verification c
 | 061 | [[061-http-middleware-stack/spec\|HTTP middleware stack: layers, rate limiting, auth, security headers]] | partial |
 | 064 | [[064-http-axum-extension/spec\|`PjsExtension`: bolt-on PJS routes for existing axum apps]] | partial |
 | 065 | [[065-http-prometheus-metrics/spec\|Prometheus `/metrics` endpoint]] | partial |
-| 066 | [[066-websocket-server-transport/spec\|WebSocket server transport: upgrade, ownership, caps and TTL]] | partial |
 | 068 | [[068-websocket-client/spec\|`PjsWebSocketClient`: client sessions, caps and TTL]] | partial |
 | 073 | [[073-js-client-core/spec\|TypeScript client core (client, transports, reconstruction)]] | partial |
