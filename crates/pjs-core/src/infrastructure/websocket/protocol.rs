@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
 
+/// `Error` code the server sends when a session id is already live on the connection.
+#[cfg(feature = "websocket-client")]
+pub(crate) const CODE_CONFLICT: u16 = 409;
+
 /// Default deadline for a single outbound WebSocket sink write.
 ///
 /// Writing to the sink blocks until the peer's TCP receive buffer drains;

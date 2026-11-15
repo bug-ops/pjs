@@ -8,7 +8,8 @@ use crate::{
     domain::SessionId,
     infrastructure::bounded_channel::{ByteBoundedSender, Envelope, byte_bounded_channel},
 };
-use futures::StreamExt;
+use futures::{Sink, Stream, StreamExt};
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -19,17 +20,18 @@ use std::{
 use tokio::sync::{RwLock, mpsc};
 use tokio_tungstenite::{
     connect_async_with_config,
-    tungstenite::{Message, protocol::WebSocketConfig},
+    tungstenite::{Error as WsError, Message, protocol::WebSocketConfig},
 };
 use tracing::{debug, error, info, warn};
 
+use super::protocol::CODE_CONFLICT;
 use crate::security::rate_limit::DEFAULT_MAX_INBOUND_FRAME_SIZE;
 use url::Url;
 
 /// Capacity of the client's outgoing message channel.
 ///
 /// Bounds how many outgoing messages (stream requests, acks, pongs) can
-/// queue while `send_task` catches up. This is a message-count bound only;
+/// queue while the send half of the connection catches up. This is a message-count bound only;
 /// [`MAX_QUEUED_MESSAGE_BYTES`] additionally bounds cumulative queued
 /// bytes.
 const MESSAGE_QUEUE_CAPACITY: usize = 1000;
@@ -48,7 +50,7 @@ const DEFAULT_MAX_SESSIONS: NonZeroUsize = NonZeroUsize::new(1024).unwrap();
 const DEFAULT_SESSION_IDLE_TTL: Duration = Duration::from_secs(300);
 
 /// Default cap, in bytes, on the data reconstructed for a single session.
-const DEFAULT_MAX_SESSION_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_MAX_SESSION_BYTES: NonZeroUsize = NonZeroUsize::new(16 * 1024 * 1024).unwrap();
 
 /// How long a client session may go without receiving data before it expires.
 ///
@@ -123,6 +125,9 @@ pub struct WebSocketClientConfig {
     pub max_frame_size: usize,
     /// Maximum number of sessions tracked at once.
     ///
+    /// Together with [`max_session_bytes`](Self::max_session_bytes) this bounds
+    /// client memory; the default is 1024 sessions of up to 16 MiB each.
+    ///
     /// When the limit is reached, a new request first drops expired sessions,
     /// then evicts the incomplete session that has been idle the longest (it
     /// stops receiving frames). Completed sessions are never evicted, so a
@@ -139,8 +144,12 @@ pub struct WebSocketClientConfig {
     pub session_idle_ttl: SessionIdleTtl,
     /// Maximum size in bytes of the data reconstructed for one session.
     ///
-    /// A frame that would exceed it is rejected and its session is dropped.
-    pub max_session_bytes: usize,
+    /// The size is measured as serialized JSON, not as heap usage: a
+    /// `serde_json::Value` made of many small numbers can occupy up to about
+    /// 16 times more memory than its serialized form, so the worst-case
+    /// footprint is `max_sessions` x `max_session_bytes` x ~16. A frame that
+    /// would exceed the limit is rejected and its session is dropped.
+    pub max_session_bytes: NonZeroUsize,
 }
 
 impl Default for WebSocketClientConfig {
@@ -169,11 +178,49 @@ pub struct PjsWebSocketClient {
     config: WebSocketClientConfig,
     sessions: ClientSessions,
     message_tx: ByteBoundedSender<String>,
-    message_rx: Arc<RwLock<Option<mpsc::Receiver<Envelope<String>>>>>,
+    message_rx: ReceiverSlot,
     write_timeout: Duration,
 }
 
 type ClientSessions = Arc<RwLock<HashMap<SessionId, ClientStreamSession>>>;
+
+type ReceiverSlot = Arc<Mutex<Option<mpsc::Receiver<Envelope<String>>>>>;
+
+/// Exclusive use of the outgoing message receiver for one connection.
+///
+/// Returns the receiver to its slot on drop, so queued messages survive the
+/// connection and the next `connect` can send them.
+struct ReceiverLease {
+    slot: ReceiverSlot,
+    receiver: Option<mpsc::Receiver<Envelope<String>>>,
+}
+
+impl ReceiverLease {
+    fn acquire(slot: &ReceiverSlot) -> PjsResult<Self> {
+        let receiver = slot
+            .lock()
+            .take()
+            .ok_or_else(|| PjsError::ClientError("Client already connected".to_string()))?;
+        Ok(Self {
+            slot: Arc::clone(slot),
+            receiver: Some(receiver),
+        })
+    }
+
+    fn receiver_mut(&mut self) -> PjsResult<&mut mpsc::Receiver<Envelope<String>>> {
+        self.receiver
+            .as_mut()
+            .ok_or_else(|| PjsError::ClientError("Receiver lease already released".to_string()))
+    }
+}
+
+impl Drop for ReceiverLease {
+    fn drop(&mut self) {
+        if let Some(receiver) = self.receiver.take() {
+            *self.slot.lock() = Some(receiver);
+        }
+    }
+}
 
 /// Client-side stream session
 #[derive(Debug)]
@@ -358,6 +405,99 @@ fn reserve_session_slot(
     Ok(())
 }
 
+/// Writes queued outgoing messages to the socket until the queue closes.
+///
+/// Messages are already serialized when queued (see `request_stream` and
+/// `handle_incoming_message`), so the byte-budget accounting there matches the
+/// bytes held here; `split` keeps the budget charged until the write completes.
+///
+/// # Errors
+///
+/// Returns [`PjsError::ConnectionFailed`] when a write fails or times out.
+async fn send_loop<W>(
+    mut write: W,
+    outgoing: &mut mpsc::Receiver<Envelope<String>>,
+    write_timeout: Duration,
+) -> PjsResult<()>
+where
+    W: Sink<Message, Error = WsError> + Unpin,
+{
+    while let Some(envelope) = outgoing.recv().await {
+        let (json_str, _budget_permit) = envelope.split();
+        if let Err(e) = super::send_with_write_timeout(
+            &mut write,
+            Message::Text(json_str.into()),
+            write_timeout,
+        )
+        .await
+        {
+            error!("Failed to send message: {}", e);
+            return Err(PjsError::ConnectionFailed(e));
+        }
+    }
+    Ok(())
+}
+
+/// Reads server messages and applies them until the server closes the socket.
+///
+/// # Errors
+///
+/// Returns [`PjsError::ConnectionFailed`] on a transport error.
+async fn receive_loop<R>(
+    mut read: R,
+    sessions: ClientSessions,
+    message_tx: ByteBoundedSender<String>,
+    config: WebSocketClientConfig,
+) -> PjsResult<()>
+where
+    R: Stream<Item = Result<Message, WsError>> + Unpin,
+{
+    while let Some(msg) = read.next().await {
+        match msg {
+            Ok(Message::Text(text)) => match serde_json::from_str::<WsMessage>(&text) {
+                Ok(ws_message) => {
+                    if let Err(e) = PjsWebSocketClient::handle_incoming_message(
+                        sessions.clone(),
+                        message_tx.clone(),
+                        config,
+                        ws_message,
+                    )
+                    .await
+                    {
+                        error!("Failed to handle incoming message: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to parse incoming message: {:?}", e);
+                }
+            },
+            Ok(Message::Binary(data)) => {
+                debug!("Received binary data: {} bytes", data.len());
+            }
+            Ok(Message::Ping(_data)) => {
+                debug!("Received ping, sending pong");
+                // Pong is handled automatically by tungstenite
+            }
+            Ok(Message::Pong(_)) => {
+                debug!("Received pong");
+            }
+            Ok(Message::Close(_)) => {
+                info!("Server closed connection");
+                break;
+            }
+            Ok(Message::Frame(_)) => {
+                // Raw frame - usually handled internally by tungstenite
+                debug!("Received raw frame");
+            }
+            Err(e) => {
+                error!("WebSocket error: {}", e);
+                return Err(PjsError::ConnectionFailed(e.to_string()));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl PjsWebSocketClient {
     /// Create new WebSocket client
     pub fn new(url: impl AsRef<str>) -> PjsResult<Self> {
@@ -371,7 +511,7 @@ impl PjsWebSocketClient {
             config: WebSocketClientConfig::default(),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             message_tx,
-            message_rx: Arc::new(RwLock::new(Some(message_rx))),
+            message_rx: Arc::new(Mutex::new(Some(message_rx))),
             write_timeout: super::WRITE_TIMEOUT,
         })
     }
@@ -400,12 +540,12 @@ impl PjsWebSocketClient {
     }
 
     /// Overrides the deadline for a single outbound WebSocket sink write,
-    /// used by the `send_task` spawned in [`Self::connect`].
+    /// used by the send half of [`Self::connect`].
     ///
     /// Defaults to `infrastructure::websocket::WRITE_TIMEOUT` (10s) — see
     /// its doc for the rationale and the tradeoff it implies for large
     /// frames sent to slow clients. Pair a shorter value with a
-    /// resource-constrained deployment where freeing a wedged send task
+    /// resource-constrained deployment where freeing a wedged connection
     /// quickly matters more than absorbing network jitter (mirroring
     /// `RateLimitConfig::low_resource`'s tightened `write_timeout` on the
     /// server side); pair a longer value with a deployment that expects
@@ -434,14 +574,55 @@ impl PjsWebSocketClient {
         self
     }
 
-    /// Connect to WebSocket server and start message handling.
+    /// Drives one connection to the server until it ends.
+    ///
+    /// The returned future completes only when the connection is over: the
+    /// server closed the socket (`Ok(())`), or a read or write failed. It never
+    /// returns once the handshake succeeds while the server stays up, so
+    /// `connect` must run in its own task (the client is not `Clone`; share it
+    /// through an [`Arc`]) while other tasks call
+    /// [`request_stream`](Self::request_stream). Dropping the future closes the
+    /// connection.
+    ///
+    /// Both halves run inside this future, so nothing outlives it. The client
+    /// can connect again afterwards; messages queued in between (for example
+    /// by `request_stream`) are sent on the next connection. Only one
+    /// connection can be active at a time.
     ///
     /// # Errors
     ///
-    /// Returns an error if the handshake fails or the connection is aborted
-    /// by a transport error, including a message or frame exceeding the
-    /// configured [`WebSocketClientConfig`] caps.
+    /// Returns [`PjsError::ClientError`] if a connection is already active,
+    /// [`PjsError::ConnectionFailed`] if the handshake fails, a write fails or
+    /// times out, or the connection is aborted by a transport error (including
+    /// a message or frame exceeding the configured [`WebSocketClientConfig`]
+    /// caps).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use pjson_rs::infrastructure::websocket::PjsWebSocketClient;
+    /// use serde_json::json;
+    /// use std::sync::Arc;
+    ///
+    /// # async fn run() -> pjson_rs::Result<()> {
+    /// let client = Arc::new(PjsWebSocketClient::new("ws://127.0.0.1:3001/ws")?);
+    ///
+    /// let connection = {
+    ///     let client = Arc::clone(&client);
+    ///     tokio::spawn(async move { client.connect().await })
+    /// };
+    ///
+    /// let session = client.request_stream(json!({"hello": "world"}), None).await?;
+    /// # let _ = session;
+    ///
+    /// // Completes when the server closes the connection.
+    /// connection.await.expect("connection task panicked")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(&self) -> PjsResult<()> {
+        let mut lease = ReceiverLease::acquire(&self.message_rx)?;
+
         info!("Connecting to WebSocket server: {}", self.url);
 
         let (ws_stream, _) = connect_async_with_config(
@@ -454,102 +635,21 @@ impl PjsWebSocketClient {
 
         info!("WebSocket connection established");
 
-        let (mut write, mut read) = ws_stream.split();
+        let (write, read) = ws_stream.split();
 
-        // Take the receiver (can only be done once)
-        let mut message_rx = self
-            .message_rx
-            .write()
-            .await
-            .take()
-            .ok_or_else(|| PjsError::ClientError("Client already connected".to_string()))?;
-
-        // Spawn task to send outgoing messages. Messages are already
-        // serialized at the point they were queued (see `request_stream`
-        // and `handle_incoming_message`), so the byte-budget accounting
-        // there matches the bytes actually held in memory here. `split`
-        // (rather than `into_inner`) keeps the byte budget charged until
-        // the write actually completes, not just until the item leaves
-        // the channel.
-        let write_timeout = self.write_timeout;
-        let send_task = tokio::spawn(async move {
-            while let Some(envelope) = message_rx.recv().await {
-                let (json_str, _budget_permit) = envelope.split();
-                if let Err(e) = super::send_with_write_timeout(
-                    &mut write,
-                    Message::Text(json_str.into()),
-                    write_timeout,
-                )
-                .await
-                {
-                    error!("Failed to send message: {}", e);
-                    break;
-                }
-            }
-        });
-
-        // Handle incoming messages
-        let sessions = self.sessions.clone();
-        let message_tx = self.message_tx.clone();
-        let config = self.config;
-        let receive_task = tokio::spawn(async move {
-            while let Some(msg) = read.next().await {
-                match msg {
-                    Ok(Message::Text(text)) => match serde_json::from_str::<WsMessage>(&text) {
-                        Ok(ws_message) => {
-                            if let Err(e) = Self::handle_incoming_message(
-                                sessions.clone(),
-                                message_tx.clone(),
-                                config,
-                                ws_message,
-                            )
-                            .await
-                            {
-                                error!("Failed to handle incoming message: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to parse incoming message: {:?}", e);
-                        }
-                    },
-                    Ok(Message::Binary(data)) => {
-                        debug!("Received binary data: {} bytes", data.len());
-                    }
-                    Ok(Message::Ping(_data)) => {
-                        debug!("Received ping, sending pong");
-                        // Pong is handled automatically by tungstenite
-                    }
-                    Ok(Message::Pong(_)) => {
-                        debug!("Received pong");
-                    }
-                    Ok(Message::Close(_)) => {
-                        info!("Server closed connection");
-                        break;
-                    }
-                    Ok(Message::Frame(_)) => {
-                        // Raw frame - usually handled internally by tungstenite
-                        debug!("Received raw frame");
-                    }
-                    Err(e) => {
-                        error!("WebSocket error: {}", e);
-                        return Err(PjsError::ConnectionFailed(e.to_string()));
-                    }
-                }
-            }
-            Ok(())
-        });
-
-        // Wait for either task to complete
         let outcome = tokio::select! {
-            _ = send_task => {
-                debug!("Send task completed");
-                Ok(())
+            result = send_loop(write, lease.receiver_mut()?, self.write_timeout) => {
+                debug!("Send half finished");
+                result
             }
-            result = receive_task => {
-                debug!("Receive task completed");
-                result.unwrap_or_else(|e| {
-                    Err(PjsError::ClientError(format!("Receive task failed: {e}")))
-                })
+            result = receive_loop(
+                read,
+                self.sessions.clone(),
+                self.message_tx.clone(),
+                self.config,
+            ) => {
+                debug!("Receive half finished");
+                result
             }
         };
 
@@ -746,7 +846,8 @@ impl PjsWebSocketClient {
                     Self::drop_if_expired(&mut sessions, &session_id, config, processing_start);
                     match sessions.get_mut(&session_id) {
                         Some(session) if !session.is_complete => {
-                            if let Err(e) = session.apply_frame(&payload, config.max_session_bytes)
+                            if let Err(e) =
+                                session.apply_frame(&payload, config.max_session_bytes.get())
                             {
                                 sessions.remove(&session_id);
                                 return Err(e);
@@ -799,9 +900,13 @@ impl PjsWebSocketClient {
                 error,
                 code,
             } => {
+                // A conflict means the server still streams the existing live
+                // session under this id, so the client keeps tracking it.
                 let removed = match session_id {
-                    Some(id) => sessions.write().await.remove(&id).is_some(),
-                    None => false,
+                    Some(id) if code != CODE_CONFLICT => {
+                        sessions.write().await.remove(&id).is_some()
+                    }
+                    _ => false,
                 };
                 error!(
                     "Received error from server: session={:?}, error={:?}, code={}, session_removed={}",
@@ -1113,7 +1218,7 @@ mod tests {
     #[tokio::test]
     async fn test_request_stream_failed_send_does_not_leak_session() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
-        drop(client.message_rx.write().await.take());
+        drop(client.message_rx.lock().take());
 
         assert!(client.request_stream(json!({}), None).await.is_err());
         assert!(client.sessions.read().await.is_empty());
@@ -1204,7 +1309,7 @@ mod tests {
         let sessions = sessions_with(id).await;
         let (tx, _rx) = control_channel();
         let config = WebSocketClientConfig {
-            max_session_bytes: 64,
+            max_session_bytes: NonZeroUsize::new(64).unwrap(),
             ..WebSocketClientConfig::default()
         };
 
@@ -1394,7 +1499,7 @@ mod tests {
             WsMessage::Error {
                 session_id: Some(id),
                 error: "rejected".to_string(),
-                code: 409,
+                code: 400,
             },
         )
         .await
@@ -1403,6 +1508,54 @@ mod tests {
         let guard = sessions.read().await;
         assert!(!guard.contains_key(&id));
         assert!(guard.contains_key(&other));
+    }
+
+    #[tokio::test]
+    async fn test_server_conflict_error_keeps_the_live_session() {
+        let id = SessionId::new();
+        let sessions = sessions_with(id).await;
+        let (tx, _rx) = control_channel();
+
+        deliver(
+            &sessions,
+            &tx,
+            WebSocketClientConfig::default(),
+            WsMessage::Error {
+                session_id: Some(id),
+                error: "duplicate".to_string(),
+                code: CODE_CONFLICT,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(sessions.read().await.contains_key(&id));
+    }
+
+    #[tokio::test]
+    async fn test_send_loop_reports_write_failure_as_connection_failed() {
+        let (tx, mut rx) = byte_bounded_channel(4, 1024);
+        tx.send("hello".to_string(), 5).await.unwrap();
+        let failing_sink = Box::pin(futures::sink::unfold((), |(), _message: Message| async {
+            Err::<(), WsError>(WsError::ConnectionClosed)
+        }));
+
+        let result = send_loop(failing_sink, &mut rx, Duration::from_secs(1)).await;
+
+        assert!(matches!(result, Err(PjsError::ConnectionFailed(_))));
+    }
+
+    #[test]
+    fn test_receiver_lease_is_exclusive_and_returns_receiver_on_drop() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+
+        let lease = ReceiverLease::acquire(&client.message_rx).unwrap();
+        assert!(matches!(
+            ReceiverLease::acquire(&client.message_rx),
+            Err(PjsError::ClientError(_))
+        ));
+        drop(lease);
+        assert!(ReceiverLease::acquire(&client.message_rx).is_ok());
     }
 
     #[derive(Clone, Default)]
