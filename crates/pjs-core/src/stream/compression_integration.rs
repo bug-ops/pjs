@@ -6,7 +6,7 @@
 use crate::{
     compression::{
         CompressedData, CompressionStrategy, DICT_SENTINEL, MAX_DELTA_ARRAY_SIZE, MAX_RLE_COUNT,
-        SchemaCompressor, as_integer,
+        SchemaCompressor, as_integer, signed_difference,
     },
     domain::{DomainError, DomainResult},
     stream::{Priority, StreamFrame},
@@ -91,8 +91,19 @@ pub struct CompressionStats {
     pub total_output_bytes: usize,
     /// Number of frames processed
     pub frames_processed: u32,
-    /// Compression ratio by priority level
-    pub priority_ratios: HashMap<u8, f32>,
+    /// Input and output byte totals per priority level
+    pub per_priority: HashMap<Priority, PriorityTotals>,
+}
+
+/// Cumulative input and output bytes of every frame processed at one priority level.
+///
+/// Counters saturate instead of overflowing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PriorityTotals {
+    /// Bytes before compression
+    pub input_bytes: usize,
+    /// Bytes after compression
+    pub output_bytes: usize,
 }
 
 /// Compressed stream frame with metadata
@@ -111,10 +122,8 @@ pub struct CompressedFrame {
 pub struct DecompressionMetadata {
     /// Compression strategy used
     pub strategy: CompressionStrategy,
-    /// Dictionary indices mapping
-    pub dictionary_map: HashMap<u16, String>,
-    /// Delta base values for numeric decompression
-    pub delta_bases: HashMap<String, f64>,
+    /// Dictionary entries; index `i` is the string at position `i`
+    pub dictionary: Vec<String>,
 }
 
 impl StreamingCompressor {
@@ -159,7 +168,7 @@ impl StreamingCompressor {
         );
 
         // Create decompression metadata
-        let decompression_metadata = self.create_decompression_metadata(&compressed_data)?;
+        let decompression_metadata = Self::create_decompression_metadata(&compressed_data);
 
         Ok(CompressedFrame {
             frame,
@@ -210,50 +219,22 @@ impl StreamingCompressor {
 
     /// Update compression statistics
     fn update_stats(&mut self, priority: Priority, original_size: usize, compressed_size: usize) {
-        self.stats.total_input_bytes += original_size;
-        self.stats.total_output_bytes += compressed_size;
-        self.stats.frames_processed += 1;
+        let stats = &mut self.stats;
+        stats.total_input_bytes = stats.total_input_bytes.saturating_add(original_size);
+        stats.total_output_bytes = stats.total_output_bytes.saturating_add(compressed_size);
+        stats.frames_processed = stats.frames_processed.saturating_add(1);
 
-        let ratio = if original_size > 0 {
-            compressed_size as f32 / original_size as f32
-        } else {
-            1.0
-        };
-
-        self.stats.priority_ratios.insert(priority.value(), ratio);
+        let totals = stats.per_priority.entry(priority).or_default();
+        totals.input_bytes = totals.input_bytes.saturating_add(original_size);
+        totals.output_bytes = totals.output_bytes.saturating_add(compressed_size);
     }
 
     /// Create decompression metadata for client
-    fn create_decompression_metadata(
-        &self,
-        compressed_data: &CompressedData,
-    ) -> DomainResult<DecompressionMetadata> {
-        let mut dictionary_map = HashMap::new();
-        let mut delta_bases = HashMap::new();
-
-        for (key, value) in &compressed_data.compression_metadata {
-            if key == "dict" {
-                if let Some(entries) = value.as_array() {
-                    for (index, entry) in entries.iter().enumerate() {
-                        if let (Ok(index), Some(string_val)) =
-                            (u16::try_from(index), entry.as_str())
-                        {
-                            dictionary_map.insert(index, string_val.to_string());
-                        }
-                    }
-                }
-            } else if let Some(path) = key.strip_prefix("base_")
-                && let Some(num) = value.as_f64()
-            {
-                delta_bases.insert(path.to_string(), num);
-            }
-        }
-
-        Ok(DecompressionMetadata {
+    fn create_decompression_metadata(compressed_data: &CompressedData) -> DecompressionMetadata {
+        DecompressionMetadata {
             strategy: compressed_data.strategy.clone(),
-            dictionary_map,
-            delta_bases,
-        })
+            dictionary: compressed_data.dictionary.clone().unwrap_or_default(),
+        }
     }
 }
 
@@ -266,14 +247,20 @@ impl CompressionStats {
         self.total_output_bytes as f32 / self.total_input_bytes as f32
     }
 
-    /// Get compression ratio for specific priority level
-    pub fn priority_compression_ratio(&self, priority: u8) -> f32 {
-        self.priority_ratios.get(&priority).copied().unwrap_or(1.0)
+    /// Aggregate compression ratio (output bytes / input bytes) over every frame of
+    /// `priority`, or `None` when no frame of that priority was processed. A priority whose
+    /// frames all serialized to zero bytes reports `1.0`.
+    pub fn priority_compression_ratio(&self, priority: Priority) -> Option<f64> {
+        let totals = self.per_priority.get(&priority)?;
+        if totals.input_bytes == 0 {
+            return Some(1.0);
+        }
+        Some(totals.output_bytes as f64 / totals.input_bytes as f64)
     }
 
     /// Calculate bytes saved
     pub fn bytes_saved(&self) -> isize {
-        self.total_input_bytes as isize - self.total_output_bytes as isize
+        signed_difference(self.total_input_bytes, self.total_output_bytes)
     }
 
     /// Calculate percentage saved
@@ -346,7 +333,7 @@ impl StreamingDecompressor {
             CompressionStrategy::None => Ok(compressed_data.data.clone()),
 
             CompressionStrategy::Dictionary { .. } => {
-                self.decompress_dictionary(&compressed_data.data, &metadata.dictionary_map)
+                self.decompress_dictionary(&compressed_data.data, &metadata.dictionary)
             }
 
             CompressionStrategy::Delta => self.decompress_delta(&compressed_data.data),
@@ -356,7 +343,7 @@ impl StreamingDecompressor {
             CompressionStrategy::Hybrid { .. } => {
                 // Apply decompression in reverse order: delta first, then dictionary
                 let delta_decompressed = self.decompress_delta(&compressed_data.data)?;
-                self.decompress_dictionary(&delta_decompressed, &metadata.dictionary_map)
+                self.decompress_dictionary(&delta_decompressed, &metadata.dictionary)
             }
         }
     }
@@ -367,7 +354,7 @@ impl StreamingDecompressor {
     /// [`crate::compression::SchemaCompressor`]'s encoder for the marker format) — no
     /// positional metadata is needed, since a substitution is self-describing in the string
     /// itself. `dictionary` is always the *current frame's own* dictionary (its
-    /// `DecompressionMetadata::dictionary_map`), never state carried over
+    /// `DecompressionMetadata::dictionary`), never state carried over
     /// from earlier frames — every frame carries its complete dictionary, so a marker must
     /// only ever resolve against what that same frame actually transmitted. Bounding lookups
     /// to a stale, larger dictionary from an earlier frame would let a corrupted or truncated
@@ -375,7 +362,7 @@ impl StreamingDecompressor {
     fn decompress_dictionary(
         &self,
         data: &JsonValue,
-        dictionary: &HashMap<u16, String>,
+        dictionary: &[String],
     ) -> DomainResult<JsonValue> {
         Self::expand_dictionary(
             data,
@@ -386,7 +373,7 @@ impl StreamingDecompressor {
 
     fn expand_dictionary(
         data: &JsonValue,
-        dictionary: &HashMap<u16, String>,
+        dictionary: &[String],
         budget: &mut ByteBudget,
     ) -> DomainResult<JsonValue> {
         match data {
@@ -424,7 +411,7 @@ impl StreamingDecompressor {
     /// is a decode error rather than a silent pass-through (issue #333 M7).
     fn decode_dictionary_string(
         s: &str,
-        dictionary: &HashMap<u16, String>,
+        dictionary: &[String],
         budget: &mut ByteBudget,
     ) -> DomainResult<String> {
         let Some(rest) = s.strip_prefix(DICT_SENTINEL) else {
@@ -436,7 +423,7 @@ impl StreamingDecompressor {
         let index: u16 = rest.parse().map_err(|_| {
             DomainError::CompressionError(format!("malformed dictionary marker: {s:?}"))
         })?;
-        let entry = dictionary.get(&index).ok_or_else(|| {
+        let entry = dictionary.get(usize::from(index)).ok_or_else(|| {
             DomainError::CompressionError(format!(
                 "dictionary marker index {index} not found in active dictionary"
             ))
@@ -703,12 +690,11 @@ mod tests {
                 strategy: CompressionStrategy::None,
                 compressed_size: 20,
                 data: json!({"test": "data"}),
-                compression_metadata: HashMap::new(),
+                dictionary: None,
             },
             decompression_metadata: DecompressionMetadata {
                 strategy: CompressionStrategy::None,
-                dictionary_map: HashMap::new(),
-                delta_bases: HashMap::new(),
+                dictionary: Vec::new(),
             },
         };
 
@@ -722,9 +708,7 @@ mod tests {
     #[test]
     fn test_dictionary_decompression() {
         let decompressor = StreamingDecompressor::new();
-        let mut dictionary = HashMap::new();
-        dictionary.insert(0, "hello".to_string());
-        dictionary.insert(1, "world".to_string());
+        let dictionary = vec!["hello".to_string(), "world".to_string()];
 
         // Test with sentinel-escaped dictionary markers
         let compressed = json!({
@@ -1169,12 +1153,11 @@ mod tests {
                 },
                 compressed_size: 20,
                 data: json!({"value": 5.0}), // Delta from base 100
-                compression_metadata: HashMap::new(),
+                dictionary: None,
             },
             decompression_metadata: DecompressionMetadata {
                 strategy: CompressionStrategy::Hybrid { string_dict },
-                dictionary_map: HashMap::new(),
-                delta_bases: HashMap::new(),
+                dictionary: Vec::new(),
             },
         };
 
@@ -1185,9 +1168,7 @@ mod tests {
     #[test]
     fn test_decompress_dictionary_nested_arrays() {
         let decompressor = StreamingDecompressor::new();
-        let mut dictionary = HashMap::new();
-        dictionary.insert(0, "item1".to_string());
-        dictionary.insert(1, "item2".to_string());
+        let dictionary = vec!["item1".to_string(), "item2".to_string()];
 
         let data = json!([["\u{7F}0", "\u{7F}1"], ["\u{7F}1", "\u{7F}0"]]);
         let result = decompressor
@@ -1200,8 +1181,7 @@ mod tests {
     #[test]
     fn test_decompress_dictionary_non_marker_numbers() {
         let decompressor = StreamingDecompressor::new();
-        let mut dictionary = HashMap::new();
-        dictionary.insert(0, "test".to_string());
+        let dictionary = vec!["test".to_string()];
 
         // Plain number, not a sentinel-marker string
         let data = json!({"value": 999});
@@ -1274,12 +1254,11 @@ mod tests {
                 strategy: CompressionStrategy::None,
                 compressed_size: 15,
                 data: json!({"test": "data"}),
-                compression_metadata: HashMap::new(),
+                dictionary: None,
             },
             decompression_metadata: DecompressionMetadata {
                 strategy: CompressionStrategy::None,
-                dictionary_map: HashMap::new(),
-                delta_bases: HashMap::new(),
+                dictionary: Vec::new(),
             },
         };
 
@@ -1381,7 +1360,7 @@ mod tests {
     #[test]
     fn test_decompress_dictionary_expansion_bounded() {
         let decompressor = StreamingDecompressor::new();
-        let dictionary = HashMap::from([(0u16, "y".repeat(1024 * 1024))]);
+        let dictionary = vec!["y".repeat(1024 * 1024)];
         let marker = format!("{DICT_SENTINEL}0");
         let data = JsonValue::Array(vec![json!(marker); 500]);
 
@@ -1395,7 +1374,7 @@ mod tests {
     #[test]
     fn test_decompress_dictionary_expansion_within_budget() {
         let decompressor = StreamingDecompressor::new();
-        let dictionary = HashMap::from([(0u16, "y".repeat(1024))]);
+        let dictionary = vec!["y".repeat(1024)];
         let marker = format!("{DICT_SENTINEL}0");
         let data = JsonValue::Array(vec![json!(marker); 100]);
 
@@ -1487,7 +1466,7 @@ mod tests {
     fn test_decompress_dictionary_with_strings() {
         let decompressor = StreamingDecompressor::new();
         let data = json!({"key": "value", "nested": {"inner": "string"}});
-        let result = decompressor.decompress_dictionary(&data, &HashMap::new());
+        let result = decompressor.decompress_dictionary(&data, &[]);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), data);
     }
@@ -1496,7 +1475,7 @@ mod tests {
     fn test_decompress_dictionary_with_null() {
         let decompressor = StreamingDecompressor::new();
         let data = json!(null);
-        let result = decompressor.decompress_dictionary(&data, &HashMap::new());
+        let result = decompressor.decompress_dictionary(&data, &[]);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), json!(null));
     }
@@ -1505,7 +1484,7 @@ mod tests {
     fn test_decompress_dictionary_with_boolean() {
         let decompressor = StreamingDecompressor::new();
         let data = json!(true);
-        let result = decompressor.decompress_dictionary(&data, &HashMap::new());
+        let result = decompressor.decompress_dictionary(&data, &[]);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), json!(true));
     }
@@ -1514,7 +1493,7 @@ mod tests {
     fn test_decompress_dictionary_with_string() {
         let decompressor = StreamingDecompressor::new();
         let data = json!("plain string");
-        let result = decompressor.decompress_dictionary(&data, &HashMap::new());
+        let result = decompressor.decompress_dictionary(&data, &[]);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), json!("plain string"));
     }
@@ -1587,14 +1566,12 @@ mod tests {
             },
             compressed_size: 10,
             data: json!({"field": "\u{7F}0"}),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         };
-        let mut dictionary_map = HashMap::new();
-        dictionary_map.insert(0, "test".to_string());
+        let dictionary_map = vec!["test".to_string()];
         let metadata = DecompressionMetadata {
             strategy: CompressionStrategy::Dictionary { dictionary: dict },
-            dictionary_map,
-            delta_bases: HashMap::new(),
+            dictionary: dictionary_map,
         };
 
         let result = decompressor.decompress_data(&compressed_data, &metadata);
@@ -1616,12 +1593,11 @@ mod tests {
                     10.0
                 ]
             }),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         };
         let metadata = DecompressionMetadata {
             strategy: CompressionStrategy::Delta,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         };
 
         let result = decompressor.decompress_data(&compressed_data, &metadata);
@@ -1638,12 +1614,11 @@ mod tests {
             data: json!([
                 {"rle_value": "x", "rle_count": 3}
             ]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         };
         let metadata = DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         };
 
         let result = decompressor.decompress_data(&compressed_data, &metadata);
@@ -1666,14 +1641,12 @@ mod tests {
             data: json!({
                 "field": "\u{7F}0"
             }),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         };
-        let mut dictionary_map = HashMap::new();
-        dictionary_map.insert(0, "test".to_string());
+        let dictionary_map = vec!["test".to_string()];
         let metadata = DecompressionMetadata {
             strategy: CompressionStrategy::Hybrid { string_dict },
-            dictionary_map,
-            delta_bases: HashMap::new(),
+            dictionary: dictionary_map,
         };
 
         let result = decompressor.decompress_data(&compressed_data, &metadata);
@@ -1721,8 +1694,8 @@ mod tests {
         assert_eq!(stats.total_input_bytes, 0);
         assert_eq!(stats.total_output_bytes, 10);
         assert_eq!(
-            stats.priority_compression_ratio(Priority::MEDIUM.value()),
-            1.0
+            stats.priority_compression_ratio(Priority::MEDIUM),
+            Some(1.0)
         );
     }
 
@@ -1735,10 +1708,7 @@ mod tests {
         assert_eq!(stats.frames_processed, 1);
         assert_eq!(stats.total_input_bytes, 1000);
         assert_eq!(stats.total_output_bytes, 500);
-        assert_eq!(
-            stats.priority_compression_ratio(Priority::HIGH.value()),
-            0.5
-        );
+        assert_eq!(stats.priority_compression_ratio(Priority::HIGH), Some(0.5));
     }
 
     #[test]
@@ -1769,75 +1739,66 @@ mod tests {
     }
 
     #[test]
-    fn test_create_decompression_metadata_with_dict() {
-        let compressor = StreamingCompressor::new();
-        let mut metadata = HashMap::new();
-        metadata.insert("dict".to_string(), json!(["hello", "world"]));
+    fn test_update_stats_saturates_instead_of_overflowing() {
+        let mut compressor = StreamingCompressor::new();
+        compressor.stats.total_input_bytes = usize::MAX - 1;
+        compressor.stats.total_output_bytes = usize::MAX - 1;
+        compressor.stats.frames_processed = u32::MAX;
+        compressor.stats.per_priority.insert(
+            Priority::HIGH,
+            PriorityTotals {
+                input_bytes: usize::MAX - 1,
+                output_bytes: usize::MAX - 1,
+            },
+        );
 
-        let compressed_data = CompressedData {
-            strategy: CompressionStrategy::None,
-            compressed_size: 10,
-            data: json!({}),
-            compression_metadata: metadata,
-        };
+        compressor.update_stats(Priority::HIGH, 10, 10);
 
-        let result = compressor.create_decompression_metadata(&compressed_data);
-        assert!(result.is_ok());
-        let meta = result.unwrap();
-        assert_eq!(meta.dictionary_map.len(), 2);
-        assert_eq!(meta.dictionary_map.get(&0), Some(&"hello".to_string()));
-        assert_eq!(meta.dictionary_map.get(&1), Some(&"world".to_string()));
+        let stats = compressor.stats();
+        assert_eq!(stats.total_input_bytes, usize::MAX);
+        assert_eq!(stats.total_output_bytes, usize::MAX);
+        assert_eq!(stats.frames_processed, u32::MAX);
+        assert_eq!(
+            stats.per_priority[&Priority::HIGH],
+            PriorityTotals {
+                input_bytes: usize::MAX,
+                output_bytes: usize::MAX,
+            }
+        );
+        assert_eq!(stats.bytes_saved(), 0);
     }
 
     #[test]
-    fn test_create_decompression_metadata_with_delta_bases() {
-        let compressor = StreamingCompressor::new();
-        let mut metadata = HashMap::new();
-        metadata.insert("base_value1".to_string(), json!(100.0));
-        metadata.insert("base_value2".to_string(), json!(200.0));
+    fn test_priority_ratio_aggregates_across_frames() {
+        let mut compressor = StreamingCompressor::new();
+        compressor.update_stats(Priority::HIGH, 100, 50);
+        compressor.update_stats(Priority::HIGH, 100, 100);
 
-        let compressed_data = CompressedData {
-            strategy: CompressionStrategy::None,
-            compressed_size: 10,
-            data: json!({}),
-            compression_metadata: metadata,
-        };
-
-        let result = compressor.create_decompression_metadata(&compressed_data);
-        assert!(result.is_ok());
-        let meta = result.unwrap();
-        assert_eq!(meta.delta_bases.len(), 2);
-        assert_eq!(meta.delta_bases.get("value1"), Some(&100.0));
-        assert_eq!(meta.delta_bases.get("value2"), Some(&200.0));
+        assert_eq!(
+            compressor
+                .stats()
+                .priority_compression_ratio(Priority::HIGH),
+            Some(0.75)
+        );
     }
 
     #[test]
-    fn test_create_decompression_metadata_skips_non_string_dict_entries() {
-        let compressor = StreamingCompressor::new();
-        let mut metadata = HashMap::new();
-        metadata.insert("dict".to_string(), json!(["valid", 123, "also_valid"]));
-
+    fn test_create_decompression_metadata_carries_dictionary() {
         let compressed_data = CompressedData {
             strategy: CompressionStrategy::None,
             compressed_size: 10,
             data: json!({}),
-            compression_metadata: metadata,
+            dictionary: Some(vec!["hello".to_string(), "world".to_string()]),
         };
 
-        let result = compressor.create_decompression_metadata(&compressed_data);
-        assert!(result.is_ok());
-        let meta = result.unwrap();
-        // Only the string entries should be parsed; the non-string entry at index 1 is skipped.
-        assert_eq!(meta.dictionary_map.len(), 2);
-        assert_eq!(meta.dictionary_map.get(&0), Some(&"valid".to_string()));
-        assert_eq!(meta.dictionary_map.get(&2), Some(&"also_valid".to_string()));
+        let meta = StreamingCompressor::create_decompression_metadata(&compressed_data);
+        assert_eq!(meta.dictionary, vec!["hello", "world"]);
     }
 
     #[test]
     fn test_decompress_dictionary_leaves_float_untouched() {
         let decompressor = StreamingDecompressor::new();
-        let mut dictionary = HashMap::new();
-        dictionary.insert(0, "test".to_string());
+        let dictionary = vec!["test".to_string()];
 
         // Only JSON strings are ever substitution candidates, so a float is untouched
         // regardless of its value (issue #333 C1: closed structurally, not by narrowing).
@@ -1850,8 +1811,7 @@ mod tests {
     #[test]
     fn test_decompress_dictionary_leaves_negative_number_untouched() {
         let decompressor = StreamingDecompressor::new();
-        let mut dictionary = HashMap::new();
-        dictionary.insert(0, "test".to_string());
+        let dictionary = vec!["test".to_string()];
 
         let data = json!({"value": -1});
         let result = decompressor.decompress_dictionary(&data, &dictionary);
@@ -2000,7 +1960,7 @@ mod tests {
     #[test]
     fn test_decompress_frame_does_not_retain_dictionary_across_frames() {
         let mut decompressor = StreamingDecompressor::new();
-        let frame_with = |dictionary_map: HashMap<u16, String>| CompressedFrame {
+        let frame_with = |dictionary: Vec<String>| CompressedFrame {
             frame: StreamFrame {
                 data: json!({}),
                 priority: Priority::MEDIUM,
@@ -2012,25 +1972,24 @@ mod tests {
                 },
                 compressed_size: 1,
                 data: json!({"k": "\u{7F}0"}),
-                compression_metadata: HashMap::new(),
+                dictionary: None,
             },
             decompression_metadata: DecompressionMetadata {
                 strategy: CompressionStrategy::Dictionary {
                     dictionary: HashMap::new(),
                 },
-                dictionary_map,
-                delta_bases: HashMap::new(),
+                dictionary,
             },
         };
 
         let first = decompressor
-            .decompress_frame(frame_with(HashMap::from([(0, "hello".to_string())])))
+            .decompress_frame(frame_with(vec!["hello".to_string()]))
             .unwrap();
         assert_eq!(first.data, json!({"k": "hello"}));
 
         assert!(
             decompressor
-                .decompress_frame(frame_with(HashMap::new()))
+                .decompress_frame(frame_with(Vec::new()))
                 .is_err()
         );
     }
@@ -2041,7 +2000,7 @@ mod tests {
         // marker and must error, not silently pass through (issue #333 M7).
         let result = StreamingDecompressor::decode_dictionary_string(
             "\u{7F}not_a_number",
-            &HashMap::new(),
+            &[],
             &mut ByteBudget::new(MAX_DECOMPRESSED_SIZE),
         );
         assert!(result.is_err());
@@ -2051,7 +2010,7 @@ mod tests {
     fn test_decode_dictionary_string_passes_through_non_sentinel() {
         let result = StreamingDecompressor::decode_dictionary_string(
             "plain string",
-            &HashMap::new(),
+            &[],
             &mut ByteBudget::new(MAX_DECOMPRESSED_SIZE),
         );
         assert_eq!(result.unwrap(), "plain string");

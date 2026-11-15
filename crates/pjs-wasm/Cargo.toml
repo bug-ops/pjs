@@ -2,6 +2,7 @@
 name = "pjs-wasm"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 license = { workspace = true }
 description = "WebAssembly bindings for PJS - Priority JSON Streaming"
 repository = { workspace = true }
@@ -14,12 +15,15 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 console_error_panic_hook = { workspace = true, optional = true }
 js-sys = { workspace = true }
-pjson-rs-domain = { workspace = true, features = ["std", "wasm"] }
+pjson-rs-domain = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde-wasm-bindgen = { workspace = true }
 tsify = { workspace = true, features = ["js"] }
 wasm-bindgen = { workspace = true }
+
+[lints]
+workspace = true
 
 [features]
 default = ["console_error_panic_hook"]

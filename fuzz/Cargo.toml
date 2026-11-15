@@ -2,7 +2,6 @@
 name = "pjs-fuzz"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.89"
 publish = false
 authors = ["Andrei G. <k05h31@gmail.com>"]
 license = "MIT OR Apache-2.0"
@@ -18,7 +17,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 [dependencies.pjson-rs]
 path = "../crates/pjs-core"
 default-features = false
-features = ["compression", "partial-parse", "http-server"]
+features = ["compression", "partial-parse", "http-server", "websocket-server"]
 
 [workspace]
 members = ["."]

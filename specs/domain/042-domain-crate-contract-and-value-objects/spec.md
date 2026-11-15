@@ -62,13 +62,13 @@ Status: done. (`pjs-core` is different: it denies only `unsafe_op_in_unsafe_fn` 
 
 ### FR-042-002 Dependencies and features
 
-The crate shall depend only on `chrono` (serde), `serde` (derive), `serde_json`, `smallvec` (serde), `thiserror`, `uuid` (`v4`, `serde`; plus `js` on `target_arch = "wasm32"`). Features: `std` (default, enables `thiserror/std`) and `wasm` (empty marker, enabled by `pjs-wasm` together with `std`).
+The crate shall depend only on `chrono` (serde), `serde` (derive), `serde_json`, `smallvec` (serde), `thiserror`, `uuid` (`v4`, `serde`; plus `js` on `target_arch = "wasm32"`). The crate declares no features: the former `std` and `wasm` features were removed (#606).
 Status: done.
 
-### FR-042-003 `no_std` is declared but not buildable
+### FR-042-003 std only
 
-`lib.rs` shall carry `#![cfg_attr(not(feature = "std"), no_std)]` and an `alloc` import. In fact the modules use `std::` paths (`std::collections::HashMap`, `std::fmt`, `std::num::NonZeroU8`) and `chrono`/`serde_json` are used with std, so `cargo check -p pjson-rs-domain --no-default-features` fails (266 errors, verified 2026-11-15). The supported configuration is `std`.
-Status: open. The crate doc's `serde` feature does not exist either (see Open Questions).
+The crate shall build with `std` only: the unsupported `no_std` mode (the `cfg_attr(not(feature = "std"), no_std)` attribute and the `alloc` import) and the `std` and `wasm` features were removed (#606). The crate is still WASM-compatible (`wasm32-unknown-unknown`, `uuid/js`).
+Status: done.
 
 ### FR-042-004 `DomainError`
 
@@ -160,13 +160,11 @@ See FR text. Type inventory: `Priority`, `Id<T>`, `IdMarker`, `SessionMarker`, `
 ## Agent Boundaries
 
 - Always: add a validating constructor (`new() -> Result`) for any new value object with an invariant; keep `unsafe` out.
-- Ask first: removing the `no_std` attribute or making the crate truly `no_std` (needs replacing `HashMap`, `chrono` features, `serde_json` use); changing `Priority` constant values (they are wire-visible through frames and heuristics).
+- Ask first: adding a `no_std` mode or a Cargo feature (needs replacing `HashMap`, `chrono` features, `serde_json` use); changing `Priority` constant values (they are wire-visible through frames and heuristics).
 - Never: add an infallible `From<u8> for Priority` or public fields to value objects; add dependencies on `tokio`, `axum` or `jiter` (see `parser/partial.rs` note).
 
 ## Open Questions
 
-- `no_std` claim vs reality (FR-042-003): either implement it or delete the attribute, the `alloc` import and the doc claim. The crate docs also mention a `serde` feature that does not exist, and say the crate has "ZERO external dependencies (except thiserror)", which is stale (see FR-042-002).
-- `wasm` feature is empty; `pjs-wasm` enables it but no code in the domain crate reads it.
 - `Priority` scale: constants peak at 100 but the type allows up to 255, so values 101..=255 are "critical" by `is_critical()` and `to_percentage()` of `CRITICAL` is about 39.2. `from_percentage(100.0)` yields 255. The percent API therefore does not match the constants' scale.
 - `JsonData: Eq` is implemented manually while `PartialEq` is derived over `f64`; a directly constructed `Float(NAN)` is not equal to itself, breaking `Eq`. The public variant bypasses `float()`.
 - `JsonData::Display` does not escape strings or keys, so its output is not valid JSON for values containing quotes, backslashes or control characters; `Frame::estimated_size` relies on its length only.

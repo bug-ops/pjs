@@ -12,9 +12,10 @@
 
 use chrono::Utc;
 use pjson_rs::domain::{
+    config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET},
     ports::repositories::{
-        CacheStatistics, SessionPagination, SessionQueryCriteria, SessionSortField, SortOrder,
-        StreamFilter, StreamMetadata, StreamStatus,
+        CacheStatistics, FramePresence, SessionPagination, SessionQueryCriteria, SessionSortField,
+        SortOrder, StreamFilter, StreamMetadata, StreamStatus,
     },
     value_objects::Priority,
 };
@@ -27,61 +28,39 @@ use std::collections::HashMap;
 #[test]
 fn test_pagination_default() {
     let pagination = SessionPagination::default();
-    assert_eq!(pagination.offset, 0);
-    assert_eq!(pagination.limit, 50);
-    assert!(pagination.sort_by.is_none());
-    assert_eq!(pagination.sort_order, SortOrder::Ascending);
+    assert_eq!(pagination.offset(), 0);
+    assert_eq!(pagination.limit(), 50);
+    assert!(pagination.sort_by().is_none());
+    assert_eq!(pagination.sort_order(), &SortOrder::Ascending);
 }
 
 #[test]
 fn test_pagination_custom() {
-    let pagination = SessionPagination {
-        offset: 10,
-        limit: 100,
-        sort_by: Some(SessionSortField::CreatedAt),
-        sort_order: SortOrder::Descending,
-    };
+    let pagination = SessionPagination::new(10, 100)
+        .unwrap()
+        .with_sort(SessionSortField::CreatedAt, SortOrder::Descending);
 
-    assert_eq!(pagination.offset, 10);
-    assert_eq!(pagination.limit, 100);
-    assert_eq!(pagination.sort_by, Some(SessionSortField::CreatedAt));
-    assert_eq!(pagination.sort_order, SortOrder::Descending);
+    assert_eq!(pagination.offset(), 10);
+    assert_eq!(pagination.limit(), 100);
+    assert_eq!(pagination.sort_by(), Some(&SessionSortField::CreatedAt));
+    assert_eq!(pagination.sort_order(), &SortOrder::Descending);
 }
 
 #[test]
 fn test_pagination_zero_offset() {
-    let pagination = SessionPagination {
-        offset: 0,
-        limit: 10,
-        sort_by: None,
-        sort_order: SortOrder::Ascending,
-    };
+    let pagination = SessionPagination::new(0, 10).unwrap();
 
-    assert_eq!(pagination.offset, 0);
+    assert_eq!(pagination.offset(), 0);
 }
 
 #[test]
-fn test_pagination_large_offset() {
-    let pagination = SessionPagination {
-        offset: usize::MAX,
-        limit: 10,
-        sort_by: None,
-        sort_order: SortOrder::Ascending,
-    };
-
-    assert_eq!(pagination.offset, usize::MAX);
+fn test_pagination_huge_offset_rejected() {
+    assert!(SessionPagination::new(usize::MAX, 10).is_err());
 }
 
 #[test]
-fn test_pagination_large_limit() {
-    let pagination = SessionPagination {
-        offset: 0,
-        limit: usize::MAX,
-        sort_by: None,
-        sort_order: SortOrder::Ascending,
-    };
-
-    assert_eq!(pagination.limit, usize::MAX);
+fn test_pagination_huge_limit_rejected() {
+    assert!(SessionPagination::new(0, usize::MAX).is_err());
 }
 
 // ============================================================================
@@ -117,89 +96,67 @@ fn test_sort_order_debug() {
 
 #[test]
 fn test_session_query_criteria_empty() {
-    let criteria = SessionQueryCriteria {
-        states: None,
-        created_after: None,
-        created_before: None,
-        client_info_pattern: None,
-        has_active_streams: None,
-        min_stream_count: None,
-        max_stream_count: None,
-        exclude_expired: false,
-    };
+    let criteria = SessionQueryCriteria::builder()
+        .exclude_expired(false)
+        .build()
+        .unwrap();
 
-    assert!(criteria.states.is_none());
-    assert!(criteria.created_after.is_none());
-    assert!(criteria.created_before.is_none());
+    assert!(criteria.states().is_none());
+    assert!(criteria.created_after().is_none());
+    assert!(criteria.created_before().is_none());
 }
 
 #[test]
 fn test_session_query_criteria_with_states() {
-    let criteria = SessionQueryCriteria {
-        states: Some(vec!["active".to_string(), "closed".to_string()]),
-        created_after: None,
-        created_before: None,
-        client_info_pattern: None,
-        has_active_streams: None,
-        min_stream_count: None,
-        max_stream_count: None,
-        exclude_expired: false,
-    };
+    let criteria = SessionQueryCriteria::builder()
+        .states(vec!["active".to_string(), "closed".to_string()])
+        .exclude_expired(false)
+        .build()
+        .unwrap();
 
-    assert_eq!(criteria.states.as_ref().unwrap().len(), 2);
+    assert_eq!(criteria.states().unwrap().len(), 2);
 }
 
 #[test]
 fn test_session_query_criteria_with_dates() {
     let now = Utc::now();
-    let criteria = SessionQueryCriteria {
-        states: None,
-        created_after: Some(now),
-        created_before: Some(now),
-        client_info_pattern: None,
-        has_active_streams: None,
-        min_stream_count: None,
-        max_stream_count: None,
-        exclude_expired: false,
-    };
+    let criteria = SessionQueryCriteria::builder()
+        .created_after(now)
+        .created_before(now)
+        .exclude_expired(false)
+        .build()
+        .unwrap();
 
-    assert!(criteria.created_after.is_some());
-    assert!(criteria.created_before.is_some());
+    assert!(criteria.created_after().is_some());
+    assert!(criteria.created_before().is_some());
 }
 
 #[test]
 fn test_session_query_criteria_with_stream_counts() {
-    let criteria = SessionQueryCriteria {
-        states: None,
-        created_after: None,
-        created_before: None,
-        client_info_pattern: None,
-        has_active_streams: Some(true),
-        min_stream_count: Some(1),
-        max_stream_count: Some(10),
-        exclude_expired: false,
-    };
+    let criteria = SessionQueryCriteria::builder()
+        .has_active_streams(true)
+        .min_stream_count(1)
+        .max_stream_count(10)
+        .exclude_expired(false)
+        .build()
+        .unwrap();
 
-    assert_eq!(criteria.min_stream_count, Some(1));
-    assert_eq!(criteria.max_stream_count, Some(10));
-    assert_eq!(criteria.has_active_streams, Some(true));
+    assert_eq!(criteria.min_stream_count(), Some(1));
+    assert_eq!(criteria.max_stream_count(), Some(10));
+    assert_eq!(criteria.has_active_streams(), Some(true));
 }
 
 #[test]
 fn test_session_query_criteria_clone() {
-    let criteria = SessionQueryCriteria {
-        states: Some(vec!["active".to_string()]),
-        created_after: None,
-        created_before: None,
-        client_info_pattern: Some("test%".to_string()),
-        has_active_streams: None,
-        min_stream_count: None,
-        max_stream_count: None,
-        exclude_expired: false,
-    };
+    let criteria = SessionQueryCriteria::builder()
+        .states(vec!["active".to_string()])
+        .client_info_pattern("test%".to_string())
+        .exclude_expired(false)
+        .build()
+        .unwrap();
 
     let cloned = criteria.clone();
-    assert_eq!(cloned.client_info_pattern, Some("test%".to_string()));
+    assert_eq!(cloned.client_info_pattern(), Some("test%"));
 }
 
 // ============================================================================
@@ -208,66 +165,43 @@ fn test_session_query_criteria_clone() {
 
 #[test]
 fn test_stream_filter_empty() {
-    let filter = StreamFilter {
-        statuses: None,
-        min_priority: None,
-        max_priority: None,
-        created_after: None,
-        has_frames: None,
-    };
+    let filter = StreamFilter::builder().build().unwrap();
 
-    assert!(filter.statuses.is_none());
-    assert!(filter.min_priority.is_none());
+    assert!(filter.statuses().is_none());
+    assert!(filter.has_frames().is_none());
 }
 
 #[test]
 fn test_stream_filter_with_statuses() {
-    let filter = StreamFilter {
-        statuses: Some(vec![StreamStatus::Active, StreamStatus::Completed]),
-        min_priority: None,
-        max_priority: None,
-        created_after: None,
-        has_frames: None,
-    };
+    let filter = StreamFilter::builder()
+        .statuses(vec![StreamStatus::Active, StreamStatus::Completed])
+        .build()
+        .unwrap();
 
-    assert_eq!(filter.statuses.as_ref().unwrap().len(), 2);
-}
-
-#[test]
-fn test_stream_filter_with_priority_range() {
-    let filter = StreamFilter {
-        statuses: None,
-        min_priority: Some(Priority::LOW),
-        max_priority: Some(Priority::HIGH),
-        created_after: None,
-        has_frames: None,
-    };
-
-    assert!(filter.min_priority.is_some());
-    assert!(filter.max_priority.is_some());
+    assert_eq!(filter.statuses().unwrap().as_slice().len(), 2);
 }
 
 #[test]
 fn test_stream_filter_has_frames() {
-    let filter_with_frames = StreamFilter {
-        statuses: None,
-        min_priority: None,
-        max_priority: None,
-        created_after: None,
-        has_frames: Some(true),
-    };
+    let filter_with_frames = StreamFilter::builder()
+        .has_frames(FramePresence::WithFrames)
+        .build()
+        .unwrap();
 
-    assert_eq!(filter_with_frames.has_frames, Some(true));
+    assert_eq!(
+        filter_with_frames.has_frames(),
+        Some(FramePresence::WithFrames)
+    );
 
-    let filter_without_frames = StreamFilter {
-        statuses: None,
-        min_priority: None,
-        max_priority: None,
-        created_after: None,
-        has_frames: Some(false),
-    };
+    let filter_without_frames = StreamFilter::builder()
+        .has_frames(FramePresence::WithoutFrames)
+        .build()
+        .unwrap();
 
-    assert_eq!(filter_without_frames.has_frames, Some(false));
+    assert_eq!(
+        filter_without_frames.has_frames(),
+        Some(FramePresence::WithoutFrames)
+    );
 }
 
 // ============================================================================
@@ -503,24 +437,15 @@ fn test_cache_statistics_debug() {
 
 #[test]
 fn test_pagination_boundary_values() {
-    let min_pagination = SessionPagination {
-        offset: 0,
-        limit: 1,
-        sort_by: None,
-        sort_order: SortOrder::Ascending,
-    };
+    let min_pagination = SessionPagination::new(0, 1).unwrap();
 
-    let max_pagination = SessionPagination {
-        offset: usize::MAX - 1,
-        limit: usize::MAX,
-        sort_by: None,
-        sort_order: SortOrder::Descending,
-    };
+    let max_pagination =
+        SessionPagination::new(MAX_PAGINATION_OFFSET, MAX_PAGINATION_LIMIT).unwrap();
 
-    assert_eq!(min_pagination.offset, 0);
-    assert_eq!(min_pagination.limit, 1);
-    assert_eq!(max_pagination.offset, usize::MAX - 1);
-    assert_eq!(max_pagination.limit, usize::MAX);
+    assert_eq!(min_pagination.offset(), 0);
+    assert_eq!(min_pagination.limit(), 1);
+    assert_eq!(max_pagination.offset(), MAX_PAGINATION_OFFSET);
+    assert_eq!(max_pagination.limit(), MAX_PAGINATION_LIMIT);
 }
 
 #[test]
@@ -596,13 +521,7 @@ fn test_pagination_type_safety() {
 fn test_stream_filter_type_safety() {
     fn takes_filter(_filter: StreamFilter) {}
 
-    let f = StreamFilter {
-        statuses: None,
-        min_priority: None,
-        max_priority: None,
-        created_after: None,
-        has_frames: None,
-    };
+    let f = StreamFilter::builder().build().unwrap();
     takes_filter(f);
 }
 
@@ -625,17 +544,14 @@ fn test_stream_metadata_type_safety() {
 
 #[test]
 fn test_pagination_with_sorting() {
-    let pagination = SessionPagination {
-        offset: 0,
-        limit: 20,
-        sort_by: Some(SessionSortField::CreatedAt),
-        sort_order: SortOrder::Descending,
-    };
+    let pagination = SessionPagination::new(0, 20)
+        .unwrap()
+        .with_sort(SessionSortField::CreatedAt, SortOrder::Descending);
 
     // Simulate pagination logic
     let total_items = 100;
-    let start = pagination.offset.min(total_items);
-    let end = (start + pagination.limit).min(total_items);
+    let start = pagination.offset().min(total_items);
+    let end = (start + pagination.limit()).min(total_items);
 
     assert_eq!(start, 0);
     assert_eq!(end, 20);
@@ -643,20 +559,17 @@ fn test_pagination_with_sorting() {
 
 #[test]
 fn test_stream_filter_combination() {
-    let filter = StreamFilter {
-        statuses: Some(vec![StreamStatus::Active, StreamStatus::Paused]),
-        min_priority: Some(Priority::MEDIUM),
-        max_priority: Some(Priority::CRITICAL),
-        created_after: Some(Utc::now()),
-        has_frames: Some(true),
-    };
+    let filter = StreamFilter::builder()
+        .statuses(vec![StreamStatus::Active, StreamStatus::Paused])
+        .created_after(Utc::now())
+        .has_frames(FramePresence::WithFrames)
+        .build()
+        .unwrap();
 
     // All filters should be set
-    assert!(filter.statuses.is_some());
-    assert!(filter.min_priority.is_some());
-    assert!(filter.max_priority.is_some());
-    assert!(filter.created_after.is_some());
-    assert!(filter.has_frames.is_some());
+    assert!(filter.statuses().is_some());
+    assert!(filter.created_after().is_some());
+    assert!(filter.has_frames().is_some());
 }
 
 #[test]

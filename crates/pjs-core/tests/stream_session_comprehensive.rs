@@ -10,7 +10,10 @@
 
 use pjson_rs::domain::{
     DomainError,
-    aggregates::{StreamSession, stream_session::SessionConfig},
+    aggregates::{
+        StreamSession,
+        stream_session::{SessionConfig, SessionTimeout},
+    },
     entities::stream::StreamConfig as EntityStreamConfig,
     events::{DomainEvent, SessionState},
     ports::TimeProvider,
@@ -58,10 +61,10 @@ impl TimeProvider for ManualTimeProvider {
     }
 }
 
-fn custom_config(max_streams: usize, timeout: u64) -> SessionConfig {
+fn custom_config(max_streams: usize, timeout: u32) -> SessionConfig {
     SessionConfig {
         max_concurrent_streams: max_streams,
-        session_timeout_seconds: timeout,
+        session_timeout: SessionTimeout::try_from(u64::from(timeout)).unwrap(),
         default_stream_config: EntityStreamConfig::default(),
         enable_compression: true,
         metadata: HashMap::new(),
@@ -545,12 +548,12 @@ fn test_is_expired_initially_false() {
 
 #[test]
 fn test_is_active_expired_session() {
-    let config = custom_config(10, 0); // Zero timeout for immediate expiry
+    let config = custom_config(10, 1); // 1 second timeout, expired by advancing the clock
     let clock = Arc::new(ManualTimeProvider::new());
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(10));
+    clock.advance(chrono::Duration::milliseconds(1100));
 
     // Session is expired, so not active
     assert!(session.is_expired());
@@ -559,12 +562,12 @@ fn test_is_active_expired_session() {
 
 #[test]
 fn test_force_close_expired_success() {
-    let config = custom_config(10, 0);
+    let config = custom_config(10, 1);
     let clock = Arc::new(ManualTimeProvider::new());
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(10));
+    clock.advance(chrono::Duration::milliseconds(1100));
 
     let result = session.force_close_expired();
 
@@ -588,12 +591,12 @@ fn test_force_close_non_expired_no_op() {
 
 #[test]
 fn test_force_close_expired_generates_event() {
-    let config = custom_config(10, 0);
+    let config = custom_config(10, 1);
     let clock = Arc::new(ManualTimeProvider::new());
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(10));
+    clock.advance(chrono::Duration::milliseconds(1100));
     session.take_events(); // Clear previous events
 
     session.force_close_expired().unwrap();
@@ -632,7 +635,7 @@ fn test_extend_timeout_success() {
 
     let initial_expires = session.expires_at();
 
-    let result = session.extend_timeout(1800);
+    let result = session.extend_timeout(SessionTimeout::try_from(1800u64).unwrap());
 
     assert!(result.is_ok());
     assert!(session.expires_at() > initial_expires);
@@ -644,7 +647,9 @@ fn test_extend_timeout_generates_event() {
     session.activate().unwrap();
     session.take_events(); // Clear previous events
 
-    session.extend_timeout(1800).unwrap();
+    session
+        .extend_timeout(SessionTimeout::try_from(1800u64).unwrap())
+        .unwrap();
 
     let events = session.pending_events();
     let has_extend_event = events
@@ -655,14 +660,14 @@ fn test_extend_timeout_generates_event() {
 
 #[test]
 fn test_extend_timeout_on_expired_fails() {
-    let config = custom_config(10, 0);
+    let config = custom_config(10, 1);
     let clock = Arc::new(ManualTimeProvider::new());
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(10));
+    clock.advance(chrono::Duration::milliseconds(1100));
 
-    let result = session.extend_timeout(1800);
+    let result = session.extend_timeout(SessionTimeout::try_from(1800u64).unwrap());
 
     assert!(result.is_err());
     assert!(matches!(
@@ -738,12 +743,12 @@ fn test_health_check_with_active_streams() {
 
 #[test]
 fn test_health_check_expired_session() {
-    let config = custom_config(10, 0);
+    let config = custom_config(10, 1);
     let clock = Arc::new(ManualTimeProvider::new());
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(10));
+    clock.advance(chrono::Duration::milliseconds(1100));
 
     let health = session.health_check();
 
@@ -1289,7 +1294,7 @@ fn test_session_config_metadata() {
 
     let config = SessionConfig {
         max_concurrent_streams: 10,
-        session_timeout_seconds: 3600,
+        session_timeout: SessionTimeout::try_from(3600u64).unwrap(),
         default_stream_config: EntityStreamConfig::default(),
         enable_compression: false,
         metadata: metadata.clone(),

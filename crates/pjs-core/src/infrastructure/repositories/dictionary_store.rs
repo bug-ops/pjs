@@ -8,13 +8,16 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use pjson_rs_domain::value_objects::SessionId;
+use pjson_rs_domain::value_objects::{SessionId, TrainedDictionary};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::{
     Error, Result,
     compression::zstd::{MAX_DICT_SIZE, N_TRAIN, ZstdDictCompressor, ZstdDictionary},
-    domain::ports::dictionary_store::{DictionaryFuture, DictionaryStore},
+    domain::{
+        DomainError,
+        ports::dictionary_store::{DictionaryFuture, DictionaryStore},
+    },
     security::CompressionBombDetector,
 };
 
@@ -66,7 +69,7 @@ struct SessionDictState {
     corpus: Mutex<Vec<Vec<u8>>>,
     /// Training result. `OnceCell::get_or_try_init` guarantees that the closure
     /// runs at most once even when many tasks cross the threshold concurrently.
-    dict: OnceCell<Arc<ZstdDictionary>>,
+    dict: OnceCell<Arc<TrainedDictionary>>,
     /// Monotonic timestamp (milliseconds since process start, see
     /// [`now_millis`]) of the last access — bumped by both writes
     /// (`session_state`) and reads (`get_dictionary`) so an
@@ -106,21 +109,9 @@ fn release_corpus_bytes(corpus_bytes_in_flight: &AtomicUsize, amount: usize) {
     if amount == 0 {
         return;
     }
-    // A manual CAS loop rather than `AtomicUsize::update`/`try_update`
-    // (stable since Rust 1.95): the workspace MSRV is 1.89.
-    let mut current = corpus_bytes_in_flight.load(Ordering::Relaxed);
-    loop {
-        let new = current.saturating_sub(amount);
-        match corpus_bytes_in_flight.compare_exchange_weak(
-            current,
-            new,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return,
-            Err(observed) => current = observed,
-        }
-    }
+    corpus_bytes_in_flight.update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        current.saturating_sub(amount)
+    });
 }
 
 /// RAII guard releasing a fixed, pre-captured byte amount back to the
@@ -409,7 +400,7 @@ impl InMemoryDictionaryStore {
         let state = self.session_state(session_id);
 
         // First-write-wins: silently ignore if already set.
-        let _ = state.dict.set(Arc::new(dict));
+        let _ = state.dict.set(Arc::new(TrainedDictionary::from(dict)));
         Ok(())
     }
 
@@ -426,11 +417,18 @@ impl InMemoryDictionaryStore {
     }
 }
 
+fn into_domain_error(error: Error) -> DomainError {
+    match error {
+        Error::CompressionError(message) => DomainError::CompressionError(message),
+        other => DomainError::Logic(other.to_string()),
+    }
+}
+
 impl DictionaryStore for InMemoryDictionaryStore {
     fn get_dictionary<'a>(
         &'a self,
         session_id: SessionId,
-    ) -> DictionaryFuture<'a, Option<Arc<ZstdDictionary>>> {
+    ) -> DictionaryFuture<'a, Option<Arc<TrainedDictionary>>> {
         Box::pin(async move {
             Ok(self.sessions.get(&session_id).and_then(|s| {
                 let dict = s.dict.get().cloned();
@@ -553,8 +551,9 @@ impl DictionaryStore for InMemoryDictionaryStore {
                     })
                     .await
                     .map_err(|e| {
-                        Error::CompressionError(format!("zstd: train join error: {e}"))
-                    })??;
+                        DomainError::CompressionError(format!("zstd: train join error: {e}"))
+                    })?
+                    .map_err(into_domain_error)?;
 
                     // Symmetric bomb-detector check after training, mirroring `register()`.
                     // Catches the case where CompressionBombConfig is tuned tighter than
@@ -563,12 +562,12 @@ impl DictionaryStore for InMemoryDictionaryStore {
                     bomb_detector
                         .validate_pre_decompression(dict.len())
                         .map_err(|e| {
-                            Error::CompressionError(format!(
+                            DomainError::CompressionError(format!(
                                 "trained dict rejected by bomb detector: {e}"
                             ))
                         })?;
 
-                    Ok::<_, Error>(Arc::new(dict))
+                    Ok::<_, DomainError>(Arc::new(TrainedDictionary::from(dict)))
                 })
                 .await?;
 

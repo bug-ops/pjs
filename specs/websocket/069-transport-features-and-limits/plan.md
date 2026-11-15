@@ -46,7 +46,7 @@ See FR-005 in the spec.
 
 | Item | Precondition | Postcondition | Undefined / notes |
 |---|---|---|---|
-| Feature `websocket-client` alone | none | build fails | #598 |
+| Feature `websocket-client` alone | none | builds | #598 |
 | Feature `metrics` | nightly | `/metrics` route and counter | `once_cell_try` |
 | Cargo test-target `required-features` | listed features | test target compiled only then | `websocket_wire_level` needs `http-server` + `websocket-client` |
 

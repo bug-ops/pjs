@@ -7,7 +7,7 @@ tags:
   - http
   - websocket
 created: 2026-11-15
-status: draft
+status: implemented
 issue: "#590"
 related:
   - "[[037-graceful-shutdown-serve-with-limits/spec|spec]]"
@@ -20,14 +20,14 @@ verified: 2026-11-15
 
 > [!info] References
 > **Spec**: [[037-graceful-shutdown-serve-with-limits/spec|spec]]
-> **Verified 2026-11-15**: plan assumptions checked against `serve.rs` and `websocket/server.rs` at HEAD `dcf9b11`; nothing implemented yet (issue #590 open). `tokio-util` is not yet a dependency and hyper-util lacks the `server-graceful` feature.
+> **Implemented 2026-11-15** (#590, #618, #611) with deviations DV1 and DV2 recorded in the [[037-graceful-shutdown-serve-with-limits/spec|spec]]. Where this plan names `child()`, hyper-util `GracefulShutdown` or `server-graceful`, the shipped design is a per-connection `select!` plus `UpgradeableConnection::graceful_shutdown()`, one `ShutdownSignal` shared by clone with the WebSocket transport (`with_shutdown`), `tokio-util` `TaskTracker` and two `CancellationToken`s (shutdown, force). `DrainTimeout` default 30 s, max 600 s. The terminal frame stays deferred (#625).
 
 ## 1. Architecture
 
 ### Approach
 Add a typed `ShutdownSignal` (cancellation handle) and `DrainTimeout` newtype under `infrastructure/http/`. `serve_with_limits` races its semaphore acquire and `accept_with_retry` against the signal. Each connection is driven through `hyper_util::server::graceful::GracefulShutdown::watch` (HTTP/1 and HTTP/2, including upgradeable connections), so `shutdown()` sends GOAWAY / `Connection: close`. After the signal, the loop waits for `GracefulShutdown::shutdown()` bounded by `DrainTimeout`; on expiry the remaining connection tasks (held in a tracked set) are aborted and counted.
 
-Hyper stops tracking a connection after an HTTP upgrade, so WebSocket handlers need their own path: `AxumWebSocketTransport` gets a child `ShutdownSignal`; each `handle_socket` task selects on it, sends Close(1001), and is registered in the same tracker so the drain waits for it. Streaming handlers receive the signal through a request extension (inserted per connection next to `ConnectInfo`) so they can emit a terminal frame (FR-008, format pending).
+Hyper stops tracking a connection after an HTTP upgrade, so WebSocket handlers need their own path: `AxumWebSocketTransport::with_shutdown` takes a clone of the same `ShutdownSignal` (DV1: no child); each `handle_socket` task selects on it, sends Close(1001), and is registered in the signal's tracker so the drain waits for it. Streaming handlers receive the signal through a request extension (inserted per connection next to `ConnectInfo`) so they can emit a terminal frame (FR-008; the frame format is deferred, #625).
 
 ### Component Diagram
 
@@ -36,7 +36,7 @@ graph TD
     Caller[Caller: owns trigger] -->|ShutdownSignal| Serve[serve_with_limits]
     Serve -->|watch| Hyper[hyper-util GracefulShutdown]
     Serve -->|extension| Handlers[SSE/NDJSON handlers]
-    Serve -->|child signal| WS[AxumWebSocketTransport]
+    Serve -->|shared signal| WS[AxumWebSocketTransport]
     WS --> WSTasks[per-connection WS tasks]
     Serve --> Tracker[connection task tracker]
     WSTasks --> Tracker
@@ -47,10 +47,10 @@ graph TD
 
 | Decision | Choice | Rationale | Alternatives Considered |
 |----------|--------|-----------|------------------------|
-| HTTP drain | hyper-util `GracefulShutdown` (feature `server-graceful`) | Same primitive axum uses; handles GOAWAY and keep-alive | Hand-rolled per-connection `graceful_shutdown()` calls: more code, same result |
+| HTTP drain (DV1: not adopted) | hyper-util `GracefulShutdown` (feature `server-graceful`) | Same primitive axum uses; handles GOAWAY and keep-alive | Hand-rolled per-connection `graceful_shutdown()` calls: more code, same result |
 | Cancellation primitive | `tokio_util::sync::CancellationToken` wrapped in `ShutdownSignal` | Cloneable, child tokens for WS, race-free | `tokio::sync::watch<bool>`: no new dependency but no child hierarchy; viable fallback |
 | Task tracking | `tokio_util::task::TaskTracker` | Wait-for-all with count; avoids hand-rolled JoinSet | `JoinSet` in the accept loop (no dep, but WS tasks live elsewhere) |
-| Entry point | Single `serve_with_limits(listener, router, limits, ShutdownConfig)` | Pre-1.0 clean API, no duplicate paths (DRY) | Sibling fn + delegating wrapper: non-breaking, extra surface [NEEDS CLARIFICATION: see spec open question] |
+| Entry point | Single `serve_with_limits(listener, router, limits, ShutdownConfig)` | Pre-1.0 clean API, no duplicate paths (DRY) | Sibling fn + delegating wrapper: non-breaking, extra surface (chosen: single entry point) |
 | Public types | `ShutdownSignal`, `DrainTimeout`, `ShutdownOutcome` (enum) | Type safety: no raw Duration/bool/usize tuples | `impl Future<Output=()>` param: loses child derivation and typing |
 | Abort policy | Abort remaining tasks at deadline, report count | Bounded exit (NFR-SEC-001) | Wait forever: rejected |
 
@@ -72,8 +72,8 @@ CHANGELOG.md                                      # breaking-change entry
 
 Shapes only (no implementation):
 
-- `ShutdownSignal`: `Clone`; `trigger(&self)`, `is_triggered(&self) -> bool`, `async cancelled(&self)`, `child(&self) -> ShutdownSignal`.
-- `DrainTimeout`: newtype over `Duration`; `TryFrom<Duration>` rejects zero and values above the max cap; `Default` = [NEEDS CLARIFICATION: 30 s]; error enum `InvalidDrainTimeout { Zero, TooLarge }`.
+- `ShutdownSignal`: `Clone`; `trigger(&self)`, `is_triggered(&self) -> bool`, `async cancelled(&self)`, no `child()` (DV1).
+- `DrainTimeout`: newtype over `Duration`; `TryFrom<Duration>` rejects zero and values above the max cap; `Default` = 30 s, cap 600 s; error enum `InvalidDrainTimeout { Zero, TooLarge }`.
 - `ShutdownConfig { signal: ShutdownSignal, drain_timeout: DrainTimeout }`.
 - `ShutdownOutcome`: `Drained` | `Forced { aborted: NonZeroUsize }`.
 
@@ -139,7 +139,7 @@ Checked against [[constitution]] and CLAUDE.md rules.
 | Risk | Impact | Probability | Mitigation |
 |------|--------|-------------|------------|
 | Hyper does not track upgraded connections | high | high | separate WS signal and shared tracker (designed in) |
-| Terminal frame format undefined | med | high | [NEEDS CLARIFICATION: format]; ship FR-008 as extension-only hook first |
+| Terminal frame format undefined | med | high | format deferred (#625); FR-008 shipped as extension-only hook first |
 | `max_connection_duration` `timeout` wrapping interacts with `watch` | med | med | wrap the watched future; covered by test |
 | Breaking signature affects demos/tests (`http_serve_connection_limits.rs`, axum_adapter.rs) | low | high | update call sites in the same PR |
 | New dependency tokio-util | low | med | fallback to `watch` + `JoinSet` |
@@ -153,20 +153,15 @@ Checked against [[constitution]] and CLAUDE.md rules.
 | `serve_with_limits(listener, router, limits, shutdown)` | listener bound; Tokio runtime with time enabled | Ok(`Drained`) if all connections ended before the deadline; Ok(`Forced{n}`) if n were aborted; no accept after signal; no task outlives return; Err only on a non-retryable listener failure | signal never triggered and no exit (runs forever, as today); runtime without the time driver |
 | `DrainTimeout::try_from(Duration)` | none | Ok iff 0 < d <= cap | none |
 | `ShutdownSignal::trigger` | none | `is_triggered()` true; all clones and children observe; idempotent | none |
-| `ShutdownSignal::child` | none | child triggers when parent triggers; child trigger does not affect parent | none |
+| `ShutdownSignal::child` (DV1: not implemented) | none | clones share one state | none |
 | WS handler on signal | connection established | Close(1001) attempted within the write timeout, then task ends | peer that never acks the close: bounded by drain deadline |
-| Streaming handler terminal frame | signal available in request extensions | handler may end stream with terminal frame | frame format [NEEDS CLARIFICATION] |
+| Streaming handler terminal frame | signal available in request extensions | handler may end stream with terminal frame | frame format deferred (#625) |
 
 ## 13. Open Questions (carried from spec)
 
 > [!question]
-> - [NEEDS CLARIFICATION: terminal frame wire format for SSE/NDJSON]
-> - [NEEDS CLARIFICATION: default and max `DrainTimeout`]
-> - [NEEDS CLARIFICATION: break signature vs sibling function]
-> - [NEEDS CLARIFICATION: dropped-trigger semantics]
-> - [NEEDS CLARIFICATION: standalone WS transport shutdown outside `serve_with_limits`]
-> - [NEEDS CLARIFICATION: tokio-util vs `watch`+`JoinSet` (dependency approval)]
-> - [resolved: issue is #590]
+> - [NEEDS CLARIFICATION: terminal frame wire format for SSE/NDJSON, tracked in #625]
+> - Resolved: 30 s default and 600 s cap, in-place signature break, dropped trigger never shuts down, WebSocket transport takes the shared signal via `with_shutdown`, `tokio-util` approved.
 
 ## See Also
 

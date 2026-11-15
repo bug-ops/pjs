@@ -83,7 +83,7 @@ Status: done. `ByteCodec::ZstdDict` decode counts bytes via the bomb detector; `
 
 ## Data Model
 
-`ZstdDictionary(Vec<u8>)`, `DictionaryStore` trait (resolve/accumulate per `SessionId`), `InMemoryDictionaryStore` (DashMap-backed per-session state with TTL cleanup via `cleanup_expired`).
+`ZstdDictionary(TrainedDictionary)` (the validated bytes live in `pjson-rs-domain`; construction is fallible, no panicking `From`), `DictionaryStore` trait (not feature-gated, #605) (resolve/accumulate per `SessionId`), `InMemoryDictionaryStore` (DashMap-backed per-session state with TTL cleanup via `cleanup_expired`).
 
 ## Edge Cases
 

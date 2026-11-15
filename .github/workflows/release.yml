@@ -6,9 +6,7 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write # Required for OIDC trusted publishing
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -133,10 +131,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust stable
+      - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: stable
+          toolchain: nightly
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -245,7 +243,32 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Check if already published
+        id: node-check
+        env:
+          VERSION: ${{ needs.version-check.outputs.version }}
+        run: |
+          if npm view "@pjson/node@${VERSION}" version 2>/dev/null | grep -qF "${VERSION}"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "@pjson/node@${VERSION} already published, skipping"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Install and build from the committed lockfile before package.json is
+      # rewritten for publishing, so the shipped bundle uses reviewed versions.
+      - name: Install dependencies
+        if: steps.node-check.outputs.exists != 'true'
+        working-directory: crates/pjs-js-client
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        if: steps.node-check.outputs.exists != 'true'
+        working-directory: crates/pjs-js-client
+        run: npm run build
+
       - name: Sync package metadata to release version
+        if: steps.node-check.outputs.exists != 'true'
         working-directory: crates/pjs-js-client
         env:
           VERSION: ${{ needs.version-check.outputs.version }}
@@ -261,28 +284,6 @@ jobs:
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
 
-      - name: Check if already published
-        id: node-check
-        env:
-          VERSION: ${{ needs.version-check.outputs.version }}
-        run: |
-          if npm view "@pjson/node@${VERSION}" version 2>/dev/null | grep -qF "${VERSION}"; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "@pjson/node@${VERSION} already published, skipping"
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Install dependencies
-        if: steps.node-check.outputs.exists != 'true'
-        working-directory: crates/pjs-js-client
-        run: npm install --no-package-lock --ignore-scripts
-
-      - name: Build
-        if: steps.node-check.outputs.exists != 'true'
-        working-directory: crates/pjs-js-client
-        run: npm run build
-
       - name: Publish to npm
         if: steps.node-check.outputs.exists != 'true'
         working-directory: crates/pjs-js-client
@@ -294,6 +295,8 @@ jobs:
     needs: [version-check, publish, publish-wasm, publish-node]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

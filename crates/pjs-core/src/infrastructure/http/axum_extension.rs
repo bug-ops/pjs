@@ -436,11 +436,9 @@ mod tests {
                 axum::http::Request::builder()
                     .uri("/pjs/health")
                     .body(axum::body::Body::empty())
-                    // TODO: Handle unwrap() - add proper error handling for request building in tests
                     .unwrap(),
             )
             .await
-            // TODO: Handle unwrap() - add proper error handling for response in tests
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
@@ -455,7 +453,6 @@ mod tests {
         let request = axum::http::Request::builder()
             .header("Accept", "text/event-stream")
             .body(axum::body::Body::empty())
-            // TODO: Handle unwrap() - add proper error handling for request building in tests
             .unwrap();
 
         // Test middleware detection logic

@@ -14,6 +14,7 @@
 //! not `wasm32`.
 
 use crate::{Error, Result};
+use pjson_rs_domain::value_objects::{MAX_TRAINED_DICTIONARY_BYTES, TrainedDictionary};
 
 /// Maximum permitted dictionary size in bytes (112 KiB).
 ///
@@ -22,7 +23,7 @@ use crate::{Error, Result};
 /// can produce dictionaries up to 2 GiB, but large dicts inflate RSS on every
 /// session and slow context initialisation. 112 KiB covers the sweet spot for
 /// JSON-like payloads.
-pub const MAX_DICT_SIZE: usize = 112 * 1024;
+pub const MAX_DICT_SIZE: usize = MAX_TRAINED_DICTIONARY_BYTES;
 
 /// Number of training samples required before [`ZstdDictCompressor::train`] is
 /// called.  Libzstd requires at least 8 samples; `N_TRAIN` is set to 32 so
@@ -73,27 +74,23 @@ const ZSTD_MAGIC: [u8; 4] = [0x37, 0xA4, 0x30, 0xEC];
 /// # }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ZstdDictionary(Vec<u8>);
+pub struct ZstdDictionary(TrainedDictionary);
 
 impl ZstdDictionary {
     /// Private constructor — the single enforcement point for the type invariant.
     fn new_checked(bytes: Vec<u8>) -> Result<Self> {
-        if bytes.is_empty() {
-            return Err(Error::CompressionError("zstd: empty dictionary".into()));
-        }
-        if bytes.len() > MAX_DICT_SIZE {
-            return Err(Error::CompressionError(format!(
-                "zstd: dictionary size {} exceeds MAX_DICT_SIZE ({})",
-                bytes.len(),
-                MAX_DICT_SIZE
-            )));
-        }
-        if bytes.len() < 4 || bytes[0..4] != ZSTD_MAGIC {
+        let dictionary = TrainedDictionary::from_bytes(bytes)
+            .map_err(|e| Error::CompressionError(format!("zstd: {e}")))?;
+        Self::with_magic_checked(dictionary)
+    }
+
+    fn with_magic_checked(dictionary: TrainedDictionary) -> Result<Self> {
+        if !dictionary.as_bytes().starts_with(&ZSTD_MAGIC) {
             return Err(Error::CompressionError(
                 "zstd: invalid dictionary magic (expected 0xEC30A437)".into(),
             ));
         }
-        Ok(Self(bytes))
+        Ok(Self(dictionary))
     }
 
     /// Construct a [`ZstdDictionary`] from a raw byte blob produced by libzstd.
@@ -135,7 +132,7 @@ impl ZstdDictionary {
 
     /// Returns the raw dictionary bytes.
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0
+        self.0.as_bytes()
     }
 
     /// Returns the dictionary size in bytes (always `<= MAX_DICT_SIZE`).
@@ -150,6 +147,22 @@ impl ZstdDictionary {
     /// Clippy's `len_without_is_empty` requirement.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl TryFrom<&TrainedDictionary> for ZstdDictionary {
+    type Error = Error;
+
+    /// Validates the zstd magic header on top of the size bounds already
+    /// guaranteed by [`TrainedDictionary`].
+    fn try_from(dictionary: &TrainedDictionary) -> Result<Self> {
+        Self::with_magic_checked(dictionary.clone())
+    }
+}
+
+impl From<ZstdDictionary> for TrainedDictionary {
+    fn from(dictionary: ZstdDictionary) -> Self {
+        dictionary.0
     }
 }
 

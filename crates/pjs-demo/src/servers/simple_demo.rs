@@ -11,9 +11,10 @@ use axum::{
     routing::get,
 };
 use clap::Parser;
+use pjs_demo::utils::trigger_on_ctrl_c;
 use pjson_rs::{
     PriorityStreamer,
-    infrastructure::http::{ConnectionLimits, serve_with_limits},
+    infrastructure::http::{ConnectionLimits, ShutdownConfig, serve_with_limits},
     stream::PriorityStreamFrame,
 };
 use serde::{Deserialize, Serialize};
@@ -384,7 +385,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting simple demo server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    serve_with_limits(listener, app, ConnectionLimits::default()).await?;
+    let shutdown = ShutdownConfig::default();
+    trigger_on_ctrl_c(shutdown.signal.clone());
+    let outcome = serve_with_limits(listener, app, ConnectionLimits::default(), shutdown).await?;
+    info!(?outcome, "server stopped");
 
     Ok(())
 }

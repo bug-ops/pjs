@@ -29,7 +29,7 @@ verified: 2026-11-15
 # Spec 053: StreamSession Aggregate
 
 > [!info] Verification (2026-11-15)
-> **State: implemented.** `StreamSession` is the aggregate root that owns streams, stats and a pending-event queue. Several methods (`fail_stream`, `force_close_expired`, `extend_timeout`) have no production caller; only tests use them. Related open issues: #596 (timeout casts), #573 (id cross-checks on decode).
+> **State: implemented.** `StreamSession` is the aggregate root that owns streams, stats and a pending-event queue. Several methods (`fail_stream`, `force_close_expired`, `extend_timeout`) have no production caller; only tests use them. Timeouts are a bounded `SessionTimeout` (#596) and decoding cross-checks stream ids (#573).
 
 ## 1. Overview
 
@@ -52,7 +52,7 @@ Document the verified behaviour of `StreamSession`, `SessionConfig`, `SessionSta
 ## 3. Functional Requirements
 
 ### FR-001 Construction
-`StreamSession::new(SessionConfig)` shall create a session in `SessionState::Initializing` with a fresh `SessionId`, `expires_at = now + session_timeout_seconds`, empty `StreamMap`, empty event queue and default stats. `with_time_provider(config, Arc<dyn TimeProvider>)` shall use the injected clock for session-level timestamps only; child `Stream` entities still read the system clock. `SessionConfig::default()`: 10 concurrent streams, 3600 s timeout, compression on, empty metadata.
+`StreamSession::new(SessionConfig)` shall create a session in `SessionState::Initializing` with a fresh `SessionId`, `expires_at = now + session_timeout` (`SessionTimeout`, serialised as `session_timeout_seconds`), empty `StreamMap`, empty event queue and default stats. `with_time_provider(config, Arc<dyn TimeProvider>)` shall use the injected clock for session-level timestamps only; child `Stream` entities still read the system clock. `SessionConfig::default()`: 10 concurrent streams, 3600 s timeout, compression on, empty metadata.
 Code: `stream_session.rs` (`new`, `with_time_provider`, `SessionConfig`).
 
 ### FR-002 State machine
@@ -94,8 +94,8 @@ The session shall offer a two-phase API so a repository can run the expensive tr
 Code: `stream_session.rs`; related issue #506 (sequence assignment only to surviving frames), #472.
 
 ### FR-006 Timeout extension and client info
-`extend_timeout(additional_seconds)` shall fail with `InvalidStateTransition` if already expired, otherwise add seconds to `expires_at` and emit `SessionTimeoutExtended`. `set_client_info(client_info, user_agent, ip_address)` shall store the three optional strings and bump `updated_at`.
-Status: done, with a defect: both timeout conversions use `u64 as i64` without bound (open issue #596; the 7-day ceiling `MAX_SESSION_TIMEOUT_SECONDS` is enforced only in `CommandValidator`).
+`extend_timeout(additional: SessionTimeout)` shall fail with `InvalidStateTransition` if already expired and with `InvalidInput` if the expiry would overflow, otherwise add the duration to `expires_at` and emit `SessionTimeoutExtended`. `set_client_info(client_info, user_agent, ip_address)` shall store the three optional strings and bump `updated_at`.
+Status: done. `SessionTimeout` (`NonZeroU32`, `TryFrom<u64>`, 1..=`MAX_SESSION_TIMEOUT_SECONDS` = 7 days, default 3600 s) makes out-of-range timeouts unrepresentable (#596).
 
 ### FR-007 Event queue
 Every state-changing method shall append a `DomainEvent` to an internal `VecDeque`. `pending_events()` shall expose it read-only; `take_events()` shall drain it. The queue is part of the serialized aggregate.
@@ -129,7 +129,8 @@ Code: `health_check`.
 | `close()` from `Initializing`, `Completed`, `Failed` | `InvalidStateTransition` |
 | `extend_timeout` on expired session | `InvalidStateTransition` |
 | `commit_patch_frames_for_stream` for a stream completed since extraction | `InvalidStreamState` (test `test_commit_patch_frames_for_stream_rejects_stream_completed_since_extraction`) |
-| `session_timeout_seconds >= 9_223_372_036_854_776` | panic in `chrono` (issue #596) |
+| Decoded session holding a stream whose `session_id` differs from the session id | rejected at decode (#573) |
+| `session_timeout_seconds` 0 or above 604800 | rejected by `SessionTimeout::try_from` (decode error) |
 
 ## 7. Success Criteria
 - `cargo nextest run -p pjson-rs stream_session` passes.
@@ -143,10 +144,9 @@ Code: `health_check`.
 ## 9. Open Questions
 - `close()` cancels streams but does not decrement `stats.active_streams`, emit `StreamCancelled`, or count them in `failed_streams`; `force_close_expired()` removes streams but leaves stats unchanged. [NEEDS CLARIFICATION: intended?]
 - `fail_stream`, `force_close_expired`, `extend_timeout` and the `SessionExpired` event have no production caller or emitter; nothing sweeps expired sessions (see [[057-in-memory-repositories/spec|057]]).
-- `SessionConfig` and its fields are `pub` with no validating constructor; invariants (`max_concurrent_streams > 0`, timeout range) are enforced only by `CommandValidator` (issue #596).
+- `SessionConfig` fields are `pub`; `max_concurrent_streams > 0` is enforced only by `CommandValidator`, while the timeout range is typed.
 - `client_info`, `user_agent`, `ip_address` are `Option<String>` (primitive obsession).
 - `pending_events` is unbounded if no caller drains it; only `*_atomic` methods and `save_and_publish` drain.
-- `Stream.session_id` vs owning session id and `StreamMap` key == id are not cross-checked on deserialize (issue #573).
 - `max_concurrent_streams` counts finished streams, so a session can become permanently full.
 
 ## 10. See Also

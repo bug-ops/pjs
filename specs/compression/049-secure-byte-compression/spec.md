@@ -131,7 +131,7 @@ Status: partial. The returned reader is an empty cursor and `current_depth` is n
 2. `SecureCompressedData` has public fields, so `original_size` and `compression_ratio` can disagree with `data`; `decompress_*` ignores them.
 3. `compress` rejects inputs by `max_compressed_size`, a name that suggests compressed bytes; the check runs on the uncompressed input.
 4. Protector checks run every `check_interval_bytes`, so a single read can overshoot the limit by up to one read buffer before the next check; the final `validate_result` still catches the total.
-5. `DictionaryStore` port depends on `compression::zstd` and `pjson_rs::Result` (#605, open).
+5. The `DictionaryStore` port is feature-independent and uses `TrainedDictionary` and `DomainResult` (#605); `ZstdDictionary` holds a `TrainedDictionary` plus the zstd magic check.
 6. `ByteCodec::ZstdDict` is not fuzzed (#575, open).
 7. `Error::CompressionError` and `SecurityError` carry `String` (#599).
 

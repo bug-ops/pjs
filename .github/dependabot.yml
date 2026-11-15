@@ -24,10 +24,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    # Ignore nightly-specific dependencies
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
 
   # Fuzz crate (standalone workspace, not covered by the root manifest)
   - package-ecosystem: "cargo"
@@ -50,9 +46,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
 
   # GitHub Actions
   - package-ecosystem: "github-actions"

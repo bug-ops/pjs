@@ -1,10 +1,11 @@
 //! PJS Domain Layer - Pure Business Logic
 //!
 //! This crate contains the pure domain logic for PJS (Priority JSON Streaming Protocol)
-//! with ZERO external dependencies (except thiserror for error handling).
+//! with a small dependency set: `serde`, `serde_json`, `chrono`, `smallvec`,
+//! `uuid` and `thiserror`.
 //!
 //! The domain layer is WASM-compatible and can be used in both native and
-//! WebAssembly environments.
+//! WebAssembly environments. It requires `std`.
 //!
 //! ## Architecture
 //!
@@ -12,21 +13,9 @@
 //! - **Value Objects**: Immutable, validated domain concepts (Priority, JsonPath, etc.)
 //! - **Entities**: Domain objects with identity (Frame, Stream)
 //! - **Domain Events**: State change notifications
-//!
-//! ## Features
-//!
-//! - `std` (default): Standard library support
-//! - `serde`: Serialization support for WASM interop
-//! - `wasm`: Enables WASM-specific optimizations
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
-
-#[cfg(not(feature = "std"))]
-extern crate alloc;
-
-#[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
 
 pub mod entities;
 pub mod events;

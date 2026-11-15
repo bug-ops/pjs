@@ -6,4 +6,4 @@ pub mod stream_map;
 
 pub use frame::Frame;
 pub use stream::Stream;
-pub use stream_map::StreamMap;
+pub use stream_map::{StreamMap, StreamMut};

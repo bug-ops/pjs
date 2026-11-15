@@ -50,13 +50,13 @@ Each pattern carries a **status** (Compliant, Partial, Drift) and an **enforceme
 | Application | `crates/pjs-core/src/application/` | domain; defines `commands/`, `queries/`, `handlers/`, `dto/`, `shared.rs` |
 | Infrastructure | `crates/pjs-core/src/infrastructure/` | domain ports plus `axum`, `tokio`, `tokio-tungstenite`, `subtle`, etc.: `adapters/`, `http/`, `websocket/`, `repositories/`, `bounded_channel.rs`, `schema_repository.rs` |
 | Cross-cutting | `compression/`, `parser/`, `stream/`, `security/`, `config/`, `error.rs`, `global_alloc.rs` | used by application and infrastructure |
-| Edge crates | `pjs-wasm` (depends only on `pjson-rs-domain`, features `std`+`wasm`), `pjs-demo`, `pjs-bench`, `pjs-js-client` | |
+| Edge crates | `pjs-wasm` (depends only on `pjson-rs-domain`, no features), `pjs-demo`, `pjs-bench`, `pjs-js-client` | |
 
 ### Dependency direction (verified 2026-11-15)
 
 - `rg` over `crates/pjs-domain/src` finds no `tokio`, `axum`, `sonic`, `brotli`, `flate`, `jiter`, `reqwest`, `hyper` imports (only substring hits in doc comments).
 - `crates/pjs-core/src/domain/` contains `use tokio::` only inside `#[cfg(test)]` modules (`services/gat_orchestrator.rs`, `ports/gat.rs`, `ports/repositories.rs`). The former production leak (`ConnectionManager` with `tokio::sync::RwLock`) was deleted with the orphaned `PriorityService`/`TimeoutMonitor` chain in #254 (closes #251).
-- `pjs-domain` documents itself as `no_std`-capable (`#![cfg_attr(not(feature = "std"), no_std)]`) but the `no_std` build currently fails to compile (open #606). Treat the `no_std` claim as aspirational until fixed.
+- `pjs-domain` is `std` only: the unsupported `no_std` mode and the `std` and `wasm` features were removed (#606).
 
 ### Known leaks
 
@@ -64,7 +64,7 @@ Each pattern carries a **status** (Compliant, Partial, Drift) and an **enforceme
 |---|---|---|---|
 | L1 | `tokio::sync::RwLock` in `domain/services/connection_manager.rs` | removed | Resolved (#254) |
 | L2 | `application/handlers/command_handlers.rs` imports `crate::infrastructure::adapters::InMemoryFrameStore` as the default type parameter `F` of `SessionCommandHandler` and constructs it in `SessionCommandHandler::new` / `with_dictionary_store` | `application/handlers/command_handlers.rs` | Open (D15) |
-| L3 | `domain/ports/dictionary_store.rs` imports `crate::compression::zstd::ZstdDictionary` and `crate::Result` (top-level `pjson_rs::Error`), so a domain port depends on a cross-cutting module and an infrastructure-flavoured error | `domain/ports/dictionary_store.rs` | Open (D16, related to #605) |
+| L3 | `domain/ports/dictionary_store.rs` used `crate::compression::zstd::ZstdDictionary` and `crate::Result`; it now uses `TrainedDictionary` (in `pjs-domain`) and `DomainResult` | `domain/ports/dictionary_store.rs` | Resolved (D16, #605) |
 
 ### Rule for new code
 
@@ -182,7 +182,7 @@ The 1.82x claim (CLAUDE.md) is attributed to removing `async_trait` virtual disp
 
 ### Deliberate exception
 
-`DictionaryStore` returns `DictionaryFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>` because it is cold-path (once per dictionary request or sample batch) and used as `Arc<dyn DictionaryStore>`. Its methods are `cfg`-gated on `all(feature = "compression", not(target_arch = "wasm32"))` (open #605).
+`DictionaryStore` returns `DictionaryFuture<'a, T> = Pin<Box<dyn Future<Output = DomainResult<T>> + Send + 'a>>` because it is cold-path (once per dictionary request or sample batch) and used as `Arc<dyn DictionaryStore>`. The port is not feature-gated and uses `TrainedDictionary` (#605); only the `InMemoryDictionaryStore` adapter needs `compression`.
 
 **Rule:** hot-path port (per frame/decode/event) uses `gat_port!`; cold-path port may box, with the choice documented.
 
@@ -196,13 +196,13 @@ The 1.82x claim (CLAUDE.md) is attributed to removing `async_trait` virtual disp
 |---|---|---|
 | `ZstdDictionary(Vec<u8>)` | private `new_checked` (`compression/zstd.rs`) | non-empty, `<= MAX_DICT_SIZE` (112 KiB), magic `0xEC30A437`; documented as a type invariant |
 | `Priority`, `JsonPath`, `JsonData::float` | see 2.1 | |
-| `Validated<T>` / `ValidatedSecurityConfig` / `ValidatedCompressionConfig` (`config.rs`) | sealed `Validate` trait; only `Validate::validated()` yields a `Validated<T>` | proof that `validate()` passed. Weakened by #614 (`SecurityConfig::validate` accepts zero for 12 fields) |
+| `Validated<T>` / `ValidatedSecurityConfig` / `ValidatedCompressionConfig` (`config.rs`) | sealed `Validate` trait; only `Validate::validated()` yields a `Validated<T>` | proof that `validate()` passed. `SecurityConfig::validate` rejects zero and inconsistent limits (#614) |
 | `MaxDepth(usize)` (`config/security.rs`) | `From<&ValidatedSecurityConfig>` | depth derived from validated config |
 | `ConnectionId(Uuid)` (`infrastructure/websocket/mod.rs`) | newtype | WebSocket session owner tag |
 
 Other enforced patterns: sealed `PartialJsonParser` (`parser/partial.rs`, feature `partial-parse`) so only `pjs-core` implements it; sealed `IdMarker`; `Id<Marker>` brands. State machines (`SessionState`, `StreamState`, `FrameType`) are runtime enums, not typestate, by choice.
 
-**Known gaps:** `pjson_rs::Error` is stringly typed (open #599); `StreamFilter::validate` is never called (open #604); `SessionConfig`/`SessionStats` are plain structs with public fields.
+**Known gaps:** `pjson_rs::Error` is stringly typed (open #599); `StreamFilter`, `SessionQueryCriteria` and `Pagination` validate at construction (#604) and `SessionConfig.session_timeout` is a `SessionTimeout` (#596); `SessionConfig`/`SessionStats` are otherwise plain structs with public fields.
 
 **Rule for new types with invariants:** private fields, a single `new`/`new_checked`/`try_from` gate, the invariant stated in the type's doc comment. `unsafe` constructors are not allowed in `pjs-domain`.
 
@@ -234,7 +234,7 @@ Other enforced patterns: sealed `PartialJsonParser` (`parser/partial.rs`, featur
 6. Depth/size bounds: `SecurityConfig` (`config/security.rs`, `MAX_SAFE_JSON_DEPTH` ceiling), `SecurityValidator::validate_json_depth_bytes` (string-aware), `DepthTracker`, schema/DTO recursion guards, `serve_with_limits` connection limits (`infrastructure/http/serve.rs`), WebSocket origin allow-list and rate limits (`infrastructure/websocket/security.rs`).
 7. CORS origins validated at router build time (`build_cors_layer` returns `PjsError::HttpError`).
 
-Known gaps: `max_array_length`/`max_object_keys`/`max_string_length` in `SecurityConfig` are not enforced by the parsers (open #613); no explicit header-size cap in `ConnectionLimits` (open #618).
+`ZeroCopyParser` enforces the array, object-key and string limits (#613) and `ConnectionLimits.max_header_bytes` caps request headers (#618); several other `SecurityConfig` fields remain unread.
 
 **Rule:** untrusted decoding goes through a budget gate; structured inputs fail at type construction; credential comparison is constant-time; document the threat model in the module doc.
 
@@ -269,7 +269,7 @@ Known gaps: `max_array_length`/`max_object_keys`/`max_string_length` in `Securit
 - Hot-path traits are GAT (section 4); tokio primitives appear only in `infrastructure/` (and test modules).
 - CPU-bound zstd training runs in `tokio::task::spawn_blocking` (`infrastructure/repositories/dictionary_store.rs`).
 - Streaming bodies use `async_stream::try_stream!` (`BatchFrameStream::into_stream`). A hand-written `poll_next` remains only inside a test harness (`PendingThenReady` in `infrastructure/http/streaming.rs`, used to catch waker-contract bugs, #166/#168).
-- WebSocket frame fan-out uses a shared `tokio::sync::broadcast` channel tagged with the owner `ConnectionId`; a slow receiver can lose other connections' frames (open #570).
+- WebSocket frames go through a per-connection bounded outgoing channel owned by the controller, so a slow connection stalls only its own sessions (#570).
 
 **Rule:** new `Stream` impls use `async_stream`; CPU-bound work over about 1 ms goes through `spawn_blocking`.
 
@@ -310,7 +310,7 @@ Gating idiom: `#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 - `CHANGELOG.md` is Keep-a-Changelog; pre-1.0 breaking changes are allowed without deprecation but must be marked BREAKING and carry `!`/`BREAKING CHANGE:` in the commit.
 - Conventional Commits per `.claude/rules/commits-and-issues.md`.
 
-Open CI observations: `release.yml` publish job uses a stable toolchain although the crate needs nightly (#617); dependabot ignores semver-major (#616).
+CI observations: the publish job installs nightly (#617) and dependabot proposes semver-major updates (#616).
 
 ---
 
@@ -349,14 +349,14 @@ Before a PR: `RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links" cargo doc --
 | D13 | `StreamingOrchestrator` orphan | | | **Resolved** (#234) |
 | D14 | `cargo deny`/audit not in CI | | Low | **Resolved** for deny and OSV (jobs `security-deny`, `security-osv`, PR/merge-queue/schedule only); `cargo audit` is not run in CI |
 | D15 | `application/` depends on `infrastructure::adapters::InMemoryFrameStore` (default type param and constructors of `SessionCommandHandler`) | `application/handlers/command_handlers.rs` | Medium | **New, open**; no issue found by `gh issue list --search` |
-| D16 | `domain/ports/dictionary_store.rs` imports `crate::compression::zstd` and `crate::Result` | `domain/ports/` | Low | **New, open** (related #605) |
-| D17 | `pjs-domain` `no_std` build fails; docs mention a nonexistent `serde` feature | `pjs-domain` | Low | **New, open** #606 |
-| D18 | `SecurityConfig::validate` permissive; parser limits unenforced | `config/security.rs` | Medium | **New, open** #613, #614 |
+| D16 | `domain/ports/dictionary_store.rs` imported `crate::compression::zstd` and `crate::Result` | `domain/ports/` | Low | **Resolved** (#605) |
+| D17 | `pjs-domain` `no_std` build fails; docs mention a nonexistent `serde` feature | `pjs-domain` | Low | **Resolved** (mode and features removed, #606) |
+| D18 | `SecurityConfig::validate` permissive; parser limits unenforced | `config/security.rs` | Medium | **Resolved** (#613, #614) |
 | D19 | `EventStoreGat` has no production implementation | `domain/ports/gat.rs` | Low | Open (design stub; matches section 19) |
 | D20 | A few non-test `unsafe` sites lack an adjacent SAFETY comment (for example `AlignedAllocator::realloc_aligned`/`dealloc_aligned` signatures, some `buffer_pool.rs` call sites); not exhaustively audited | `parser/aligned_alloc.rs`, `parser/buffer_pool.rs` | Low | **New, open** |
 | D21 | No `#[cfg_attr(docsrs, doc(cfg(...)))]` on feature-gated API despite the rule | all crates | Low | **New, open** |
-| D22 | `pjson_rs::Error` is stringly typed; `StreamFilter::validate` never called | `error.rs`, `domain/ports/repositories.rs` | Medium | **New, open** #599, #604 |
-| D23 | WebSocket transport never prioritizes; shared broadcast can drop other connections' frames | `infrastructure/websocket/` | Medium | **New, open** #600, #570 |
+| D22 | `pjson_rs::Error` is stringly typed; `StreamFilter::validate` never called | `error.rs`, `domain/ports/repositories.rs` | Medium | `Error` open (#599); filter validation resolved (#604) |
+| D23 | WebSocket transport never prioritizes; shared broadcast could drop other connections' frames | `infrastructure/websocket/` | Medium | Broadcast removed (#570); planner open (#624) |
 | D24 | `CLAUDE.md` (project) still lists `jemalloc` feature and says `pjs-demo` is excluded from the workspace; CI comment says "Windows skips mimalloc" but the matrix runs 3 OS x 2 allocators | `.claude/CLAUDE.md`, `.github/workflows/ci.yml` | Low | **New, open** (docs/comments only) |
 
 ---

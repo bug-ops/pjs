@@ -58,8 +58,8 @@ Status: done.
 Status: done (#456, #568).
 
 ### FR-003 Validation
-`SecurityConfig::validate` shall fail if `min_session_id_length > max_session_id_length`, if `json.max_depth > 512`, or if any of these ten fields is zero: `json.{max_input_size, max_depth, max_string_length}`, `buffers.{max_buffer_size, max_total_memory}`, `network.{max_websocket_frame_size, max_http_payload_size}`, `sessions.{max_session_id_length, min_session_id_length, max_session_data_size}`. It returns the first error as `ConfigError::{MustBePositive{section, field}, InconsistentBounds{section, message}}`.
-Status: done, incomplete (see Open Questions 2).
+`SecurityConfig::validate` shall fail if `min_session_id_length > max_session_id_length`, if `json.max_depth > 512`, if any limit, count or timeout field is zero, or if `buffers.max_buffer_size > buffers.max_total_memory`, `network.max_websocket_frame_size > json.max_input_size` or `sessions.max_session_data_size > buffers.max_total_memory`. It returns the first error as `ConfigError::{MustBePositive{section, field}, InconsistentBounds{section, message}}`.
+Status: done (#614).
 
 ### FR-004 Proof type
 `Validate::validated(self) -> Result<Validated<Self>, ConfigError>` shall be the only way to build `Validated<T>`; the trait is sealed (implemented for `SecurityConfig` and `CompressionConfig` only); `Validated<T>` has a private field, `Deref<Target = T>`, and `into_inner(self) -> T`. `Default`, `high_throughput`, `low_memory`, `development` exist directly on `ValidatedSecurityConfig`, `Default` on `ValidatedCompressionConfig`.
@@ -82,8 +82,8 @@ Status: done.
 Status: done.
 
 ### FR-009 Enforcement points
-Production code shall call: `SecurityValidator::validate_input_size` and `validate_json_depth` from `ZeroCopyParser` (input size once, depth at each nesting level), and `validate_buffer_size` from `BufferPool`; `BufferPool` also enforces `max_total_memory`.
-Status: partial. See Open Questions 1.
+Production code shall call: `SecurityValidator::validate_input_size`, `validate_json_depth`, `validate_string_length`, `validate_object_keys` and `validate_array_length` from `ZeroCopyParser` (input size once, the others at each string, object and array, #613), and `validate_buffer_size` from `BufferPool`; `BufferPool` also enforces `max_total_memory`.
+Status: partial. The remaining unread config fields are listed in Open Questions 1.
 
 ### FR-010 Config accessors
 `NetworkLimits::connection_timeout`, `BufferLimits::buffer_ttl`, `SessionLimits::session_timeout` shall return `Duration` from the `*_secs` fields.
@@ -122,8 +122,8 @@ Types listed in the Scope callout; `ConfigError { MustBePositive{section, field}
 
 ## Open Questions
 
-1. #613 (open): `json.max_array_length`, `max_object_keys`, `max_string_length` have validator methods but no non-test caller; `ZeroCopyParser` checks depth and input size only. Also not read anywhere in production (by grep over `crates/pjs-core/src`): `network.{max_concurrent_connections, max_requests_per_second, rate_limiting, compression_bomb}`, `sessions.{max_streams_per_session, session_timeout_secs, max_session_data_size}`, `buffers.max_pool_size`, `max_http_payload_size`. `validate_session_id`, `validate_websocket_frame_size`, `DepthTracker` and `validate_json_depth_bytes` have no production callers (CHANGELOG records the removal of the parsers that called the byte scan).
-2. #614 (open): `validate` accepts zero for twelve other fields and does not check cross-field consistency (e.g. `max_buffer_size > max_total_memory`).
+1. Not read anywhere in production (by grep over `crates/pjs-core/src`): `network.{max_concurrent_connections, max_requests_per_second, rate_limiting, compression_bomb}`, `sessions.{max_streams_per_session, session_timeout_secs, max_session_data_size}`, `buffers.max_pool_size`, `max_http_payload_size`. `validate_session_id`, `validate_websocket_frame_size`, `DepthTracker` and `validate_json_depth_bytes` have no production callers (CHANGELOG records the removal of the parsers that called the byte scan). `ZeroCopyParser` now enforces `max_array_length`, `max_object_keys` and `max_string_length` (#613).
+2. Resolved (#614): `validate` rejects zero for every limit, count and timeout and checks `max_buffer_size <= max_total_memory`, `max_websocket_frame_size <= json.max_input_size` and `max_session_data_size <= max_total_memory`.
 3. Violations return `Error::Other(String)` rather than a typed security error (#599).
 4. `SecurityConfig` and its sub-structs have public fields and `Deserialize`, so invalid values are representable until `validated()` is called; only the wrapper types make them unreachable by consumers.
 5. `Validated<T>::into_inner` gives up the proof and the inner value is then mutable; re-validation is the caller's job.

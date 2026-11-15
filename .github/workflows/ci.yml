@@ -14,10 +14,6 @@ on:
 
 permissions:
   contents: read
-  statuses: write
-  security-events: write
-  actions: read
-  pull-requests: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -39,6 +35,9 @@ jobs:
   changes:
     name: Detect changed paths
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       wasm: ${{ steps.filter.outputs.wasm }}
@@ -603,6 +602,9 @@ jobs:
     needs: [changes, wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
     if: |
       needs.changes.outputs.wasm == 'true' ||
       github.event_name == 'push' ||
@@ -778,6 +780,65 @@ jobs:
           path: wasm-pkg/
           retention-days: 7
 
+  # ── Feature matrix and MSRV ──────────────────────────────────────────────
+  # Every feature must compile on its own (no dev-deps, keep going past the
+  # first failure so one run reports every broken combination).
+  feature-matrix:
+    name: Feature Matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [changes]
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-hack
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "feature-matrix"
+          cache-on-failure: true
+
+      - name: Check each feature
+        run: cargo hack check -p pjson-rs -p pjson-rs-domain --each-feature --no-dev-deps --keep-going
+
+  # Only the crates that build on stable have a meaningful MSRV; pjson-rs needs
+  # nightly and carries no rust-version.
+  msrv:
+    name: MSRV (1.89)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [changes]
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "msrv"
+          cache-on-failure: true
+
+      - name: Check MSRV
+        run: cargo +1.89 check -p pjson-rs-domain -p pjs-wasm --locked
+
   # ── Security (independent, no Rust build required) ────────────────────────
   security-osv:
     name: OSV Security Scan
@@ -869,6 +930,8 @@ jobs:
       - wasm-node-example
       - wasm-types-drift
       - wasm-package-validation
+      - feature-matrix
+      - msrv
       - security-osv
       - security-deny
       - js-client-test
@@ -897,6 +960,8 @@ jobs:
           check wasm-node-example         "${{ needs.wasm-node-example.result }}"
           check wasm-types-drift          "${{ needs.wasm-types-drift.result }}"
           check wasm-package-validation   "${{ needs.wasm-package-validation.result }}"
+          check feature-matrix            "${{ needs.feature-matrix.result }}"
+          check msrv                      "${{ needs.msrv.result }}"
           check security-osv              "${{ needs.security-osv.result }}"
           check security-deny             "${{ needs.security-deny.result }}"
           check js-client-test            "${{ needs.js-client-test.result }}"

@@ -324,43 +324,39 @@ fn build_dictionary(
 }
 
 /// Compute the total wire-transmitted size of a compressed payload: the serialized `data` plus
-/// its side-channel `metadata`, when present.
+/// its `dictionary` envelope (`{"dict":[...]}`), when present.
 ///
 /// `CompressedData::compressed_size` and everything derived from it
 /// (`compression_ratio`, `compression_savings`,
 /// [`crate::stream::compression_integration::CompressionStats::bytes_saved`]) are always
 /// measured this way — the report is never a model estimate, so it can never claim a false
 /// saving even when the *selection* model used elsewhere (see [`build_dictionary`]) is wrong.
-fn wire_size(data: &JsonValue, metadata: &HashMap<String, JsonValue>) -> DomainResult<usize> {
-    let mut size = serde_json::to_string(data)
-        .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
-        .len();
-    if !metadata.is_empty() {
-        size += serde_json::to_string(metadata)
-            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))?
-            .len();
+fn wire_size(data: &JsonValue, dictionary: Option<&[String]>) -> DomainResult<usize> {
+    let serialized_len = |value: &JsonValue| {
+        serde_json::to_string(value)
+            .map(|s| s.len())
+            .map_err(|e| DomainError::CompressionError(format!("JSON serialization failed: {e}")))
+    };
+    let mut size = serialized_len(data)?;
+    if let Some(dictionary) = dictionary {
+        size += serialized_len(&json!({ "dict": dictionary }))?;
     }
     Ok(size)
 }
 
-/// Build the wire-format dictionary metadata: an index-ordered JSON array of strings, where
-/// array position `i` holds the string assigned dictionary index `i`.
+/// Build the wire-format dictionary: an index-ordered list of strings, where position `i`
+/// holds the string assigned dictionary index `i`.
 ///
 /// Any index not present in `dictionary` (a caller contract violation — indices are expected to
 /// be exactly `0..dictionary.len()`) is degraded to an empty string slot rather than panicking.
-fn dictionary_metadata(dictionary: &HashMap<String, u16>) -> JsonValue {
-    let mut ordered: Vec<Option<&str>> = vec![None; dictionary.len()];
+fn dictionary_entries(dictionary: &HashMap<String, u16>) -> Vec<String> {
+    let mut ordered = vec![String::new(); dictionary.len()];
     for (s, &i) in dictionary {
-        if let Some(slot) = ordered.get_mut(i as usize) {
-            *slot = Some(s.as_str());
+        if let Some(slot) = ordered.get_mut(usize::from(i)) {
+            slot.clone_from(s);
         }
     }
-    JsonValue::Array(
-        ordered
-            .into_iter()
-            .map(|s| JsonValue::String(s.unwrap_or_default().to_string()))
-            .collect(),
-    )
+    ordered
 }
 
 /// Encode dictionary substitutions as sentinel-escaped string markers.
@@ -443,15 +439,12 @@ impl SchemaCompressor {
     /// Compress JSON data according to current strategy
     pub fn compress(&self, data: &JsonValue) -> DomainResult<CompressedData> {
         match &self.strategy {
-            CompressionStrategy::None => {
-                let metadata = HashMap::new();
-                Ok(CompressedData {
-                    strategy: self.strategy.clone(),
-                    compressed_size: wire_size(data, &metadata)?,
-                    data: data.clone(),
-                    compression_metadata: metadata,
-                })
-            }
+            CompressionStrategy::None => Ok(CompressedData {
+                strategy: self.strategy.clone(),
+                compressed_size: wire_size(data, None)?,
+                data: data.clone(),
+                dictionary: None,
+            }),
 
             CompressionStrategy::Dictionary { dictionary } => {
                 self.compress_with_dictionary(data, dictionary)
@@ -471,45 +464,41 @@ impl SchemaCompressor {
         data: &JsonValue,
         dictionary: &HashMap<String, u16>,
     ) -> DomainResult<CompressedData> {
-        let mut metadata = HashMap::new();
-        metadata.insert("dict".to_string(), dictionary_metadata(dictionary));
-
+        let entries = dictionary_entries(dictionary);
         let compressed = substitute_dictionary_strings(data, dictionary);
-        let compressed_size = wire_size(&compressed, &metadata)?;
+        let compressed_size = wire_size(&compressed, Some(&entries))?;
 
         Ok(CompressedData {
             strategy: self.strategy.clone(),
             compressed_size,
             data: compressed,
-            compression_metadata: metadata,
+            dictionary: Some(entries),
         })
     }
 
     /// Delta compression for integer arrays
     fn compress_with_delta(&self, data: &JsonValue) -> DomainResult<CompressedData> {
-        let metadata = HashMap::new();
         let compressed = self.apply_delta_compression(data);
-        let compressed_size = wire_size(&compressed, &metadata)?;
+        let compressed_size = wire_size(&compressed, None)?;
 
         Ok(CompressedData {
             strategy: self.strategy.clone(),
             compressed_size,
             data: compressed,
-            compression_metadata: metadata,
+            dictionary: None,
         })
     }
 
     /// Run-length encoding compression
     fn compress_with_run_length(&self, data: &JsonValue) -> DomainResult<CompressedData> {
-        let metadata = HashMap::new();
         let compressed = self.apply_run_length_encoding(data);
-        let compressed_size = wire_size(&compressed, &metadata)?;
+        let compressed_size = wire_size(&compressed, None)?;
 
         Ok(CompressedData {
             strategy: self.strategy.clone(),
             compressed_size,
             data: compressed,
-            compression_metadata: metadata,
+            dictionary: None,
         })
     }
 
@@ -550,20 +539,19 @@ impl SchemaCompressor {
         data: &JsonValue,
         string_dict: &HashMap<String, u16>,
     ) -> DomainResult<CompressedData> {
-        let mut metadata = HashMap::new();
-        metadata.insert("dict".to_string(), dictionary_metadata(string_dict));
+        let entries = dictionary_entries(string_dict);
 
         // Dictionary substitution first, then delta; the decoder reverses the order.
         let dict_compressed = substitute_dictionary_strings(data, string_dict);
         let final_compressed = self.apply_delta_compression(&dict_compressed);
 
-        let compressed_size = wire_size(&final_compressed, &metadata)?;
+        let compressed_size = wire_size(&final_compressed, Some(&entries))?;
 
         Ok(CompressedData {
             strategy: self.strategy.clone(),
             compressed_size,
             data: final_compressed,
-            compression_metadata: metadata,
+            dictionary: Some(entries),
         })
     }
 
@@ -602,19 +590,28 @@ impl SchemaCompressor {
     }
 }
 
-/// Compressed data with metadata
+/// `minuend - subtrahend` as a signed value, saturating at the `isize` bounds instead of
+/// wrapping on sizes above `isize::MAX`.
+pub(crate) fn signed_difference(minuend: usize, subtrahend: usize) -> isize {
+    isize::try_from(minuend)
+        .unwrap_or(isize::MAX)
+        .saturating_sub(isize::try_from(subtrahend).unwrap_or(isize::MAX))
+}
+
+/// Compressed data with its decompression dictionary
 #[derive(Debug, Clone)]
 pub struct CompressedData {
     /// Strategy that produced the compressed payload.
     pub strategy: CompressionStrategy,
-    /// Total wire-transmitted size, in bytes: `data` after JSON serialization plus
-    /// `compression_metadata` when non-empty. This is always a measured value, never a model
-    /// estimate — see the `wire_size` helper in this module.
+    /// Total wire-transmitted size, in bytes: `data` after JSON serialization plus the
+    /// `{"dict":[...]}` envelope when `dictionary` is present. This is always a measured value,
+    /// never a model estimate — see the `wire_size` helper in this module.
     pub compressed_size: usize,
     /// JSON payload after compression has been applied.
     pub data: JsonValue,
-    /// Side-channel metadata required for decompression (the dictionary).
-    pub compression_metadata: HashMap<String, JsonValue>,
+    /// Dictionary required for decompression; index `i` is the string at position `i`
+    /// (at most `u16::MAX` entries). `None` when the strategy uses no dictionary.
+    pub dictionary: Option<Vec<String>>,
 }
 
 impl CompressedData {
@@ -628,7 +625,7 @@ impl CompressedData {
 
     /// Get compression savings in bytes
     pub fn compression_savings(&self, original_size: usize) -> isize {
-        original_size as isize - self.compressed_size as isize
+        signed_difference(original_size, self.compressed_size)
     }
 }
 
@@ -850,10 +847,9 @@ mod tests {
 
         let result = compressor.compress(&data).unwrap();
 
-        // Verify compression metadata contains the index-ordered dictionary array.
         assert_eq!(
-            result.compression_metadata.get("dict"),
-            Some(&json!(["active", "admin"]))
+            result.dictionary,
+            Some(vec!["active".to_string(), "admin".to_string()])
         );
     }
 
@@ -915,10 +911,12 @@ mod tests {
         // Size-honesty regression test for issue #333 S5: `compressed_size` must equal the
         // actual serialized data plus metadata bytes for every strategy, never a model
         // estimate.
-        fn expected_wire_size(data: &JsonValue, metadata: &HashMap<String, JsonValue>) -> usize {
+        fn expected_wire_size(data: &JsonValue, dictionary: &Option<Vec<String>>) -> usize {
             let mut size = serde_json::to_string(data).unwrap().len();
-            if !metadata.is_empty() {
-                size += serde_json::to_string(metadata).unwrap().len();
+            if let Some(dictionary) = dictionary {
+                size += serde_json::to_string(&json!({ "dict": dictionary }))
+                    .unwrap()
+                    .len();
             }
             size
         }
@@ -947,7 +945,7 @@ mod tests {
             let result = compressor.compress(&data).unwrap();
             assert_eq!(
                 result.compressed_size,
-                expected_wire_size(&result.data, &result.compression_metadata),
+                expected_wire_size(&result.data, &result.dictionary),
                 "strategy {:?} mismatched wire size",
                 result.strategy
             );

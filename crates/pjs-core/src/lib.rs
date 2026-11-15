@@ -6,13 +6,7 @@
 
 #![feature(impl_trait_in_assoc_type)]
 #![cfg_attr(feature = "metrics", feature(once_cell_try))]
-#![warn(rust_2018_idioms)]
 #![warn(missing_docs)]
-#![deny(unsafe_op_in_unsafe_fn)]
-// Allow specific clippy warnings that are intentional design choices
-#![allow(clippy::manual_div_ceil)] // Performance: manual div_ceil is faster
-#![allow(clippy::only_used_in_recursion)] // Recursive algorithms by design
-// Note: dead_code is now handled per-item with targeted annotations
 
 pub mod application;
 pub mod compression;
@@ -92,7 +86,7 @@ pub use compression::{
 
 // Streaming exports
 pub use error::{Error, Result};
-#[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
+#[cfg(feature = "websocket-server")]
 pub use infrastructure::websocket::SecureWebSocketHandler;
 pub use parser::{LazyParser, ZeroCopyParser};
 pub use security::{

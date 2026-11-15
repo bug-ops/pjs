@@ -21,6 +21,8 @@ related:
   - "[[029-websocket-stream-session-binding/spec|Demo session/URL binding]]"
   - "[[037-graceful-shutdown-serve-with-limits/spec|Graceful shutdown]]"
 code:
+  - crates/pjs-core/src/infrastructure/websocket/controller.rs
+  - crates/pjs-core/src/infrastructure/websocket/protocol.rs
   - crates/pjs-core/src/infrastructure/websocket/mod.rs
   - crates/pjs-core/src/infrastructure/websocket/server.rs
   - crates/pjs-core/src/infrastructure/websocket/security.rs
@@ -32,7 +34,7 @@ verified: 2026-11-15
 # WebSocket server transport: upgrade, ownership, caps and TTL
 
 > [!info] Status
-> `partial`: transport hardening (origin check, rate limits, frame caps, write timeout, bounded queues, per-connection session ownership and cleanup) is implemented and covered by wire-level tests. Delivery semantics are minimal: every session is a single-frame plan and `StreamOptions` are ignored (issue #600). Message formats are in [[067-websocket-wire-protocol/spec|067]].
+> `partial`: transport hardening (origin check, rate limits, frame caps, write timeout, bounded queues, per-connection session ownership and cleanup) is implemented and covered by wire-level tests. Delivery semantics are minimal: every session is a single-frame plan and only default `StreamOptions` are accepted (real planner: #624). Message formats are in [[067-websocket-wire-protocol/spec|067]].
 
 ## Overview
 
@@ -40,9 +42,9 @@ verified: 2026-11-15
 
 **Goal.** `AxumWebSocketTransport` upgrades requests at an axum route, tracks connections, and routes frames only to the owning connection.
 
-**Out of scope.** Priority-ordered multi-frame plans (#600), HTTP session integration (the WebSocket session model is disjoint from `StreamSession`, issue #239), graceful shutdown ([[037-graceful-shutdown-serve-with-limits/spec|037]], #590).
+**Out of scope.** Priority-ordered multi-frame plans (#624), HTTP session integration (the WebSocket session model is disjoint from `StreamSession`, issue #239).
 
-Feature gates: `websocket-server` (= `http-server`); module `infrastructure::websocket` is compiled under `http-server`. `websocket-client` adds the client ([[068-websocket-client/spec|068]]).
+Feature gates: `websocket-server` (= `http-server`); the server module and `SecureWebSocketHandler` are gated by `websocket-server`, not `http-server` (#598). `websocket-client` adds the client ([[068-websocket-client/spec|068]]).
 
 ## User Stories
 
@@ -66,7 +68,7 @@ On upgrade the handler shall, in order: (1) apply `ClientRateLimiter::check_requ
 
 ### FR-004 Connection lifecycle
 
-`handle_socket(socket, client_ip)` shall: create a `RateLimitGuard` (per-IP concurrent-connection cap; on failure send close code `1008` and return); assign a `ConnectionId` (server-side `Uuid`, never on the wire); register an outgoing channel `byte_bounded_channel<String>(1000 messages, 16 MiB)`; run one `select!` loop over (a) the controller's frame broadcast, forwarding only events whose owner equals this connection, (b) the outgoing channel, (c) inbound messages; on exit remove the channel, call `remove_sessions_owned_by(connection_id)` (aborting streaming tasks), remove the connection record and drop the guard.
+`handle_socket(socket, client_ip)` shall: create a `RateLimitGuard` (per-IP concurrent-connection cap; on failure send close code `1008` and return); assign a `ConnectionId` (server-side `Uuid`, never on the wire); register an outgoing channel `byte_bounded_channel<String>(1000 messages, 16 MiB)` with the controller under that id; run one `select!` loop over the outgoing channel, inbound messages and the shutdown signal; on exit detach the connection, abort its sessions' streaming tasks and drop the guard. Frames reach a connection only through its own channel, so there is no shared broadcast. When a `ShutdownSignal` is set via `with_shutdown`, the loop sends close code `1001` and ends, and its task is tracked by the signal ([[037-graceful-shutdown-serve-with-limits/spec|037]]).
 
 ### FR-005 Inbound handling
 
@@ -76,25 +78,27 @@ On upgrade the handler shall, in order: (1) apply `ClientRateLimiter::check_requ
 | Binary | `check_message(len)` then ignored (debug log only) |
 | Ping (protocol) | `Pong` with same payload |
 | Pong | ignored |
+| `WsMessage::Ping` | `WsMessage::Pong` with the same timestamp |
+| `WsMessage::StreamCancel` | ends the connection's own session |
 | Close / transport error | end loop |
 
 Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitConfig`). Oversize frames are rejected during frame assembly by the transport cap before the application check.
 
 ### FR-006 Session ownership
 
-`StreamInit` shall be handled as: nil UUID answers `Error{400, "nil session id is not allowed"}` and returns an error; otherwise `create_session(session_id, owner = connection, data, options)` and, if the id exists, answer `Error{session_id, 409, "session id already in use"}` and leave the existing session untouched; on success start the streaming task. `FrameAck` is accepted only from the owner (`handle_frame_ack` filters on owner; non-owner or unknown session yields `InvalidSession` and no metric change). Session ids are peer-chosen, share one namespace across connections, and must be random v4 (a predictable id can be pre-claimed, an availability risk only).
+`StreamInit` shall be handled as: nil UUID answers `Error{400, "nil session id is not allowed"}`; non-default `StreamOptions` answer `Error{400, "unsupported stream options"}` and create no session; otherwise `create_session(session_id, owner = connection, data, options)`. A duplicate id on the same connection answers `Error{session_id, 409, "session id already in use"}` and leaves the existing session untouched; a connection already holding the cap of live sessions (`with_max_sessions_per_connection`, default 64) answers `Error{session_id, 429, "too many live sessions on this connection"}`. On success the streaming task starts. `FrameAck` and `StreamCancel` act only on a session of the sending connection (unknown ids are ignored). Session ids are peer-chosen and scoped to the connection: two connections may use the same id without interacting (#572, #571). A session stops being live before its `StreamComplete` is queued, so the id can be reused as soon as the peer sees it.
 
 ### FR-007 Streaming task
 
-`start_streaming` shall spawn a task that sends each plan frame as `WsMessage::StreamFrame` tagged `(owner, session_id)` on the shared broadcast (capacity 1000), sleeping `recommended_frame_delay` between frames (10 ms normally; 0.5 x average ack time when average exceeds 100 ms, clamped to 1 s), then sends `StreamComplete` with the checksum (see 067). A supervising task logs panics; a repeated start aborts the earlier task. The plan today is a single frame with `Priority::HIGH` carrying the full `StreamInit.data` (`is_complete: true`).
+`start_streaming` shall spawn a task that sends each plan frame as `WsMessage::StreamFrame` into the owner's outgoing channel, sleeping `recommended_frame_delay` between frames (10 ms normally; 0.5 x average ack time when average exceeds 100 ms, clamped to 1 s), then sends `StreamComplete` (see 067). A supervising task logs panics; a repeated start is a no-op. A frame that exceeds the 16 MiB outgoing byte budget ends the session and the peer receives `Error{413}`. The plan today is a single frame with `Priority::HIGH` carrying the full `StreamInit.data` (`is_complete: true`); the planner is tracked in #624.
 
 ### FR-008 Outgoing path and backpressure
 
-`send_frame(connection, message)` (the `WebSocketTransport` method) shall serialise once, `try_send` with the byte length against the 16 MiB budget, and return `Ok(())` even when the frame is dropped (full channel, closed channel, over budget, unknown connection), logging a `warn!`. It never blocks, so it is safe to call from the connection's own message-handling path. Every socket write uses `send_with_write_timeout` with `RateLimitConfig::write_timeout` (10 s default, 3 s `low_resource`); a timeout is treated as a send error and the connection ends.
+`AxumWebSocketTransport::send_frame(connection, message)` shall serialise once, `try_send` with the byte length against the 16 MiB budget, and return `Ok(())` even when the frame is dropped (full channel, closed channel, over budget, unknown connection), logging a `warn!`. It never blocks, so it is safe to call from the connection's own message-handling path. Every socket write uses `send_with_write_timeout` with `RateLimitConfig::write_timeout` (10 s default, 3 s `low_resource`); a timeout is treated as a send error and the connection ends.
 
 ### FR-009 Session TTL sweep
 
-`with_rate_limit_config` shall spawn a task that every 60 s calls `cleanup_expired_sessions(3600 s)`, aborting streaming tasks of sessions older than one hour; it holds only a `Weak<AdaptiveStreamController>` and exits when the controller is dropped. `AdaptiveStreamController::remove_session(id)` is idempotent and returns whether it removed anything.
+`with_rate_limit_config` shall spawn a task that every 60 s calls `cleanup_expired_sessions(3600 s)`, aborting streaming tasks of sessions older than one hour; it holds only a `Weak<AdaptiveStreamController>` and exits when the controller is dropped. The constructors do not panic outside a Tokio runtime (#602). `AdaptiveStreamController::remove_session(id)` is idempotent and returns whether it removed anything.
 
 ### FR-010 Standalone security helper
 
@@ -110,7 +114,7 @@ Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitCo
 
 ## Data Model
 
-`ConnectionId(Uuid)`, `WsMessage`, `StreamOptions`, `WebSocketStreamSession { id, created_at, options, plan, current_frame, acknowledged_frames, client_metrics, rate_limit_guard, owner (private), stream_task (private) }`, `ClientMetrics` (EMA alpha 0.3), `AdaptiveStreamController { sessions: RwLock<HashMap<SessionId, WebSocketStreamSession>>, frame_tx: broadcast<FrameEvent> }`, `FrameEvent = (ConnectionId, SessionId, Arc<WsMessage>)`, `CreateSessionError::AlreadyExists`, `AxumWebSocketTransport`, trait `WebSocketTransport` (GAT futures), `SecureWebSocketHandler`.
+`ConnectionId(Uuid)`, `WsMessage`, `StreamOptions`, `ClientMetrics` (EMA alpha 0.3), `AdaptiveStreamController` (connections keyed by `ConnectionId`, each holding its outgoing channel and its sessions keyed by `SessionId`), `CreateSessionError { AlreadyExists, TooManySessions }`, `AxumWebSocketTransport`, `SecureWebSocketHandler`. `WebSocketStreamSession` is crate-private and the `WebSocketTransport` trait, `subscribe_frames` and `FrameEvent` were removed (#601, #570).
 
 ## Edge Cases and Errors
 
@@ -122,8 +126,10 @@ Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitCo
 | Inbound frame over cap | rejected at transport, or close 1008 at application check |
 | Malformed text | `Error` 400, connection stays |
 | Nil or duplicate session id | `Error` 400 or 409; existing session untouched |
-| Slow/stalled reader | dropped frames when queue full; disconnect after write timeout |
-| Broadcast lag | `Lagged` logged, frames skipped (#570) |
+| Non-default `StreamOptions` | `Error` 400, no session |
+| Live-session cap reached | `Error` 429 |
+| Server shutdown | close frame 1001 |
+| Slow/stalled reader | stalls only its own sessions; disconnect after write timeout |
 | Connection closes | its sessions and tasks removed |
 
 ## Success Criteria
@@ -133,21 +139,14 @@ Message rate: `max_messages_per_second` 30 with burst 5 by default (`RateLimitCo
 
 ## Agent Boundaries
 
-- Always: tag every broadcast event with its owner; keep replies fixed-text.
+- Always: route every frame through the owner's channel only; keep replies fixed-text.
 - Ask first: changing close codes, defaults, or the wire route.
 - Never: let `send_frame` await channel capacity on the connection's own loop (deadlock).
 
 ## Open Questions
 
-- #570: one shared `broadcast` channel (capacity 1000) means a slow connection can cause `Lagged` for others.
-- #571: no cap on sessions per connection; `remove_sessions_owned_by` scans all sessions. #572 session-lifecycle follow-ups.
-- #600: single-frame plan, `StreamOptions` (`max_frame_size`, `client_fps`, `compression`, `priority_mapping`) unused; #601 dead GAT methods, raw `u8` priority on wire, checksum unverified.
-- #602: `AxumWebSocketTransport::new`/`default` call `tokio::spawn` and panic outside a runtime.
-- #590 / [[037-graceful-shutdown-serve-with-limits/spec|037]]: no graceful close of connections on shutdown.
-- Application-level `WsMessage::Ping` receives no `WsMessage::Pong` reply on the server (comment says "handled automatically" but only protocol-level pings are); the client does answer.
+- #624: single-frame plan; a real priority planner honouring `StreamOptions` is not implemented.
 - Rustdoc elsewhere (`serve.rs`, `streams.rs`) names `/pjs/ws/{session_id}`; the crate route is `/ws`, and the demo mounts `/ws/{session_id}` itself ([[029-websocket-stream-session-binding/spec|029]]).
-- `WebSocketTransport::start_stream` mints a server-side `SessionId` while `StreamInit` adopts the peer's; two creation paths.
-- `active_connections` is a `Vec<ConnectionId>` (linear removal), not a set.
 
 ## See Also
 

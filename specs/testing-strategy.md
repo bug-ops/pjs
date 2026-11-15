@@ -103,8 +103,8 @@ Allocator variants are tested separately (`--features mimalloc`); `jemalloc` no 
 
 1. Integration tests (`crates/*/tests/`) are **not** run by the `test` job (`--lib --bins`). They run in the `coverage` job (`--all-targets`, ubuntu, all features, system allocator), in `wasm-native-tests` (for `pjs-wasm`) and in `release.yml`. Windows and macOS therefore only execute unit tests and doctests.
 2. `wasm_bindgen_test` tests (28) are not executed anywhere in CI; the `wasm-build` job only builds.
-3. No per-feature build matrix: `websocket-client` alone does not compile (open #598) and `pjson-rs-domain` `no_std` fails (open #606); proposed gate is open #615 (`cargo hack --each-feature --keep-going`).
-4. Benchmarks are never run or compared in CI; the A/B of 914fc72 vs dcf9b11 was contaminated by machine load and needs a quiet-machine rerun with documented `--bench <name>` flags (open #619).
+3. Per-feature build matrix: the `feature-matrix` job runs `cargo hack check --each-feature --keep-going` on `pjson-rs` and `pjson-rs-domain` (#615), and the `msrv` job checks `pjson-rs-domain` and `pjs-wasm` on 1.89 (#608).
+4. Benchmarks are never run or compared in CI; the quiet-machine A/B procedure with explicit `--bench <name>` flags is documented in `crates/pjs-bench/README.md` (#619).
 5. `cargo audit` is not run in CI (deny advisories and OSV cover advisories); `security-*` jobs do not run on plain pushes.
 6. Fuzz targets do not cover `ByteCodec::ZstdDict` (TODO in `fuzz/fuzz_targets/secure_decompress.rs`).
 7. Windows leg compiles the `mimalloc` variant like the others, but the CI comment says Windows skips it (stale comment, no exclusion in the matrix).
@@ -134,7 +134,7 @@ Tests that pin a previously fixed defect or a cross-crate invariant. Names are r
 
 ## 6. Performance testing
 
-`crates/pjs-bench` benches are criterion binaries (`harness = false`); run with `cargo bench -p pjs-bench --bench <name>` (criterion flags need the explicit `--bench` target). Expected process (from the continuous-improvement rules, not CI-enforced): compare against the previous cycle, treat a regression above 10% as P1. Numbers are only trustworthy on an idle machine (open #619). `scripts/profile.sh` offers cpu/heap/bench profiling. The `pjs-bench/README.md` still carries stale result tables and emoji for removed benchmarks. [NEEDS CLARIFICATION: current benchmark baseline; none is committed.]
+`crates/pjs-bench` benches are criterion binaries (`harness = false`); run with `cargo bench -p pjs-bench --bench <name>` (criterion flags need the explicit `--bench` target). Expected process (from the continuous-improvement rules, not CI-enforced): compare against the previous cycle, treat a regression above 10% as P1. Numbers are only trustworthy on an idle machine (procedure in `crates/pjs-bench/README.md`, #619). `scripts/profile.sh` offers cpu/heap/bench profiling. The `pjs-bench/README.md` still carries stale result tables and emoji for removed benchmarks. [NEEDS CLARIFICATION: current benchmark baseline; none is committed.]
 
 ## 7. Corrections to the source notes
 
@@ -147,12 +147,8 @@ Tests that pin a previously fixed defect or a cross-crate invariant. Names are r
 
 | Item | Issue |
 |---|---|
-| Per-feature CI matrix | #615 |
-| `websocket-client` alone does not compile | #598 |
-| `pjson-rs-domain` `no_std` build fails | #606 |
-| Benchmark A/B procedure and quiet-machine rerun | #619 |
-| WebSocket shared broadcast can drop frames; transport never prioritizes | #570, #600 |
-| `SecurityConfig` limits unenforced and zero accepted | #613, #614 |
+| WebSocket transport never prioritizes (real planner) | #624 |
+| Terminal SSE/NDJSON frame on shutdown | #625 |
 | Run `wasm_bindgen_test` suite in CI | [NEEDS CLARIFICATION: no issue found] |
 | Run integration tests on all OSes (switch `test` job to include `--tests`, or add a job) | [NEEDS CLARIFICATION: no issue found] |
 

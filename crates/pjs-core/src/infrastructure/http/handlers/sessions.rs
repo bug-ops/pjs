@@ -8,6 +8,7 @@ use axum::{
 
 use crate::{
     application::{
+        ApplicationError,
         commands::CreateSessionCommand,
         handlers::{CommandHandlerGat, QueryHandlerGat, query_handlers::SessionQueryHandler},
         queries::{
@@ -17,7 +18,7 @@ use crate::{
         },
     },
     domain::{
-        aggregates::stream_session::SessionConfig,
+        aggregates::stream_session::{SessionConfig, SessionTimeout},
         ports::{EventPublisherGat, StreamRepositoryGat, StreamStoreGat},
         value_objects::SessionId,
     },
@@ -39,9 +40,13 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
+    let session_timeout = request
+        .timeout_seconds
+        .map_or_else(|| Ok(SessionTimeout::default()), SessionTimeout::try_from)
+        .map_err(|e| PjsError::Application(ApplicationError::Validation(e.to_string())))?;
     let config = SessionConfig {
         max_concurrent_streams: request.max_concurrent_streams.unwrap_or(10),
-        session_timeout_seconds: request.timeout_seconds.unwrap_or(3600),
+        session_timeout,
         default_stream_config: Default::default(),
         enable_compression: true,
         metadata: Default::default(),
@@ -63,12 +68,18 @@ where
         .await
         .map_err(PjsError::Application)?;
 
-    let expires_at = chrono::Utc::now()
-        + chrono::Duration::seconds(request.timeout_seconds.unwrap_or(3600) as i64);
+    let stored = <SessionQueryHandler<R> as QueryHandlerGat<GetSessionQuery>>::handle(
+        &*state.session_query_handler,
+        GetSessionQuery {
+            session_id: session_id.into(),
+        },
+    )
+    .await
+    .map_err(PjsError::Application)?;
 
     Ok(Json(CreateSessionResponse {
         session_id: session_id.to_string(),
-        expires_at,
+        expires_at: stored.session.expires_at(),
     }))
 }
 

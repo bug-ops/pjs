@@ -15,7 +15,7 @@ status: moc
 > [!abstract]
 > Map of Content for all PJS specifications. Specs 001-037 were originally written as issue-driven specs and were re-verified against the code on 2026-11-15; specs 038-079 document existing functionality as built (living specs). Status values: `implemented`, `partial`, `draft`, `obsolete`.
 
-Counts across 79 spec folders: 52 implemented, 21 partial, 1 draft, 5 obsolete.
+Counts across 79 spec folders: 53 implemented, 21 partial, 0 draft, 5 obsolete.
 
 ## Project Foundation
 
@@ -95,7 +95,7 @@ Counts across 79 spec folders: 52 implemented, 21 partial, 1 draft, 5 obsolete.
 | 029 | [[029-websocket-stream-session-binding/spec\|Fix websocket-streaming-server Session/WebSocket URL Mismatch]] | implemented | P2 | #382 |
 | 035 | [[035-streaming-module-unreachable/spec\|Resolve `infrastructure::http::streaming` Module Unreachability]] | implemented | P2 | #511 |
 | 036 | [[036-accept-header-negotiation-crate/spec\|RFC 9110 Accept-Header Negotiation via a Dedicated Crate]] | implemented | P3 | #518 |
-| 037 | [[037-graceful-shutdown-serve-with-limits/spec\|Graceful Shutdown for serve_with_limits]] | draft | P2 | #590 |
+| 037 | [[037-graceful-shutdown-serve-with-limits/spec\|Graceful Shutdown for serve_with_limits]] | implemented | P2 | #590 |
 | 060 | [[060-http-rest-api/spec\|HTTP REST API (route table, DTOs, errors, router constructors)]] | implemented | P2 |  |
 | 061 | [[061-http-middleware-stack/spec\|HTTP middleware stack: layers, rate limiting, auth, security headers]] | partial | P2 |  |
 | 062 | [[062-http-serve-connection-limits/spec\|Connection-level protection: `serve_with_limits`]] | implemented | P2 | #523 |
@@ -144,7 +144,6 @@ Specs whose work is not complete (`draft` or `partial`); see each Verification c
 | 011 | [[011-zstd-dictionary-compression/spec\|Zstd Trained-Dictionary Compression for Frame Transport]] | partial |
 | 016 | [[016-async-stream-test-harness/spec\|Async Stream Test Harness]] | partial |
 | 018 | [[018-config-validation-startup/spec\|PjsConfig Startup Validation]] | partial |
-| 037 | [[037-graceful-shutdown-serve-with-limits/spec\|Graceful Shutdown for serve_with_limits]] | draft |
 | 039 | [[039-partial-json-jiter-parser/spec\|Partial JSON Parser (`partial-parse` feature)]] | partial |
 | 045 | [[045-priority-stream-planning/spec\|Priority Stream Planning (skeleton + patches)]] | partial |
 | 049 | [[049-secure-byte-compression/spec\|Secure Byte Compression (Layer B)]] | partial |

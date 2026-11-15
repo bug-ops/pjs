@@ -50,7 +50,7 @@ flowchart TD
 | `commit_priority_frames` | `is_active()` | sequence numbers assigned only to surviving frames; output sorted by priority desc | stream vanished or no longer `Streaming`: skipped silently |
 | `close` | state `Active` | state `Completed`, active streams cancelled, `SessionClosed` queued | `stats.active_streams` not reduced |
 | `force_close_expired` | none | `Ok(false)` if not expired; else state `Failed`, streams removed | stats untouched |
-| `extend_timeout` | not expired | `expires_at` increased, event queued | `additional_seconds > i64::MAX` wraps (issue #596) |
+| `extend_timeout` | not expired | `expires_at` increased, event queued | expiry overflow returns `InvalidInput` |
 | `take_events` | `&mut self` | queue empty | events lost if caller drops them |
 
 ## Testing strategy
@@ -59,4 +59,4 @@ flowchart TD
 - Property/fuzz: none for the aggregate.
 
 ## Security notes
-Frame generation is bounded by `max_frames`/`batch_size` and the per-stream chunk limit of 5. Session timeouts must be bounded by the caller (issue #596).
+Frame generation is bounded by `max_frames`/`batch_size` and the per-stream chunk limit of 5. Session timeouts are bounded by the `SessionTimeout` type.

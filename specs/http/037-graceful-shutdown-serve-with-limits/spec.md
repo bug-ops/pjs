@@ -9,7 +9,7 @@ tags:
   - websocket
   - reliability
 created: 2026-11-15
-status: draft
+status: implemented
 priority: P2
 issue: "#590"
 related:
@@ -20,6 +20,7 @@ related:
   - "[[066-websocket-server-transport/spec|066 WebSocket server transport]]"
 code:
   - crates/pjs-core/src/infrastructure/http/serve.rs
+  - crates/pjs-core/src/infrastructure/http/shutdown.rs
   - crates/pjs-core/src/infrastructure/websocket/server.rs
   - crates/pjs-demo/src/servers/interactive_demo.rs
   - crates/pjs-demo/src/servers/simple_demo.rs
@@ -30,21 +31,19 @@ verified: 2026-11-15
 # Feature: Graceful Shutdown for serve_with_limits
 
 > [!info] Verification (2026-11-15)
-> **State: not implemented (draft, still valid).**
+> **State: implemented (issues #590, #618, #611).**
 >
 > **Evidence**
-> - GitHub issue #590 ("feat(http): graceful shutdown path for serve_with_limits and WebSocket tasks") exists, is OPEN, labels `enhancement`, `infrastructure`, `P2`, created 2026-11-14. It carries this spec in its body. No PR references it; `git log` and CHANGELOG `[Unreleased]` have no shutdown entry.
-> - `rg -i "shutdown|cancellation"` over `crates/pjs-core/src` and `crates/pjs-demo/src` has no hit in `serve.rs`, `websocket/server.rs` or the demo servers (only unrelated "cancellation" comments in `dictionary_store.rs`).
-> - Current `serve_with_limits(listener: TcpListener, router: Router, limits: ConnectionLimits) -> std::io::Result<()>` is an infinite `loop`: acquires an `Arc<Semaphore>` permit, calls `accept_with_retry`, applies the per-IP `RateLimitGuard`, then `tokio::spawn`s a fire-and-forget task (peek for first byte under `header_read_timeout`, `serve_connection_with_upgrades`, optional `tokio::time::timeout(max_connection_duration, conn)`). The only `return Ok(())` is the unreachable closed-semaphore branch.
-> - `AxumWebSocketTransport::with_rate_limit_config` spawns a session-cleanup task and `handle_socket` spawns a per-connection task, with no shared cancellation signal; `handle_socket` already sends `Message::Close` frames for its own error paths.
-> - Dependencies today: `hyper-util = { features = ["server-auto", "tokio", "service"] }` (no `server-graceful`); `tokio-util` is not a dependency of `pjs-core` (`rg tokio-util Cargo.toml crates/pjs-core/Cargo.toml` is empty).
-> - Three callers adopt the signature: `crates/pjs-demo/src/servers/{interactive_demo,simple_demo,websocket_streaming}.rs`; tests in `crates/pjs-core/tests/http_serve_connection_limits.rs`.
+> - `infrastructure/http/shutdown.rs` defines `ShutdownSignal`, `DrainTimeout`, `ShutdownConfig` and `ShutdownOutcome`; `serve_with_limits(listener, router, limits, ShutdownConfig) -> io::Result<ShutdownOutcome>` races the semaphore wait, `accept_with_retry` and the header-read peek against the signal, and calls `graceful_shutdown()` on each upgradeable connection.
+> - `AxumWebSocketTransport::with_shutdown(signal)` makes every WebSocket loop send Close 1001 and end; session tasks register in the signal's tracker, so the drain waits for them.
+> - Demo servers wire Ctrl-C to the signal (`pjs-demo/src/utils/mod.rs` `trigger_on_ctrl_c`).
+> - `ConnectionLimits.max_header_bytes: Option<HeaderSizeLimit>` (minimum 8192) shipped with #618.
 >
-> **Drift from original spec**
-> - Source gave no issue number; now #590. Branch should follow `.claude/rules/branching.md` (`feat/issue-590/graceful-shutdown`).
-> - The original constitution reference did not resolve; [[constitution]] now exists in `specs/`.
-> - Related open issues touching the same function, to avoid conflicting edits: #618 (no request header size cap in `ConnectionLimits`), #602 (`AxumWebSocketTransport::new` panics outside a Tokio runtime), #572 (WebSocket session lifecycle follow-ups).
-> - All FRs below are `Status: open`.
+> **Deviations from the original draft (approved)**
+> - **DV1**: no `ShutdownSignal::child()` and no hyper-util `GracefulShutdown` / `server-graceful` feature. Each connection runs a per-connection `select!` plus `UpgradeableConnection::graceful_shutdown()`; the signal holds two `CancellationToken`s (shutdown, force) and a `TaskTracker` (`tokio-util` dependency). Clones of one signal are passed to both `serve_with_limits` and the WebSocket transport.
+> - **DV2**: in all three demo servers Ctrl-C triggers the `ShutdownSignal` given to `serve_with_limits`; only `interactive-demo` (which mounts `AxumWebSocketTransport`) also passes it to `with_shutdown`. `websocket-streaming` keeps its own upgrade handler, so Ctrl-C there drains HTTP only. This replaces the Out of Scope line about demo draining.
+> - **FR-008** is satisfied by inserting the `ShutdownSignal` as a request extension; the terminal SSE/NDJSON frame is deferred (#625).
+> - Decisions: `DrainTimeout` default 30 s, maximum 600 s, zero rejected; dropping every signal clone never triggers shutdown; the signature of `serve_with_limits` was broken in place (no sibling function).
 
 > [!info] Metadata
 > **Author**: sdd-orchestrator (continuous improvement cycle)
@@ -64,7 +63,7 @@ A library user can trigger shutdown: the server stops accepting new connections,
 
 ### Out of Scope
 - OS signal handling (SIGTERM/Ctrl-C wiring); the caller supplies the trigger.
-- Draining the demo servers beyond adopting the new signature.
+- Draining a demo server's own custom WebSocket handler (`websocket-streaming`); see DV2.
 - Session/stream persistence or resumption after restart.
 - HTTP/3, TLS termination, load-balancer readiness endpoints.
 - Changing `ConnectionLimits` semantics.
@@ -129,7 +128,7 @@ WHEN the shutdown signal fires THE SYSTEM SHALL stop calling `accept()` and rele
 
 **Priority**: must
 
-**Status**: open
+**Status**: implemented
 
 ### FR-002
 
@@ -137,7 +136,7 @@ WHEN the shutdown signal fires THE SYSTEM SHALL ask every tracked HTTP connectio
 
 **Priority**: must
 
-**Status**: open
+**Status**: implemented
 
 ### FR-003
 
@@ -145,7 +144,7 @@ WHEN the shutdown signal fires THE SYSTEM SHALL notify every active WebSocket co
 
 **Priority**: must
 
-**Status**: open
+**Status**: implemented
 
 ### FR-004
 
@@ -153,7 +152,7 @@ WHEN the drain timeout elapses with connections still open THE SYSTEM SHALL abor
 
 **Priority**: must
 
-**Status**: open
+**Status**: implemented
 
 ### FR-005
 
@@ -161,7 +160,7 @@ WHEN all connections finish before the drain timeout THE SYSTEM SHALL return imm
 
 **Priority**: must
 
-**Status**: open
+**Status**: implemented
 
 ### FR-006
 
@@ -169,7 +168,7 @@ THE SYSTEM SHALL expose the shutdown trigger and the drain timeout as dedicated 
 
 **Priority**: must
 
-**Status**: open
+**Status**: implemented
 
 ### FR-007
 
@@ -177,7 +176,7 @@ WHILE shutdown is in progress THE SYSTEM SHALL keep enforcing `ConnectionLimits`
 
 **Priority**: must
 
-**Status**: open
+**Status**: implemented
 
 ### FR-008
 
@@ -185,7 +184,7 @@ WHEN shutdown fires THE SYSTEM SHALL make the shutdown signal observable by requ
 
 **Priority**: should
 
-**Status**: open
+**Status**: implemented (extension only; the terminal frame itself is deferred, #625)
 
 ### FR-009
 
@@ -193,7 +192,7 @@ WHEN a connection is accepted after shutdown fired but before the loop observed 
 
 **Priority**: should
 
-**Status**: open
+**Status**: implemented
 
 ### FR-010
 
@@ -201,7 +200,7 @@ WHEN the shutdown signal is already fired at call time THE SYSTEM SHALL return w
 
 **Priority**: must
 
-**Status**: open
+**Status**: implemented
 
 ## 4. Non-Functional Requirements
 
@@ -229,9 +228,10 @@ MSRV 1.89 and nightly toolchain; new dependencies limited to what is justified i
 
 | Entity | Description | Key Attributes |
 |--------|-------------|----------------|
-| `ShutdownSignal` | Cloneable, typed handle: one side triggers, many observe | triggered state, child-derivable |
-| `DrainTimeout` | Validated drain deadline newtype | duration, bounded (non-zero, max cap) |
-| `ShutdownOutcome` | Result of a completed serve | `Drained` or `Forced { aborted: usize }` |
+| `ShutdownSignal` | Cloneable, typed handle: any clone triggers, all observe; owns the task tracker | shutdown and force tokens, tracker; no `child()` (DV1) |
+| `DrainTimeout` | Validated drain deadline newtype | duration, `0 < d <= 600 s`, default 30 s |
+| `ShutdownConfig` | Signal plus drain timeout passed to `serve_with_limits` | `signal`, `drain_timeout`; `Default` never triggers |
+| `ShutdownOutcome` | Result of a completed serve | `Drained` or `Forced { aborted: NonZeroUsize }` |
 
 ## 6. Edge Cases and Error Handling
 
@@ -240,11 +240,11 @@ MSRV 1.89 and nightly toolchain; new dependencies limited to what is justified i
 | Signal fires while the loop waits on the connection semaphore | The wait is raced with the signal; loop exits without accepting |
 | Signal fires during `accept_with_retry` backoff sleep | Backoff is raced with the signal; exits promptly |
 | Signal fires before first request on a connection (header-read peek pending) | Connection dropped immediately; nothing to drain |
-| Client keeps an SSE stream open forever | Terminal frame requested (FR-008); aborted at drain deadline |
+| Client keeps an SSE stream open forever | Aborted at the drain deadline (terminal frame deferred, #625) |
 | Upgraded WebSocket (hyper no longer tracks it after upgrade) | Tracked separately via the WS task tracker (FR-003) |
 | `max_connection_duration` shorter than drain timeout | Connection-duration deadline still wins (FR-007) |
 | Signal triggered twice | Idempotent |
-| Signal handle dropped without triggering | Defined behavior needed: [NEEDS CLARIFICATION: does dropping the last trigger handle count as shutdown, or never-shutdown?] |
+| Signal handle dropped without triggering | Never triggers; the server runs until the process ends |
 | Drain timeout zero | Rejected at construction |
 
 ## 7. Success Criteria
@@ -278,11 +278,9 @@ MSRV 1.89 and nightly toolchain; new dependencies limited to what is justified i
 ## 9. Open Questions
 
 > [!question] Open items
-> - [NEEDS CLARIFICATION: terminal frame format for SSE (named event?) and NDJSON (final line object?) and whether it is part of the public protocol]
-> - [NEEDS CLARIFICATION: default `DrainTimeout` value and max cap (suggest 30 s default, 10 min cap)]
-> - [NEEDS CLARIFICATION: break `serve_with_limits` signature or add a sibling `serve_with_graceful_shutdown`? Pre-1.0 permits a break]
-> - [NEEDS CLARIFICATION: semantics when the trigger handle is dropped (see edge cases)]
-> - [NEEDS CLARIFICATION: should `AxumWebSocketTransport` shutdown be usable without `serve_with_limits` (e.g. embedded under `axum::serve`)?]
+> - [NEEDS CLARIFICATION: terminal frame format for SSE and NDJSON and whether it is part of the public protocol; tracked in #625]
+>
+> Resolved: default `DrainTimeout` 30 s with a 600 s cap; `serve_with_limits` signature broken in place; dropped trigger never shuts down; the WebSocket transport takes the same signal through `with_shutdown`; `tokio-util` approved as a dependency.
 
 ## 10. See Also
 

@@ -1,6 +1,6 @@
 # PJS Benchmarking Suite
 
-[![CI](https://github.com/bug-ops/pjs/actions/workflows/rust.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/rust.yml)
+[![CI](https://github.com/bug-ops/pjs/actions/workflows/ci.yml/badge.svg)](https://github.com/bug-ops/pjs/actions/workflows/ci.yml)
 [![License](https://img.shields.io/crates/l/pjson-rs)](../../LICENSE-MIT)
 
 Comprehensive performance benchmarking for the Priority JSON Streaming Protocol (PJS).
@@ -131,6 +131,26 @@ cargo bench --bench gat_query_benchmarks
 # HTTP streaming serialization (sonic_rs vs serde_json, e2e route)
 cargo bench --bench http_streaming
 ```
+
+### Before/After (A/B) Comparison
+
+Criterion's `--save-baseline` and `--baseline` flags are only understood by the Criterion targets. Without an explicit `--bench <name>`, `cargo bench -p pjs-bench` also runs the library's libtest target, which fails with `Unrecognized option` and produces no data while the command can still look finished.
+
+1. Run on a quiet machine: no builds, tests or other benchmarks in parallel. Concurrent load makes the numbers meaningless (a load average of ~28 once showed +10..+544% on benchmarks that only exercise `serde_json`).
+2. Save a baseline on the unchanged code, one explicit `--bench` per target:
+
+   ```bash
+   cargo bench -p pjs-bench --bench simple_throughput -- --save-baseline before
+   ```
+
+3. Apply the change and compare against it:
+
+   ```bash
+   cargo bench -p pjs-bench --bench simple_throughput -- --baseline before
+   ```
+
+4. Use a benchmark that only exercises third-party dependencies as a noise gauge, for example the `serde_json_parsing` group of `simple_throughput` (`-- serde_json_parsing`). If it reports a change, the machine is too noisy: discard the run and repeat.
+5. Check that the output contains `time:` lines for every benchmark. A run without them produced no data, whatever the exit status.
 
 ## Interpreting Results
 

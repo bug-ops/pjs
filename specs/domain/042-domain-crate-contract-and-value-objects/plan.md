@@ -18,7 +18,7 @@ Spec: [[042-domain-crate-contract-and-value-objects/spec|042]]. Index: [[MOC-spe
 
 ## Architecture
 
-`pjs-domain` is the innermost crate: `pjs-core` re-exports it (`pjson_rs::domain::*`) and `pjs-wasm` depends on it directly (features `std`, `wasm`). It has no dependency on either.
+`pjs-domain` is the innermost crate: `pjs-core` re-exports it (`pjson_rs::domain::*`) and `pjs-wasm` depends on it directly (no features). It has no dependency on either.
 
 ```mermaid
 flowchart TD

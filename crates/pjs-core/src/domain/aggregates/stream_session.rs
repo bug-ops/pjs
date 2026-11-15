@@ -2,6 +2,7 @@
 
 use crate::domain::{
     DomainError, DomainResult,
+    config::limits::MAX_SESSION_TIMEOUT_SECONDS,
     entities::{
         Frame, Stream, StreamMap,
         frame::FramePatch,
@@ -14,7 +15,9 @@ use crate::domain::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Default [`TimeProvider`] used when a session is constructed without an
 /// explicit one, and when a deserialized session needs one filled back in
@@ -23,13 +26,77 @@ fn default_time_provider() -> Arc<dyn TimeProvider> {
     Arc::new(SystemTimeProvider)
 }
 
+/// Session lifetime in whole seconds, guaranteed to be in
+/// `1..=`[`MAX_SESSION_TIMEOUT_SECONDS`].
+///
+/// The bound makes every conversion to a `chrono` duration total, so building
+/// or extending a session can neither panic nor move its expiry backward.
+/// It is carried on the wire as a plain `u64` and validated on decode.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::domain::aggregates::SessionTimeout;
+///
+/// let timeout = SessionTimeout::try_from(1800u64).unwrap();
+/// assert_eq!(timeout.as_duration().as_secs(), 1800);
+/// assert!(SessionTimeout::try_from(0u64).is_err());
+/// assert!(SessionTimeout::try_from(u64::MAX).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct SessionTimeout(NonZeroU32);
+
+impl SessionTimeout {
+    /// The timeout as a standard [`Duration`].
+    #[must_use]
+    pub fn as_duration(self) -> Duration {
+        Duration::from_secs(u64::from(self.0.get()))
+    }
+
+    fn as_chrono(self) -> chrono::Duration {
+        chrono::Duration::seconds(i64::from(self.0.get()))
+    }
+}
+
+impl Default for SessionTimeout {
+    /// One hour.
+    fn default() -> Self {
+        Self(const { NonZeroU32::new(3600).unwrap() })
+    }
+}
+
+impl TryFrom<u64> for SessionTimeout {
+    type Error = DomainError;
+
+    fn try_from(seconds: u64) -> Result<Self, Self::Error> {
+        u32::try_from(seconds)
+            .ok()
+            .filter(|_| seconds <= MAX_SESSION_TIMEOUT_SECONDS)
+            .and_then(NonZeroU32::new)
+            .map(Self)
+            .ok_or_else(|| {
+                DomainError::InvalidInput(format!(
+                    "session timeout must be 1..={MAX_SESSION_TIMEOUT_SECONDS} seconds, got {seconds}"
+                ))
+            })
+    }
+}
+
+impl From<SessionTimeout> for u64 {
+    fn from(timeout: SessionTimeout) -> Self {
+        u64::from(timeout.0.get())
+    }
+}
+
 /// Session configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
     /// Maximum concurrent streams
     pub max_concurrent_streams: usize,
-    /// Session timeout in seconds
-    pub session_timeout_seconds: u64,
+    /// Session lifetime; encoded as `session_timeout_seconds`
+    #[serde(rename = "session_timeout_seconds")]
+    pub session_timeout: SessionTimeout,
     /// Default stream configuration
     pub default_stream_config: StreamConfig,
     /// Enable session-level compression
@@ -42,7 +109,7 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             max_concurrent_streams: 10,
-            session_timeout_seconds: 3600, // 1 hour
+            session_timeout: SessionTimeout::default(),
             default_stream_config: StreamConfig::default(),
             enable_compression: true,
             metadata: HashMap::new(),
@@ -93,8 +160,62 @@ pub struct SessionStats {
     pub recent_avg_duration_ms: f64,
 }
 
+/// Wire form of [`StreamSession`]; decoding goes through it so the
+/// stream/session id cross-check runs on every decode.
+#[derive(Deserialize)]
+struct StreamSessionWire {
+    #[serde(with = "pjson_rs_domain::serde_support::session_id")]
+    id: SessionId,
+    state: SessionState,
+    config: SessionConfig,
+    stats: SessionStats,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+    streams: StreamMap,
+    pending_events: VecDeque<DomainEvent>,
+    client_info: Option<String>,
+    user_agent: Option<String>,
+    ip_address: Option<String>,
+}
+
+impl TryFrom<StreamSessionWire> for StreamSession {
+    type Error = DomainError;
+
+    fn try_from(wire: StreamSessionWire) -> Result<Self, Self::Error> {
+        if let Some(foreign) = wire.streams.values().find(|s| s.session_id() != wire.id) {
+            return Err(DomainError::InvalidInput(format!(
+                "stream {} belongs to session {}, not {}",
+                foreign.id(),
+                foreign.session_id(),
+                wire.id
+            )));
+        }
+        Ok(Self {
+            id: wire.id,
+            state: wire.state,
+            config: wire.config,
+            stats: wire.stats,
+            created_at: wire.created_at,
+            updated_at: wire.updated_at,
+            expires_at: wire.expires_at,
+            completed_at: wire.completed_at,
+            streams: wire.streams,
+            pending_events: wire.pending_events,
+            client_info: wire.client_info,
+            user_agent: wire.user_agent,
+            ip_address: wire.ip_address,
+            time_provider: default_time_provider(),
+        })
+    }
+}
+
 /// StreamSession aggregate root - manages multiple prioritized streams
+///
+/// Decoding rejects a session whose streams do not all carry its own id.
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(try_from = "StreamSessionWire")]
 pub struct StreamSession {
     #[serde(with = "pjson_rs_domain::serde_support::session_id")]
     id: SessionId,
@@ -178,7 +299,7 @@ impl StreamSession {
     /// ```
     pub fn with_time_provider(config: SessionConfig, time_provider: Arc<dyn TimeProvider>) -> Self {
         let now = time_provider.now();
-        let expires_at = now + chrono::Duration::seconds(config.session_timeout_seconds as i64);
+        let expires_at = now + config.session_timeout.as_chrono();
 
         Self {
             id: SessionId::new(),
@@ -280,7 +401,7 @@ impl StreamSession {
         stream_id: StreamId,
         config: StreamConfig,
     ) -> DomainResult<()> {
-        let stream = self
+        let mut stream = self
             .streams
             .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
@@ -362,7 +483,7 @@ impl StreamSession {
         patches: Vec<(FramePatch, Priority)>,
         max_frames: usize,
     ) -> DomainResult<Vec<Frame>> {
-        let stream = self
+        let mut stream = self
             .streams
             .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
@@ -484,7 +605,7 @@ impl StreamSession {
 
     /// Start streaming for a specific stream
     pub fn start_stream(&mut self, stream_id: StreamId) -> DomainResult<()> {
-        let stream = self
+        let mut stream = self
             .streams
             .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
@@ -503,7 +624,7 @@ impl StreamSession {
 
     /// Complete a specific stream
     pub fn complete_stream(&mut self, stream_id: StreamId) -> DomainResult<()> {
-        let stream = self
+        let mut stream = self
             .streams
             .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
@@ -549,7 +670,7 @@ impl StreamSession {
 
     /// Fail a specific stream
     pub fn fail_stream(&mut self, stream_id: StreamId, error: String) -> DomainResult<()> {
-        let stream = self
+        let mut stream = self
             .streams
             .get_mut(stream_id)
             .ok_or_else(|| DomainError::StreamNotFound(stream_id.to_string()))?;
@@ -743,7 +864,7 @@ impl StreamSession {
             if !keep[i] {
                 continue;
             }
-            let Some(stream) = self.streams.get_mut(stream_id) else {
+            let Some(mut stream) = self.streams.get_mut(stream_id) else {
                 continue;
             };
             let Ok(frame) = stream.finalize_patch_frame(priority, frame_patches) else {
@@ -796,7 +917,7 @@ impl StreamSession {
                     .collect();
 
                 for stream_id in active_stream_ids {
-                    if let Some(stream) = self.streams.get_mut(stream_id) {
+                    if let Some(mut stream) = self.streams.get_mut(stream_id) {
                         let _ = stream.cancel(); // Best effort
                     }
                 }
@@ -840,27 +961,48 @@ impl StreamSession {
         self.add_event(DomainEvent::SessionTimedOut {
             session_id: self.id,
             original_state: old_state,
-            timeout_duration: self.config.session_timeout_seconds,
+            timeout_duration: u64::from(self.config.session_timeout),
             timestamp: self.time_provider.now(),
         });
 
         Ok(true)
     }
 
-    /// Extend session timeout (if allowed)
-    pub fn extend_timeout(&mut self, additional_seconds: u64) -> DomainResult<()> {
+    /// Extends the session expiry by `additional`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DomainError::InvalidStateTransition`] if the session has
+    /// already expired and [`DomainError::InvalidInput`] if the new expiry is
+    /// not representable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::domain::aggregates::{SessionTimeout, StreamSession};
+    /// use pjson_rs::domain::aggregates::stream_session::SessionConfig;
+    ///
+    /// let mut session = StreamSession::new(SessionConfig::default());
+    /// let before = session.expires_at();
+    /// session.extend_timeout(SessionTimeout::try_from(60u64).unwrap()).unwrap();
+    /// assert!(session.expires_at() > before);
+    /// ```
+    pub fn extend_timeout(&mut self, additional: SessionTimeout) -> DomainResult<()> {
         if self.is_expired() {
             return Err(DomainError::InvalidStateTransition(
                 "Cannot extend timeout for expired session".to_string(),
             ));
         }
 
-        self.expires_at += chrono::Duration::seconds(additional_seconds as i64);
+        self.expires_at = self
+            .expires_at
+            .checked_add_signed(additional.as_chrono())
+            .ok_or_else(|| DomainError::InvalidInput("session expiry overflow".to_string()))?;
         self.update_timestamp();
 
         self.add_event(DomainEvent::SessionTimeoutExtended {
             session_id: self.id,
-            additional_seconds,
+            additional_seconds: u64::from(additional),
             new_expires_at: self.expires_at,
             timestamp: self.time_provider.now(),
         });
@@ -1278,7 +1420,7 @@ mod tests {
     #[test]
     fn test_session_expiration() {
         let config = SessionConfig {
-            session_timeout_seconds: 1,
+            session_timeout: SessionTimeout::try_from(1u64).unwrap(),
             ..Default::default()
         };
         let session = StreamSession::new(config);
@@ -1289,6 +1431,26 @@ mod tests {
         // Would need to sleep for 1+ seconds to test expiration in real scenario
         // For unit test, we verify the expiration logic exists
         assert!(session.expires_at > session.created_at);
+    }
+
+    #[test]
+    fn test_decode_rejects_stream_owned_by_another_session() {
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        let stream_id = session.create_stream(JsonData::Null).unwrap();
+        let mut value = serde_json::to_value(&session).unwrap();
+        value["streams"][stream_id.as_uuid().to_string()]["session_id"] =
+            serde_json::json!(SessionId::new().as_uuid().to_string());
+
+        assert!(serde_json::from_value::<StreamSession>(value).is_err());
+    }
+
+    #[test]
+    fn test_timeout_rejects_out_of_range_seconds() {
+        assert!(SessionTimeout::try_from(0u64).is_err());
+        assert!(SessionTimeout::try_from(MAX_SESSION_TIMEOUT_SECONDS + 1).is_err());
+        assert!(SessionTimeout::try_from(u64::MAX).is_err());
+        assert!(SessionTimeout::try_from(MAX_SESSION_TIMEOUT_SECONDS).is_ok());
     }
 
     #[test]

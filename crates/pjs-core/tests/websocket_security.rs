@@ -65,38 +65,36 @@ async fn test_websocket_rate_limiting_integration() {
     });
 
     let session_id = SessionId::new();
+    let owner = ConnectionId::new();
     stream_controller
-        .create_session(
-            session_id,
-            ConnectionId::new(),
-            test_data,
-            StreamOptions::default(),
-        )
+        .create_session(session_id, owner, test_data, StreamOptions::default())
         .await
         .unwrap();
 
     // Associate rate limit guard with session
     stream_controller
-        .set_rate_limit_guard(session_id, guard)
+        .set_rate_limit_guard(owner, session_id, guard)
         .await
         .unwrap();
 
     // Test message validation
     assert!(
         stream_controller
-            .validate_message(session_id, 512)
+            .validate_message(owner, session_id, 512)
             .await
             .is_ok()
     );
     assert!(
         stream_controller
-            .validate_message(session_id, 512)
+            .validate_message(owner, session_id, 512)
             .await
             .is_ok()
     );
 
     // Should be rate limited after burst
-    let result = stream_controller.validate_message(session_id, 512).await;
+    let result = stream_controller
+        .validate_message(owner, session_id, 512)
+        .await;
     assert!(result.is_err());
     assert!(
         result
@@ -106,7 +104,9 @@ async fn test_websocket_rate_limiting_integration() {
     );
 
     // Test frame size limits
-    let result = stream_controller.validate_message(session_id, 2048).await;
+    let result = stream_controller
+        .validate_message(owner, session_id, 2048)
+        .await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Frame size"));
 }
@@ -173,44 +173,42 @@ async fn test_burst_rate_limiting() {
     // Create session
     let test_data = json!({"test": "burst data"});
     let session_id = SessionId::new();
+    let owner = ConnectionId::new();
     stream_controller
-        .create_session(
-            session_id,
-            ConnectionId::new(),
-            test_data,
-            StreamOptions::default(),
-        )
+        .create_session(session_id, owner, test_data, StreamOptions::default())
         .await
         .unwrap();
 
     let guard = security_handler.create_connection_guard(client_ip).unwrap();
     stream_controller
-        .set_rate_limit_guard(session_id, guard)
+        .set_rate_limit_guard(owner, session_id, guard)
         .await
         .unwrap();
 
     // Should allow 3 burst messages (initial token count == burst_allowance)
     assert!(
         stream_controller
-            .validate_message(session_id, 100)
+            .validate_message(owner, session_id, 100)
             .await
             .is_ok()
     );
     assert!(
         stream_controller
-            .validate_message(session_id, 100)
+            .validate_message(owner, session_id, 100)
             .await
             .is_ok()
     );
     assert!(
         stream_controller
-            .validate_message(session_id, 100)
+            .validate_message(owner, session_id, 100)
             .await
             .is_ok()
     );
 
     // Should be rate limited now (tokens exhausted)
-    let result = stream_controller.validate_message(session_id, 100).await;
+    let result = stream_controller
+        .validate_message(owner, session_id, 100)
+        .await;
     assert!(result.is_err());
 }
 
@@ -260,32 +258,30 @@ async fn test_frame_size_validation() {
 
     let test_data = json!({"frame": "size test"});
     let session_id = SessionId::new();
+    let owner = ConnectionId::new();
     stream_controller
-        .create_session(
-            session_id,
-            ConnectionId::new(),
-            test_data,
-            StreamOptions::default(),
-        )
+        .create_session(session_id, owner, test_data, StreamOptions::default())
         .await
         .unwrap();
 
     let guard = security_handler.create_connection_guard(client_ip).unwrap();
     stream_controller
-        .set_rate_limit_guard(session_id, guard)
+        .set_rate_limit_guard(owner, session_id, guard)
         .await
         .unwrap();
 
     // Small frame should work
     assert!(
         stream_controller
-            .validate_message(session_id, 256)
+            .validate_message(owner, session_id, 256)
             .await
             .is_ok()
     );
 
     // Large frame should be rejected
-    let result = stream_controller.validate_message(session_id, 1024).await;
+    let result = stream_controller
+        .validate_message(owner, session_id, 1024)
+        .await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Frame size"));
 }

@@ -48,8 +48,12 @@ The crate shall define three binaries (`Cargo.toml`): `interactive-demo-server` 
 Status: done.
 
 ### FR-002 interactive-demo-server
-It shall serve `GET /` (HTML page `static/performance_comparison.html`), `/traditional`, `/pjs-streaming`, `/performance` (query `dataset_type`, `dataset_size`, `network_type`) and `/api/info`, with CLI flags `--port` (default 3000), `--host` (default 127.0.0.1) and `--verbose`, using `serve_with_limits(ConnectionLimits::default())`.
-Status: done. `--host` is printed but the bind address is always `127.0.0.1` (#611), and the banner advertises `WS /ws` which is not routed.
+It shall serve `GET /` (HTML page `static/performance_comparison.html`), `/traditional`, `/pjs-streaming`, `/performance` (query `dataset_type`, `dataset_size`, `network_type`) and `/api/info`, with CLI flags `--port` (default 3000), `--host` (default 127.0.0.1) and `--verbose`, using `serve_with_limits(ConnectionLimits::default(), ShutdownConfig)`. The server binds `(host, port)`, mounts `create_websocket_router()` at `/ws` (allowing its own origins), and `/api/info` lists only routes that exist.
+Status: done (#611).
+
+### FR-010 Graceful shutdown (DV2 of [[037-graceful-shutdown-serve-with-limits/spec|037]])
+In all three demo servers Ctrl-C shall trigger the `ShutdownSignal` passed to `serve_with_limits` (`utils::trigger_on_ctrl_c`), so the process exits after the HTTP drain. Only `interactive-demo-server`, which mounts `AxumWebSocketTransport`, also passes the same signal to `with_shutdown`, so its `/ws` clients receive Close 1001. `websocket-streaming-server` keeps its own upgrade handler, which is not drained.
+Status: done (#611).
 
 ### FR-003 simple-demo-server
 It shall serve `/`, `/traditional`, `/pjs`, `/performance`, `/api/info` (query `size`, `latency`), flag `--port` (default 3000). The `/pjs` endpoint returns a skeleton from `pjson_rs::PriorityStreamer::analyze` (#399).
@@ -70,11 +74,12 @@ Status: done (#406, #428); tests `tests/ws_pause_resume.rs` (5 tests).
 
 ### FR-007 Per-stream configuration
 `StreamConfig` (`priority_threshold`, `enable_compression`, `compression_strategy`, `frame_delay_ms`, `max_frames`; defaults 50 / true / "adaptive" / 10 / 1000) shall be accepted and echoed.
-Status: partial. The values are not applied to streaming (#609).
+`priority_threshold` filters frames, `max_frames` caps them, `frame_delay_ms` (bounded) paces them and `enable_compression` selects compression; omitted fields echo the defaults, and an unknown field, a zero `max_frames` or an over-limit delay is rejected.
+Status: done (#609); tests `tests/ws_streaming_config_acceptance.rs`.
 
 ### FR-008 Metrics
-`/metrics` shall report `active_sessions`, `total_frames_sent`, `total_bytes_sent`, `average_session_age_seconds`, `server_uptime_seconds`, `timestamp`, computed from live sessions only.
-Status: partial. Totals drop to 0 when sessions end (#610).
+`/metrics` shall report `active_sessions`, `total_frames_sent`, `total_bytes_sent`, `average_session_age_seconds`, `server_uptime_seconds`, `timestamp`, `active_sessions`, `average_session_age_seconds` come from live sessions; `total_frames_sent` and `total_bytes_sent` are lifetime counters that survive session end.
+Status: done (#610).
 
 ### FR-009 Dataset generation
 The library shall generate synthetic JSON by `DatasetType` (`ECommerce`, `SocialMedia`, `Analytics`, `RealTime`) and `DatasetSize` (`Small` 10 items; `Medium` 50/25/30; `Large` 200/100/150; `Huge` 1000/500/750 for e-commerce/social/others), parseable from strings (`ecommerce|e|store`, `social|s|feed`, `analytics|a|dashboard`, `realtime|r|live`; `small|s`, `medium|m`, `large|l`, `huge|h`), via `generate_dataset` and `generate_metadata` (type, size, bytes, size_kb, generated_at, items). `RealTime` reuses `generate_realtime_data` from `analytics.rs`.
@@ -121,7 +126,7 @@ Status: done.
 - Demo integration tests are not run in PR CI: the nextest archive uses `--lib --bins`, the coverage job excludes `pjs-demo`, and no job runs `cargo nextest -p pjs-demo`; they run only in the release `test-check` (`--all-targets`). The comment in `ci.yml` above the coverage job ("zero tests") is stale. See [[078-ci-pipeline/spec]].
 - `src/clients/websocket_demo.rs` (442 lines) is not referenced by `lib.rs`, `Cargo.toml` or any module, so it is not compiled (orphan file).
 - Banners use emoji in console output; `data::mod` leaves `pub use realtime::*` commented as TODO.
-- `/ws` is advertised by `interactive-demo-server` but returns 404 (#611); docs in `.claude/rules/continuous-improvement.md` list `ws://localhost:3000/pjs/ws/{session_id}`, which no demo binary serves.
+- `.claude/rules/continuous-improvement.md` lists `ws://localhost:3000/pjs/ws/{session_id}`, which no demo binary serves (`interactive-demo-server` serves `/ws`).
 
 ## See Also
 

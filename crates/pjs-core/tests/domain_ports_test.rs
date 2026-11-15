@@ -4,10 +4,10 @@
 //! that supporting types behave correctly.
 
 use pjson_rs::domain::ports::{
-    BackpressureStrategy, CacheStatistics, ConnectionMetrics, ConnectionState, SessionPagination,
-    SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder, StreamFilter,
-    StreamMetadata, StreamStatistics, StreamStatus, SystemTimeProvider, TimeProvider, WriterConfig,
-    WriterMetrics,
+    BackpressureStrategy, CacheStatistics, ConnectionMetrics, ConnectionState, FramePresence,
+    SessionPagination, SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder,
+    StreamFilter, StreamMetadata, StreamStatistics, StreamStatus, SystemTimeProvider, TimeProvider,
+    WriterConfig, WriterMetrics,
 };
 use pjson_rs::domain::value_objects::Priority;
 use std::collections::HashMap;
@@ -58,39 +58,36 @@ fn test_system_time_provider_debug() {
 #[test]
 fn test_pagination_default() {
     let pagination = SessionPagination::default();
-    assert_eq!(pagination.offset, 0);
-    assert_eq!(pagination.limit, 50);
-    assert_eq!(pagination.sort_by, None);
-    assert_eq!(pagination.sort_order, SortOrder::Ascending);
+    assert_eq!(pagination.offset(), 0);
+    assert_eq!(pagination.limit(), 50);
+    assert!(pagination.sort_by().is_none());
+    assert_eq!(pagination.sort_order(), &SortOrder::Ascending);
 }
 
 #[test]
 fn test_pagination_custom() {
-    let pagination = SessionPagination {
-        offset: 100,
-        limit: 20,
-        sort_by: Some(SessionSortField::CreatedAt),
-        sort_order: SortOrder::Descending,
-    };
+    let pagination = SessionPagination::new(100, 20)
+        .unwrap()
+        .with_sort(SessionSortField::CreatedAt, SortOrder::Descending);
 
-    assert_eq!(pagination.offset, 100);
-    assert_eq!(pagination.limit, 20);
-    assert_eq!(pagination.sort_by.unwrap(), SessionSortField::CreatedAt);
-    assert_eq!(pagination.sort_order, SortOrder::Descending);
+    assert_eq!(pagination.offset(), 100);
+    assert_eq!(pagination.limit(), 20);
+    assert_eq!(
+        pagination.sort_by().copied().unwrap(),
+        SessionSortField::CreatedAt
+    );
+    assert_eq!(pagination.sort_order(), &SortOrder::Descending);
 }
 
 #[test]
 fn test_pagination_clone() {
-    let pagination = SessionPagination {
-        offset: 50,
-        limit: 25,
-        sort_by: Some(SessionSortField::UpdatedAt),
-        sort_order: SortOrder::Ascending,
-    };
+    let pagination = SessionPagination::new(50, 25)
+        .unwrap()
+        .with_sort(SessionSortField::UpdatedAt, SortOrder::Ascending);
 
     let cloned = pagination.clone();
-    assert_eq!(cloned.offset, 50);
-    assert_eq!(cloned.limit, 25);
+    assert_eq!(cloned.offset(), 50);
+    assert_eq!(cloned.limit(), 25);
 }
 
 #[test]
@@ -129,103 +126,88 @@ fn test_sort_order_debug() {
 
 #[test]
 fn test_session_query_criteria_default() {
-    let criteria = SessionQueryCriteria {
-        states: None,
-        created_after: None,
-        created_before: None,
-        client_info_pattern: None,
-        has_active_streams: None,
-        min_stream_count: None,
-        max_stream_count: None,
-        exclude_expired: false,
-    };
+    let criteria = SessionQueryCriteria::builder()
+        .exclude_expired(false)
+        .build()
+        .unwrap();
 
-    assert!(criteria.states.is_none());
-    assert!(criteria.created_after.is_none());
+    assert!(criteria.states().is_none());
+    assert!(criteria.created_after().is_none());
 }
 
 #[test]
 fn test_session_query_criteria_with_filters() {
     let now = chrono::Utc::now();
 
-    let criteria = SessionQueryCriteria {
-        states: Some(vec!["active".to_string(), "pending".to_string()]),
-        created_after: Some(now),
-        created_before: Some(now + chrono::Duration::hours(1)),
-        client_info_pattern: Some("test-*".to_string()),
-        has_active_streams: Some(true),
-        min_stream_count: Some(1),
-        max_stream_count: Some(10),
-        exclude_expired: false,
-    };
+    let criteria = SessionQueryCriteria::builder()
+        .states(vec!["active".to_string(), "pending".to_string()])
+        .created_after(now)
+        .created_before(now + chrono::Duration::hours(1))
+        .client_info_pattern("test-*".to_string())
+        .has_active_streams(true)
+        .min_stream_count(1)
+        .max_stream_count(10)
+        .exclude_expired(false)
+        .build()
+        .unwrap();
 
-    assert_eq!(criteria.states.as_ref().unwrap().len(), 2);
-    assert!(criteria.created_after.is_some());
-    assert_eq!(criteria.client_info_pattern.unwrap(), "test-*");
+    assert_eq!(criteria.states().unwrap().len(), 2);
+    assert!(criteria.created_after().is_some());
+    assert_eq!(criteria.client_info_pattern().unwrap(), "test-*");
 }
 
 #[test]
 fn test_session_query_criteria_clone() {
-    let criteria = SessionQueryCriteria {
-        states: Some(vec!["active".to_string()]),
-        created_after: None,
-        created_before: None,
-        client_info_pattern: Some("pattern".to_string()),
-        has_active_streams: Some(true),
-        min_stream_count: Some(5),
-        max_stream_count: Some(20),
-        exclude_expired: false,
-    };
+    let criteria = SessionQueryCriteria::builder()
+        .states(vec!["active".to_string()])
+        .client_info_pattern("pattern".to_string())
+        .has_active_streams(true)
+        .min_stream_count(5)
+        .max_stream_count(20)
+        .exclude_expired(false)
+        .build()
+        .unwrap();
 
     let cloned = criteria.clone();
-    assert_eq!(cloned.states.unwrap().len(), 1);
-    assert_eq!(cloned.min_stream_count, Some(5));
+    assert_eq!(cloned.states().unwrap().len(), 1);
+    assert_eq!(cloned.min_stream_count(), Some(5));
 }
 
 // StreamFilter tests
 
 #[test]
 fn test_stream_filter_empty() {
-    let filter = StreamFilter {
-        statuses: None,
-        min_priority: None,
-        max_priority: None,
-        created_after: None,
-        has_frames: None,
-    };
+    let filter = StreamFilter::builder().build().unwrap();
 
-    assert!(filter.statuses.is_none());
-    assert!(filter.min_priority.is_none());
+    assert!(filter.statuses().is_none());
+    assert!(filter.created_after().is_none());
 }
 
 #[test]
 fn test_stream_filter_with_criteria() {
-    let filter = StreamFilter {
-        statuses: Some(vec![StreamStatus::Active, StreamStatus::Completed]),
-        min_priority: Some(Priority::LOW),
-        max_priority: Some(Priority::HIGH),
-        created_after: Some(chrono::Utc::now()),
-        has_frames: Some(true),
-    };
+    let filter = StreamFilter::builder()
+        .statuses(vec![StreamStatus::Active, StreamStatus::Completed])
+        .created_after(chrono::Utc::now())
+        .has_frames(FramePresence::WithFrames)
+        .build()
+        .unwrap();
 
-    assert_eq!(filter.statuses.as_ref().unwrap().len(), 2);
-    assert!(filter.min_priority.is_some());
-    assert!(filter.has_frames.unwrap());
+    assert_eq!(filter.statuses().unwrap().as_slice().len(), 2);
+    assert!(filter.created_after().is_some());
+    assert_eq!(filter.has_frames(), Some(FramePresence::WithFrames));
 }
 
 #[test]
 fn test_stream_filter_clone() {
-    let filter = StreamFilter {
-        statuses: Some(vec![StreamStatus::Active]),
-        min_priority: Some(Priority::MEDIUM),
-        max_priority: None,
-        created_after: None,
-        has_frames: Some(false),
-    };
+    let filter = StreamFilter::builder()
+        .statuses(vec![StreamStatus::Active])
+        .has_frames(FramePresence::WithoutFrames)
+        .build()
+        .unwrap();
 
     let cloned = filter.clone();
-    assert_eq!(cloned.statuses.as_ref().unwrap().len(), 1);
-    assert_eq!(cloned.has_frames, Some(false));
+    assert_eq!(cloned.statuses().unwrap().as_slice().len(), 1);
+    assert_eq!(cloned.has_frames(), Some(FramePresence::WithoutFrames));
 }
 
 // StreamStatus tests

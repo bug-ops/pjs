@@ -34,6 +34,10 @@ pub trait LazyParser<'a> {
     fn reset(&mut self);
 }
 
+fn security_violation(error: crate::Error) -> DomainError {
+    DomainError::SecurityViolation(error.to_string())
+}
+
 /// Zero-copy JSON parser implementation
 pub struct ZeroCopyParser<'a> {
     input: &'a [u8],
@@ -107,6 +111,9 @@ impl<'a> ZeroCopyParser<'a> {
             match self.input[self.position] {
                 b'"' => {
                     let string_slice = &self.input[start..self.position];
+                    self.validator
+                        .validate_string_length(string_slice.len())
+                        .map_err(security_violation)?;
                     self.position += 1; // Skip closing quote
 
                     // Check if string contains escape sequences
@@ -136,7 +143,7 @@ impl<'a> ZeroCopyParser<'a> {
     fn parse_object(&mut self) -> DomainResult<LazyJsonValue<'a>> {
         self.validator
             .validate_json_depth(self.depth + 1)
-            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
+            .map_err(security_violation)?;
 
         if self.position >= self.input.len() || self.input[self.position] != b'{' {
             return Err(DomainError::InvalidInput("Expected '{'".to_string()));
@@ -157,13 +164,16 @@ impl<'a> ZeroCopyParser<'a> {
             ));
         }
 
-        let mut first = true;
+        let mut keys = 0usize;
         while self.position < self.input.len() && self.input[self.position] != b'}' {
-            if !first {
+            if keys > 0 {
                 self.expect_char(b',')?;
                 self.skip_whitespace();
             }
-            first = false;
+            keys += 1;
+            self.validator
+                .validate_object_keys(keys)
+                .map_err(security_violation)?;
 
             // Parse key (must be string)
             let _key = self.parse_value()?;
@@ -188,7 +198,7 @@ impl<'a> ZeroCopyParser<'a> {
     fn parse_array(&mut self) -> DomainResult<LazyJsonValue<'a>> {
         self.validator
             .validate_json_depth(self.depth + 1)
-            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
+            .map_err(security_violation)?;
 
         if self.position >= self.input.len() || self.input[self.position] != b'[' {
             return Err(DomainError::InvalidInput("Expected '['".to_string()));
@@ -207,13 +217,16 @@ impl<'a> ZeroCopyParser<'a> {
             return Ok(LazyJsonValue::ArraySlice(&self.input[start..self.position]));
         }
 
-        let mut first = true;
+        let mut elements = 0usize;
         while self.position < self.input.len() && self.input[self.position] != b']' {
-            if !first {
+            if elements > 0 {
                 self.expect_char(b',')?;
                 self.skip_whitespace();
             }
-            first = false;
+            elements += 1;
+            self.validator
+                .validate_array_length(elements)
+                .map_err(security_violation)?;
 
             // Parse array element
             let _element = self.parse_value()?;
@@ -437,7 +450,7 @@ impl<'a> LazyParser<'a> for ZeroCopyParser<'a> {
         // Validate input size first
         self.validator
             .validate_input_size(input.len())
-            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
+            .map_err(security_violation)?;
 
         self.input = input;
         self.position = 0;

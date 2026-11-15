@@ -641,10 +641,10 @@ mod tests {
                 let total_count = all_sessions.len();
                 let paginated: Vec<_> = all_sessions
                     .into_iter()
-                    .skip(pagination.offset)
-                    .take(pagination.limit)
+                    .skip(pagination.offset())
+                    .take(pagination.limit())
                     .collect();
-                let has_more = pagination.offset + paginated.len() < total_count;
+                let has_more = pagination.offset() + paginated.len() < total_count;
                 Ok(SessionQueryResult {
                     sessions: paginated,
                     total_count,

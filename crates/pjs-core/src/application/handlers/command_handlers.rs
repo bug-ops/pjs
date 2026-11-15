@@ -4,7 +4,7 @@ use crate::{
     application::{ApplicationError, ApplicationResult, commands::*, handlers::CommandHandlerGat},
     domain::{
         aggregates::StreamSession,
-        config::limits::{MAX_FRAMES_PER_REQUEST, MAX_SESSION_TIMEOUT_SECONDS},
+        config::limits::MAX_FRAMES_PER_REQUEST,
         entities::Frame,
         ports::{
             DictionaryStore, EventPublisherGat, FrameStoreGat, NoopDictionaryStore,
@@ -545,16 +545,6 @@ impl CommandValidator {
 
         if command.config.max_concurrent_streams == 0 {
             errors.push("max_concurrent_streams must be greater than 0".to_string());
-        }
-
-        if command.config.session_timeout_seconds == 0 {
-            errors.push("session_timeout_seconds must be greater than 0".to_string());
-        }
-
-        if command.config.session_timeout_seconds > MAX_SESSION_TIMEOUT_SECONDS {
-            errors.push(format!(
-                "session_timeout_seconds cannot exceed {MAX_SESSION_TIMEOUT_SECONDS}"
-            ));
         }
 
         if errors.is_empty() {
@@ -1138,7 +1128,7 @@ mod tests {
             infrastructure::repositories::InMemoryDictionaryStore,
             security::CompressionBombDetector,
         };
-        use pjson_rs_domain::value_objects::{JsonData, StreamId};
+        use pjson_rs_domain::value_objects::{JsonData, StreamId, TrainedDictionary};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         /// Counts every `train_if_ready` invocation so a test can verify the
@@ -1168,8 +1158,7 @@ mod tests {
             fn get_dictionary<'a>(
                 &'a self,
                 session_id: SessionId,
-            ) -> DictionaryFuture<'a, Option<Arc<crate::compression::zstd::ZstdDictionary>>>
-            {
+            ) -> DictionaryFuture<'a, Option<Arc<TrainedDictionary>>> {
                 self.inner.get_dictionary(session_id)
             }
 
@@ -1403,29 +1392,6 @@ mod tests {
 
         let config = SessionConfig {
             max_concurrent_streams: 0,
-            ..Default::default()
-        };
-
-        let result = handler
-            .handle(CreateSessionCommand {
-                config,
-                client_info: None,
-                user_agent: None,
-                ip_address: None,
-            })
-            .await;
-
-        assert!(matches!(result, Err(ApplicationError::Validation(_))));
-    }
-
-    #[tokio::test]
-    async fn test_create_session_rejects_zero_session_timeout() {
-        let repository = Arc::new(MockRepository::new());
-        let event_publisher = Arc::new(MockEventPublisher);
-        let handler = SessionCommandHandler::new(repository, event_publisher);
-
-        let config = SessionConfig {
-            session_timeout_seconds: 0,
             ..Default::default()
         };
 
@@ -1898,57 +1864,6 @@ mod tests {
             .unwrap();
         assert_eq!(session.stats().total_frames, (N * 2) as u64);
         assert_eq!(session.stats().completed_streams, 1);
-    }
-
-    #[tokio::test]
-    async fn test_create_session_rejects_session_timeout_that_would_panic_chrono() {
-        let repository = Arc::new(MockRepository::new());
-        let event_publisher = Arc::new(MockEventPublisher);
-        let handler = SessionCommandHandler::new(repository, event_publisher);
-
-        // Reproduces the S1 panic: `session_timeout_seconds as i64` overflowed
-        // `chrono::Duration::seconds`'s valid range and panicked inside
-        // `StreamSession::with_time_provider` before this bound existed.
-        let config = SessionConfig {
-            session_timeout_seconds: 9_223_372_036_854_776,
-            ..Default::default()
-        };
-
-        let result = handler
-            .handle(CreateSessionCommand {
-                config,
-                client_info: None,
-                user_agent: None,
-                ip_address: None,
-            })
-            .await;
-
-        assert!(matches!(result, Err(ApplicationError::Validation(_))));
-    }
-
-    #[tokio::test]
-    async fn test_create_session_rejects_session_timeout_that_would_wrap_negative() {
-        let repository = Arc::new(MockRepository::new());
-        let event_publisher = Arc::new(MockEventPublisher);
-        let handler = SessionCommandHandler::new(repository, event_publisher);
-
-        // Reproduces the S1 silent-wraparound case: `u64::MAX as i64` is -1,
-        // which previously created a session already expired on arrival.
-        let config = SessionConfig {
-            session_timeout_seconds: u64::MAX,
-            ..Default::default()
-        };
-
-        let result = handler
-            .handle(CreateSessionCommand {
-                config,
-                client_info: None,
-                user_agent: None,
-                ip_address: None,
-            })
-            .await;
-
-        assert!(matches!(result, Err(ApplicationError::Validation(_))));
     }
 
     /// Regression test for #466: `save_and_publish` must drain

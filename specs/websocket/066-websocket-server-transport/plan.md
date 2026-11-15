@@ -26,18 +26,16 @@ flowchart TB
   UH --> HS[handle_socket per connection]
   HS -->|StreamInit| CTRL[AdaptiveStreamController]
   CTRL -->|spawn| TASK[stream_frames task]
-  TASK -->|FrameEvent owner,sid,Arc msg| BC[(broadcast 1000)]
-  BC --> HS
-  HS -->|owner filter| C1
-  HS --- OUT[(ByteBoundedSender 1000 msgs / 16 MiB)]
+  TASK -->|StreamFrame| OUT[(owner's ByteBoundedSender 1000 msgs / 16 MiB)]
+  OUT --> HS
+  HS --> C1
   SWEEP[60s sweep, 1h max age] --> CTRL
 ```
 
 ## Design decisions
 
 - One select loop per connection owning the socket sink, so every write goes through `send_with_write_timeout`.
-- Frame fan-out through a single `broadcast` carrying `Arc<WsMessage>` tagged with the owner; receivers drop foreign events (issue #569 fix; its cost is #570).
-- Session ownership is a field on the session, checked at ack time and used for teardown, rather than a separate connection-to-sessions index (cost: #571 scan).
+- Frames go straight into the owning connection's bounded channel; the controller keys sessions by connection, so a session id is private to its connection and a slow reader stalls only its own sessions (#569, #570, #571, #572).
 - `send_frame` is fire-and-forget with `try_send` to rule out deadlock on the connection's own loop.
 - Fixed-text replies and length-only logging prevent echo and log amplification.
 - Origin default is deny-all for browsers while native clients (no `Origin`) keep working.
@@ -45,17 +43,17 @@ flowchart TB
 
 ## Public API surface
 
-`AxumWebSocketTransport` (`new`, `with_rate_limit_config`, `with_allowed_origins`, `upgrade_handler`, `handle_socket`, `controller`, `active_connection_count`), `create_websocket_router`, `AdaptiveStreamController`, `ConnectionId`, `CreateSessionError`, `FrameEvent`, `WebSocketStreamSession`, `ClientMetrics`, `StreamOptions`, `WsMessage`, trait `WebSocketTransport`, `SecureWebSocketHandler`, `byte_bounded_channel` (`infrastructure::bounded_channel`).
+`AxumWebSocketTransport` (`new`, `with_rate_limit_config`, `with_allowed_origins`, `with_shutdown`, `with_max_sessions_per_connection`, `upgrade_handler`, `handle_socket`, `controller`, `active_connection_count`), `create_websocket_router`, `AdaptiveStreamController`, `ConnectionId`, `CreateSessionError`, `ClientMetrics`, `StreamOptions`, `WsMessage`, `SecureWebSocketHandler`, `byte_bounded_channel` (`infrastructure::bounded_channel`).
 
 ## Contracts
 
 | Function | Precondition | Postcondition | Undefined / notes |
 |---|---|---|---|
-| `AxumWebSocketTransport::new` / `with_rate_limit_config` | inside a Tokio runtime | sweep task spawned; Origin policy `DenyAll` | Panics outside a runtime (#602) |
+| `AxumWebSocketTransport::new` / `with_rate_limit_config` | inside a Tokio runtime | sweep task spawned; Origin policy `DenyAll` | Does not panic outside a runtime (#602) |
 | `upgrade_handler` | `ConnectInfo<SocketAddr>` present | 429, 403, or upgrade with size caps | Missing `ConnectInfo` yields 500 |
-| `create_session(id, owner, data, opts)` | none | inserts iff id free | Never overwrites; `AlreadyExists` otherwise |
+| `create_session(id, owner, data, opts)` | none | inserts iff id free on this connection and the session cap is not reached | Never overwrites; `AlreadyExists` or `TooManySessions` otherwise |
 | `handle_frame_ack(owner, ...)` | session exists and owned by `owner` | appends ack, updates EMA | Otherwise `InvalidSession`, no state change |
-| `remove_sessions_owned_by(owner)` | none | removes and aborts all of owner's sessions, returns count | O(total sessions) |
+| `remove_sessions_owned_by(owner)` | none | removes and aborts all of owner's sessions, returns count | O(owner's sessions) |
 | `send_frame(conn, msg)` | none | `Ok(())` always; frame queued or dropped with warn | No delivery acknowledgement |
 | `cleanup_expired_sessions(max_age)` | none | sessions older than `max_age` removed and aborted | Age counts from creation, not activity |
 

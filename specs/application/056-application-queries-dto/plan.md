@@ -30,7 +30,7 @@ flowchart LR
 
 ## Design decisions
 - Stream queries read through the session aggregate (`find_session` then `stream(id)`), not through `StreamStoreGat`, so there is one source of truth.
-- Page caps live in the handlers (100 sessions, 1000 frames); the repository re-validates through `Pagination::validate`.
+- Page caps live in the handlers (100 sessions, 1000 frames); `Pagination::new` rejects out-of-range values at construction.
 - `SearchSessions` clamps instead of failing; `GetActiveSessions` fails on invalid paging (inconsistent, see spec Open Questions).
 - DTOs wrap domain value objects with `#[serde(transparent)]` so JSON stays a bare UUID or integer.
 - Schema DTO deserialization uses a thread-local depth counter and RAII guard (`enter_deserialize_depth`) shared with `pjs-domain`.

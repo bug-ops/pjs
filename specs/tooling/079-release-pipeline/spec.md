@@ -31,7 +31,7 @@ verified: 2026-11-15
 Part of [[MOC-specs]]; see [[constitution]]. PR-time checks are in [[078-ci-pipeline/spec]].
 
 > [!info] Verification (2026-11-15)
-> Implemented. `.github/workflows/release.yml` (327 lines) read in full; releases `v0.6.2`, `v0.6.3`, `v0.7.0` exist as tags and in `CHANGELOG.md`. Open: #617 (publish job installs `stable` toolchain), #588 (workflow-level write permissions), #589 (`@pjson/node` built without the lockfile).
+> Implemented. `.github/workflows/release.yml` (327 lines) read in full; releases `v0.6.2`, `v0.6.3`, `v0.7.0` exist as tags and in `CHANGELOG.md`. Since then fixed: #617 (publish job installs nightly), #588 (least-privilege permissions) and #589 (`@pjson/node` installs from `package-lock.json`).
 
 ## Overview
 
@@ -53,7 +53,7 @@ Status: done.
 
 ### FR-003 crates.io publish
 Job `publish` (environment `crates-io`, needs all gates) shall authenticate through crates.io Trusted Publishing (`rust-lang/crates-io-auth-action`, OIDC) and run `katyo/publish-crates` with `ignore-unpublished-changes: true` and `publish-delay: 10000`. Publishable crates are those with `publish = true`: `pjson-rs` (`crates/pjs-core`) and `pjson-rs-domain`; `pjs-wasm`, `pjs-bench`, `pjs-demo` inherit workspace `publish = false`. `pjs-core` carries `[package.metadata.release.publishers.crates-io]` with `trusted-publishing = true`, workflow `release.yml`.
-Status: done. The job installs `toolchain: stable` while the crate needs nightly; it works only via `rust-toolchain.toml` (#617).
+Status: done. The job installs the nightly toolchain, like the gates (#617).
 
 ### FR-004 WASM npm publish
 Job `publish-wasm` (environment `npm`, Node 24) shall build `wasm-pack build crates/pjs-wasm --target web --release --scope pjson`, rewrite `pkg/package.json` with `jq` (name `@pjson/wasm`, `collaborators` -> `contributors`, repository URL normalised to `git+...git`), skip when `npm view @pjson/wasm@<version>` already exists, else `npm publish --access public --provenance`.
@@ -72,8 +72,8 @@ npm publishes shall be skipped when the exact version exists; crates publishing 
 Status: done.
 
 ### FR-008 Release environments and permissions
-Workflow-level `permissions` are `contents: write`, `packages: write`, `id-token: write`; the three publish jobs narrow to `id-token: write` + `contents: read` (the `github-release` job keeps the workflow-level write).
-Status: done; verification jobs still inherit write (#588).
+Workflow-level `permissions` are `contents: read`; the three publish jobs add `id-token: write` (OIDC) and only `github-release` adds `contents: write` (#588).
+Status: done.
 
 ### FR-009 Local profiling helper
 `scripts/profile.sh` shall provide `cpu`, `heap`, `bench`, `help` subcommands for performance work before releases ([[075-bench-suite/spec]]).
@@ -113,9 +113,6 @@ Version sources: root `Cargo.toml` `[workspace.package].version` (single source 
 
 ## Open Questions
 
-- #617: `publish` job uses `stable`; others use `nightly`.
-- #589: `publish-node` ignores `package-lock.json`.
-- #588: write permissions inherited by non-publish jobs.
 - Name inconsistency across in-repo files (`@pjs/client` vs `@pjson/node`; `pjs-wasm` vs `@pjson/wasm`).
 - The in-repo `@pjs/client` `VERSION` constant (`0.3.0-alpha.1`) is not updated by the pipeline, so the published `@pjson/node` reports a different version than its `package.json`.
 - Release preparation (version bump, changelog finalisation) is manual; `release:` commit convention only.

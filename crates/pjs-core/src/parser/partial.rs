@@ -495,80 +495,39 @@ fn count_trailing_whitespace(input: &[u8], from: usize) -> usize {
         .count()
 }
 
+fn recursion_limit_exceeded(
+    jiter: &Tokens<'_>,
+    depth: usize,
+    config: &JiterConfig,
+) -> Option<WalkOutcome> {
+    (depth >= config.max_depth.get()).then(|| {
+        WalkOutcome::Hard(jiter::JiterError {
+            error_type: JiterErrorType::JsonError(JsonErrorType::RecursionLimitExceeded),
+            index: jiter.index(),
+        })
+    })
+}
+
 fn walk(
     jiter: &mut Tokens<'_>,
     depth: usize,
     path: &JsonPath,
     config: &JiterConfig,
 ) -> WalkOutcome {
-    if depth >= config.max_depth.get() {
-        return WalkOutcome::Hard(jiter::JiterError {
-            error_type: JiterErrorType::JsonError(JsonErrorType::RecursionLimitExceeded),
-            index: jiter.index(),
-        });
+    if let Some(outcome) = recursion_limit_exceeded(jiter, depth, config) {
+        return outcome;
     }
 
     let pre = jiter.index();
 
-    let peek = match jiter.peek() {
-        Ok(p) => p,
-        Err(e) if is_eof_value(&e) => {
-            return WalkOutcome::Truncated {
-                partial: JsonData::Null,
-                cursor: pre,
-                diagnostics: vec![],
-            };
-        }
-        Err(e) => return WalkOutcome::Hard(e),
-    };
-
-    match peek {
-        Peek::Null => match jiter.known_null() {
-            Ok(()) => WalkOutcome::Complete {
-                value: JsonData::Null,
-                cursor: jiter.index(),
-                diagnostics: vec![],
-            },
-            Err(e) if is_partial_tolerated(&e) => WalkOutcome::Truncated {
-                partial: JsonData::Null,
-                cursor: pre,
-                diagnostics: vec![],
-            },
-            Err(e) => WalkOutcome::Hard(e),
+    match jiter.peek() {
+        Ok(peek) => dispatch_peeked(jiter, peek, pre, depth, path, config),
+        Err(e) if is_eof_value(&e) => WalkOutcome::Truncated {
+            partial: JsonData::Null,
+            cursor: pre,
+            diagnostics: vec![],
         },
-        Peek::True | Peek::False => match jiter.known_bool(peek) {
-            Ok(b) => WalkOutcome::Complete {
-                value: JsonData::Bool(b),
-                cursor: jiter.index(),
-                diagnostics: vec![],
-            },
-            Err(e) if is_partial_tolerated(&e) => WalkOutcome::Truncated {
-                partial: JsonData::Null,
-                cursor: pre,
-                diagnostics: vec![],
-            },
-            Err(e) => WalkOutcome::Hard(e),
-        },
-        Peek::String => walk_string(jiter, pre, config),
-        p if p.is_num() => walk_number(jiter, peek, pre, path),
-        Peek::Array => {
-            // M1 fix: capture cursor BEFORE calling known_array (peek does not
-            // consume the `[` byte; known_array advances past it).
-            let pre_open = jiter.index();
-            walk_array(jiter, depth + 1, path, config, pre_open)
-        }
-        Peek::Object => {
-            // M1 fix: same pattern for `{`.
-            let pre_open = jiter.index();
-            walk_object(jiter, depth + 1, path, config, pre_open)
-        }
-        _ => {
-            // Unexpected peek variant — surface as a hard error.
-            WalkOutcome::Hard(jiter::JiterError {
-                error_type: JiterErrorType::JsonError(JsonErrorType::ExpectedSomeValue),
-                index: pre,
-            })
-        }
+        Err(e) => WalkOutcome::Hard(e),
     }
 }
 
@@ -889,15 +848,24 @@ fn walk_with_peek(
     path: &JsonPath,
     config: &JiterConfig,
 ) -> WalkOutcome {
-    if depth >= config.max_depth.get() {
-        return WalkOutcome::Hard(jiter::JiterError {
-            error_type: JiterErrorType::JsonError(JsonErrorType::RecursionLimitExceeded),
-            index: jiter.index(),
-        });
+    if let Some(outcome) = recursion_limit_exceeded(jiter, depth, config) {
+        return outcome;
     }
-
     let pre = jiter.index();
+    dispatch_peeked(jiter, peek, pre, depth, path, config)
+}
 
+/// Single peek-dispatch shared by [`walk`] and [`walk_with_peek`]; the caller has already
+/// checked the recursion limit. `pre` is the cursor reported when the value is cut short
+/// (before any whitespace `peek` skipped).
+fn dispatch_peeked(
+    jiter: &mut Tokens<'_>,
+    peek: Peek,
+    pre: usize,
+    depth: usize,
+    path: &JsonPath,
+    config: &JiterConfig,
+) -> WalkOutcome {
     match peek {
         Peek::Null => match jiter.known_null() {
             Ok(()) => WalkOutcome::Complete {
@@ -927,6 +895,7 @@ fn walk_with_peek(
         },
         Peek::String => walk_string(jiter, pre, config),
         p if p.is_num() => walk_number(jiter, peek, pre, path),
+        // `peek` does not consume the bracket; capture the cursor before `known_*` advances.
         Peek::Array => {
             let pre_open = jiter.index();
             walk_array(jiter, depth + 1, path, config, pre_open)

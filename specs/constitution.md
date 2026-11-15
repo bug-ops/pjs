@@ -22,7 +22,7 @@ related:
 ## I. Architecture
 
 - Clean / Hexagonal architecture with strict inward dependency direction: `pjs-domain` -> `pjs-core::domain` -> `application` -> `infrastructure`.
-- `pjs-domain` stays free of runtime and I/O dependencies (no `tokio`, `axum`, `sonic-rs`, compression, HTTP clients), WASM-compatible, with `unsafe_code` forbidden; `no_std` capability is a stated goal but the `no_std` build currently fails (#606, see [[042-domain-crate-contract-and-value-objects/spec|042]]).
+- `pjs-domain` stays free of runtime and I/O dependencies (no `tokio`, `axum`, `sonic-rs`, compression, HTTP clients), WASM-compatible, with `unsafe_code` forbidden; it is `std` only and declares no features (the `no_std` mode was removed, #606, see [[042-domain-crate-contract-and-value-objects/spec|042]]).
 - Ports (`domain/ports`) are trait-only and contain no infrastructure types; adapters live under `infrastructure/`. One adapter implements one port.
 - Async ports use GAT traits (`impl Trait` in associated types, nightly) instead of `async_trait` virtual dispatch; regressing a port to boxed/dynamic dispatch is a defect.
 - CQRS boundary: command/query DTOs in `application/` never leak HTTP, axum or storage types; mapping happens at the adapter edge.
@@ -31,7 +31,7 @@ related:
 
 ## II. Technology Stack
 
-- Rust edition 2024, resolver 3, MSRV 1.89, **nightly toolchain pinned** in `rust-toolchain.toml` (GAT zero-cost ports, SIMD work).
+- Rust edition 2024, resolver 3, MSRV 1.89 (declared and checked in CI only for `pjson-rs-domain` and `pjs-wasm`, #608), **nightly toolchain pinned** in `rust-toolchain.toml` (GAT zero-cost ports, SIMD work).
 - Primary parser backend: `sonic-rs` (SIMD) selected at runtime in `parser/hybrid.rs`; zero-copy and simple parsers are fallbacks; `jiter` for partial parsing behind `partial-parse`.
 - Transport: `axum` 0.8 / `hyper` / `tokio-tungstenite`; compression via `brotli`, `flate2`, `zstd` behind `compression`.
 - The `mimalloc` allocator is opt-in and must not conflict with a consumer's `#[global_allocator]`; see [[decisions/adr-001-allocator-decision]].

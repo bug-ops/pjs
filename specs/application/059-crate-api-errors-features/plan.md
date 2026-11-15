@@ -42,7 +42,7 @@ flowchart TD
 - `mimalloc` is the only allocator feature; registration lives in `global_alloc.rs` only.
 
 ## Public API surface
-See spec FR-002 to FR-004. Feature-gated root items: `SecureWebSocketHandler` (`websocket-client` or `websocket-server`, effectively needs `http-server`). Gated module paths: `infrastructure::http`, `infrastructure::websocket` (`http-server`), `infrastructure::repositories::InMemoryDictionaryStore` (`compression`, non-wasm).
+See spec FR-002 to FR-004. Feature-gated root items: `SecureWebSocketHandler` (`websocket-server`). Gated module paths: `infrastructure::http`, `infrastructure::websocket` (`websocket-client` or `websocket-server`), `infrastructure::repositories::InMemoryDictionaryStore` (`compression`, non-wasm).
 
 ## Contracts
 
@@ -57,7 +57,7 @@ See spec FR-002 to FR-004. Feature-gated root items: `SecureWebSocketHandler` (`
 - Unit tests in `error.rs` (constructors, classification, categories, display, conversions, clone).
 - Doc-test for `global_allocator_name`.
 - CI (`.github/workflows/ci.yml`): `quality` (fmt, clippy `--all-features`), `build`/`test` (3 OS x 2 allocators), `doctest`, `docs`, `coverage`, fuzz jobs, `security-deny`, `security-osv`.
-- Gap: no per-feature matrix (#615), which hid #598.
+- Per-feature matrix runs in CI (`feature-matrix` job, #615).
 
 ## Security notes
 Feature `mimalloc` can conflict with a downstream allocator; `http-auth-jwt` is opt-in; `simd-avx512` requires explicit target features. `cargo deny` and OSV scans run in CI.

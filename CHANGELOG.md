@@ -19,12 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rustix` 1.1.6 (RUSTSEC-2026-0486) (#587)
 - WebSocket server forwards frames only to the connection that owns the session and rejects `FrameAck` from non-owners; previously every client received every client's frames (#569, #563, #577)
 - `JiterPartialParser::parse_partial` no longer returns `consumed > input.len()` or panics on input truncated inside an open string (#577)
+- Release and CI workflows use least-privilege `permissions`, and the node release build installs from `package-lock.json` (#588, #589)
+- `ZeroCopyParser` enforces the json array, object-key and string limits; `SecurityConfig::validate` rejects zero limits and inconsistent pairs; `alloc_aligned(0, _)` returns an error (**BREAKING**) (#613, #614, #591)
+- WebSocket sessions are capped per connection (64 live sessions, 429 above) and one slow connection no longer makes others lose frames (**BREAKING**) (#570, #571)
+- `sonic-rs` 0.5.11 (depth-limit stack overflow fixes), `jiter` 0.19, `brotli` 9 (#592, #593, #594)
 
 ### Added
 
 - `PjsWebSocketClient` session idle TTL (`SessionIdleTtl`), `close_session` returning `ClosedSession`, and `Error::SessionLimitReached` when every session is complete (#565, #577)
 - Standalone `fuzz/` crate with five cargo-fuzz targets, committed seeds, a gating CI build and seed replay, and a scheduled exploratory job (#564, #577)
 - Tracked specifications in `specs/` (79 specs by area, constitution, ADR, BRD/SRS/NFR) (#620)
+- `ShutdownSignal`, `DrainTimeout` and `ShutdownOutcome` for graceful shutdown of `serve_with_limits` and the WebSocket transport, and `ConnectionLimits.max_header_bytes` (#590, #618)
+- `SessionTimeout`, `TrainedDictionary` in `pjs-domain`, and `StreamFilter`/`SessionQueryCriteria` builders that validate at construction (#596, #604, #605)
+- CI jobs for the per-feature build matrix and the MSRV check, and a documented quiet-machine A/B bench procedure (#615, #608, #619)
+- `WsMessage::StreamCancel` and a Pong reply to Ping on the WebSocket server (#572, #601)
 
 ### Changed
 
@@ -37,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `stream::StreamConfig` renamed to `StreamProcessorConfig` without its dead fields; `ProcessResult::{Complete, Error}` replaced by `FrameTooLarge { size, limit }` (**BREAKING**) (#547, #568)
 - `StreamStats.processed_frames` removed and `StreamingDecompressor` keeps no cross-frame state (**BREAKING**) (#551, #568)
 - Serde helpers for `Priority`, `SessionId` and `StreamId` consolidated into one `pjs-domain` module with validating decode; wire format unchanged (#548, #568)
+- **BREAKING** `serve_with_limits` takes a `ShutdownConfig` and returns `io::Result<ShutdownOutcome>` (#590)
+- **BREAKING** The WebSocket protocol drops `checksum`, `StreamFrame.priority` is a `Priority`, non-default `StreamOptions` are rejected with a 400 and a frame above the 16 MiB outgoing budget ends the session with a 413 (#601, #600)
+- **BREAKING** `AdaptiveStreamController` methods take `(ConnectionId, SessionId)`, `subscribe_frames` and `FrameEvent` are removed, and the `WebSocketTransport` trait is removed (#572, #570, #601)
+- **BREAKING** `websocket-client` builds on its own, and `PjsWebSocketClient::connect` can be called again, reports write failures and rejects a concurrent second call; `max_session_bytes` is a `NonZeroUsize` (#598, #597, #572)
+- **BREAKING** `SessionConfig.session_timeout_seconds` is a `SessionTimeout`; `StreamFilter`, `Pagination` and `SessionQueryCriteria` validate at construction and lose `validate()`, `min_priority` and `max_priority`; `DictionaryStore` is no longer feature-gated (#596, #604, #605)
+- **BREAKING** `CompressedData`, `DecompressionMetadata` and `CompressionStats` use typed metadata and per-`Priority` totals, and `priority_compression_ratio` returns `Option<f64>` (#603)
+- **BREAKING** `pjson-rs-domain` drops the unsupported `no_std` mode and the `std` and `wasm` features; `rust-version` is set only where it is tested (#606, #608)
+- **BREAKING** `StreamMut` guards mutation of `Stream`, and session decoding cross-checks stream ids instead of trusting the payload (#573)
+- **BREAKING** WebSocket stream ids are scoped per connection, so two connections can reuse the same id without clashing (#572)
+- **BREAKING** `WebSocketStreamSession` is no longer part of the public API (#601)
+- **BREAKING** `ClientMetrics` drops `estimated_bandwidth_kbps` and `connection_rtt_ms`, and the WebSocket server module and `SecureWebSocketHandler` are gated by `websocket-server` instead of `http-server` (#601, #598)
+- Dependabot also proposes semver-major updates, and its auto-merge is limited to patch bumps and minor bumps of dependencies at 1.0 or above (#616, #633)
 
 ### Fixed
 
@@ -45,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tighten `StreamingDecompressor` run-length and dictionary decompression size limits (#552)
 - **BREAKING** `SchemaAnalyzer` selects Delta/RunLength/Dictionary by exact byte savings, Delta is lossless integer-only, `CompressionConfig` drops six threshold fields (#553)
 - `pjs-wasm`'s `StreamStats`/`FrameData` no longer derive `tsify(into_wasm_abi, from_wasm_abi)`, which `tsify` 0.5.8 deprecated; both types are already converted manually via `serde_wasm_bindgen`, so the attribute was unused (#531)
+- `AxumWebSocketTransport` constructors no longer panic outside a Tokio runtime (#602)
+- Publish job installs the nightly toolchain (#617)
+- Demo servers honor `--host`, mount the advertised `/ws`, apply the per-stream config, keep lifetime `/metrics` counters and shut down on Ctrl-C (#609, #610, #611)
+- `JiterPartialParser` shares one peek dispatch between `walk` and `walk_with_peek` (#576)
 
 ## [0.7.0] - 2026-08-19
 

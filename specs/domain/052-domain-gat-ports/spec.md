@@ -94,12 +94,12 @@ The crate declares `FrameRepositoryGat`, `EventStoreGat`, `CacheGat` (with `Cach
 Code: `domain/ports/gat.rs`, `domain/ports/repositories.rs`.
 
 ### FR-009 Pagination is generic over sort vocabulary
-`Pagination<S>` (`offset`, `limit`, `sort_by: Option<S>`, `sort_order`) shall be used via the aliases `SessionPagination = Pagination<SessionSortField>` and `FramePagination = Pagination<FrameSortField>`. `Default` is offset 0, limit 50, ascending. `validate()` shall reject `limit == 0`, `limit > MAX_PAGINATION_LIMIT` (1000), `offset > MAX_PAGINATION_OFFSET` (1_000_000) and `offset + limit` overflow, all as `DomainError::InvalidInput`. `new_validated(offset, limit)` validates on construction. `SessionSortField` (`CreatedAt`, `UpdatedAt`, `StreamCount`, `TotalBytes`) is serde `snake_case`; `FrameSortField` (`Sequence`, `Priority`) has no serde derive. PR #504.
+`Pagination<S>` (private `offset`, `limit`, `sort_by: Option<S>`, `sort_order`, read through accessors) shall be used via the aliases `SessionPagination = Pagination<SessionSortField>` and `FramePagination = Pagination<FrameSortField>`. `Default` is offset 0, limit 50, ascending. `Pagination::new(offset, limit) -> DomainResult<Self>` shall reject `limit == 0`, `limit > MAX_PAGINATION_LIMIT` (1000) and `offset > MAX_PAGINATION_OFFSET` (1_000_000) as `DomainError::InvalidInput`; `with_sort(sort_by, order)` sets the ordering. A `Pagination` therefore cannot hold out-of-range values, and `validate()` no longer exists (#604). `SessionSortField` (`CreatedAt`, `UpdatedAt`, `StreamCount`, `TotalBytes`) is serde `snake_case`; `FrameSortField` (`Sequence`, `Priority`) has no serde derive. PR #504.
 Code: `domain/ports/repositories.rs`.
 
-### FR-010 Query criteria validate their own consistency
-`SessionQueryCriteria::validate()` shall reject `min_stream_count > max_stream_count`, `created_after > created_before`, and an empty `states` vector (`None` means no filter). `StreamFilter::validate()` shall reject `min_priority > max_priority` and an empty `statuses` vector.
-Status: partial. `StreamFilter::validate()` has no non-test caller and `StreamFilter.min_priority/max_priority` are ignored by the in-memory adapter (open issue #604).
+### FR-010 Query criteria validate at construction
+`SessionQueryCriteria` and `StreamFilter` are built through `builder()` and `build() -> DomainResult<_>`; their fields are private (read through accessors) and there is no `validate()`. `SessionQueryCriteriaBuilder::build` shall reject `min_stream_count > max_stream_count`, `created_after > created_before`, and an empty `states` vector (`None` means no filter). `StreamFilterBuilder::build` shall reject an empty `statuses` list (`NonEmptyStatuses`); `has_frames` is a `FramePresence` enum. `StreamFilter.min_priority` and `max_priority` were removed because no adapter honoured them (#604).
+Status: done.
 Code: `domain/ports/repositories.rs`.
 
 ### FR-011 Writer and connection value types
@@ -111,7 +111,7 @@ Code: `domain/ports/writer.rs`.
 Code: `domain/ports/mod.rs`.
 
 ### FR-013 `DictionaryStore` is a boxed-future port, not GAT
-`DictionaryStore: Send + Sync` shall return `DictionaryFuture<'a, T> = Pin<Box<dyn Future<Output = crate::Result<T>> + Send + 'a>>`. Methods `get_dictionary(SessionId) -> Option<Arc<ZstdDictionary>>` and `train_if_ready(SessionId, Vec<u8>)` exist only when `compression` is on and target is not `wasm32`. `get_dictionary` returns `Ok(None)` until training completes; `train_if_ready` fires training exactly once. `NoopDictionaryStore` is the default.
+`DictionaryStore: Send + Sync` shall return `DictionaryFuture<'a, T> = Pin<Box<dyn Future<Output = DomainResult<T>> + Send + 'a>>`. Methods `get_dictionary(SessionId) -> Option<Arc<TrainedDictionary>>` and `train_if_ready(SessionId, Vec<u8>)` are always present: the port is no longer feature-gated and depends only on `pjson-rs-domain` types (#605). `get_dictionary` returns `Ok(None)` until training completes; `train_if_ready` fires training exactly once. `NoopDictionaryStore` is the default.
 Code: `domain/ports/dictionary_store.rs`. Implementation: [[058-event-metrics-dictionary-adapters/spec|058]].
 
 ### FR-014 Domain limits
@@ -130,8 +130,8 @@ Port errors are `DomainError` (`#[non_exhaustive]`): `SessionNotFound`, `StreamN
 
 | Situation | Result |
 |---|---|
-| `Pagination.limit == 0` or `> 1000` | `InvalidInput` |
-| `SessionQueryCriteria.states == Some([])` | `InvalidInput` |
+| `Pagination::new` with limit 0 or `> 1000`, or offset `> 1_000_000` | `InvalidInput` |
+| `SessionQueryCriteria` built with `states == Some([])` | `InvalidInput` |
 | `*_atomic` on unknown session | `SessionNotFound` |
 | `StreamStatus::Paused` or `Created` target in `update_stream_status` | `InvalidStateTransition` (adapter behaviour, see 057) |
 
@@ -146,9 +146,7 @@ Port errors are `DomainError` (`#[non_exhaustive]`): `SessionNotFound`, `StreamN
 
 ## 9. Open Questions
 - Seven declared ports (FR-008) have no implementation or caller. [NEEDS CLARIFICATION: keep as forward declarations or remove before v1.0.0?]
-- `SessionQueryCriteria.states` is `Option<Vec<String>>` and `client_info_pattern` is a `String`: stringly typed where `SessionState` exists. The adapter compares with `eq_ignore_ascii_case` on `SessionState::as_str()`.
-- `StreamFilter::validate` never called, `min/max_priority` silently ignored: open issue #604.
-- `DictionaryStore` depends on `crate::Result` and `compression::zstd::ZstdDictionary` and has cfg-gated required methods (non-additive trait): open issue #605.
+- `SessionQueryCriteria::states` is `Option<&[String]>` and `client_info_pattern` is a `String`: stringly typed where `SessionState` exists. The adapter compares with `eq_ignore_ascii_case` on `SessionState::as_str()`.
 - `StreamStatus::Paused` has no `StreamState` counterpart.
 - Two `SortOrder` enums exist: `domain::ports::SortOrder` (no serde) and `application::queries::SortOrder` (serde, `asc`/`desc` aliases); the handler maps one to the other.
 - `gat_port!` bound is always `Send + Sync`; no port can opt out.

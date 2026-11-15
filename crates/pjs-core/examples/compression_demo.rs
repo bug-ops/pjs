@@ -144,9 +144,9 @@ fn demo_dictionary_compression() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔍 Compressed data preview:");
     println!("   {}", serde_json::to_string_pretty(&compressed.data)?);
 
-    println!("\n📋 Metadata (for decompression):");
-    for (key, value) in compressed.compression_metadata.iter().take(3) {
-        println!("   {} → {}", key, value);
+    println!("\n📋 Dictionary (for decompression):");
+    for (index, entry) in compressed.dictionary.iter().flatten().take(3).enumerate() {
+        println!("   {} → {}", index, entry);
     }
     println!();
 
@@ -241,16 +241,18 @@ fn demo_streaming_compression() -> Result<(), Box<dyn std::error::Error>> {
         stats.percentage_saved()
     );
 
-    if !stats.priority_ratios.is_empty() {
+    if !stats.per_priority.is_empty() {
         println!("   - Priority ratios:");
-        for (priority, ratio) in &stats.priority_ratios {
+        for priority in stats.per_priority.keys() {
             let priority_name = match *priority {
-                p if p == Priority::CRITICAL.value() => "CRITICAL",
-                p if p == Priority::HIGH.value() => "HIGH",
-                p if p == Priority::LOW.value() => "LOW",
+                Priority::CRITICAL => "CRITICAL",
+                Priority::HIGH => "HIGH",
+                Priority::LOW => "LOW",
                 _ => "OTHER",
             };
-            println!("     {} → {:.3}", priority_name, ratio);
+            if let Some(ratio) = stats.priority_compression_ratio(*priority) {
+                println!("     {} → {:.3}", priority_name, ratio);
+            }
         }
     }
     println!();

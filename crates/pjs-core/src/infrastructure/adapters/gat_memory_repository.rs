@@ -59,9 +59,9 @@ use crate::domain::{
     },
     events::DomainEvent,
     ports::{
-        PriorityDistribution, SessionHealthSnapshot, SessionPagination, SessionQueryCriteria,
-        SessionQueryResult, SessionSortField, SortOrder, StreamFilter, StreamRepositoryGat,
-        StreamStatistics, StreamStatus, StreamStoreGat,
+        FramePresence, PriorityDistribution, SessionHealthSnapshot, SessionPagination,
+        SessionQueryCriteria, SessionQueryResult, SessionSortField, SortOrder, StreamFilter,
+        StreamRepositoryGat, StreamStatistics, StreamStatus, StreamStoreGat,
     },
     value_objects::{JsonData, Priority, SessionId, StreamId},
 };
@@ -187,7 +187,7 @@ impl GatInMemoryStreamRepository {
     /// Helper: Check if session matches query criteria
     fn matches_criteria(session: &StreamSession, criteria: &SessionQueryCriteria) -> bool {
         // Check state filter
-        if let Some(states) = &criteria.states {
+        if let Some(states) = criteria.states() {
             let state_str = session.state().as_str();
             if !states.iter().any(|s| s.eq_ignore_ascii_case(state_str)) {
                 return false;
@@ -195,24 +195,24 @@ impl GatInMemoryStreamRepository {
         }
 
         // Check expiry filter
-        if criteria.exclude_expired && session.is_expired() {
+        if criteria.exclude_expired() && session.is_expired() {
             return false;
         }
 
         // Check time range
-        if let Some(after) = criteria.created_after
+        if let Some(after) = criteria.created_after()
             && session.created_at() < after
         {
             return false;
         }
-        if let Some(before) = criteria.created_before
+        if let Some(before) = criteria.created_before()
             && session.created_at() > before
         {
             return false;
         }
 
         // Check active streams filter
-        if let Some(has_active) = criteria.has_active_streams {
+        if let Some(has_active) = criteria.has_active_streams() {
             let active_count = session.streams().values().filter(|s| s.is_active()).count();
             if has_active && active_count == 0 {
                 return false;
@@ -224,19 +224,19 @@ impl GatInMemoryStreamRepository {
 
         // Check stream count bounds
         let stream_count = session.streams().len();
-        if let Some(min) = criteria.min_stream_count
+        if let Some(min) = criteria.min_stream_count()
             && stream_count < min
         {
             return false;
         }
-        if let Some(max) = criteria.max_stream_count
+        if let Some(max) = criteria.max_stream_count()
             && stream_count > max
         {
             return false;
         }
 
         // Check client_info pattern filter
-        if let Some(pattern) = &criteria.client_info_pattern {
+        if let Some(pattern) = criteria.client_info_pattern() {
             match session.client_info() {
                 Some(client_info) => {
                     if !client_info.to_lowercase().contains(&pattern.to_lowercase()) {
@@ -593,10 +593,6 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
         pagination: SessionPagination,
     ) -> Self::FindSessionsByCriteriaFuture<'_> {
         async move {
-            // Validate inputs first
-            criteria.validate()?;
-            pagination.validate()?;
-
             let start = Instant::now();
 
             // Use bounded iteration to prevent DOS
@@ -609,10 +605,10 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
             let total_count = filtered.len();
 
             // Sort if sort_by specified
-            if let Some(sort_field) = pagination.sort_by {
+            if let Some(&sort_field) = pagination.sort_by() {
                 filtered.sort_by(|a, b| {
                     let cmp = Self::compare_by_field(a, b, sort_field);
-                    match pagination.sort_order {
+                    match pagination.sort_order() {
                         SortOrder::Ascending => cmp,
                         SortOrder::Descending => cmp.reverse(),
                     }
@@ -622,11 +618,11 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
             // Apply pagination
             let paginated: Vec<StreamSession> = filtered
                 .into_iter()
-                .skip(pagination.offset)
-                .take(pagination.limit)
+                .skip(pagination.offset())
+                .take(pagination.limit())
                 .collect();
 
-            let has_more = pagination.offset + paginated.len() < total_count;
+            let has_more = pagination.offset() + paginated.len() < total_count;
 
             Ok(SessionQueryResult {
                 sessions: paginated,
@@ -761,8 +757,9 @@ impl GatInMemoryStreamStore {
         }
 
         // Apply status filter
-        if let Some(statuses) = &filter.statuses {
+        if let Some(statuses) = filter.statuses() {
             let matches_status = statuses
+                .as_slice()
                 .iter()
                 .any(|status| Self::stream_state_matches_status(stream.state(), status));
             if !matches_status {
@@ -771,19 +768,16 @@ impl GatInMemoryStreamStore {
         }
 
         // Apply time filter
-        if let Some(after) = filter.created_after
+        if let Some(after) = filter.created_after()
             && stream.created_at() < after
         {
             return false;
         }
 
         // Apply has_frames filter
-        if let Some(has_frames) = filter.has_frames {
-            let frame_count = stream.stats().total_frames;
-            if has_frames && frame_count == 0 {
-                return false;
-            }
-            if !has_frames && frame_count > 0 {
+        if let Some(presence) = filter.has_frames() {
+            let has_frames = stream.stats().total_frames > 0;
+            if has_frames != (presence == FramePresence::WithFrames) {
                 return false;
             }
         }
@@ -1093,10 +1087,10 @@ mod tests {
         repo.save_session(inactive_session).await.unwrap();
 
         // Filter by Active state
-        let criteria = SessionQueryCriteria {
-            states: Some(vec!["Active".to_string()]),
-            ..Default::default()
-        };
+        let criteria = SessionQueryCriteria::builder()
+            .states(vec!["Active".to_string()])
+            .build()
+            .unwrap();
         let pagination = SessionPagination::default();
 
         let result = repo
@@ -1119,11 +1113,11 @@ mod tests {
 
         // Filter by time range - should find the session
         let now = Utc::now();
-        let criteria = SessionQueryCriteria {
-            created_after: Some(now - Duration::hours(1)),
-            created_before: Some(now + Duration::hours(1)),
-            ..Default::default()
-        };
+        let criteria = SessionQueryCriteria::builder()
+            .created_after(now - Duration::hours(1))
+            .created_before(now + Duration::hours(1))
+            .build()
+            .unwrap();
         let pagination = SessionPagination::default();
 
         let result = repo
@@ -1134,10 +1128,10 @@ mod tests {
         assert_eq!(result.total_count, 1);
 
         // Filter by future time range - should find nothing
-        let criteria_future = SessionQueryCriteria {
-            created_after: Some(now + Duration::hours(1)),
-            ..Default::default()
-        };
+        let criteria_future = SessionQueryCriteria::builder()
+            .created_after(now + Duration::hours(1))
+            .build()
+            .unwrap();
         let result_future = repo
             .find_sessions_by_criteria(criteria_future, SessionPagination::default())
             .await
@@ -1168,10 +1162,10 @@ mod tests {
         repo.save_session(session_no_streams).await.unwrap();
 
         // Filter by min_stream_count
-        let criteria = SessionQueryCriteria {
-            min_stream_count: Some(2),
-            ..Default::default()
-        };
+        let criteria = SessionQueryCriteria::builder()
+            .min_stream_count(2)
+            .build()
+            .unwrap();
         let result = repo
             .find_sessions_by_criteria(criteria, SessionPagination::default())
             .await
@@ -1181,10 +1175,10 @@ mod tests {
         assert_eq!(result.sessions[0].id(), session_with_streams_id);
 
         // Filter by max_stream_count
-        let criteria_max = SessionQueryCriteria {
-            max_stream_count: Some(1),
-            ..Default::default()
-        };
+        let criteria_max = SessionQueryCriteria::builder()
+            .max_stream_count(1)
+            .build()
+            .unwrap();
         let result_max = repo
             .find_sessions_by_criteria(criteria_max, SessionPagination::default())
             .await
@@ -1205,11 +1199,7 @@ mod tests {
         }
 
         // Test offset and limit
-        let pagination = SessionPagination {
-            offset: 2,
-            limit: 2,
-            ..Default::default()
-        };
+        let pagination = SessionPagination::new(2, 2).unwrap();
 
         let result = repo
             .find_sessions_by_criteria(SessionQueryCriteria::default(), pagination)
@@ -1248,11 +1238,9 @@ mod tests {
         repo.save_session(session2).await.unwrap();
 
         // Sort by stream_count descending
-        let pagination = SessionPagination {
-            sort_by: Some(SessionSortField::StreamCount),
-            sort_order: SortOrder::Descending,
-            ..Default::default()
-        };
+        let pagination = SessionPagination::new(0, 50)
+            .unwrap()
+            .with_sort(SessionSortField::StreamCount, SortOrder::Descending);
 
         let result = repo
             .find_sessions_by_criteria(SessionQueryCriteria::default(), pagination)
@@ -1312,11 +1300,9 @@ mod tests {
         let ascending = repo
             .find_sessions_by_criteria(
                 SessionQueryCriteria::default(),
-                SessionPagination {
-                    sort_by: Some(SessionSortField::CreatedAt),
-                    sort_order: SortOrder::Ascending,
-                    ..Default::default()
-                },
+                SessionPagination::new(0, 50)
+                    .unwrap()
+                    .with_sort(SessionSortField::CreatedAt, SortOrder::Ascending),
             )
             .await
             .unwrap();
@@ -1326,11 +1312,9 @@ mod tests {
         let descending = repo
             .find_sessions_by_criteria(
                 SessionQueryCriteria::default(),
-                SessionPagination {
-                    sort_by: Some(SessionSortField::CreatedAt),
-                    sort_order: SortOrder::Descending,
-                    ..Default::default()
-                },
+                SessionPagination::new(0, 50)
+                    .unwrap()
+                    .with_sort(SessionSortField::CreatedAt, SortOrder::Descending),
             )
             .await
             .unwrap();
@@ -1367,11 +1351,9 @@ mod tests {
         let ascending = repo
             .find_sessions_by_criteria(
                 SessionQueryCriteria::default(),
-                SessionPagination {
-                    sort_by: Some(SessionSortField::UpdatedAt),
-                    sort_order: SortOrder::Ascending,
-                    ..Default::default()
-                },
+                SessionPagination::new(0, 50)
+                    .unwrap()
+                    .with_sort(SessionSortField::UpdatedAt, SortOrder::Ascending),
             )
             .await
             .unwrap();
@@ -1381,11 +1363,9 @@ mod tests {
         let descending = repo
             .find_sessions_by_criteria(
                 SessionQueryCriteria::default(),
-                SessionPagination {
-                    sort_by: Some(SessionSortField::UpdatedAt),
-                    sort_order: SortOrder::Descending,
-                    ..Default::default()
-                },
+                SessionPagination::new(0, 50)
+                    .unwrap()
+                    .with_sort(SessionSortField::UpdatedAt, SortOrder::Descending),
             )
             .await
             .unwrap();
@@ -1424,11 +1404,9 @@ mod tests {
         let ascending = repo
             .find_sessions_by_criteria(
                 SessionQueryCriteria::default(),
-                SessionPagination {
-                    sort_by: Some(SessionSortField::TotalBytes),
-                    sort_order: SortOrder::Ascending,
-                    ..Default::default()
-                },
+                SessionPagination::new(0, 50)
+                    .unwrap()
+                    .with_sort(SessionSortField::TotalBytes, SortOrder::Ascending),
             )
             .await
             .unwrap();
@@ -1438,51 +1416,14 @@ mod tests {
         let descending = repo
             .find_sessions_by_criteria(
                 SessionQueryCriteria::default(),
-                SessionPagination {
-                    sort_by: Some(SessionSortField::TotalBytes),
-                    sort_order: SortOrder::Descending,
-                    ..Default::default()
-                },
+                SessionPagination::new(0, 50)
+                    .unwrap()
+                    .with_sort(SessionSortField::TotalBytes, SortOrder::Descending),
             )
             .await
             .unwrap();
         assert_eq!(descending.sessions[0].id(), heavy_id);
         assert_eq!(descending.sessions[1].id(), empty_id);
-    }
-
-    #[tokio::test]
-    async fn test_find_sessions_validates_criteria() {
-        let repo = GatInMemoryStreamRepository::new();
-
-        // Invalid criteria: min > max
-        let criteria = SessionQueryCriteria {
-            min_stream_count: Some(10),
-            max_stream_count: Some(5),
-            ..Default::default()
-        };
-        let result = repo
-            .find_sessions_by_criteria(criteria, SessionPagination::default())
-            .await;
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DomainError::InvalidInput(_)));
-    }
-
-    #[tokio::test]
-    async fn test_find_sessions_validates_pagination() {
-        let repo = GatInMemoryStreamRepository::new();
-
-        // Invalid pagination: limit = 0
-        let pagination = SessionPagination {
-            offset: 0,
-            limit: 0,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-        let result = repo
-            .find_sessions_by_criteria(SessionQueryCriteria::default(), pagination)
-            .await;
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DomainError::InvalidInput(_)));
     }
 
     // ===== StreamRepositoryGat Tests: get_session_health =====
@@ -1597,10 +1538,10 @@ mod tests {
         store.store_stream(stream).await.unwrap();
 
         // Filter by Created status (matches Preparing state)
-        let filter = StreamFilter {
-            statuses: Some(vec![StreamStatus::Created]),
-            ..Default::default()
-        };
+        let filter = StreamFilter::builder()
+            .statuses(vec![StreamStatus::Created])
+            .build()
+            .unwrap();
 
         let result = store
             .find_streams_by_session(session_id, filter)
@@ -1611,10 +1552,10 @@ mod tests {
         assert_eq!(result[0].id(), stream_id);
 
         // Filter by Active status (should not match Preparing)
-        let filter_active = StreamFilter {
-            statuses: Some(vec![StreamStatus::Active]),
-            ..Default::default()
-        };
+        let filter_active = StreamFilter::builder()
+            .statuses(vec![StreamStatus::Active])
+            .build()
+            .unwrap();
 
         let result_active = store
             .find_streams_by_session(session_id, filter_active)
@@ -1639,10 +1580,10 @@ mod tests {
         let now = Utc::now();
 
         // Filter by created_after in the past - should find stream
-        let filter = StreamFilter {
-            created_after: Some(now - Duration::hours(1)),
-            ..Default::default()
-        };
+        let filter = StreamFilter::builder()
+            .created_after(now - Duration::hours(1))
+            .build()
+            .unwrap();
 
         let result = store
             .find_streams_by_session(session_id, filter)
@@ -1651,10 +1592,10 @@ mod tests {
         assert_eq!(result.len(), 1);
 
         // Filter by created_after in the future - should find nothing
-        let filter_future = StreamFilter {
-            created_after: Some(now + Duration::hours(1)),
-            ..Default::default()
-        };
+        let filter_future = StreamFilter::builder()
+            .created_after(now + Duration::hours(1))
+            .build()
+            .unwrap();
 
         let result_future = store
             .find_streams_by_session(session_id, filter_future)
@@ -1676,10 +1617,10 @@ mod tests {
         store.store_stream(stream).await.unwrap();
 
         // Filter by has_frames = false (new stream has no frames)
-        let filter = StreamFilter {
-            has_frames: Some(false),
-            ..Default::default()
-        };
+        let filter = StreamFilter::builder()
+            .has_frames(FramePresence::WithoutFrames)
+            .build()
+            .unwrap();
 
         let result = store
             .find_streams_by_session(session_id, filter)
@@ -1688,10 +1629,10 @@ mod tests {
         assert_eq!(result.len(), 1);
 
         // Filter by has_frames = true (should find nothing)
-        let filter_with_frames = StreamFilter {
-            has_frames: Some(true),
-            ..Default::default()
-        };
+        let filter_with_frames = StreamFilter::builder()
+            .has_frames(FramePresence::WithFrames)
+            .build()
+            .unwrap();
 
         let result_with_frames = store
             .find_streams_by_session(session_id, filter_with_frames)

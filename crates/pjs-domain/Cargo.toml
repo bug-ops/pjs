@@ -3,6 +3,7 @@ name = "pjson-rs-domain"
 version = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
+documentation = "https://docs.rs/pjson-rs-domain"
 license = { workspace = true }
 description = "Pure domain logic for PJS - WASM-compatible core"
 repository = { workspace = true }
@@ -24,13 +25,8 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["v4", "serde", "js"] }
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[features]
-default = ["std"]
-std = ["thiserror/std"]
-wasm = []
+[lints]
+workspace = true
 
 [dev-dependencies]
 proptest = { workspace = true }

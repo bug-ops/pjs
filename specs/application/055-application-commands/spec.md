@@ -81,7 +81,7 @@ Events shall be published right after the atomic call and before any fallible I/
 
 ### FR-009 CommandValidator
 `CommandValidator` shall collect all violations into `Vec<String>` and the handler shall join them with `"; "` into `ApplicationError::Validation`:
-- `validate_create_session`: `max_concurrent_streams > 0`; `session_timeout_seconds > 0`; `session_timeout_seconds <= MAX_SESSION_TIMEOUT_SECONDS` (604800).
+- `validate_create_session`: `max_concurrent_streams > 0`. The timeout range (1..=`MAX_SESSION_TIMEOUT_SECONDS`, 604800) is guaranteed by the `SessionTimeout` type in `SessionConfig`, so an out-of-range value fails at decode (#596).
 - `validate_create_stream`: `source_data` not null.
 - `validate_generate_frames`: `max_frames > 0` and `<= MAX_FRAMES_PER_REQUEST` (1000).
 No validator exists for `BatchGenerateFramesCommand` (its `max_frames` is unbounded).
@@ -95,7 +95,7 @@ Code: `application/mod.rs`; `infrastructure/http/axum_adapter.rs` (`IntoResponse
 
 ## 4. Non-Functional Requirements
 - NFR-CONC-001: no handler performs find-mutate-save for stream/session mutations except `CreateSession`; concurrency tests `test_batch_generate_frames_concurrent_with_complete_stream_loses_no_update` and `test_save_and_publish_does_not_leak_pending_events_across_commands` pin this.
-- NFR-SEC-001: `MAX_FRAMES_PER_REQUEST` and `MAX_SESSION_TIMEOUT_SECONDS` bound work and avoid chrono overflow (tests `test_create_session_rejects_session_timeout_that_would_panic_chrono`, `..._wrap_negative`).
+- NFR-SEC-001: `MAX_FRAMES_PER_REQUEST` and `SessionTimeout` (bounded by `MAX_SESSION_TIMEOUT_SECONDS`) bound work and avoid chrono overflow.
 - NFR-PERF-001: handlers are monomorphised over `R`, `P`, `F`; no boxed futures.
 
 ## 5. Data Model

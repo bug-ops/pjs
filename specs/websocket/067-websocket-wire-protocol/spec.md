@@ -34,7 +34,7 @@ verified: 2026-11-15
 
 **Goal.** A single serde enum `WsMessage`, adjacently tagged, sent as WebSocket text frames (one JSON document per frame).
 
-**Out of scope.** Binary frames (ignored), compression negotiation (field exists, unused), priority ordering (#600).
+**Out of scope.** Binary frames (ignored), compression negotiation, priority ordering and multi-frame plans (planner tracked in #624).
 
 ## User Stories
 
@@ -51,15 +51,16 @@ Every message shall be `{"type": "<Variant>", "data": { ...fields... }}` (`#[ser
 
 | `type` | Direction | `data` fields | Notes |
 |---|---|---|---|
-| `StreamInit` | client -> server | `session_id` (UUID string), `data` (any JSON), `options` (`StreamOptions`) | Server adopts the id; see errors |
-| `StreamFrame` | server -> client | `session_id`, `frame_id` (u32), `priority` (u8), `payload` (any JSON), `is_complete` (bool) | Routed only to the owner |
+| `StreamInit` | client -> server | `session_id` (UUID string), `data` (any JSON), `options` (`StreamOptions`) | Server adopts the id; non-default `options` are rejected (400) |
+| `StreamFrame` | server -> client | `session_id`, `frame_id` (u32), `priority` (`Priority`, u8 on the wire), `payload` (any JSON), `is_complete` (bool) | Routed only to the owner |
 | `FrameAck` | client -> server | `session_id`, `frame_id` (u32), `processing_time_ms` (u64) | Owner only; feeds adaptive delay |
-| `StreamComplete` | server -> client | `session_id`, `checksum` (string) | Sent after the last frame |
-| `Error` | both | `session_id` (UUID string or `null`, may be omitted), `error` (string), `code` (u16) | Server uses 400 and 409 |
-| `Ping` | both | `timestamp` (u64) | Client replies `Pong` with the same value; server does not |
+| `StreamComplete` | server -> client | `session_id` | Sent after the last frame; the session is already reusable |
+| `StreamCancel` | client -> server | `session_id` | Ends the sender's own session; an unknown id is ignored |
+| `Error` | both | `session_id` (UUID string or `null`, may be omitted), `error` (string), `code` (u16) | Server uses 400, 409, 413 and 429 |
+| `Ping` | both | `timestamp` (u64) | Both sides reply `Pong` with the same value |
 | `Pong` | both | `timestamp` (u64) | Logged and ignored |
 
-`StreamOptions`: `max_frame_size` (usize, default 65536), `client_fps` (u32 or null), `compression` (bool, default true), `priority_mapping` (object string -> u8, or null). `max_frame_size` and `compression` are required on decode (no serde defaults); `client_fps` and `priority_mapping` may be omitted (`Option`). The server currently ignores all four.
+`StreamOptions`: `max_frame_size` (usize, default 65536), `client_fps` (u32 or null), `compression` (bool, default true), `priority_mapping` (object string -> u8, or null). `max_frame_size` and `compression` are required on decode (no serde defaults); `client_fps` and `priority_mapping` may be omitted (`Option`). The server accepts only `StreamOptions::default()` and answers anything else with `Error` 400 (`unsupported stream options`) and no session; the options are not otherwise applied (real planner: #624).
 
 Example:
 
@@ -69,15 +70,15 @@ Example:
 
 ### FR-003 Session id encoding
 
-`session_id` shall be a UUID string (`pjson_rs_domain::serde_support::session_id`, option variant for `Error`). Peers may send any textual UUID form; the server always echoes the canonical lowercase hyphenated form. The nil UUID is rejected on `StreamInit`.
+`session_id` shall be a UUID string (`pjson_rs_domain::serde_support::session_id`, option variant for `Error`). Peers may send any textual UUID form; the server always echoes the canonical lowercase hyphenated form. The nil UUID is rejected on `StreamInit`. Session ids are chosen by the peer and scoped to its connection (two connections may reuse one id).
 
-### FR-004 Checksum
+### FR-004 Completion
 
-`StreamComplete.checksum` shall be `sha256:<64 lowercase hex>` computed as SHA-256 over, in order, the `serde_json::to_vec` bytes of each frame payload followed by the frame count as a little-endian u64. Clients are not required to verify it (the Rust client logs it only).
+`StreamComplete` shall carry only `session_id`. The former `checksum` field was removed (#601) because no peer verified it; decoding a message that still carries it ignores the extra field.
 
 ### FR-005 Frame plan (current)
 
-For a `StreamInit` the server shall emit exactly one `StreamFrame { frame_id: 0, priority: Priority::HIGH value, payload: <StreamInit.data>, is_complete: true }` followed by `StreamComplete`. The reply frame therefore echoes the whole request data and may reach the inbound cap.
+For a `StreamInit` the server shall emit exactly one `StreamFrame { frame_id: 0, priority: Priority::HIGH, payload: <StreamInit.data>, is_complete: true }` followed by `StreamComplete`. The reply frame therefore echoes the whole request data and may reach the inbound cap.
 
 ### FR-006 Error replies
 
@@ -85,17 +86,20 @@ For a `StreamInit` the server shall emit exactly one `StreamFrame { frame_id: 0,
 |---|---|---|---|
 | Undecodable text frame | 400 | `malformed message` | `null` |
 | Nil session id | 400 | `nil session id is not allowed` | `null` |
-| Session id already in use | 409 | `session id already in use` | the requested id |
+| Session id already in use on this connection | 409 | `session id already in use` | the requested id |
+| Non-default `StreamOptions` | 400 | `unsupported stream options` | the requested id |
+| Over the per-connection live-session cap (default 64) | 429 | `too many live sessions on this connection` | the requested id |
+| Frame above the 16 MiB outgoing byte budget | 413 | `frame exceeds the outgoing byte budget` | the session id; the session ends |
 
 Texts are fixed constants; decode errors are never echoed. Client-originated `Error` messages are logged by length only.
 
 ### FR-007 Close codes
 
-The server shall send close code `1008` (policy violation) with the limiter's error text when the per-IP connection cap is hit or an inbound message exceeds the application size check or message rate. Transport-level oversize frames are rejected by the WebSocket implementation. Clean client close ends the session set owned by that connection.
+The server shall send close code `1008` (policy violation) with the limiter's error text when the per-IP connection cap is hit or an inbound message exceeds the application size check or message rate. Transport-level oversize frames are rejected by the WebSocket implementation. Clean client close ends the session set owned by that connection. On server shutdown every open connection receives close code `1001` ([[037-graceful-shutdown-serve-with-limits/spec|037]]).
 
 ### FR-008 Unhandled variants
 
-On the server, `StreamFrame`, `StreamComplete` and `Pong` received from a client are logged as unhandled and ignored; on the client, `StreamInit` and `FrameAck` received from a server are logged as unhandled.
+On the server, `StreamFrame` and `StreamComplete` received from a client are logged as unhandled and ignored, and `Pong` is logged; on the client, `StreamInit` and `FrameAck` received from a server are logged as unhandled.
 
 ## Non-Functional Requirements
 
@@ -105,7 +109,7 @@ On the server, `StreamFrame`, `StreamComplete` and `Pong` received from a client
 
 ## Data Model
 
-`WsMessage`, `StreamOptions` (see `infrastructure::websocket`); numeric widths are fixed: `frame_id: u32`, `priority: u8`, `code: u16`, `processing_time_ms: u64`, `timestamp: u64`.
+`WsMessage`, `StreamOptions` (see `infrastructure::websocket`); numeric widths are fixed: `frame_id: u32`, `priority: Priority` (u8 on the wire), `code: u16`, `processing_time_ms: u64`, `timestamp: u64`.
 
 ## Edge Cases and Errors
 
@@ -128,10 +132,10 @@ On the server, `StreamFrame`, `StreamComplete` and `Pong` received from a client
 
 ## Open Questions
 
-- #601: raw `u8` priority on the wire (not the `Priority` newtype), unverified checksum, dead GAT methods.
+- #624: a real priority planner honouring `StreamOptions` (non-default options are rejected until then).
 - `timestamp` semantics ("wall clock") are not specified; the server does not generate pings.
 - No protocol version or capability negotiation field.
-- `compression` and `max_frame_size` options are advertised but have no effect.
+- `compression` and `max_frame_size` are advertised but only their default values are accepted.
 
 ## See Also
 

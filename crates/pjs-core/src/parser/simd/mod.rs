@@ -325,4 +325,33 @@ mod tests {
             assert_eq!(stats.mean(), 2.75);
         }
     }
+
+    /// Parses on a large stack: unoptimized frames overflow the default 2 MiB test stack at ~50 levels.
+    fn parses_nested_arrays(depth: usize) -> bool {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || {
+                let json = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+                sonic_rs::from_str::<SonicValue>(&json).is_ok()
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_sonic_accepts_shallow_nesting() {
+        assert!(parses_nested_arrays(32));
+    }
+
+    #[test]
+    fn test_sonic_handles_max_safe_depth_without_panic_or_overflow() {
+        // Ok or Err are both acceptable: the guarantee is that the parser returns.
+        let _ = parses_nested_arrays(crate::config::security::MAX_SAFE_JSON_DEPTH);
+    }
+
+    #[test]
+    fn test_sonic_handles_pathological_nesting_without_panic_or_overflow() {
+        let _ = parses_nested_arrays(1_000_000);
+    }
 }

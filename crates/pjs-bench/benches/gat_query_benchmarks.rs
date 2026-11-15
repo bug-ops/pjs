@@ -103,16 +103,12 @@ fn bench_find_sessions_by_criteria(c: &mut Criterion) {
             .build()
             .unwrap();
 
-        let criteria = SessionQueryCriteria {
-            created_after: Some(Utc::now() - Duration::hours(1)),
-            ..Default::default()
-        };
+        let criteria = SessionQueryCriteria::builder()
+            .created_after(Utc::now() - Duration::hours(1))
+            .build()
+            .unwrap();
 
-        let pagination = SessionPagination {
-            offset: 0,
-            limit: 100,
-            ..Default::default()
-        };
+        let pagination = SessionPagination::new(0, 100).unwrap();
 
         group.bench_with_input(
             BenchmarkId::new("filter_sort_paginate", size),
