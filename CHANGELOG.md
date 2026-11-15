@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING** `SessionConfig.session_timeout_seconds` is a `SessionTimeout`; `StreamFilter`, `Pagination` and `SessionQueryCriteria` validate at construction and lose `validate()`, `min_priority` and `max_priority`; `DictionaryStore` is no longer feature-gated (#596, #604, #605)
 - **BREAKING** `CompressedData`, `DecompressionMetadata` and `CompressionStats` use typed metadata and per-`Priority` totals, and `priority_compression_ratio` returns `Option<f64>` (#603)
 - **BREAKING** `pjson-rs-domain` drops the unsupported `no_std` mode and the `std` and `wasm` features; `rust-version` is set only where it is tested (#606, #608)
-- **BREAKING** `StreamMut` guards mutation of `Stream`, and session and stream decoding cross-checks ids and states instead of trusting the payload (#573)
+- **BREAKING** `StreamMut` guards mutation of `Stream`, and session decoding cross-checks stream ids instead of trusting the payload (#573)
 - **BREAKING** WebSocket stream ids are scoped per connection, so two connections can reuse the same id without clashing (#572)
 - **BREAKING** `WebSocketStreamSession` is no longer part of the public API (#601)
 - Dependabot also proposes semver-major updates (#616)
