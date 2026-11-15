@@ -43,7 +43,7 @@ verified: 2026-11-15
 > - Wildcard ties resolve in candidate order (JSON, SSE, NDJSON, binary), not purely by specificity: `application/json;q=0, */*` yields SSE; `application/json;q=0, application/*` yields NDJSON.
 > - The bound is enforced before `headers-accept` (it has no bound of its own), as decided.
 > - The dependency is gated behind `http-server` rather than always built.
-> - `.local/specs/constitution.md` reference in NFR-003 now maps to [[constitution]].
+> - The original constitution reference in NFR-003 now maps to [[constitution]].
 
 ## 1. Overview
 

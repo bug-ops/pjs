@@ -22,7 +22,7 @@ related:
 # Architecture Baseline
 
 > [!info] Verification (2026-11-15)
-> Migrated from the untracked `.local/specs/architecture-baseline.md` (originally verified 2026-05-01 at HEAD e996ad9, v0.5.2). Every pattern claim, drift item and file reference was re-checked against HEAD dcf9b11 (workspace v0.7.0). Statuses below are current; file references are by path and symbol, not line number.
+> Migrated from an earlier untracked draft (originally verified 2026-05-01 at HEAD e996ad9, v0.5.2). Every pattern claim, drift item and file reference was re-checked against HEAD dcf9b11 (workspace v0.7.0). Statuses below are current; file references are by path and symbol, not line number.
 >
 > **Drift of the original baseline from the code (what changed since 2026-05-01):**
 > - Resolved: D1 (`tokio` in domain, `ConnectionManager` deleted, #254), D2/D3 (`get_stream_mut` removed, #259; `streams()` now returns the invariant-keeping `StreamMap`, #577), D5 (`Parser { use_sonic }` and `hybrid.rs` gone, #126/#495), D6 (single `JsonPath`), D9 (doc-link CI gate exists), D14 (`cargo deny` + OSV run in CI).

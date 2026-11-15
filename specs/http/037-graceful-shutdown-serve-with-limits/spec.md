@@ -42,7 +42,7 @@ verified: 2026-11-15
 >
 > **Drift from original spec**
 > - Source gave no issue number; now #590. Branch should follow `.claude/rules/branching.md` (`feat/issue-590/graceful-shutdown`).
-> - `.local/specs/constitution.md` does not exist at the source; [[constitution]] now exists in `specs/`.
+> - The original constitution reference did not resolve; [[constitution]] now exists in `specs/`.
 > - Related open issues touching the same function, to avoid conflicting edits: #618 (no request header size cap in `ConnectionLimits`), #602 (`AxumWebSocketTransport::new` panics outside a Tokio runtime), #572 (WebSocket session lifecycle follow-ups).
 > - All FRs below are `Status: open`.
 
