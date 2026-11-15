@@ -101,7 +101,7 @@ impl AlignedAllocator {
         old_layout: Layout,
         new_size: usize,
     ) -> DomainResult<NonNull<u8>> {
-        // SAFETY: caller upholds layout match.
+        // SAFETY: `ptr` matches `old_layout`; `new_size` is non-zero and rounded size <= isize::MAX.
         let new_ptr = unsafe { realloc(ptr.as_ptr(), old_layout, new_size) };
         if new_ptr.is_null() {
             return Err(DomainError::ResourceExhausted(format!(
@@ -122,7 +122,7 @@ impl AlignedAllocator {
     /// with exactly `layout`. Double-free or mismatched layout is undefined
     /// behavior.
     pub unsafe fn dealloc_aligned(&self, ptr: NonNull<u8>, layout: Layout) {
-        // SAFETY: caller upholds layout match.
+        // SAFETY: `ptr` came from `alloc_aligned` with this `layout` and is freed once.
         unsafe { dealloc(ptr.as_ptr(), layout) };
     }
 }
@@ -146,6 +146,7 @@ mod tests {
     fn test_aligned_allocation() {
         let allocator = AlignedAllocator::new();
 
+        // SAFETY: non-zero size, power-of-two alignments, each pointer freed once with its layout.
         unsafe {
             for alignment in [16, 32, 64, 128, 256] {
                 let ptr = allocator.alloc_aligned(1024, alignment).unwrap();
@@ -167,6 +168,7 @@ mod tests {
     fn test_reallocation() {
         let allocator = AlignedAllocator::new();
 
+        // SAFETY: `ptr` is live for `initial_size`; freed once with the post-realloc layout; `new_size` > 0.
         unsafe {
             let alignment = 64;
             let initial_size = 1024;
@@ -196,6 +198,7 @@ mod tests {
     #[test]
     fn test_invalid_alignment() {
         let allocator = AlignedAllocator::new();
+        // SAFETY: invalid alignments are rejected before any allocation.
         unsafe {
             assert!(allocator.alloc_aligned(1024, 0).is_err());
             assert!(allocator.alloc_aligned(1024, 3).is_err());

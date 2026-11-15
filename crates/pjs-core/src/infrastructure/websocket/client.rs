@@ -467,6 +467,29 @@ where
     }
 }
 
+/// Maximum number of characters of server-supplied text written to one log line.
+const MAX_LOGGED_TEXT_CHARS: usize = 256;
+
+/// Renders server-supplied text for a log line: escaped, and cut to
+/// [`MAX_LOGGED_TEXT_CHARS`] characters with the original length noted.
+fn bounded_log_text(text: &str) -> String {
+    match text.char_indices().nth(MAX_LOGGED_TEXT_CHARS) {
+        None => format!("{text:?}"),
+        Some((cut, _)) => format!("{:?}... ({} bytes total)", &text[..cut], text.len()),
+    }
+}
+
+/// Renders a connection URL for logging without userinfo, query, or fragment.
+fn redacted_url(url: &Url) -> String {
+    let mut redacted = url.clone();
+    // Both setters fail only for cannot-be-a-base URLs, which carry no userinfo.
+    let _ = redacted.set_username("");
+    let _ = redacted.set_password(None);
+    redacted.set_query(None);
+    redacted.set_fragment(None);
+    redacted.into()
+}
+
 /// Reads server messages and applies them until the server closes the socket.
 ///
 /// # Errors
@@ -497,7 +520,13 @@ where
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to parse incoming message: {:?}", e);
+                    warn!(
+                        "Failed to parse incoming message: category={:?}, line={}, column={}, bytes={}",
+                        e.classify(),
+                        e.line(),
+                        e.column(),
+                        text.len()
+                    );
                 }
             },
             Ok(Message::Binary(data)) => {
@@ -652,7 +681,10 @@ impl PjsWebSocketClient {
     pub async fn connect(&self) -> PjsResult<()> {
         let mut lease = ReceiverLease::acquire(&self.message_rx)?;
 
-        info!("Connecting to WebSocket server: {}", self.url);
+        info!(
+            "Connecting to WebSocket server: {}",
+            redacted_url(&self.url)
+        );
 
         let (ws_stream, _) = connect_async_with_config(
             self.url.as_str(),
@@ -949,8 +981,11 @@ impl PjsWebSocketClient {
                     _ => false,
                 };
                 error!(
-                    "Received error from server: session={:?}, error={:?}, code={}, session_removed={}",
-                    session_id, error, code, removed
+                    "Received error from server: session={:?}, error={}, code={}, session_removed={}",
+                    session_id,
+                    bounded_log_text(&error),
+                    code,
+                    removed
                 );
             }
             WsMessage::Ping { timestamp } => {
@@ -964,7 +999,7 @@ impl PjsWebSocketClient {
                 debug!("Received pong with timestamp: {}", timestamp);
             }
             _ => {
-                warn!("Unhandled message type: {:?}", message);
+                warn!("Unhandled message type: {}", message.kind());
             }
         }
         Ok(())
@@ -1779,6 +1814,80 @@ mod tests {
             output.lines().count(),
             3,
             "a hostile string started its own log line: {output:?}"
+        );
+    }
+
+    #[test]
+    fn test_bounded_log_text_truncates_and_escapes() {
+        let long = "a".repeat(MAX_LOGGED_TEXT_CHARS * 100);
+        let out = bounded_log_text(&long);
+        assert!(
+            out.len() < MAX_LOGGED_TEXT_CHARS + 64,
+            "unbounded: {}",
+            out.len()
+        );
+        assert!(out.contains("bytes total"));
+        assert_eq!(bounded_log_text("a\nb"), "\"a\\nb\"");
+        let multibyte = "\u{44f}".repeat(MAX_LOGGED_TEXT_CHARS + 10);
+        assert!(bounded_log_text(&multibyte).contains("bytes total"));
+    }
+
+    #[test]
+    fn test_redacted_url_strips_userinfo_query_and_fragment() {
+        let url = Url::parse("wss://user:s3cret@example.com:9000/ws?token=abc#frag").unwrap();
+        assert_eq!(redacted_url(&url), "wss://example.com:9000/ws");
+    }
+
+    #[tokio::test]
+    async fn test_server_controlled_content_is_bounded_in_logs() {
+        let logs = CapturedLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let id = SessionId::new();
+        let sessions = sessions_with(id).await;
+        let (tx, _rx) = control_channel();
+        let config = WebSocketClientConfig::default();
+        let marker = "X".repeat(100_000);
+
+        deliver(
+            &sessions,
+            &tx,
+            config,
+            WsMessage::Error {
+                session_id: Some(id),
+                error: marker.clone(),
+                code: 500,
+            },
+        )
+        .await
+        .unwrap();
+        deliver(
+            &sessions,
+            &tx,
+            config,
+            WsMessage::StreamInit {
+                session_id: id,
+                data: json!({ "blob": marker }),
+                options: StreamOptions::default(),
+            },
+        )
+        .await
+        .unwrap();
+        let bad = format!(r#"{{"type":"{marker}"}}"#);
+        let stream = futures::stream::iter([Ok::<_, WsError>(Message::text(bad))]);
+        receive_loop(stream, sessions, tx, config).await.unwrap();
+
+        let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("StreamInit"), "{output}");
+        assert!(output.contains("category="), "{output}");
+        assert!(
+            output.len() < 4096,
+            "log output unbounded: {}",
+            output.len()
         );
     }
 }

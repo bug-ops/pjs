@@ -1446,6 +1446,47 @@ mod tests {
     }
 
     #[test]
+    fn test_wire_roundtrip_preserves_every_field() {
+        const WIRE_KEYS: [&str; 13] = [
+            "id",
+            "state",
+            "config",
+            "stats",
+            "created_at",
+            "updated_at",
+            "expires_at",
+            "completed_at",
+            "streams",
+            "pending_events",
+            "client_info",
+            "user_agent",
+            "ip_address",
+        ];
+
+        let mut session = StreamSession::new(SessionConfig::default());
+        session.activate().unwrap();
+        session.create_stream(JsonData::Null).unwrap();
+        session.set_client_info(
+            "client".to_string(),
+            Some("agent".to_string()),
+            Some("127.0.0.1".to_string()),
+        );
+        session.close().unwrap();
+
+        let value = serde_json::to_value(&session).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(object.len(), WIRE_KEYS.len());
+        for key in WIRE_KEYS {
+            assert!(!object[key].is_null(), "{key} must be populated");
+        }
+        assert!(!object["streams"].as_object().unwrap().is_empty());
+        assert!(!object["pending_events"].as_array().unwrap().is_empty());
+
+        let decoded: StreamSession = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), value);
+    }
+
+    #[test]
     fn test_timeout_rejects_out_of_range_seconds() {
         assert!(SessionTimeout::try_from(0u64).is_err());
         assert!(SessionTimeout::try_from(MAX_SESSION_TIMEOUT_SECONDS + 1).is_err());

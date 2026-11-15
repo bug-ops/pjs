@@ -107,6 +107,7 @@ On `StreamFrame` the client shall drop the session if expired; if the session ex
 | All sessions complete at limit | `SessionLimitReached` |
 | Expired session read | treated as unknown |
 | Binary / raw frames | logged, ignored |
+| Server-supplied text in logs (#628) | error text is escaped and cut to 256 chars; a parse failure logs category/line/column/byte count only; unhandled messages log the variant name; the connect URL is logged without userinfo, query and fragment |
 
 ## Success Criteria
 

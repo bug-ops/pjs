@@ -89,6 +89,11 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 
+# #622: unoptimized sonic-rs frames overflow the 2 MiB test-thread stack at depth ~64.
+# Applies only when building this workspace; downstream debug builds are unaffected.
+[profile.dev.package.sonic-rs]
+opt-level = 3
+
 [profile.bench]
 inherits = "release"
 debug = true

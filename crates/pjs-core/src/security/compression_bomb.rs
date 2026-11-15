@@ -6,6 +6,7 @@
 //! this codebase's HTTP/WebSocket layers. See [`crate::compression::secure::SecureCompressor`]
 //! for the protected decompression methods that are defined but not yet called from the public API.
 
+use crate::config::ConfigError;
 use crate::{Error, Result};
 use std::io::Read;
 use thiserror::Error;
@@ -79,6 +80,39 @@ impl Default for CompressionBombConfig {
 }
 
 impl CompressionBombConfig {
+    /// Check that the limits cannot fail open or lock out all input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::MustBePositive`] when `max_ratio` is NaN, infinite or not
+    /// positive (the ratio comparison would never trigger), or when
+    /// `max_decompressed_size` or `max_compressed_size` is zero.
+    /// Returns [`ConfigError::InconsistentBounds`] when `check_interval_bytes` exceeds
+    /// `max_decompressed_size`, which would skip every streaming size check.
+    pub(crate) fn validate(&self) -> std::result::Result<(), ConfigError> {
+        const SECTION: &str = "security.network.compression_bomb";
+        let must_be_positive = |field| ConfigError::MustBePositive {
+            section: SECTION,
+            field,
+        };
+        if !(self.max_ratio.is_finite() && self.max_ratio > 0.0) {
+            return Err(must_be_positive("max_ratio"));
+        }
+        if self.max_decompressed_size == 0 {
+            return Err(must_be_positive("max_decompressed_size"));
+        }
+        if self.max_compressed_size == 0 {
+            return Err(must_be_positive("max_compressed_size"));
+        }
+        if self.check_interval_bytes > self.max_decompressed_size {
+            return Err(ConfigError::InconsistentBounds {
+                section: SECTION,
+                message: "check_interval_bytes must be <= max_decompressed_size",
+            });
+        }
+        Ok(())
+    }
+
     /// Configuration for high-security environments.
     pub fn high_security() -> Self {
         Self {
@@ -336,6 +370,47 @@ impl CompressionBombDetector {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn test_config_validate_accepts_presets() {
+        CompressionBombConfig::default().validate().unwrap();
+        CompressionBombConfig::high_security().validate().unwrap();
+        CompressionBombConfig::low_memory().validate().unwrap();
+        CompressionBombConfig::high_throughput().validate().unwrap();
+    }
+
+    #[test]
+    fn test_config_validate_rejects_non_finite_ratio() {
+        let config = CompressionBombConfig {
+            max_ratio: f64::NAN,
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.validate().unwrap_err(),
+            ConfigError::MustBePositive {
+                field: "max_ratio",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_config_validate_rejects_interval_above_max_size() {
+        let config = CompressionBombConfig {
+            max_decompressed_size: 1024,
+            check_interval_bytes: 1025,
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.validate().unwrap_err(),
+            ConfigError::InconsistentBounds { .. }
+        ));
+        let at_limit = CompressionBombConfig {
+            check_interval_bytes: 1024,
+            ..config
+        };
+        at_limit.validate().unwrap();
+    }
 
     #[test]
     fn test_compression_bomb_config() {

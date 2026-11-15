@@ -52,7 +52,7 @@ Status: done.
 Code: `PriorityStreamer::analyze`.
 
 ### FR-002 Skeleton content
-The Skeleton frame shall carry priority `Priority::CRITICAL` and `complete: false`. For an object root, `generate_skeleton` maps strings to `null`, numbers to `0`, booleans to `false`, nulls to `null`, arrays to `[]`, and recurses into objects. An array root yields `[]`; any other root yields `null`.
+The Skeleton frame shall carry priority `Priority::CRITICAL` and `complete: false`. For an object root, `generate_skeleton` maps strings to `null`, numbers to `0`, booleans to `false`, nulls to `null`, arrays to `[]`, and recurses into objects. An array root yields `[]`; any other root yields `null`. When the root is a scalar, or an object with a key `JsonPath` cannot encode, `analyze` shall additionally emit a root `Set` patch (`JsonPath::root()`, value is `skeletonize_arrays` of the input: arrays under JsonPath-encodable keys replaced by `[]`, arrays under keys JsonPath cannot encode preserved whole, since no `Append` patch can reach them) at `Priority::CRITICAL`, ordered before every other CRITICAL patch, so the root round-trips (#626).
 Status: done. `complete` is never set to `true`.
 Code: `PriorityStreamer::generate_skeleton`.
 
@@ -139,7 +139,7 @@ Code: `stream/mod.rs`.
 
 1. `StreamerConfig::detect_semantics` and `priority_threshold` are never read (grep: only the definition and `Default`). Heuristics always run and no patch is dropped. Dead configuration.
 2. Nested objects are transmitted redundantly (by code reading): an object field's `Set` value contains its whole subtree except arrays, and child fields then get their own `Set`. Bytes grow with nesting depth. `[NEEDS CLARIFICATION: confirm with a payload-size measurement]`.
-3. A scalar root produces `Null` skeleton and no patches (by code reading: `extract_patches` ignores primitives, `generate_skeleton` returns `null`), so the value is not transmitted. `[NEEDS CLARIFICATION: confirm]`.
+3. Resolved (#626): a scalar root, or an object root with a key `JsonPath` cannot encode, is transmitted through a root `Set` patch at CRITICAL priority; the skeleton stays `null` for a scalar root.
 4. `PatchOperation::Replace` is identical to `Set` in the only consumer; the streamer never emits `Replace` or `Remove`.
 5. `Complete.checksum` is always `None`.
 6. Drift from `docs/architecture/SPECIFICATION.md` (sections 3.1-3.6): spec uses `@type/@seq/@priority` envelopes, JSON Pointer paths, ops `replace|add|remove|move|copy`, `@array_metadata`, error and heartbeat frames, `sha256` checksum. Implementation: externally tagged enum, `$.a[0]` paths, ops `Set|Append|Replace|Remove`, no sequence numbers, no error/heartbeat frame, no array metadata. The draft is a design target, not what `pjson-rs` emits.

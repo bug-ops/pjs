@@ -335,6 +335,14 @@ impl AxumWebSocketTransport {
     /// session. Call this while building the transport, before the controller
     /// is used.
     ///
+    /// The cap is defence in depth against session accumulation. The default
+    /// per-IP message rate limit (`RateLimitConfig::max_messages_per_second`,
+    /// 30, plus a burst allowance of 5; every inbound frame counts) stops a
+    /// burst well short of 64 sessions, but not a paced client: one that
+    /// stays under the rate limit reaches 64 live sessions, provided it
+    /// keeps them open for more than about 2 s (or the rate limit is raised),
+    /// and only this cap stops it.
+    ///
     /// # Examples
     ///
     /// ```
@@ -752,20 +760,6 @@ impl Drop for ConnectionCleanup {
     }
 }
 
-/// Variant name of `message`, for logs that must not carry its payload.
-fn message_kind(message: &WsMessage) -> &'static str {
-    match message {
-        WsMessage::StreamInit { .. } => "StreamInit",
-        WsMessage::StreamFrame { .. } => "StreamFrame",
-        WsMessage::FrameAck { .. } => "FrameAck",
-        WsMessage::StreamComplete { .. } => "StreamComplete",
-        WsMessage::StreamCancel { .. } => "StreamCancel",
-        WsMessage::Error { .. } => "Error",
-        WsMessage::Ping { .. } => "Ping",
-        WsMessage::Pong { .. } => "Pong",
-    }
-}
-
 /// Resolves when `signal` fires; never resolves when there is no signal.
 async fn wait_for_shutdown(signal: Option<&ShutdownSignal>) {
     match signal {
@@ -878,7 +872,7 @@ impl ConnectionLoop<'_> {
                     Ok(ws_message) => {
                         debug!(
                             "Inbound {} message from connection {}, {} bytes",
-                            message_kind(&ws_message),
+                            ws_message.kind(),
                             self.connection_id,
                             text.len()
                         );

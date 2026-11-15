@@ -1,8 +1,7 @@
-//! Acceptance test for #604 criterion 6: `GET /pjs/sessions?limit=0` keeps its HEAD status.
+//! Acceptance test for #604 criterion 6: `GET /pjs/sessions?limit=0` is a client error (#621).
 //!
-//! HEAD status (measured at 6b57a49) with the real `GatInMemoryStreamRepository`: 500, because
-//! the adapter's `InvalidInput` is mapped to 500. The mock repository does not validate and
-//! returns 200 at HEAD, so it is not pinned.
+//! The real `GatInMemoryStreamRepository` rejects it with `DomainError::InvalidInput`, which the
+//! HTTP adapter maps to 400. The mock repository does not validate, so it is not pinned.
 
 #![feature(impl_trait_in_assoc_type)]
 #![cfg(feature = "http-server")]
@@ -25,7 +24,7 @@ fn list_request(query: &str) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn test_list_sessions_limit_zero_with_real_repository_status_unchanged() {
+async fn test_list_sessions_limit_zero_with_real_repository_returns_bad_request() {
     let state = PjsAppState::new(
         Arc::new(GatInMemoryStreamRepository::new()),
         Arc::new(common::MockEventPublisher::new()),
@@ -36,8 +35,5 @@ async fn test_list_sessions_limit_zero_with_real_repository_status_unchanged() {
         .oneshot(list_request("limit=0"))
         .await
         .expect("responds");
-    assert_eq!(
-        response.status(),
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR
-    );
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
 }

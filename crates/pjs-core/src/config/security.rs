@@ -266,7 +266,8 @@ impl SecurityConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::MustBePositive`] when any limit, count or timeout is zero.
+    /// Returns [`ConfigError::MustBePositive`] when any limit, count, rate or timeout is zero,
+    /// or the compression bomb `max_ratio` is non-finite or not positive.
     /// Returns [`ConfigError::InconsistentBounds`] when min > max for session
     /// ID length, `max_depth` exceeds [`MAX_SAFE_JSON_DEPTH`], or a limit exceeds
     /// the budget that contains it (`buffers.max_buffer_size` and
@@ -410,6 +411,18 @@ impl SecurityConfig {
             "session_timeout_secs",
             self.sessions.session_timeout_secs
         );
+
+        must_be_positive!(
+            "security.network.rate_limiting",
+            "max_requests_per_window",
+            self.network.rate_limiting.max_requests_per_window
+        );
+        must_be_positive!(
+            "security.network.rate_limiting",
+            "max_messages_per_second",
+            self.network.rate_limiting.max_messages_per_second
+        );
+        self.network.compression_bomb.validate()?;
 
         if self.buffers.max_buffer_size > self.buffers.max_total_memory {
             return Err(ConfigError::InconsistentBounds {
@@ -717,5 +730,50 @@ mod tests {
             MaxDepth::new(MAX_SAFE_JSON_DEPTH).unwrap().get(),
             MAX_SAFE_JSON_DEPTH
         );
+    }
+
+    fn assert_must_be_positive(config: &SecurityConfig, expected: &str) {
+        match config.validate().unwrap_err() {
+            ConfigError::MustBePositive { field, .. } => assert_eq!(field, expected),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_rejects_non_finite_or_non_positive_max_ratio() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            let mut config = SecurityConfig::default();
+            config.network.compression_bomb.max_ratio = bad;
+            assert_must_be_positive(&config, "max_ratio");
+        }
+    }
+
+    #[test]
+    fn test_rejects_zero_compression_bomb_sizes() {
+        let mut config = SecurityConfig::default();
+        config.network.compression_bomb.max_decompressed_size = 0;
+        assert_must_be_positive(&config, "max_decompressed_size");
+
+        let mut config = SecurityConfig::default();
+        config.network.compression_bomb.max_compressed_size = 0;
+        assert_must_be_positive(&config, "max_compressed_size");
+    }
+
+    #[test]
+    fn test_rejects_zero_rate_limits() {
+        let mut config = SecurityConfig::default();
+        config.network.rate_limiting.max_requests_per_window = 0;
+        assert_must_be_positive(&config, "max_requests_per_window");
+
+        let mut config = SecurityConfig::default();
+        config.network.rate_limiting.max_messages_per_second = 0;
+        assert_must_be_positive(&config, "max_messages_per_second");
+    }
+
+    #[test]
+    fn test_presets_validate() {
+        SecurityConfig::high_throughput().validate().unwrap();
+        SecurityConfig::low_memory().validate().unwrap();
+        SecurityConfig::development().validate().unwrap();
     }
 }

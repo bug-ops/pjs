@@ -58,7 +58,7 @@ Status: done.
 Status: done (#456, #568).
 
 ### FR-003 Validation
-`SecurityConfig::validate` shall fail if `min_session_id_length > max_session_id_length`, if `json.max_depth > 512`, if any limit, count or timeout field is zero, or if `buffers.max_buffer_size > buffers.max_total_memory`, `network.max_websocket_frame_size > json.max_input_size` or `sessions.max_session_data_size > buffers.max_total_memory`. It returns the first error as `ConfigError::{MustBePositive{section, field}, InconsistentBounds{section, message}}`.
+`SecurityConfig::validate` shall fail if `min_session_id_length > max_session_id_length`, if `json.max_depth > 512`, if any limit, count, rate or timeout field is zero (including `rate_limiting.max_requests_per_window` and `max_messages_per_second` and the compression-bomb `max_decompressed_size`/`max_compressed_size`), if the compression-bomb `max_ratio` is non-finite or not positive (#627), or if `buffers.max_buffer_size > buffers.max_total_memory`, `network.max_websocket_frame_size > json.max_input_size`, `sessions.max_session_data_size > buffers.max_total_memory`, or the compression-bomb `check_interval_bytes > max_decompressed_size` (which would skip every streaming size check; `InconsistentBounds`). It returns the first error as `ConfigError::{MustBePositive{section, field}, InconsistentBounds{section, message}}`.
 Status: done (#614).
 
 ### FR-004 Proof type

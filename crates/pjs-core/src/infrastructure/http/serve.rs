@@ -13,21 +13,37 @@
 use std::{
     io,
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    sync::Arc,
+    pin::Pin,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
-use axum::{Extension, Router, extract::ConnectInfo};
+use axum::{
+    Extension, Router,
+    body::{Body, Bytes},
+    extract::{ConnectInfo, State},
+    http::header,
+    middleware::map_response_with_state,
+    response::Response,
+};
+use futures::StreamExt;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
     server::conn::auto::Builder,
     service::TowerToHyperService,
 };
-use tokio::{net::TcpListener, sync::Semaphore};
+use tokio::{
+    net::TcpListener,
+    sync::Semaphore,
+    time::{Instant, Sleep},
+};
 use tower::Layer;
 use tracing::{debug, error, warn};
 
-use super::shutdown::{ShutdownConfig, ShutdownOutcome};
+use super::{
+    shutdown::{DrainTimeout, ShutdownConfig, ShutdownOutcome, ShutdownSignal},
+    streaming::StreamFormat,
+};
 use crate::config::ConfigError;
 use crate::security::rate_limit::{
     ClientRateLimiter, RateLimitConfig, RateLimitError, RateLimitGuard,
@@ -262,6 +278,16 @@ impl Default for ConnectionLimits {
 /// never-triggered signal (the [`ShutdownConfig::default`]) runs until the
 /// process is torn down, the same as `axum::serve(listener, app).await`.
 ///
+/// When the signal fires, `text/event-stream` and `application/x-ndjson`
+/// response bodies keep streaming, so finite responses complete during the
+/// drain. A body still open once nine tenths of the drain timeout have elapsed
+/// since the signal fired gets a terminal frame, just before the drain aborts
+/// it: the SSE event `event: shutdown` or the NDJSON line
+/// `{"event":"shutdown"}`. Clients can use it to tell a server shutdown from
+/// a network failure. A body that ends on its own gets no terminal frame.
+/// Responses carrying a `Content-Encoding` header are passed through
+/// untouched, since appending raw bytes would corrupt the encoded body.
+///
 /// If the router mounts the WebSocket transport, pass clones of the **same**
 /// signal here and to `AxumWebSocketTransport::with_shutdown`; a different
 /// instance means the drain does not wait for WebSocket tasks.
@@ -320,6 +346,10 @@ pub async fn serve_with_limits(
         builder.http2().max_header_list_size(limit.get());
     }
     let builder = Arc::new(builder);
+    let router = router.layer(map_response_with_state(
+        ShutdownBodyState::new(signal.clone(), drain_timeout),
+        end_streams_on_shutdown,
+    ));
     let semaphore = Arc::new(Semaphore::new(limits.max_connections));
     let max_connection_duration = limits.max_connection_duration;
     let header_read_timeout = limits.header_read_timeout;
@@ -477,6 +507,154 @@ pub async fn serve_with_limits(
     Ok(signal.drain(drain_timeout).await)
 }
 
+const NDJSON_SHUTDOWN_FRAME: &[u8] = b"{\"event\":\"shutdown\"}\n";
+const SSE_SHUTDOWN_FRAME: &[u8] = b"event: shutdown\ndata: {\"event\":\"shutdown\"}\n\n";
+
+/// Terminal frame appended to a streaming response still open at the end of
+/// the shutdown drain.
+///
+/// The `event` key is deliberately not a `Frame` field, so clients can tell
+/// the marker from a data frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalFrame {
+    NdJson,
+    ServerSentEvents,
+}
+
+impl TerminalFrame {
+    fn for_response(response: &Response) -> Option<Self> {
+        if response.headers().contains_key(header::CONTENT_ENCODING) {
+            return None;
+        }
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)?
+            .to_str()
+            .ok()?;
+        let media_type = content_type.split(';').next()?.trim();
+        let is = |format: StreamFormat| media_type.eq_ignore_ascii_case(format.content_type());
+        if is(StreamFormat::NdJson) {
+            Some(Self::NdJson)
+        } else if is(StreamFormat::ServerSentEvents) {
+            Some(Self::ServerSentEvents)
+        } else {
+            None
+        }
+    }
+
+    fn bytes(self) -> Bytes {
+        Bytes::from_static(match self {
+            Self::NdJson => NDJSON_SHUTDOWN_FRAME,
+            Self::ServerSentEvents => SSE_SHUTDOWN_FRAME,
+        })
+    }
+}
+
+/// Aborts the wrapped task on drop, so the trigger recorder does not outlive
+/// the server when the signal never fires.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+#[derive(Clone)]
+struct ShutdownBodyState {
+    signal: ShutdownSignal,
+    drain_timeout: DrainTimeout,
+    triggered_at: Arc<OnceLock<Instant>>,
+    _recorder: Arc<AbortOnDrop>,
+}
+
+impl ShutdownBodyState {
+    /// Spawns the task that stamps the instant the signal fires, so every
+    /// body measures its deadline from the trigger, not from when it first
+    /// observed it.
+    fn new(signal: ShutdownSignal, drain_timeout: DrainTimeout) -> Self {
+        let triggered_at = Arc::new(OnceLock::new());
+        let recorder = (signal.clone(), Arc::clone(&triggered_at));
+        let recorder = tokio::spawn(async move {
+            let (signal, triggered_at) = recorder;
+            signal.triggered().await;
+            triggered_at.get_or_init(Instant::now);
+        });
+        Self {
+            signal,
+            drain_timeout,
+            triggered_at,
+            _recorder: Arc::new(AbortOnDrop(recorder)),
+        }
+    }
+
+    /// Drain budget minus a tenth, measured from the trigger, so the terminal
+    /// frame is flushed before the drain itself aborts the connection.
+    fn terminal_frame_deadline(&self) -> Instant {
+        let drain = Duration::from(self.drain_timeout);
+        *self.triggered_at.get_or_init(Instant::now) + (drain - drain / 10)
+    }
+}
+
+enum BodyPhase {
+    Running,
+    Draining(Pin<Box<Sleep>>),
+    Done,
+}
+
+/// Appends a terminal `shutdown` frame to SSE and NDJSON bodies that are
+/// still open near the end of the drain.
+///
+/// The body keeps forwarding frames after the signal fires, so finite
+/// responses complete during the drain; only a body still open once
+/// `drain_timeout` is nearly spent gets the frame, just before the drain
+/// aborts it. Responses with a `Content-Encoding` and other content types
+/// pass through untouched.
+async fn end_streams_on_shutdown(
+    State(state): State<ShutdownBodyState>,
+    response: Response,
+) -> Response {
+    let Some(terminal) = TerminalFrame::for_response(&response) else {
+        return response;
+    };
+    let (parts, body) = response.into_parts();
+    let stream = futures::stream::unfold(
+        (body.into_data_stream(), state, BodyPhase::Running),
+        move |(mut inner, state, mut phase)| async move {
+            loop {
+                match &mut phase {
+                    BodyPhase::Done => return None,
+                    BodyPhase::Running => {
+                        tokio::select! {
+                            () = state.signal.triggered() => {
+                                phase = BodyPhase::Draining(Box::pin(tokio::time::sleep_until(
+                                    state.terminal_frame_deadline(),
+                                )));
+                            }
+                            item = inner.next() => {
+                                return item.map(|item| (item, (inner, state, phase)));
+                            }
+                        }
+                    }
+                    BodyPhase::Draining(deadline) => {
+                        tokio::select! {
+                            // Deadline first: an always-ready body must not starve it.
+                            biased;
+                            () = deadline.as_mut() => {
+                                return Some((Ok(terminal.bytes()), (inner, state, BodyPhase::Done)));
+                            }
+                            item = inner.next() => {
+                                return item.map(|item| (item, (inner, state, phase)));
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    );
+    Response::from_parts(parts, Body::from_stream(stream))
+}
+
 /// Masks an IPv6 address down to its /64 network prefix for accept-level
 /// per-IP rate-limit keying; IPv4 addresses pass through unchanged.
 ///
@@ -552,6 +730,19 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use super::*;
+
+    #[tokio::test]
+    async fn recorder_task_stops_when_state_is_dropped_untriggered() {
+        let state = ShutdownBodyState::new(
+            ShutdownSignal::new(),
+            DrainTimeout::try_from(Duration::from_secs(1)).unwrap(),
+        );
+        let recorder = state._recorder.0.abort_handle();
+        assert!(!recorder.is_finished());
+        drop(state);
+        tokio::task::yield_now().await;
+        assert!(recorder.is_finished());
+    }
 
     #[test]
     fn ipv4_addresses_pass_through_unmasked() {

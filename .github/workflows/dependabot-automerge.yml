@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
+  checks: read
   contents: write
   pull-requests: write
 

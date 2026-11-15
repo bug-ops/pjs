@@ -169,6 +169,11 @@ const MAX_ADAPTIVE_FRAME_DELAY: Duration = Duration::from_secs(1);
 ///
 /// A session counts from creation until its stream completes, it is
 /// cancelled, or the connection closes.
+///
+/// Defence in depth: the default inbound message rate limit (30 per second
+/// per IP, burst 5) stops a burst short of this cap, but a paced client
+/// holding sessions open for more than about 2 s reaches it, since shorter
+/// sessions complete first.
 pub(super) const DEFAULT_MAX_SESSIONS_PER_CONNECTION: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
 /// Why [`AdaptiveStreamController::create_session`] refused a session.
