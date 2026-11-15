@@ -207,10 +207,12 @@ pub struct ConnectionLimits {
     /// Cap on a request's header block size, `None` to leave hyper's own
     /// per-protocol defaults in place.
     ///
-    /// Defaults to `None`: HTTP/1 keeps hyper's 417_792-byte buffer and HTTP/2
-    /// its 16 KiB header-list limit. `Some(limit)` sets both, so an oversized
-    /// HTTP/1 request gets `431` and an oversized HTTP/2 header list is
-    /// refused.
+    /// Defaults to `None`: HTTP/1 keeps hyper's own read-buffer bound, which
+    /// is far larger than a typical header cap, and HTTP/2 keeps hyper's
+    /// default header-list limit. `Some(limit)` caps the combined size of a
+    /// request's headers for both protocols: for HTTP/1 within hyper's
+    /// internal read buffer, so an oversized request gets `431`; for HTTP/2 as
+    /// the header-list limit, so an oversized header list is refused.
     pub max_header_bytes: Option<HeaderSizeLimit>,
 }
 
