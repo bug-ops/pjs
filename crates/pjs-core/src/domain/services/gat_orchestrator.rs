@@ -70,7 +70,7 @@ impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             batch_size: 100,
-            cache_ttl: Duration::from_secs(300), // 5 minutes
+            cache_ttl: Duration::from_mins(5),
             max_concurrent_streams: 10,
             priority_boost_threshold: Priority::HIGH,
         }

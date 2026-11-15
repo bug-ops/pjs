@@ -17,7 +17,7 @@ use tokio_util::{
 use crate::config::ConfigError;
 
 const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_DRAIN_TIMEOUT: Duration = Duration::from_secs(600);
+const MAX_DRAIN_TIMEOUT: Duration = Duration::from_mins(10);
 const FORCE_GRACE: Duration = Duration::from_millis(100);
 
 /// Upper bound on how long the shutdown drain waits for in-flight work

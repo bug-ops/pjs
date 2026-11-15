@@ -237,7 +237,7 @@ impl Default for ConnectionLimits {
     fn default() -> Self {
         Self {
             header_read_timeout: Some(Duration::from_secs(10)),
-            max_connection_duration: Some(Duration::from_secs(300)),
+            max_connection_duration: Some(Duration::from_mins(5)),
             max_connections: 1024,
             max_concurrent_streams: Some(128),
             max_connections_per_ip: Some(64),

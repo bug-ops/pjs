@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    mem::DropGuard,
     num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant},
@@ -47,7 +48,7 @@ const MAX_QUEUED_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_MAX_SESSIONS: NonZeroUsize = NonZeroUsize::new(1024).unwrap();
 
 /// Default idle time after which a session that stopped receiving data expires.
-const DEFAULT_SESSION_IDLE_TTL: Duration = Duration::from_secs(300);
+const DEFAULT_SESSION_IDLE_TTL: Duration = Duration::from_mins(5);
 
 /// Default cap, in bytes, on the data reconstructed for a single session.
 const DEFAULT_MAX_SESSION_BYTES: NonZeroUsize = NonZeroUsize::new(16 * 1024 * 1024).unwrap();
@@ -345,34 +346,15 @@ fn entry_size(key: &str, value: &Value) -> usize {
         .saturating_add(json_size(value))
 }
 
-/// Removes a session from the map when dropped unless disarmed, so a
-/// cancelled `request_stream` cannot leak a slot.
-struct SessionSlotGuard {
-    sessions: ClientSessions,
-    id: SessionId,
-    armed: bool,
-}
-
-impl SessionSlotGuard {
-    fn disarm(mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for SessionSlotGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        if let Ok(mut sessions) = self.sessions.try_write() {
-            sessions.remove(&self.id);
-        } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let sessions = Arc::clone(&self.sessions);
-            let id = self.id;
-            runtime.spawn(async move {
-                sessions.write().await.remove(&id);
-            });
-        }
+/// Removes the session from the map; used as a drop guard so a cancelled
+/// `request_stream` cannot leak a slot.
+fn remove_session_slot((sessions, id): (ClientSessions, SessionId)) {
+    if let Ok(mut map) = sessions.try_write() {
+        map.remove(&id);
+    } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn(async move {
+            sessions.write().await.remove(&id);
+        });
     }
 }
 
@@ -762,18 +744,17 @@ impl PjsWebSocketClient {
             )?;
             sessions.insert(session_id, ClientStreamSession::new(session_id));
         }
-        let slot = SessionSlotGuard {
-            sessions: Arc::clone(&self.sessions),
-            id: session_id,
-            armed: true,
-        };
+        let slot = DropGuard::new(
+            (Arc::clone(&self.sessions), session_id),
+            remove_session_slot,
+        );
 
         self.message_tx.send(json_str, len).await.map_err(|_| {
             PjsError::ClientError(
                 "Failed to send stream request: outgoing channel closed".to_string(),
             )
         })?;
-        slot.disarm();
+        DropGuard::dismiss(slot);
 
         info!("Requested stream initialization: {}", session_id);
         Ok(session_id)
