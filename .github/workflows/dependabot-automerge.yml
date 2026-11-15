@@ -20,10 +20,24 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # A 0.x minor bump is breaking, so minor updates auto-merge only when
+      # every updated dependency was already >= 1.0.0; a grouped PR merges
+      # only if all of its members qualify.
+      - name: Decide auto-merge eligibility
+        id: policy
+        env:
+          UPDATED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: |
+          auto=$(jq -r '
+            length > 0 and all(.[];
+              .updateType == "version-update:semver-patch" or
+              (.updateType == "version-update:semver-minor" and
+                ((.prevVersion // "" | ltrimstr("v") | split(".")[0] | try tonumber catch 0) >= 1)))
+          ' <<< "$UPDATED_DEPENDENCIES")
+          echo "auto=$auto" >> "$GITHUB_OUTPUT"
+
       - name: Wait for CI checks to complete
-        if: |
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        if: steps.policy.outputs.auto == 'true'
         uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -33,16 +47,14 @@ jobs:
           allowed-conclusions: success,skipped,neutral
 
       - name: Enable auto-merge
-        if: |
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        if: steps.policy.outputs.auto == 'true'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Label major updates
-        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+      - name: Label updates that need manual review
+        if: steps.policy.outputs.auto != 'true'
         run: gh pr edit "$PR_URL" --add-label "major-update"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
