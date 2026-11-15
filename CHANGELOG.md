@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI jobs for the per-feature build matrix and the MSRV check, and a documented quiet-machine A/B bench procedure (#615, #608, #619)
 - `WsMessage::StreamCancel` and a Pong reply to Ping on the WebSocket server (#572, #601)
 - `serve_with_limits` sends a terminal `shutdown` frame on SSE and NDJSON streams, and a `http_serve_lifecycle` benchmark covers the connection lifecycle (#625, #630, #645)
+- WebSocket `framing: patch` and `StreamPatch` frames split any payload; `PjsWebSocketClient::request_stream` with `None` options now requests patch framing (#624) (#PR)
+- `JsonPath::is_valid_key` in `pjs-domain`, an allocation-free check that a key is encodable in a `JsonPath` (#643) (#PR)
+- Opt-in `float-roundtrip` feature in `pjson-rs` and a `zstd_dict_codec` fuzz target (#575) (#PR)
+- `pjs-js-client` emits `server_shutdown` for the SSE and NDJSON shutdown marker without reconnecting and rejects pending streams with `SERVER_SHUTDOWN`, new `PJSEvent` and `PJSErrorType` members (#644) (#PR)
 
 ### Changed
 
@@ -61,9 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rust-toolchain.toml` and CI pin a dated nightly, and the `msrv` job also checks `pjs-wasm` on `wasm32-unknown-unknown` at 1.89 (#650, #649, #654)
 - README, SECURITY.md, CONTRIBUTING.md and specs describe `pjson-rs` as nightly-only and `pjson-rs-domain`/`pjs-wasm` at MSRV 1.89 (#648, #654)
 - `pjson-rs` uses `Duration::from_mins`/`from_hours` and `core::mem::DropGuard`, and the unused `manual_div_ceil` and `only_used_in_recursion` workspace clippy allows are removed (#647, #654)
+- **BREAKING** `pjson_rs::Error` is a typed, `#[non_exhaustive]`, non-`Clone` enum with `source()` chains and no `Other`; corrupt compressed input is `Error::Codec`, and `CompressionBombError` is `#[non_exhaustive]` with two new variants (#599) (#PR)
+- **BREAKING** The WebSocket server applies `StreamOptions` and splits object payloads above `max_frame_size` into several `StreamFrame`s; `StreamOptions.framing`, `WsMessage::StreamPatch` and `CreateSessionError` variants are new (#624) (#PR)
+- **BREAKING** WebSocket replies are 400 "invalid stream options", 429 "connection plan budget exhausted", 413 "stream plan too large", 500 "stream plan could not be built" and 408 on stall or deadline (#624) (#PR)
 
 ### Fixed
 
+- `pjs-domain` `Stream` keeps values under object keys `JsonPath` cannot encode via the skeleton and a root `Set` patch (#643) (#PR)
 - `PriorityStreamer` plan/reconstruct round trip keeps scalar roots and top-level keys that `JsonPath` cannot encode (#626, #645)
 - `SecurityConfig::validate` rejects invalid `max_ratio`, zero compression-bomb sizes, zero rate-limit rates and `check_interval_bytes` above `max_decompressed_size` (**BREAKING**) (#627, #645)
 - `PjsWebSocketClient` bounds logged server content and omits URL userinfo, query and fragment (#628, #645)
