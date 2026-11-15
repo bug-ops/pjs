@@ -729,7 +729,7 @@ impl PjsWebSocketClient {
             WsMessage::StreamFrame {
                 session_id,
                 frame_id,
-                priority: _priority,
+                priority: _,
                 payload,
                 is_complete,
             } => {
@@ -777,14 +777,8 @@ impl PjsWebSocketClient {
                 // read loop is not. See `try_send_control_message`'s doc.
                 Self::try_send_control_message(&message_tx, &ack_message, "frame acknowledgment");
             }
-            WsMessage::StreamComplete {
-                session_id,
-                checksum,
-            } => {
-                info!(
-                    "Stream completed: {} (checksum: {:?})",
-                    session_id, checksum
-                );
+            WsMessage::StreamComplete { session_id } => {
+                info!("Stream completed: {}", session_id);
 
                 let now = Instant::now();
                 let mut sessions = sessions.write().await;
@@ -858,6 +852,7 @@ pub struct ClosedSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::Priority;
     use serde_json::json;
 
     #[tokio::test]
@@ -1145,7 +1140,7 @@ mod tests {
         WsMessage::StreamFrame {
             session_id,
             frame_id,
-            priority: 1,
+            priority: Priority::LOW,
             payload,
             is_complete: false,
         }
@@ -1175,10 +1170,7 @@ mod tests {
     }
 
     fn complete(session_id: SessionId) -> WsMessage {
-        WsMessage::StreamComplete {
-            session_id,
-            checksum: "c".to_string(),
-        }
+        WsMessage::StreamComplete { session_id }
     }
 
     #[tokio::test]
@@ -1447,10 +1439,7 @@ mod tests {
         let config = WebSocketClientConfig::default();
 
         for message in [
-            WsMessage::StreamComplete {
-                session_id: id,
-                checksum: hostile.clone(),
-            },
+            WsMessage::StreamComplete { session_id: id },
             WsMessage::Error {
                 session_id: Some(id),
                 error: hostile.clone(),

@@ -10,11 +10,11 @@
 //
 // Coverage target: 60%+ for Infrastructure Layer
 
-#![cfg(feature = "http-server")]
+#![cfg(feature = "websocket-server")]
 
 use pjson_rs::{
     Error as PjsError,
-    domain::SessionId,
+    domain::{Priority, SessionId},
     infrastructure::websocket::{
         AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, StreamOptions,
         WebSocketTransport, WsMessage,
@@ -354,8 +354,8 @@ fn test_stream_options_custom() {
     use std::collections::HashMap;
 
     let mut priority_mapping = HashMap::new();
-    priority_mapping.insert("critical".to_string(), 255);
-    priority_mapping.insert("high".to_string(), 200);
+    priority_mapping.insert("critical".to_string(), Priority::CRITICAL);
+    priority_mapping.insert("high".to_string(), Priority::HIGH);
 
     let options = StreamOptions {
         max_frame_size: 1024 * 1024,
@@ -369,7 +369,7 @@ fn test_stream_options_custom() {
     assert!(!options.compression);
     assert_eq!(
         options.priority_mapping.as_ref().unwrap().get("critical"),
-        Some(&255)
+        Some(&Priority::CRITICAL)
     );
 }
 
@@ -423,7 +423,7 @@ fn test_ws_message_stream_frame_serialization() {
     let message = WsMessage::StreamFrame {
         session_id: SessionId::new(),
         frame_id: 5,
-        priority: 200,
+        priority: Priority::HIGH,
         payload: json!({"frame": "data"}),
         is_complete: false,
     };
@@ -432,7 +432,7 @@ fn test_ws_message_stream_frame_serialization() {
 
     assert_eq!(json["type"], "StreamFrame");
     assert_eq!(json["data"]["frame_id"], 5);
-    assert_eq!(json["data"]["priority"], 200);
+    assert_eq!(json["data"]["priority"], 80);
 }
 
 #[test]
@@ -454,13 +454,12 @@ fn test_ws_message_frame_ack_serialization() {
 fn test_ws_message_stream_complete_serialization() {
     let message = WsMessage::StreamComplete {
         session_id: SessionId::new(),
-        checksum: "sha256:abcd1234".to_string(),
     };
 
     let json = serde_json::to_value(&message).unwrap();
 
     assert_eq!(json["type"], "StreamComplete");
-    assert_eq!(json["data"]["checksum"], "sha256:abcd1234");
+    assert!(json["data"].get("checksum").is_none());
 }
 
 #[test]
@@ -647,7 +646,7 @@ async fn test_websocket_send_frame() {
     let message = WsMessage::StreamFrame {
         session_id: SessionId::new(),
         frame_id: 1,
-        priority: 200,
+        priority: Priority::HIGH,
         payload: json!({"test": "data"}),
         is_complete: false,
     };

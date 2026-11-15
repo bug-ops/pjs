@@ -86,7 +86,7 @@ pub use compression::{
 
 // Streaming exports
 pub use error::{Error, Result};
-#[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
+#[cfg(feature = "websocket-server")]
 pub use infrastructure::websocket::SecureWebSocketHandler;
 pub use parser::{LazyParser, ZeroCopyParser};
 pub use security::{

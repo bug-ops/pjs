@@ -4,7 +4,7 @@
 //! and exchange real WebSocket frames with `AxumWebSocketTransport`. They cover
 //! code paths (protocol upgrade, frame routing, connection cleanup) that
 //! struct-level unit tests in `websocket_server_comprehensive.rs` cannot reach.
-#![cfg(all(feature = "http-server", feature = "websocket-client"))]
+#![cfg(all(feature = "websocket-server", feature = "websocket-client"))]
 
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -105,11 +105,11 @@ pub struct RateLimitConfig {
     ///
     /// Guards against a peer that stops reading wedging the connection's
     /// task indefinitely. Bounds a single write, not overall throughput —
-    /// see `infrastructure::websocket::WRITE_TIMEOUT`'s doc for the
+    /// see `infrastructure::websocket::protocol::WRITE_TIMEOUT`'s doc for the
     /// tradeoff this implies for large frames sent to slow clients, and
     /// raise this value if that tradeoff doesn't fit a deployment's
     /// expected client bandwidth. Defaults to the same 10s value as
-    /// `infrastructure::websocket::WRITE_TIMEOUT`; the two constants are
+    /// `infrastructure::websocket::protocol::WRITE_TIMEOUT`; the two constants are
     /// independent (different feature gates), so an intentional change to
     /// one should be mirrored in the other unless a divergence is
     /// deliberate. [`Self::low_resource`] tightens this to 3s. This value
@@ -166,7 +166,7 @@ impl RateLimitConfig {
             // unaffected by this preset. A slow-but-honest client now
             // needs roughly 3.3x the downlink bandwidth it needed under
             // the 10s default to avoid being disconnected as "stalled"
-            // (see `infrastructure::websocket::WRITE_TIMEOUT`'s doc for
+            // (see `infrastructure::websocket::protocol::WRITE_TIMEOUT`'s doc for
             // the full bandwidth-vs-deadline tradeoff) — raise this value
             // if a low-resource deployment still expects to serve large
             // frames to bandwidth-constrained clients.

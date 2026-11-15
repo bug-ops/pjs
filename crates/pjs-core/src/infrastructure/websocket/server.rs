@@ -1,17 +1,15 @@
 //! WebSocket server implementation for Axum
 
-#[cfg(feature = "http-server")]
-use super::{
-    AdaptiveStreamController, ConnectionId, CreateSessionError, StreamOptions, WebSocketTransport,
-    WsMessage,
-};
+use super::{AdaptiveStreamController, ConnectionId, CreateSessionError, StreamOptions, WsMessage};
 use crate::{
     Error as PjsError, Result as PjsResult,
     domain::SessionId,
-    infrastructure::bounded_channel::{self, ByteBoundedSender, byte_bounded_channel},
+    infrastructure::{
+        bounded_channel::{self, ByteBoundedSender, byte_bounded_channel},
+        http::ShutdownSignal,
+    },
     security::{ClientRateLimiter, RateLimitConfig, RateLimitGuard},
 };
-#[cfg(feature = "http-server")]
 use axum::{
     extract::{
         ConnectInfo, State, WebSocketUpgrade,
@@ -196,6 +194,65 @@ impl OriginAllowList {
     }
 }
 
+/// WebSocket transport trait for different implementations (GAT-based)
+pub trait WebSocketTransport: Send + Sync {
+    /// Concrete connection type the implementor uses for I/O.
+    type Connection: Send + Sync;
+
+    /// Future type for starting stream
+    type StartStreamFuture<'a>: Future<Output = PjsResult<SessionId>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for sending frame
+    type SendFrameFuture<'a>: Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for handling message
+    type HandleMessageFuture<'a>: Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Future type for closing stream
+    type CloseStreamFuture<'a>: Future<Output = PjsResult<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Start streaming session
+    fn start_stream(
+        &self,
+        connection: Arc<Self::Connection>,
+        data: Value,
+        options: StreamOptions,
+    ) -> Self::StartStreamFuture<'_>;
+
+    /// Send frame to client
+    ///
+    /// Implementors typically queue `message` onto a per-connection channel
+    /// consumed by that same connection's I/O loop. Do not call this method
+    /// from within that connection's own message-handling path (e.g. from
+    /// [`WebSocketTransport::handle_message`]): if the implementor applies
+    /// backpressure by awaiting channel capacity rather than dropping,
+    /// calling from the same loop that drains the channel can deadlock the
+    /// connection.
+    fn send_frame(
+        &self,
+        connection: Arc<Self::Connection>,
+        message: WsMessage,
+    ) -> Self::SendFrameFuture<'_>;
+
+    /// Handle incoming message
+    fn handle_message(
+        &self,
+        connection: Arc<Self::Connection>,
+        message: WsMessage,
+    ) -> Self::HandleMessageFuture<'_>;
+
+    /// Close streaming session
+    fn close_stream(&self, session_id: SessionId) -> Self::CloseStreamFuture<'_>;
+}
+
 /// Axum WebSocket transport implementation
 pub struct AxumWebSocketTransport {
     controller: Arc<AdaptiveStreamController>,
@@ -210,6 +267,7 @@ pub struct AxumWebSocketTransport {
     /// cross-site WebSocket hijacking (CSWSH) from browser clients. See
     /// [`Self::with_allowed_origins`].
     allowed_origins: OriginAllowList,
+    shutdown: Option<ShutdownSignal>,
 }
 
 impl AxumWebSocketTransport {
@@ -253,7 +311,34 @@ impl AxumWebSocketTransport {
             outgoing_channels: Arc::new(RwLock::new(HashMap::new())),
             rate_limiter: Arc::new(ClientRateLimiter::new(config)),
             allowed_origins: OriginAllowList::DenyAll,
+            shutdown: None,
         }
+    }
+
+    /// Ties the transport to a [`ShutdownSignal`] shared with
+    /// [`serve_with_limits`](crate::infrastructure::http::serve_with_limits).
+    ///
+    /// Serve and the transport must hold clones of one signal: with a
+    /// different instance the serve drain does not wait for this transport's
+    /// tasks. Constructing the transport has no side effects until the first
+    /// upgrade.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::infrastructure::http::ShutdownSignal;
+    /// use pjson_rs::infrastructure::websocket::AxumWebSocketTransport;
+    ///
+    /// # #[tokio::main] async fn main() {
+    /// let signal = ShutdownSignal::new();
+    /// let transport = AxumWebSocketTransport::new().with_shutdown(signal.clone());
+    /// # drop(transport);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_shutdown(mut self, signal: ShutdownSignal) -> Self {
+        self.shutdown = Some(signal);
+        self
     }
 
     /// Restrict WebSocket upgrades to the given `Origin` allow-list.

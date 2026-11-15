@@ -9,7 +9,7 @@ pub mod bounded_channel;
 pub mod http;
 pub mod repositories;
 pub mod schema_repository;
-#[cfg(feature = "http-server")]
+#[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
 pub mod websocket;
 
 pub use adapters::{
@@ -33,11 +33,13 @@ pub use http::{
     create_streaming_response, create_streaming_response_with_content_type, serve_with_limits,
 };
 pub use schema_repository::SchemaRepository;
-#[cfg(feature = "http-server")]
+#[cfg(feature = "websocket-server")]
 pub use websocket::{
     AdaptiveStreamController, AxumWebSocketTransport, ClientMetrics, ConnectionId,
-    CreateSessionError, SecureWebSocketHandler, StreamOptions, WebSocketStreamSession,
-    WebSocketTransport, WsMessage, create_websocket_router,
+    CreateSessionError, SecureWebSocketHandler, WebSocketStreamSession, WebSocketTransport,
+    create_websocket_router,
 };
-#[cfg(all(feature = "http-server", feature = "websocket-client"))]
+#[cfg(feature = "websocket-client")]
 pub use websocket::{ClosedSession, PjsWebSocketClient, SessionIdleTtl, StreamStats};
+#[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
+pub use websocket::{StreamOptions, WsMessage};
