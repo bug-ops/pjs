@@ -43,7 +43,7 @@ pub const MAX_TRACKED_CLIENTS: usize = 100_000;
 
 /// Default interval between periodic [`ClientRateLimiter::cleanup_expired`]
 /// sweeps spawned by [`ClientRateLimiter::spawn_cleanup_task`].
-pub const DEFAULT_CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
+pub const DEFAULT_CLEANUP_INTERVAL: Duration = Duration::from_mins(5);
 
 /// Rate limiting errors
 #[derive(Error, Debug, Clone)]

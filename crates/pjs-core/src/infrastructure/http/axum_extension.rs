@@ -75,7 +75,7 @@ impl Default for HttpExtensionConfig {
             auto_detect: true,
             default_priority: Priority::MEDIUM,
             max_streams_per_client: 10,
-            session_timeout: Duration::from_secs(3600),
+            session_timeout: Duration::from_hours(1),
             allowed_origins: Vec::new(),
         }
     }

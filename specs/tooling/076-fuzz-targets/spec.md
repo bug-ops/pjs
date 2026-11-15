@@ -114,7 +114,7 @@ Inputs are raw `&[u8]`; structured targets derive values via `arbitrary::Unstruc
 - #575: no ZstdDict target; `float_roundtrip` masks production float behaviour.
 - No fuzz target for `pjs-domain` deserialisation (`MAX_DESERIALIZE_DEPTH` guard), `SecurityValidator`, schema validation, or the WASM crate.
 - The seed replay validates only that targets do not crash on seeds; no coverage threshold.
-- Fuzz crate sets `rust-version = "1.89"` but CI uses nightly (required by cargo-fuzz).
+- Fuzz crate declares no `rust-version`; CI uses nightly (required by cargo-fuzz).
 
 ## See Also
 

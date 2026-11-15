@@ -100,7 +100,7 @@ const SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 /// background sweep removes it (aborting its streaming task) even if the
 /// owning connection's teardown never ran, e.g. a session created but never
 /// associated with a live connection.
-const SESSION_MAX_AGE: Duration = Duration::from_secs(3600);
+const SESSION_MAX_AGE: Duration = Duration::from_hours(1);
 
 /// Pre-resolved `Origin` allow-list policy for [`AxumWebSocketTransport::upgrade_handler`].
 ///

@@ -261,9 +261,9 @@ stream.setSecurityConfig(security);
 ### Prerequisites
 
 > [!WARNING]
-> Building from source requires **nightly Rust** for GAT features.
+> Building from source requires Rust **1.89** or newer (MSRV, checked in CI).
 
-- Rust nightly toolchain: `rustup install nightly`
+- Rust toolchain 1.89+: `rustup install stable`
 - wasm-pack: `cargo install wasm-pack`
 
 ### Build Commands

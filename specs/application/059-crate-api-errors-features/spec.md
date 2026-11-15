@@ -57,7 +57,7 @@ Record what `lib.rs` exports, what `Error` provides, and what each feature enabl
 ## 3. Functional Requirements
 
 ### FR-001 Crate-level attributes
-The crate shall enable `#![feature(impl_trait_in_assoc_type)]` (nightly, required by GAT ports), `#![cfg_attr(feature = "metrics", feature(once_cell_try))]`, `#![warn(rust_2018_idioms)]`, `#![warn(missing_docs)]`, `#![deny(unsafe_op_in_unsafe_fn)]`, and allow `clippy::manual_div_ceil` and `clippy::only_used_in_recursion`. `rust-toolchain.toml` pins `channel = "nightly"`. Upstream stabilisation is tracked in issue #580.
+The crate shall enable `#![feature(impl_trait_in_assoc_type)]` (nightly, required by GAT ports), `#![cfg_attr(feature = "metrics", feature(once_cell_try))]`, `#![warn(rust_2018_idioms)]`, `#![warn(missing_docs)]`, `#![deny(unsafe_op_in_unsafe_fn)]`. The workspace lint config does not allow `clippy::manual_div_ceil` or `clippy::only_used_in_recursion`. `rust-toolchain.toml` pins a dated nightly channel (see 078 FR-012). Upstream stabilisation is tracked in issue #580.
 
 ### FR-002 Public modules
 `lib.rs` shall declare `pub mod` for `application`, `compression`, `config`, `domain`, `error`, `global_alloc`, `infrastructure`, `parser`, `security`, `stream`; `test_support` is `#[cfg(test)]` only.

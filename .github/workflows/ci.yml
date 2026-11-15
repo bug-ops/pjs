@@ -88,7 +88,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
           components: rustfmt, clippy
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -104,7 +104,7 @@ jobs:
             ~/.cargo/git
 
       - name: Check formatting
-        run: cargo +nightly fmt --all --check
+        run: cargo fmt --all --check
 
       - name: Run clippy (strict mode)
         env:
@@ -138,7 +138,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -152,7 +152,7 @@ jobs:
           tool: cargo-fuzz
 
       - name: Check formatting
-        run: cargo +nightly fmt --manifest-path fuzz/Cargo.toml --check
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --check
 
       - name: Run clippy
         run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
@@ -183,7 +183,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -239,7 +239,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
           components: llvm-tools-preview
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -310,7 +310,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
 
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
@@ -349,7 +349,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
           components: llvm-tools-preview
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -399,7 +399,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -440,7 +440,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
@@ -485,7 +485,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
           components: llvm-tools-preview
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -560,7 +560,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
           targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -798,7 +798,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-11-12
 
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
@@ -830,6 +830,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -838,6 +839,9 @@ jobs:
 
       - name: Check MSRV
         run: cargo +1.89 check -p pjson-rs-domain -p pjs-wasm --locked
+
+      - name: Check pjs-wasm MSRV (wasm32)
+        run: cargo +1.89 check -p pjs-wasm --target wasm32-unknown-unknown --locked
 
   # ── Security (independent, no Rust build required) ────────────────────────
   security-osv:

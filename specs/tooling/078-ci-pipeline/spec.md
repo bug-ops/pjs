@@ -58,7 +58,7 @@ Job `changes` (dorny/paths-filter) shall output `rust` (core, domain, wasm, demo
 Status: done.
 
 ### FR-003 Rust quality gate
-Job `quality` shall run `cargo +nightly fmt --all --check` and `cargo clippy --workspace --all-features --all-targets -- -D warnings` (sccache + rust-cache).
+Job `quality` shall run `cargo fmt --all --check` (pinned toolchain) and `cargo clippy --workspace --all-features --all-targets -- -D warnings` (sccache + rust-cache).
 Status: done.
 
 ### FR-004 Build and test matrix
@@ -90,7 +90,7 @@ Job `security-osv` (pull_request, merge_group, schedule) shall run `google/osv-s
 Status: done.
 
 ### FR-015 Feature matrix and MSRV
-Job `feature-matrix` (nightly, `cargo-hack`) shall run `cargo hack check -p pjson-rs -p pjson-rs-domain --each-feature --no-dev-deps --keep-going`, so every feature compiles on its own and one run reports every broken combination (#615). Job `msrv` shall run `cargo +1.89 check -p pjson-rs-domain -p pjs-wasm --locked`; `rust-version` (1.89) is set only on crates that build on stable (`pjson-rs-domain`, `pjs-wasm`), and `pjson-rs` carries none (#608).
+Job `feature-matrix` (nightly, `cargo-hack`) shall run `cargo hack check -p pjson-rs -p pjson-rs-domain --each-feature --no-dev-deps --keep-going`, so every feature compiles on its own and one run reports every broken combination (#615). Job `msrv` shall run `cargo +1.89 check -p pjson-rs-domain -p pjs-wasm --locked` and `cargo +1.89 check -p pjs-wasm --target wasm32-unknown-unknown --locked`; `rust-version` (1.89) is set only on crates that build on stable (`pjson-rs-domain`, `pjs-wasm`), and `pjson-rs` carries none (#608).
 Status: done.
 
 ### FR-011 Required-status aggregator
@@ -98,7 +98,7 @@ Job `ci-success` (`if: always()`) shall fail when any of quality, feature-matrix
 Status: done.
 
 ### FR-012 Toolchain and compile flags
-`rust-toolchain.toml` shall pin channel `nightly` with `rustfmt`, `clippy` and targets `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`. `.cargo/config.toml` sets `-C target-cpu=native` for x86_64 and aarch64 hosts (CI `RUSTFLAGS` env overrides it).
+`rust-toolchain.toml` shall pin a dated nightly channel (`nightly-YYYY-MM-DD`, not floating `nightly`) with `rustfmt`, `clippy` and targets `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`. `.cargo/config.toml` sets `-C target-cpu=native` for x86_64 and aarch64 hosts (CI `RUSTFLAGS` env overrides it).
 Status: done.
 
 ### FR-013 Action pinning

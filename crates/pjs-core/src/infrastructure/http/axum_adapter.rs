@@ -177,7 +177,7 @@ pub(crate) fn build_cors_layer_from_origins(
     let base = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([CONTENT_TYPE, AUTHORIZATION])
-        .max_age(std::time::Duration::from_secs(3600));
+        .max_age(std::time::Duration::from_hours(1));
 
     let has_wildcard = allowed_origins.iter().any(|o| o == "*");
     let has_explicit = allowed_origins.iter().any(|o| o != "*");
