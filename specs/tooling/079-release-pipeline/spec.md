@@ -48,7 +48,7 @@ The workflow shall run on pushed tags matching `v[0-9]+.[0-9]+.[0-9]+`. Job `ver
 Status: done.
 
 ### FR-002 Verification gates
-Before any publish, jobs `format-check` (`cargo +nightly fmt --all -- --check`), `clippy-check` (`cargo clippy --workspace --all-features --all-targets -- -D warnings`) and `test-check` (`cargo nextest run --workspace --all-features --all-targets --no-fail-fast`, then `cargo test --workspace --doc --all-features`) shall pass. `test-check` includes integration tests and `pjs-demo` tests that PR CI does not run ([[078-ci-pipeline/spec]]).
+Before any publish, jobs `format-check` (`cargo fmt --all -- --check`), `clippy-check` (`cargo clippy --workspace --all-features --all-targets -- -D warnings`) and `test-check` (`cargo nextest run --workspace --all-features --all-targets --no-fail-fast`, then `cargo test --workspace --doc --all-features`) shall pass. `test-check` includes integration tests and `pjs-demo` tests that PR CI does not run ([[078-ci-pipeline/spec]]).
 Status: done.
 
 ### FR-003 crates.io publish

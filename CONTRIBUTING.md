@@ -22,17 +22,10 @@ This project adheres to the Rust Project Code of Conduct. By participating, you 
 
 ### Prerequisites
 
-PJS requires **nightly Rust 1.89+** for Generic Associated Types (GAT) features:
+`pjson-rs` requires **nightly Rust** and has no MSRV. The nightly gates are `impl_trait_in_assoc_type` (GAT-based ports) and, with the `metrics` feature, `once_cell_try`; GATs themselves are stable. `rust-toolchain.toml` pins a dated nightly, so rustup installs and selects it automatically. `pjson-rs-domain` and `pjs-wasm` declare MSRV 1.89, checked in CI.
 
 ```bash
-# Install nightly Rust
-rustup install nightly
-
-# Set nightly as override for this project
-cd pjs
-rustup override set nightly
-
-# Verify nightly is active
+# Verify the pinned nightly is active
 rustc --version  # Should show "nightly"
 ```
 

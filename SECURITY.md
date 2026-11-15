@@ -18,7 +18,7 @@ We actively support the following versions of PJS with security updates:
 - **Previous Patch Releases**: Security fixes backported for critical vulnerabilities (CVSS >= 7.0)
 - **EOL Versions**: No security support - users must upgrade
 
-**Minimum Supported Rust Version (MSRV):** Rust nightly 1.89+
+**Rust toolchain:** `pjson-rs` requires nightly Rust (no MSRV; `rust-toolchain.toml` pins a dated nightly). `pjson-rs-domain` and `pjs-wasm` have an MSRV of Rust 1.89.
 
 ## Reporting a Vulnerability
 

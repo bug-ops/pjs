@@ -8,7 +8,8 @@
 [![docs.rs](https://img.shields.io/docsrs/pjson-rs)](https://docs.rs/pjson-rs)
 [![CI](https://img.shields.io/github/actions/workflow/status/bug-ops/pjs/ci.yml?branch=main&label=build)](https://github.com/bug-ops/pjs/actions)
 [![codecov](https://codecov.io/gh/bug-ops/pjs/branch/main/graph/badge.svg)](https://codecov.io/gh/bug-ops/pjs)
-[![MSRV](https://img.shields.io/crates/msrv/pjson-rs)](#status)
+[![Rust](https://img.shields.io/badge/rust-nightly-orange)](#status)
+[![MSRV](https://img.shields.io/crates/msrv/pjson-rs-domain?label=MSRV%20%28pjson-rs-domain%29)](https://crates.io/crates/pjson-rs-domain)
 [![License](https://img.shields.io/crates/l/pjson-rs)](#license)
 
 </div>
@@ -187,7 +188,7 @@ Defaults cover the common server + browser path; everything else is opt-in.
 `0.6.x` — the core protocol works end to end (Rust server, WASM browser client, Node.js), CI on Linux/macOS/Windows.
 
 > [!IMPORTANT]
-> Currently requires **nightly Rust** (zero-cost GAT async abstractions). Supporting stable is a priority on the road to `1.0` — if this blocks you, say so in [Discussions](https://github.com/bug-ops/pjs/discussions): it directly affects how we prioritize.
+> `pjson-rs` currently requires **nightly Rust** (`impl_trait_in_assoc_type`, plus `once_cell_try` with the `metrics` feature); `rust-toolchain.toml` pins a dated nightly. `pjson-rs-domain` and `pjs-wasm` build on stable Rust 1.89+ (MSRV, checked in CI). Supporting stable is a priority on the road to `1.0` — if this blocks you, say so in [Discussions](https://github.com/bug-ops/pjs/discussions): it directly affects how we prioritize.
 
 > [!NOTE]
 > Pre-`1.0`: the [wire format](docs/architecture/SPECIFICATION.md) is a draft and may still change. Feedback on the frame format is the most valuable contribution right now.
@@ -199,7 +200,7 @@ Workspace crates, one line each: `pjs-domain` (pure protocol logic, WASM-compati
 ## Contributing
 
 ```bash
-rustup override set nightly
+# rust-toolchain.toml selects the pinned nightly automatically
 cargo clippy --workspace -- -D warnings
 cargo nextest run --workspace --all-features
 cargo +nightly fmt --check

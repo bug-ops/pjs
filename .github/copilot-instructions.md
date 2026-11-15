@@ -4,10 +4,10 @@ High-performance Rust library for priority-based JSON streaming with SIMD accele
 
 ## Nightly Rust Requirement
 
-This project requires nightly Rust for `impl_trait_in_assoc_type` feature.
+This project requires nightly Rust for `impl_trait_in_assoc_type` feature. `rust-toolchain.toml` pins a dated nightly; rustup selects it automatically.
 
 ```bash
-rustup override set nightly
+rustc --version  # shows the pinned nightly
 ```
 
 ## Build Commands
@@ -17,7 +17,7 @@ cargo build                                    # Debug build
 cargo build --release                          # Release build with LTO
 cargo nextest run --workspace --all-features   # Run tests
 cargo clippy --workspace -- -D warnings        # Lint (zero warnings)
-cargo +nightly fmt --check                     # Format check
+cargo fmt --check                              # Format check
 cargo bench -p pjs-bench                       # Benchmarks
 ```
 
