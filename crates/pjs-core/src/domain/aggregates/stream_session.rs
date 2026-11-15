@@ -54,12 +54,6 @@ impl SessionTimeout {
         Duration::from_secs(u64::from(self.0.get()))
     }
 
-    /// The timeout in whole seconds.
-    #[must_use]
-    pub fn as_secs(self) -> u32 {
-        self.0.get()
-    }
-
     fn as_chrono(self) -> chrono::Duration {
         chrono::Duration::seconds(i64::from(self.0.get()))
     }
