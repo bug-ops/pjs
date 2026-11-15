@@ -1,0 +1,121 @@
+---
+aliases:
+  - benchmark suite
+  - pjs-bench
+tags:
+  - sdd
+  - spec
+  - performance
+  - benchmarks
+created: 2026-11-15
+status: implemented
+priority: P2
+related:
+  - "[[021-bench-crate-workspace-isolation/spec]]"
+  - "[[078-ci-pipeline/spec]]"
+issue: "#514"
+pr: "#519"
+code:
+  - crates/pjs-bench/Cargo.toml
+  - crates/pjs-bench/src/lib.rs
+  - crates/pjs-bench/benches/simple_throughput.rs
+  - crates/pjs-bench/benches/zero_copy_bench.rs
+  - crates/pjs-bench/benches/serde_overhead_bench.rs
+  - crates/pjs-bench/benches/gat_query_benchmarks.rs
+  - crates/pjs-bench/benches/http_streaming.rs
+  - scripts/profile.sh
+verified: 2026-11-15
+---
+
+# Spec 075: pjs-bench benchmark suite
+
+Part of [[MOC-specs]]; see [[constitution]].
+
+> [!info] Verification (2026-11-15)
+> Implemented: five Criterion benches exist and compile as workspace member `pjs-bench` (workspace isolation history in [[021-bench-crate-workspace-isolation/spec]]). No CI job runs them; regression checking is manual per `.claude/rules/continuous-improvement.md` (more than 10% regression is a P1 issue). Open: #619 (document quiet-machine A/B procedure).
+
+## Overview
+
+**Problem.** PJS claims high performance (SIMD parsing, GAT zero-overhead ports, fast serialization); claims need repeatable measurements.
+
+**Goal.** Describe each benchmark target, which claim it guards, and how to run and profile it.
+
+**Out of scope.** The benchmarks' numbers (machine dependent); README result tables (stale, see Open Questions).
+
+## Functional Requirements
+
+### FR-001 Crate layout
+`pjs-bench` shall be a workspace member (root `members = ["crates/*"]`, not in `default-members`), `publish = false`, with `harness = false` for each of the five `[[bench]]` targets, depending on `criterion` (html_reports), `pjson-rs`, `pjson-rs-domain`, `serde_json`, `sonic-rs`, `tokio`, `futures`, `chrono`, `uuid`, with dev-dependency `dhat` and an empty feature `dhat-heap`. `src/lib.rs` contains documentation only.
+Code: `crates/pjs-bench/Cargo.toml`, `src/lib.rs`.
+Status: done.
+
+### FR-002 simple_throughput
+The bench shall measure parsing of three fixed JSON documents (small, medium nested, large with 1000 items) with `serde_json` and `sonic_rs` separately (`serde_json_parsing`, `sonic_rs_parsing`) and head to head (`parsing_comparison`: `serde_json`, `sonic_rs`), reporting bytes/second throughput.
+Guards: the parser-backend baseline.
+Status: done. The former `pjs_parser` group was removed with the dead `Parser` type (#486/#488).
+
+### FR-003 zero_copy_bench
+The bench shall measure `pjson_rs::parser::{ZeroCopyParser, LazyParser}` over simple strings (`simple_string`), objects (`json_objects`), arrays (`json_arrays`) at several sizes via `BenchmarkId::new("zero_copy", name)` and a `memory_efficiency` group.
+Guards: zero-copy parser speed and allocation behaviour.
+Status: done.
+
+### FR-004 serde_overhead_bench
+The bench shall measure serialisation and deserialisation of domain events (`SessionActivated`, `StreamCreated`, a batch of 100 events) in groups `custom_serde_serialization` / `custom_serde_deserialization`, plus value-object creation (`Priority::new`, `SessionId::new`, `StreamId::new`) and UUID conversions (`SessionId::as_uuid`, `from_uuid`, `to_string`).
+Guards: custom `serde` implementations of `pjs-domain` and constructor cost.
+Status: done.
+
+### FR-005 gat_query_benchmarks
+The bench shall measure `GatInMemoryStreamRepository` (`StreamRepositoryGat`) over 100/500/1000 sessions: `find_session` (O(1)), `find_active_sessions` (O(n)), `find_sessions_by_criteria` (filter, sort, paginate), `session_exists`, `get_session_health`, `save_session`, a mixed concurrent read/write group, and a 1000-sample latency distribution (`p99_find_session`, `p99_session_exists`).
+Guards: stated targets in the file header, namely every query under 1 ms for 1000 sessions, no `Box<dyn Future>` allocations, lock-free `DashMap` operations. The targets are not asserted in code; they are read from Criterion output.
+Status: done.
+
+### FR-006 http_streaming
+The bench shall measure `infrastructure::http::streaming`: `http_streaming_serialization_many_small_calls` and `..._one_big_call` (`sonic_rs` vs `serde_json` at 10/100/1000 frames, values pre-built outside the timed loop) and `http_streaming_batch_frame_stream_e2e` (`BatchFrameStream::into_stream` for JSON and SSE at batch sizes 1 and 100; `noise_threshold(0.15)`, 8 s measurement time, `BatchSize::PerIteration`). NDJSON is skipped (byte-identical to JSON). Module docs state the answer to #514: sonic_rs contributes roughly 9-11% of the end-to-end route time.
+Guards: the serialiser choice from #510 and the HTTP streaming hot path.
+Status: done (#519).
+
+### FR-007 Running and profiling
+The suite shall run with `cargo bench -p pjs-bench [--bench <name>]`, using the workspace `[profile.bench]` (inherits release, `debug = true`). `scripts/profile.sh` shall offer `cpu` (cargo-flamegraph on `simple_throughput`), `heap` (dhat) and `bench` (all benches with `--profile-time=10`) subcommands.
+Code: `scripts/profile.sh`.
+Status: partial. See Open Questions.
+
+## Non-Functional Requirements
+
+- NFR-PERF-001: no regression above 10% on any benchmark between cycles (policy in `.claude/rules/continuous-improvement.md`, manual).
+- NFR-PERF-002: GAT queries below 1 ms for 1000 sessions (documented target in `gat_query_benchmarks.rs`).
+- NFR-PERF-003: `http_streaming_serialization_*` groups are the preferred gate; the e2e group is a baseline with a wide noise threshold.
+
+## Data Model
+
+Fixtures are inline: `SMALL_JSON`, `MEDIUM_JSON`, `generate_large_json()` (1000 items); `make_frames(n)` with escape-heavy Unicode text; sessions created with `SessionConfig::default()` and activated.
+
+## Edge Cases
+
+| Case | Note |
+|------|------|
+| Shared machine | drift above 30% seen on few-microsecond cells (module doc of `http_streaming.rs`) |
+| Changing `make_frames` | breaks comparison with saved baselines; save with `--save-baseline` first |
+
+## Success Criteria
+
+1. `cargo bench -p pjs-bench --no-run` compiles all five targets.
+2. A run of each target completes and writes `target/criterion/`.
+
+## Agent Boundaries
+
+- Always: compare against a saved baseline before claiming a regression; use `-p pjs-bench`.
+- Ask first: adding a CI bench job (shared runners are noisy).
+- Never: commit machine-specific numbers as requirements.
+
+## Open Questions
+
+- Benchmarks are not built or run in CI (`ci.yml` has no bench job); even `--no-run` compilation of the benches is covered only through `cargo clippy --workspace --all-targets`.
+- `crates/pjs-bench/README.md` still contains stale tables and emoji from removed benches (`memory_benchmarks`, "PJS Parser" columns) and a CI badge pointing to `rust.yml`, which does not exist.
+- `dhat-heap` feature is declared but no bench or source references `dhat` or the feature. `scripts/profile.sh heap` runs `cargo build --bench simple_throughput --features dhat-heap` without `-p pjs-bench`, so it cannot resolve in the virtual workspace root; `cpu` has the same missing `-p`. [NEEDS CLARIFICATION: not executed; flagged from reading]
+- `profile.sh` help text refers to `.local/performance-profile.md`, which is untracked.
+- SIMD paths (`simd-auto`, `simd-avx512`) and the hybrid parser selection have no dedicated bench (only `sonic_rs` vs `serde_json` directly).
+- No benchmark for WASM, compression, or priority queue ordering, though those are listed as critical paths.
+
+## See Also
+
+[[plan]] | [[021-bench-crate-workspace-isolation/spec]] | [[078-ci-pipeline/spec]] | `.claude/rules/continuous-improvement.md`
