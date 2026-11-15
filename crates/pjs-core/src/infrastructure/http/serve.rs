@@ -27,6 +27,7 @@ use tokio::{net::TcpListener, sync::Semaphore};
 use tower::Layer;
 use tracing::{debug, error, warn};
 
+use super::shutdown::{ShutdownConfig, ShutdownOutcome};
 use crate::security::rate_limit::{
     ClientRateLimiter, RateLimitConfig, RateLimitError, RateLimitGuard,
 };
@@ -199,22 +200,32 @@ impl Default for ConnectionLimits {
 /// the loop either — mirroring axum's own `Listener::accept` retry
 /// behavior, connection-class errors (`ConnectionRefused`,
 /// `ConnectionAborted`, `ConnectionReset`) are retried immediately and any
-/// other error is logged and retried after a 1s backoff. In practice this
-/// function only returns if a future revision adds an explicit exit path;
-/// today it runs until the process is torn down, the same as
-/// `axum::serve(listener, app).await` today.
+/// other error is logged and retried after a 1s backoff.
+///
+/// `shutdown` carries the [`ShutdownSignal`](super::ShutdownSignal) and the
+/// [`DrainTimeout`](super::DrainTimeout) that bound the server's lifetime;
+/// the returned [`ShutdownOutcome`] reports how the drain ended. A
+/// never-triggered signal (the [`ShutdownConfig::default`]) runs until the
+/// process is torn down, the same as `axum::serve(listener, app).await`.
+///
+/// If the router mounts the WebSocket transport, pass clones of the **same**
+/// signal here and to `AxumWebSocketTransport::with_shutdown`; a different
+/// instance means the drain does not wait for WebSocket tasks.
 ///
 /// # Examples
 ///
 /// ```no_run
 /// # async fn run() -> std::io::Result<()> {
 /// use axum::Router;
-/// use pjson_rs::infrastructure::http::{ConnectionLimits, serve_with_limits};
+/// use pjson_rs::infrastructure::http::{ConnectionLimits, ShutdownConfig, serve_with_limits};
 /// use tokio::net::TcpListener;
 ///
 /// let listener = TcpListener::bind("127.0.0.1:0").await?;
 /// let router = Router::new();
-/// serve_with_limits(listener, router, ConnectionLimits::default()).await?;
+/// let outcome =
+///     serve_with_limits(listener, router, ConnectionLimits::default(), ShutdownConfig::default())
+///         .await?;
+/// println!("{outcome:?}");
 /// # Ok(())
 /// # }
 /// ```
@@ -222,7 +233,8 @@ pub async fn serve_with_limits(
     listener: TcpListener,
     router: Router,
     limits: ConnectionLimits,
-) -> std::io::Result<()> {
+    _shutdown: ShutdownConfig,
+) -> std::io::Result<ShutdownOutcome> {
     let mut builder = Builder::new(TokioExecutor::new());
     builder.http1().timer(TokioTimer::new());
     builder.http2().timer(TokioTimer::new());
@@ -273,7 +285,7 @@ pub async fn serve_with_limits(
         // practice; treat it as a benign "stop serving" signal rather than
         // panicking on an accept-loop hot path.
         let Ok(permit) = Arc::clone(&semaphore).acquire_owned().await else {
-            return Ok(());
+            return Ok(ShutdownOutcome::Drained);
         };
         let (stream, peer_addr) = accept_with_retry(&listener).await;
 

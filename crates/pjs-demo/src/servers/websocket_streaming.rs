@@ -18,7 +18,7 @@ use pjson_rs::{
     ApplicationError, ApplicationResult, DomainError, DomainResult,
     compression::SchemaCompressor,
     domain::value_objects::SessionId,
-    infrastructure::http::{ConnectionLimits, serve_with_limits},
+    infrastructure::http::{ConnectionLimits, ShutdownConfig, serve_with_limits},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -226,7 +226,7 @@ pub async fn run() -> ApplicationResult<()> {
 
     let mut limits = ConnectionLimits::default();
     limits.max_connection_duration = None;
-    serve_with_limits(listener, app(app_state), limits)
+    serve_with_limits(listener, app(app_state), limits, ShutdownConfig::default())
         .await
         .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Server error: {e}"))))?;
 

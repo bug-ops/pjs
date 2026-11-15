@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use axum::{Router, extract::ConnectInfo, routing::get};
-use pjson_rs::infrastructure::http::{ConnectionLimits, serve_with_limits};
+use pjson_rs::infrastructure::http::{ConnectionLimits, ShutdownConfig, serve_with_limits};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -32,7 +32,7 @@ async fn spawn_server(router: Router, limits: ConnectionLimits) -> SocketAddr {
         .expect("bind random port");
     let addr = listener.local_addr().expect("local_addr");
     tokio::spawn(async move {
-        let _ = serve_with_limits(listener, router, limits).await;
+        let _ = serve_with_limits(listener, router, limits, ShutdownConfig::default()).await;
     });
     addr
 }

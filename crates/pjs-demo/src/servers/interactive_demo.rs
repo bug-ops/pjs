@@ -15,7 +15,7 @@ use pjs_demo::{
     data::{DatasetSize, DatasetType, generate_dataset, generate_metadata},
     utils::{NetworkType, PerfTimer, simulate_network_latency},
 };
-use pjson_rs::infrastructure::http::{ConnectionLimits, serve_with_limits};
+use pjson_rs::infrastructure::http::{ConnectionLimits, ShutdownConfig, serve_with_limits};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
@@ -404,7 +404,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    serve_with_limits(listener, app, ConnectionLimits::default()).await?;
+    serve_with_limits(
+        listener,
+        app,
+        ConnectionLimits::default(),
+        ShutdownConfig::default(),
+    )
+    .await?;
 
     Ok(())
 }

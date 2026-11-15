@@ -13,7 +13,7 @@ use axum::{
 use clap::Parser;
 use pjson_rs::{
     PriorityStreamer,
-    infrastructure::http::{ConnectionLimits, serve_with_limits},
+    infrastructure::http::{ConnectionLimits, ShutdownConfig, serve_with_limits},
     stream::PriorityStreamFrame,
 };
 use serde::{Deserialize, Serialize};
@@ -384,7 +384,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting simple demo server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    serve_with_limits(listener, app, ConnectionLimits::default()).await?;
+    serve_with_limits(
+        listener,
+        app,
+        ConnectionLimits::default(),
+        ShutdownConfig::default(),
+    )
+    .await?;
 
     Ok(())
 }
