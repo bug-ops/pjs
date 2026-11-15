@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `PjsWebSocketClient` session idle TTL (`SessionIdleTtl`), `close_session` returning `ClosedSession`, and `Error::SessionLimitReached` when every session is complete (#565, #577)
 - Standalone `fuzz/` crate with five cargo-fuzz targets, committed seeds, a gating CI build and seed replay, and a scheduled exploratory job (#564, #577)
+- Tracked specifications in `specs/` (79 specs by area, constitution, ADR, BRD/SRS/NFR) (#620)
 
 ### Changed
 
