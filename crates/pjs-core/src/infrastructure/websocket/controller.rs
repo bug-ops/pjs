@@ -167,10 +167,9 @@ const MAX_ADAPTIVE_FRAME_DELAY: Duration = Duration::from_secs(1);
 
 /// Default cap on live streaming sessions per connection.
 ///
-/// Bounds the tasks and memory one connection can pin; a session counts
-/// while its stream is running and stops counting as soon as it completes,
-/// is cancelled, or the connection closes.
-const DEFAULT_MAX_SESSIONS_PER_CONNECTION: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+/// A session counts from creation until its stream completes, it is
+/// cancelled, or the connection closes.
+pub(super) const DEFAULT_MAX_SESSIONS_PER_CONNECTION: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
 /// Why [`AdaptiveStreamController::create_session`] refused a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -245,11 +244,16 @@ where
 
 /// Queues `message` on the owner's channel, waiting for capacity. Returns
 /// `false` once the receiver is gone or the message can never fit.
-async fn enqueue(outgoing: Option<&ByteBoundedSender<String>>, message: &WsMessage) -> bool {
+///
+/// Takes the message by value and serializes it before waiting, so a session
+/// blocked on a full channel holds only the serialized text.
+async fn enqueue(outgoing: Option<&ByteBoundedSender<String>>, message: WsMessage) -> bool {
     let Some(outgoing) = outgoing else {
         return true;
     };
-    match serde_json::to_string(message) {
+    let serialized = serde_json::to_string(&message);
+    drop(message);
+    match serialized {
         Ok(json) => {
             let len = json.len();
             outgoing.send(json, len).await.is_ok()
@@ -284,34 +288,15 @@ impl AdaptiveStreamController {
 
     /// Spawns every session task on `signal`'s tracker, so a shutdown drain
     /// waits for them and can force-drop them.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use pjson_rs::infrastructure::http::ShutdownSignal;
-    /// use pjson_rs::infrastructure::websocket::AdaptiveStreamController;
-    ///
-    /// let _controller = AdaptiveStreamController::new().with_shutdown(ShutdownSignal::new());
-    /// ```
     #[must_use]
-    pub fn with_shutdown(mut self, signal: ShutdownSignal) -> Self {
+    pub(super) fn with_shutdown(mut self, signal: ShutdownSignal) -> Self {
         self.shutdown = Some(signal);
         self
     }
 
     /// Caps the live sessions a single connection may hold (default 64).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use pjson_rs::infrastructure::websocket::AdaptiveStreamController;
-    /// use std::num::NonZeroUsize;
-    ///
-    /// let _controller = AdaptiveStreamController::new()
-    ///     .with_max_sessions_per_connection(NonZeroUsize::new(8).unwrap());
-    /// ```
     #[must_use]
-    pub fn with_max_sessions_per_connection(mut self, limit: NonZeroUsize) -> Self {
+    pub(super) fn with_max_sessions_per_connection(mut self, limit: NonZeroUsize) -> Self {
         self.max_sessions_per_connection = limit;
         self
     }
@@ -325,13 +310,13 @@ impl AdaptiveStreamController {
     /// Forgets `owner`'s channel and aborts every session it owns. Returns
     /// the number of sessions removed. Synchronous so a connection's drop
     /// guard can call it.
-    pub fn detach_connection(&self, owner: ConnectionId) -> usize {
+    pub(super) fn detach_connection(&self, owner: ConnectionId) -> usize {
         let removed = self.connections.write().remove(&owner);
         removed.map_or(0, |mut entry| entry.abort_all())
     }
 
     /// Number of connections with a registered outgoing channel.
-    pub fn connection_count(&self) -> usize {
+    pub(super) fn connection_count(&self) -> usize {
         self.connections
             .read()
             .values()
@@ -397,7 +382,7 @@ impl AdaptiveStreamController {
             data,
             priority: Priority::HIGH,
             metadata: HashMap::new(),
-        }]; // TODO(review): the real priority planner honouring `StreamOptions` is #600's deferred scope (D5)
+        }]; // TODO(#624): real priority planner honouring `StreamOptions`
 
         let session = WebSocketStreamSession {
             created_at: Instant::now(),
@@ -450,7 +435,7 @@ impl AdaptiveStreamController {
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
 
         let generation = session.generation;
-        let plan = session.plan.clone();
+        let plan = std::mem::take(&mut session.plan);
         let connections_for_task = self.connections.clone();
         let handle = spawn_task(self.shutdown.as_ref(), async move {
             Self::stream_frames(
@@ -492,20 +477,21 @@ impl AdaptiveStreamController {
         owner: ConnectionId,
         session_id: SessionId,
         generation: u64,
-        plan: Vec<StreamFrame>, // Simplified for now
+        plan: Vec<StreamFrame>,
         outgoing: Option<ByteBoundedSender<String>>,
         connections: Connections,
     ) {
-        for (frame_id, frame) in plan.iter().enumerate() {
+        let frame_count = plan.len();
+        for (frame_id, frame) in plan.into_iter().enumerate() {
             let ws_message = WsMessage::StreamFrame {
                 session_id,
                 frame_id: frame_id as u32,
                 priority: frame.priority,
-                payload: frame.data.clone(),
-                is_complete: frame_id == (plan.len() - 1),
+                payload: frame.data,
+                is_complete: frame_id + 1 == frame_count,
             };
 
-            if !enqueue(outgoing.as_ref(), &ws_message).await {
+            if !enqueue(outgoing.as_ref(), ws_message).await {
                 Self::remove_if_generation(&connections, owner, session_id, generation);
                 Self::report_undeliverable(outgoing.as_ref(), session_id);
                 return;
@@ -524,7 +510,7 @@ impl AdaptiveStreamController {
         // peer that has seen StreamComplete can immediately reuse the id or
         // open another session without a spurious 409 or 429.
         Self::remove_if_generation(&connections, owner, session_id, generation);
-        enqueue(outgoing.as_ref(), &WsMessage::StreamComplete { session_id }).await;
+        enqueue(outgoing.as_ref(), WsMessage::StreamComplete { session_id }).await;
     }
 
     /// Tells the peer its stream was dropped, if its channel is still open.
@@ -704,7 +690,7 @@ impl AdaptiveStreamController {
     /// Remove every session created by `owner`, aborting their streaming tasks.
     ///
     /// Returns the number of sessions removed; the connection's outgoing
-    /// channel stays registered (see [`Self::detach_connection`]).
+    /// channel stays registered.
     ///
     /// # Examples
     ///
@@ -1090,6 +1076,31 @@ mod tests {
             next_message(&mut outbox).await,
             WsMessage::Error { code: 413, session_id: Some(reported), .. } if reported == id
         ));
+        assert_eq!(controller.session_count(owner), 0);
+    }
+
+    #[tokio::test]
+    async fn test_start_streaming_twice_does_not_panic_and_ends_with_a_single_stream_complete() {
+        let controller = AdaptiveStreamController::new();
+        let owner = ConnectionId::new();
+        let mut outbox = attach(&controller, owner);
+        let id = new_session(&controller, owner, json!({})).await;
+
+        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).await.unwrap();
+
+        let mut completes = 0;
+        while let Ok(Some(envelope)) =
+            tokio::time::timeout(Duration::from_millis(300), outbox.recv()).await
+        {
+            if matches!(
+                serde_json::from_str::<WsMessage>(&envelope.into_inner()),
+                Ok(WsMessage::StreamComplete { .. })
+            ) {
+                completes += 1;
+            }
+        }
+        assert_eq!(completes, 1);
         assert_eq!(controller.session_count(owner), 0);
     }
 

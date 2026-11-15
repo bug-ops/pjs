@@ -2,7 +2,7 @@
 
 use super::{
     AdaptiveStreamController, ConnectionId, CreateSessionError, StreamOptions, WsMessage,
-    controller::spawn_task, send_with_write_timeout,
+    controller::spawn_task, protocol::CODE_CONFLICT, send_with_write_timeout,
 };
 use crate::{
     Error as PjsError, Result as PjsResult,
@@ -37,9 +37,6 @@ use tracing::{debug, error, info, warn};
 /// `Error` reply code for a request the server cannot parse or accept.
 const CODE_BAD_REQUEST: u16 = 400;
 
-/// `Error` reply code for a `StreamInit` whose session id is already in use.
-const CODE_CONFLICT: u16 = 409;
-
 /// Close code (RFC 6455) for a connection that violated the server's policy.
 const CLOSE_POLICY_VIOLATION: u16 = 1008;
 
@@ -61,9 +58,6 @@ const TOO_MANY_SESSIONS: &str = "too many live sessions on this connection";
 
 /// Fixed reply text for a `StreamInit` carrying non-default stream options.
 const UNSUPPORTED_STREAM_OPTIONS: &str = "unsupported stream options";
-
-/// Default cap on live streaming sessions per connection.
-const DEFAULT_MAX_SESSIONS_PER_CONNECTION: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
 /// Fixed reply text for a `StreamInit` whose id belongs to an existing session.
 const DUPLICATE_SESSION_ID: &str = "session id already in use";
@@ -266,7 +260,7 @@ impl AxumWebSocketTransport {
             rate_limiter: Arc::new(ClientRateLimiter::new(config)),
             allowed_origins: OriginAllowList::DenyAll,
             shutdown: None,
-            max_sessions_per_connection: DEFAULT_MAX_SESSIONS_PER_CONNECTION,
+            max_sessions_per_connection: super::controller::DEFAULT_MAX_SESSIONS_PER_CONNECTION,
             sweep_started: OnceLock::new(),
             #[cfg(test)]
             upgrade_callback_delay: None,
@@ -616,11 +610,10 @@ impl AxumWebSocketTransport {
     /// application-level `Ping` is answered with a `Pong` carrying the same
     /// timestamp.
     ///
-    /// Session ids are chosen by the peer and share one namespace across
-    /// connections, so they must be random (UUID v4). A peer using predictable
-    /// ids can have them taken by another connection for as long as that
-    /// connection lives or up to `SESSION_MAX_AGE`: an availability risk, not
-    /// a confidentiality one, since routing and acks are owner-checked.
+    /// Session ids are chosen by the peer and scoped to its connection: two
+    /// connections may use the same id without interacting, and an
+    /// acknowledgment or cancellation only reaches a session of the
+    /// connection that sends it. A duplicate id on one connection is a 409.
     pub async fn handle_message(
         &self,
         connection: ConnectionId,
@@ -894,7 +887,10 @@ impl ConnectionLoop<'_> {
                             .handle_message(self.connection_id, ws_message)
                             .await
                         {
-                            error!("Failed to handle message: {:?}", e);
+                            debug!(
+                                "Rejected message from connection {}: {}",
+                                self.connection_id, e
+                            );
                         }
                         ControlFlow::Continue(())
                     }
