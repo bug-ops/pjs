@@ -3,7 +3,7 @@ name = "pjson-rs"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
-rust-version = { workspace = true }
+documentation = { workspace = true }
 license = { workspace = true }
 repository = { workspace = true }
 description = "Priority JSON Streaming Protocol - high-performance priority-based JSON streaming (requires nightly Rust)"
@@ -19,7 +19,6 @@ async-stream = { workspace = true, optional = true }
 axum = { workspace = true, optional = true, features = ["ws"] }
 metrics = { workspace = true, optional = true }
 metrics-exporter-prometheus = { workspace = true, optional = true }
-bitflags = { workspace = true }
 brotli = { workspace = true, optional = true }
 
 bytes = { workspace = true }
@@ -34,7 +33,6 @@ hyper = { workspace = true, optional = true, features = ["http1", "http2", "serv
 hyper-util = { workspace = true, optional = true, features = ["server-auto", "tokio", "service"] }
 jiter = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
-maplit = { workspace = true }
 mediatype = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }
 parking_lot = { workspace = true }
@@ -58,6 +56,7 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 tokio-tungstenite = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
 tower = { workspace = true, optional = true, features = ["limit"] }
 tower-http = { workspace = true, features = ["cors", "trace", "timeout"], optional = true }
 tracing = { workspace = true }
@@ -109,18 +108,22 @@ http-server = [
     "dep:mediatype",
     "dep:hyper",
     "dep:hyper-util",
+    "dep:tokio-util",
 ]
 http-auth-jwt = ["http-server", "dep:jsonwebtoken"]
 metrics = ["http-server", "dep:metrics", "dep:metrics-exporter-prometheus"]
 websocket-client = ["dep:tokio-tungstenite", "dep:url"]
 websocket-server = ["http-server"]
 
+[lints]
+workspace = true
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["axum", "tower", "tower-http", "hyper", "futures", "sha2"]
 
 [package.metadata.cargo-machete]
-# mimalloc is referenced only via #[global_allocator] static; machete cannot detect this usage.
-ignored = ["mimalloc"]
+# hyper only enables the features hyper-util needs; tokio-util is consumed by http/shutdown.rs (W0c) - drop its entry then.
+ignored = ["hyper", "tokio-util"]
 
 # Trusted publishing configuration for crates.io
 [package.metadata.release.publishers.crates-io]
@@ -140,7 +143,7 @@ required-features = ["websocket-server"]
 [[test]]
 name = "websocket_wire_level"
 path = "tests/websocket_wire_level.rs"
-required-features = ["http-server", "websocket-client"]
+required-features = ["websocket-server", "websocket-client"]
 
 [[example]]
 name = "simple_priority_demo"

@@ -3,7 +3,6 @@ name = "pjs-bench"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
-rust-version = { workspace = true }
 license = { workspace = true }
 repository = { workspace = true }
 description = "Comprehensive benchmarking suite for PJS"
@@ -11,7 +10,7 @@ keywords = { workspace = true }
 categories = { workspace = true }
 publish = { workspace = true }
 
-[dependencies]
+[dev-dependencies]
 chrono = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 futures = { workspace = true }
@@ -21,9 +20,10 @@ serde_json = { workspace = true }
 sonic-rs = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 uuid = { workspace = true }
-
-[dev-dependencies]
 dhat = { workspace = true }
+
+[lints]
+workspace = true
 
 [features]
 dhat-heap = []

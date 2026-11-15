@@ -325,4 +325,35 @@ mod tests {
             assert_eq!(stats.mean(), 2.75);
         }
     }
+
+    /// Parses on a large stack: unoptimized frames overflow the default 2 MiB test stack at ~50 levels.
+    fn parses_nested_arrays(depth: usize) -> bool {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || {
+                let json = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+                sonic_rs::from_str::<SonicValue>(&json).is_ok()
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_sonic_accepts_moderate_nesting() {
+        assert!(parses_nested_arrays(128));
+    }
+
+    #[test]
+    fn test_sonic_depth_limit_rejects_max_safe_depth_nesting() {
+        // sonic-rs 0.5.11 enforces its own limit (between 200 and 255 levels), below MAX_SAFE_JSON_DEPTH.
+        assert!(!parses_nested_arrays(
+            crate::config::security::MAX_SAFE_JSON_DEPTH
+        ));
+    }
+
+    #[test]
+    fn test_sonic_rejects_pathological_nesting_without_overflow() {
+        assert!(!parses_nested_arrays(1_000_000));
+    }
 }
