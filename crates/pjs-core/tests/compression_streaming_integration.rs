@@ -6,7 +6,7 @@ use pjson_rs::compression::CompressionStrategy;
 use pjson_rs::domain::value_objects::Priority;
 use pjson_rs::stream::StreamFrame;
 use pjson_rs::stream::compression_integration::{
-    CompressedFrame, CompressionStats, DecompressionMetadata, StreamingCompressor,
+    CompressedFrame, CompressionStats, DecompressionMetadata, PriorityTotals, StreamingCompressor,
     StreamingDecompressor,
 };
 use serde_json::json;
@@ -100,17 +100,9 @@ fn test_compress_multiple_frames_with_different_priorities() {
     assert_eq!(stats.frames_processed, 3);
 
     // Verify different priority levels were tracked
-    assert!(
-        stats
-            .priority_ratios
-            .contains_key(&Priority::CRITICAL.value())
-    );
-    assert!(stats.priority_ratios.contains_key(&Priority::LOW.value()));
-    assert!(
-        stats
-            .priority_ratios
-            .contains_key(&Priority::MEDIUM.value())
-    );
+    assert!(stats.per_priority.contains_key(&Priority::CRITICAL));
+    assert!(stats.per_priority.contains_key(&Priority::LOW));
+    assert!(stats.per_priority.contains_key(&Priority::MEDIUM));
 }
 
 #[test]
@@ -152,7 +144,7 @@ fn test_compression_stats_overall_ratio() {
         total_input_bytes: 1000,
         total_output_bytes: 600,
         frames_processed: 5,
-        priority_ratios: HashMap::new(),
+        per_priority: HashMap::new(),
     };
 
     assert_eq!(stats.overall_compression_ratio(), 0.6);
@@ -172,7 +164,7 @@ fn test_compression_stats_bytes_saved() {
         total_input_bytes: 2000,
         total_output_bytes: 1200,
         frames_processed: 10,
-        priority_ratios: HashMap::new(),
+        per_priority: HashMap::new(),
     };
 
     assert_eq!(stats.bytes_saved(), 800);
@@ -184,7 +176,7 @@ fn test_compression_stats_percentage_saved() {
         total_input_bytes: 1000,
         total_output_bytes: 300,
         frames_processed: 5,
-        priority_ratios: HashMap::new(),
+        per_priority: HashMap::new(),
     };
 
     let percentage = stats.percentage_saved();
@@ -193,23 +185,32 @@ fn test_compression_stats_percentage_saved() {
 
 #[test]
 fn test_compression_stats_priority_ratio() {
-    let mut priority_ratios = HashMap::new();
-    priority_ratios.insert(Priority::HIGH.value(), 0.5);
-    priority_ratios.insert(Priority::LOW.value(), 0.8);
+    let mut per_priority = HashMap::new();
+    per_priority.insert(
+        Priority::HIGH,
+        PriorityTotals {
+            input_bytes: 100,
+            output_bytes: 50,
+        },
+    );
+    per_priority.insert(
+        Priority::LOW,
+        PriorityTotals {
+            input_bytes: 100,
+            output_bytes: 80,
+        },
+    );
 
     let stats = CompressionStats {
         total_input_bytes: 1000,
         total_output_bytes: 600,
         frames_processed: 2,
-        priority_ratios,
+        per_priority,
     };
 
-    assert_eq!(
-        stats.priority_compression_ratio(Priority::HIGH.value()),
-        0.5
-    );
-    assert_eq!(stats.priority_compression_ratio(Priority::LOW.value()), 0.8);
-    assert_eq!(stats.priority_compression_ratio(99), 1.0); // Non-existent priority
+    assert_eq!(stats.priority_compression_ratio(Priority::HIGH), Some(0.5));
+    assert_eq!(stats.priority_compression_ratio(Priority::LOW), Some(0.8));
+    assert_eq!(stats.priority_compression_ratio(Priority::CRITICAL), None);
 }
 
 #[test]
@@ -235,7 +236,7 @@ fn test_reset_stats() {
     assert_eq!(stats.total_input_bytes, 0);
     assert_eq!(stats.total_output_bytes, 0);
     assert_eq!(stats.frames_processed, 0);
-    assert!(stats.priority_ratios.is_empty());
+    assert!(stats.per_priority.is_empty());
 }
 
 #[test]
@@ -274,12 +275,11 @@ fn test_decompress_frame_with_no_compression() {
             strategy: CompressionStrategy::None,
             compressed_size: 30,
             data: test_data.clone(),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::None,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -300,9 +300,7 @@ fn test_decompress_frame_with_no_compression() {
 fn test_decompress_with_dictionary_metadata() {
     let mut decompressor = StreamingDecompressor::new();
 
-    let mut dictionary_map = HashMap::new();
-    dictionary_map.insert(0, "hello".to_string());
-    dictionary_map.insert(1, "world".to_string());
+    let dictionary_map = vec!["hello".to_string(), "world".to_string()];
 
     let compressed_data = json!({
         "greeting": "\u{7F}0",
@@ -321,14 +319,13 @@ fn test_decompress_with_dictionary_metadata() {
             },
             compressed_size: 20,
             data: compressed_data,
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Dictionary {
                 dictionary: HashMap::new(),
             },
-            dictionary_map: dictionary_map.clone(),
-            delta_bases: HashMap::new(),
+            dictionary: dictionary_map.clone(),
         },
     };
 
@@ -349,9 +346,7 @@ fn test_decompress_with_dictionary_metadata() {
 fn test_decompress_nested_dictionary_values() {
     let mut decompressor = StreamingDecompressor::new();
 
-    let mut dictionary_map = HashMap::new();
-    dictionary_map.insert(0, "status".to_string());
-    dictionary_map.insert(1, "active".to_string());
+    let dictionary_map = vec!["status".to_string(), "active".to_string()];
 
     // "value" happens to hold the same raw number (1) that "active"'s dictionary index
     // encodes as, but it stays a number: only JSON strings are ever candidates for
@@ -375,14 +370,13 @@ fn test_decompress_nested_dictionary_values() {
             },
             compressed_size: 50,
             data: compressed_data,
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Dictionary {
                 dictionary: HashMap::new(),
             },
-            dictionary_map,
-            delta_bases: HashMap::new(),
+            dictionary: dictionary_map,
         },
     };
 
@@ -427,12 +421,11 @@ fn test_decompress_delta_strategy() {
             strategy: CompressionStrategy::Delta,
             compressed_size: 30,
             data: compressed_data,
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Delta,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -469,12 +462,11 @@ fn test_decompress_run_length_strategy() {
             strategy: CompressionStrategy::RunLength,
             compressed_size: 25,
             data: compressed_data,
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -489,8 +481,7 @@ fn test_decompress_run_length_strategy() {
 fn test_decompress_hybrid_strategy() {
     let mut decompressor = StreamingDecompressor::new();
 
-    let mut dictionary_map = HashMap::new();
-    dictionary_map.insert(0, "test".to_string());
+    let dictionary_map = vec!["test".to_string()];
 
     let compressed_data = json!({"field": "\u{7F}0"});
 
@@ -506,14 +497,13 @@ fn test_decompress_hybrid_strategy() {
             },
             compressed_size: 15,
             data: compressed_data,
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Hybrid {
                 string_dict: HashMap::new(),
             },
-            dictionary_map,
-            delta_bases: HashMap::new(),
+            dictionary: dictionary_map,
         },
     };
 
@@ -540,12 +530,11 @@ fn test_decompressor_stats_accumulation() {
                 strategy: CompressionStrategy::None,
                 compressed_size: 20,
                 data: json!({"iteration": i}),
-                compression_metadata: HashMap::new(),
+                dictionary: None,
             },
             decompression_metadata: DecompressionMetadata {
                 strategy: CompressionStrategy::None,
-                dictionary_map: HashMap::new(),
-                delta_bases: HashMap::new(),
+                dictionary: Vec::new(),
             },
         };
 
@@ -772,14 +761,13 @@ fn test_dictionary_decode_rejects_out_of_range_marker_index() {
             },
             compressed_size: 20,
             data: json!({"value": "\u{7F}9"}),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Dictionary {
                 dictionary: HashMap::new(),
             },
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 

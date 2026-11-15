@@ -26,8 +26,7 @@ fn strategy(u: &mut Unstructured<'_>) -> Result<CompressionStrategy> {
 
 fn frame(mut u: Unstructured<'_>) -> Result<CompressedFrame> {
     let strategy = strategy(&mut u)?;
-    let dictionary_map: HashMap<u16, String> = u.arbitrary()?;
-    let delta_bases: HashMap<String, f64> = u.arbitrary()?;
+    let dictionary: Vec<String> = u.arbitrary()?;
     let json = u.take_rest();
     let data = serde_json::from_slice(json)
         .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(json).into_owned()));
@@ -41,12 +40,11 @@ fn frame(mut u: Unstructured<'_>) -> Result<CompressedFrame> {
             strategy: strategy.clone(),
             compressed_size: 0,
             data,
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy,
-            dictionary_map,
-            delta_bases,
+            dictionary,
         },
     })
 }

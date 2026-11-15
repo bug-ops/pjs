@@ -17,7 +17,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 [dependencies.pjson-rs]
 path = "../crates/pjs-core"
 default-features = false
-features = ["compression", "partial-parse", "http-server"]
+features = ["compression", "partial-parse", "http-server", "websocket-server"]
 
 [workspace]
 members = ["."]

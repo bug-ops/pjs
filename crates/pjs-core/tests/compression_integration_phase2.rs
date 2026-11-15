@@ -23,8 +23,7 @@ use std::collections::HashMap;
 fn test_decompress_frame_with_dictionary_strategy() {
     let mut decompressor = StreamingDecompressor::new();
 
-    let mut dict_map = HashMap::new();
-    dict_map.insert(0, "testKey".to_string());
+    let dict_map = vec!["testKey".to_string()];
 
     let frame = CompressedFrame {
         frame: StreamFrame {
@@ -38,14 +37,13 @@ fn test_decompress_frame_with_dictionary_strategy() {
             },
             compressed_size: 10,
             data: json!({"value": "data"}),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Dictionary {
                 dictionary: HashMap::new(),
             },
-            dictionary_map: dict_map,
-            delta_bases: HashMap::new(),
+            dictionary: dict_map,
         },
     };
 
@@ -67,12 +65,11 @@ fn test_decompress_frame_with_delta_strategy() {
             strategy: CompressionStrategy::Delta,
             compressed_size: 20,
             data: json!([{"delta_base": 10.0, "delta_type": "numeric"}, 1.0, 2.0]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Delta,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -94,12 +91,11 @@ fn test_decompress_frame_with_runlength_strategy() {
             strategy: CompressionStrategy::RunLength,
             compressed_size: 15,
             data: json!([{"rle_value": "x", "rle_count": 3}]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -124,14 +120,13 @@ fn test_decompress_frame_with_hybrid_strategy() {
             },
             compressed_size: 10,
             data: json!({"test": "data"}),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Hybrid {
                 string_dict: HashMap::new(),
             },
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -157,12 +152,11 @@ fn test_decompress_delta_via_frame() {
             strategy: CompressionStrategy::Delta,
             compressed_size: 20,
             data: json!([{"delta_base": 100.0, "delta_type": "numeric"}, -10.0, 5.0]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Delta,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -187,12 +181,11 @@ fn test_decompress_delta_missing_base_treated_as_regular_array() {
             strategy: CompressionStrategy::Delta,
             compressed_size: 20,
             data: json!([{"delta_type": "numeric"}, 1.0]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Delta,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -215,12 +208,11 @@ fn test_decompress_delta_invalid_delta_value_error() {
             strategy: CompressionStrategy::Delta,
             compressed_size: 20,
             data: json!([{"delta_base": 100.0, "delta_type": "numeric"}, "not_a_number"]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Delta,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -246,12 +238,11 @@ fn test_decompress_rle_malformed_rle_value_only() {
             strategy: CompressionStrategy::RunLength,
             compressed_size: 10,
             data: json!([{"rle_value": "x"}]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -273,12 +264,11 @@ fn test_decompress_rle_malformed_count_only() {
             strategy: CompressionStrategy::RunLength,
             compressed_size: 10,
             data: json!([{"rle_count": 5}]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -300,12 +290,11 @@ fn test_decompress_rle_invalid_count_type() {
             strategy: CompressionStrategy::RunLength,
             compressed_size: 10,
             data: json!([{"rle_value": "x", "rle_count": "five"}]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -327,12 +316,11 @@ fn test_decompress_rle_exceeds_max_count() {
             strategy: CompressionStrategy::RunLength,
             compressed_size: 10,
             data: json!([{"rle_value": "x", "rle_count": 100_001}]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -360,12 +348,11 @@ fn test_decompress_rle_total_size_exceeds_limit() {
                 {"rle_value": "x", "rle_count": 5_000_000},
                 {"rle_value": "y", "rle_count": 6_000_000}
             ]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -387,12 +374,11 @@ fn test_decompress_rle_zero_count() {
             strategy: CompressionStrategy::RunLength,
             compressed_size: 10,
             data: json!([{"rle_value": "x", "rle_count": 0}]),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::RunLength,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -536,12 +522,11 @@ fn test_decompressor_stats_increments() {
             strategy: CompressionStrategy::None,
             compressed_size: 15,
             data: json!({"key": "value"}),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::None,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
@@ -567,12 +552,11 @@ fn test_decompressor_running_average() {
                 strategy: CompressionStrategy::None,
                 compressed_size: 15,
                 data: json!({"frame": i}),
-                compression_metadata: HashMap::new(),
+                dictionary: None,
             },
             decompression_metadata: DecompressionMetadata {
                 strategy: CompressionStrategy::None,
-                dictionary_map: HashMap::new(),
-                delta_bases: HashMap::new(),
+                dictionary: Vec::new(),
             },
         };
 
@@ -942,7 +926,7 @@ fn test_compression_stats_overall_ratio() {
         total_input_bytes: 1000,
         total_output_bytes: 500,
         frames_processed: 1,
-        priority_ratios: HashMap::new(),
+        per_priority: HashMap::new(),
     };
     assert_eq!(stats.overall_compression_ratio(), 0.5);
 }
@@ -953,9 +937,9 @@ fn test_compression_stats_priority_ratio_default() {
         total_input_bytes: 100,
         total_output_bytes: 50,
         frames_processed: 1,
-        priority_ratios: HashMap::new(),
+        per_priority: HashMap::new(),
     };
-    assert_eq!(stats.priority_compression_ratio(255), 1.0);
+    assert_eq!(stats.priority_compression_ratio(Priority::CRITICAL), None);
 }
 
 #[test]
@@ -964,7 +948,7 @@ fn test_compression_stats_bytes_saved_positive() {
         total_input_bytes: 1000,
         total_output_bytes: 600,
         frames_processed: 1,
-        priority_ratios: HashMap::new(),
+        per_priority: HashMap::new(),
     };
     assert_eq!(stats.bytes_saved(), 400);
 }
@@ -975,7 +959,7 @@ fn test_compression_stats_percentage_saved() {
         total_input_bytes: 1000,
         total_output_bytes: 700,
         frames_processed: 1,
-        priority_ratios: HashMap::new(),
+        per_priority: HashMap::new(),
     };
     let percentage = stats.percentage_saved();
     assert!((percentage - 30.0).abs() < 0.001);
@@ -1264,10 +1248,11 @@ fn test_decompress_delta_array_fractional_deltas() {
 fn test_metadata_update_with_dictionary() {
     let mut decompressor = StreamingDecompressor::new();
 
-    let mut dict_map = HashMap::new();
-    dict_map.insert(0, "first".to_string());
-    dict_map.insert(1, "second".to_string());
-    dict_map.insert(2, "third".to_string());
+    let dict_map = vec![
+        "first".to_string(),
+        "second".to_string(),
+        "third".to_string(),
+    ];
 
     let frame = CompressedFrame {
         frame: StreamFrame {
@@ -1281,50 +1266,17 @@ fn test_metadata_update_with_dictionary() {
             },
             compressed_size: 10,
             data: json!({"data": "test"}),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::Dictionary {
                 dictionary: HashMap::new(),
             },
-            dictionary_map: dict_map,
-            delta_bases: HashMap::new(),
+            dictionary: dict_map,
         },
     };
 
     // Dictionary should be updated during decompression
-    let result = decompressor.decompress_frame(frame);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_metadata_update_with_delta_bases() {
-    let mut decompressor = StreamingDecompressor::new();
-
-    let mut delta_bases = HashMap::new();
-    delta_bases.insert("path1".to_string(), 100.0);
-    delta_bases.insert("path2".to_string(), 200.0);
-
-    let frame = CompressedFrame {
-        frame: StreamFrame {
-            data: json!({"data": "test"}),
-            priority: Priority::MEDIUM,
-            metadata: HashMap::new(),
-        },
-        compressed_data: CompressedData {
-            strategy: CompressionStrategy::Delta,
-            compressed_size: 10,
-            data: json!({"data": "test"}),
-            compression_metadata: HashMap::new(),
-        },
-        decompression_metadata: DecompressionMetadata {
-            strategy: CompressionStrategy::Delta,
-            dictionary_map: HashMap::new(),
-            delta_bases,
-        },
-    };
-
-    // Delta bases should be updated
     let result = decompressor.decompress_frame(frame);
     assert!(result.is_ok());
 }
@@ -1425,12 +1377,11 @@ fn test_decompress_frame_preserves_original_frame_data() {
             strategy: CompressionStrategy::None,
             compressed_size: 20,
             data: original_data.clone(),
-            compression_metadata: HashMap::new(),
+            dictionary: None,
         },
         decompression_metadata: DecompressionMetadata {
             strategy: CompressionStrategy::None,
-            dictionary_map: HashMap::new(),
-            delta_bases: HashMap::new(),
+            dictionary: Vec::new(),
         },
     };
 
