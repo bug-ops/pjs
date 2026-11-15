@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING** `WebSocketStreamSession` is no longer part of the public API (#601)
 - **BREAKING** `ClientMetrics` drops `estimated_bandwidth_kbps` and `connection_rtt_ms`, and the WebSocket server module and `SecureWebSocketHandler` are gated by `websocket-server` instead of `http-server` (#601, #598)
 - Dependabot also proposes semver-major updates, and its auto-merge is limited to patch bumps and minor bumps of dependencies at 1.0 or above (#616, #633)
+- `rust-toolchain.toml` and CI pin a dated nightly, and the `msrv` job also checks `pjs-wasm` on `wasm32-unknown-unknown` at 1.89 (#650, #649, #654)
+- README, SECURITY.md, CONTRIBUTING.md and specs describe `pjson-rs` as nightly-only and `pjson-rs-domain`/`pjs-wasm` at MSRV 1.89 (#648, #654)
+- `pjson-rs` uses `Duration::from_mins`/`from_hours` and `core::mem::DropGuard`, and the unused `manual_div_ceil` and `only_used_in_recursion` workspace clippy allows are removed (#647, #654)
 
 ### Fixed
 
