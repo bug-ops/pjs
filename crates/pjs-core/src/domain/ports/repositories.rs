@@ -68,50 +68,176 @@ impl<T: super::gat::CacheGat> CacheExtensions for T {}
 // Supporting types for query operations
 
 /// Criteria for session queries
+///
+/// Built through [`SessionQueryCriteria::builder`], which rejects inconsistent
+/// combinations, so every value of this type is already valid.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::domain::ports::SessionQueryCriteria;
+///
+/// let criteria = SessionQueryCriteria::builder()
+///     .states(vec!["Active".to_owned()])
+///     .exclude_expired(true)
+///     .build()?;
+/// assert!(criteria.exclude_expired());
+///
+/// assert!(SessionQueryCriteria::builder().states(vec![]).build().is_err());
+/// # Ok::<(), pjson_rs::domain::DomainError>(())
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SessionQueryCriteria {
-    /// Match sessions whose state is one of these values.
-    pub states: Option<Vec<String>>,
-    /// Match sessions created at or after this timestamp.
-    pub created_after: Option<DateTime<Utc>>,
-    /// Match sessions created at or before this timestamp.
-    pub created_before: Option<DateTime<Utc>>,
-    /// Match sessions whose client info matches this pattern (substring or glob).
-    pub client_info_pattern: Option<String>,
-    /// When `Some`, match sessions that currently do (or do not) have active streams.
-    pub has_active_streams: Option<bool>,
-    /// Minimum number of streams the session must contain.
-    pub min_stream_count: Option<usize>,
-    /// Maximum number of streams the session may contain.
-    pub max_stream_count: Option<usize>,
-    /// When `true`, exclude sessions past their `expires_at` regardless of `states`.
-    pub exclude_expired: bool,
+    states: Option<Vec<String>>,
+    created_after: Option<DateTime<Utc>>,
+    created_before: Option<DateTime<Utc>>,
+    client_info_pattern: Option<String>,
+    has_active_streams: Option<bool>,
+    min_stream_count: Option<usize>,
+    max_stream_count: Option<usize>,
+    exclude_expired: bool,
 }
 
 impl SessionQueryCriteria {
-    /// Validate query criteria for logical consistency
+    /// Starts a builder with no filters set.
+    #[must_use]
+    pub fn builder() -> SessionQueryCriteriaBuilder {
+        SessionQueryCriteriaBuilder::default()
+    }
+
+    /// Match sessions whose state is one of these values.
+    #[must_use]
+    pub fn states(&self) -> Option<&[String]> {
+        self.states.as_deref()
+    }
+
+    /// Match sessions created at or after this timestamp.
+    #[must_use]
+    pub fn created_after(&self) -> Option<DateTime<Utc>> {
+        self.created_after
+    }
+
+    /// Match sessions created at or before this timestamp.
+    #[must_use]
+    pub fn created_before(&self) -> Option<DateTime<Utc>> {
+        self.created_before
+    }
+
+    /// Match sessions whose client info matches this pattern (substring or glob).
+    #[must_use]
+    pub fn client_info_pattern(&self) -> Option<&str> {
+        self.client_info_pattern.as_deref()
+    }
+
+    /// When `Some`, match sessions that currently do (or do not) have active streams.
+    #[must_use]
+    pub fn has_active_streams(&self) -> Option<bool> {
+        self.has_active_streams
+    }
+
+    /// Minimum number of streams the session must contain.
+    #[must_use]
+    pub fn min_stream_count(&self) -> Option<usize> {
+        self.min_stream_count
+    }
+
+    /// Maximum number of streams the session may contain.
+    #[must_use]
+    pub fn max_stream_count(&self) -> Option<usize> {
+        self.max_stream_count
+    }
+
+    /// When `true`, exclude sessions past their `expires_at` regardless of `states`.
+    #[must_use]
+    pub fn exclude_expired(&self) -> bool {
+        self.exclude_expired
+    }
+}
+
+/// Builder for [`SessionQueryCriteria`]; validation happens in [`Self::build`].
+#[derive(Debug, Default)]
+pub struct SessionQueryCriteriaBuilder {
+    criteria: SessionQueryCriteria,
+}
+
+impl SessionQueryCriteriaBuilder {
+    /// Sets the accepted session states.
+    #[must_use]
+    pub fn states(mut self, states: Vec<String>) -> Self {
+        self.criteria.states = Some(states);
+        self
+    }
+
+    /// Sets the lower bound on session creation time.
+    #[must_use]
+    pub fn created_after(mut self, at: DateTime<Utc>) -> Self {
+        self.criteria.created_after = Some(at);
+        self
+    }
+
+    /// Sets the upper bound on session creation time.
+    #[must_use]
+    pub fn created_before(mut self, at: DateTime<Utc>) -> Self {
+        self.criteria.created_before = Some(at);
+        self
+    }
+
+    /// Sets the client info pattern.
+    #[must_use]
+    pub fn client_info_pattern(mut self, pattern: String) -> Self {
+        self.criteria.client_info_pattern = Some(pattern);
+        self
+    }
+
+    /// Requires sessions to have (or not have) active streams.
+    #[must_use]
+    pub fn has_active_streams(mut self, active: bool) -> Self {
+        self.criteria.has_active_streams = Some(active);
+        self
+    }
+
+    /// Sets the minimum stream count.
+    #[must_use]
+    pub fn min_stream_count(mut self, count: usize) -> Self {
+        self.criteria.min_stream_count = Some(count);
+        self
+    }
+
+    /// Sets the maximum stream count.
+    #[must_use]
+    pub fn max_stream_count(mut self, count: usize) -> Self {
+        self.criteria.max_stream_count = Some(count);
+        self
+    }
+
+    /// Excludes sessions past their expiry.
+    #[must_use]
+    pub fn exclude_expired(mut self, exclude: bool) -> Self {
+        self.criteria.exclude_expired = exclude;
+        self
+    }
+
+    /// Validates the criteria and returns them.
     ///
     /// # Errors
     ///
     /// Returns `DomainError::InvalidInput` if:
     /// - `min_stream_count > max_stream_count`
     /// - `created_after > created_before`
-    /// - `states` is empty (use `None` for no filter)
-    pub fn validate(&self) -> DomainResult<()> {
+    /// - `states` is empty (leave it unset for no filter)
+    pub fn build(self) -> DomainResult<SessionQueryCriteria> {
         use crate::domain::DomainError;
 
-        // Check min/max stream count consistency
-        if let (Some(min), Some(max)) = (self.min_stream_count, self.max_stream_count)
+        let c = &self.criteria;
+        if let (Some(min), Some(max)) = (c.min_stream_count, c.max_stream_count)
             && min > max
         {
             return Err(DomainError::InvalidInput(format!(
-                "min_stream_count ({}) > max_stream_count ({})",
-                min, max
+                "min_stream_count ({min}) > max_stream_count ({max})"
             )));
         }
 
-        // Check time range consistency
-        if let (Some(after), Some(before)) = (self.created_after, self.created_before)
+        if let (Some(after), Some(before)) = (c.created_after, c.created_before)
             && after > before
         {
             return Err(DomainError::InvalidInput(
@@ -119,16 +245,13 @@ impl SessionQueryCriteria {
             ));
         }
 
-        // Reject empty states vec (ambiguous semantics)
-        if let Some(ref states) = self.states
-            && states.is_empty()
-        {
+        if c.states.as_ref().is_some_and(Vec::is_empty) {
             return Err(DomainError::InvalidInput(
-                "states filter cannot be empty (use None for no filter)".to_string(),
+                "states filter cannot be empty (leave it unset for no filter)".to_string(),
             ));
         }
 
-        Ok(())
+        Ok(self.criteria)
     }
 }
 
@@ -179,30 +302,26 @@ pub enum FrameSortField {
 /// - [`SessionPagination`] — paginating session queries, sorted by [`SessionSortField`].
 /// - [`FramePagination`] — paginating frame queries, sorted by [`FrameSortField`].
 ///
-/// `sort_by` and `sort_order` carry no invariants of their own — only `offset`/`limit`
-/// are checked by [`Self::validate`] — so setting them after construction, as in the
-/// example below, is an intentional use of the type, not a workaround.
+/// `offset` and `limit` are checked once by [`Self::new`]; `sort_by` and `sort_order`
+/// carry no invariants and are set with [`Self::with_sort`].
 ///
 /// # Examples
 ///
 /// ```
 /// use pjson_rs::domain::ports::{SessionPagination, SessionSortField, SortOrder};
 ///
-/// let mut pagination = SessionPagination::new_validated(0, 50)?;
-/// pagination.sort_by = Some(SessionSortField::CreatedAt);
-/// pagination.sort_order = SortOrder::Descending;
+/// let pagination = SessionPagination::new(0, 50)?
+///     .with_sort(SessionSortField::CreatedAt, SortOrder::Descending);
+/// assert_eq!(pagination.limit(), 50);
+/// assert!(SessionPagination::new(0, 0).is_err());
 /// # Ok::<(), pjson_rs::domain::DomainError>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct Pagination<S> {
-    /// Number of items to skip before returning results.
-    pub offset: usize,
-    /// Maximum number of items to return.
-    pub limit: usize,
-    /// Optional field to sort by.
-    pub sort_by: Option<S>,
-    /// Sort direction applied to `sort_by`.
-    pub sort_order: SortOrder,
+    offset: usize,
+    limit: usize,
+    sort_by: Option<S>,
+    sort_order: SortOrder,
 }
 
 impl<S> Default for Pagination<S> {
@@ -217,7 +336,7 @@ impl<S> Default for Pagination<S> {
 }
 
 impl<S> Pagination<S> {
-    /// Validate pagination parameters against security limits
+    /// Creates pagination with no sort, validated against the security limits.
     ///
     /// # Errors
     ///
@@ -225,55 +344,65 @@ impl<S> Pagination<S> {
     /// - `limit` is 0
     /// - `limit` exceeds `MAX_PAGINATION_LIMIT` (1000)
     /// - `offset` exceeds `MAX_PAGINATION_OFFSET` (1_000_000)
-    /// - `offset + limit` would overflow
-    pub fn validate(&self) -> DomainResult<()> {
+    pub fn new(offset: usize, limit: usize) -> DomainResult<Self> {
         use crate::domain::DomainError;
         use crate::domain::config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET};
 
-        if self.limit == 0 {
+        if limit == 0 {
             return Err(DomainError::InvalidInput(
                 "pagination limit must be at least 1".to_string(),
             ));
         }
 
-        if self.limit > MAX_PAGINATION_LIMIT {
+        if limit > MAX_PAGINATION_LIMIT {
             return Err(DomainError::InvalidInput(format!(
-                "pagination limit {} exceeds maximum {}",
-                self.limit, MAX_PAGINATION_LIMIT
+                "pagination limit {limit} exceeds maximum {MAX_PAGINATION_LIMIT}"
             )));
         }
 
-        if self.offset > MAX_PAGINATION_OFFSET {
+        if offset > MAX_PAGINATION_OFFSET {
             return Err(DomainError::InvalidInput(format!(
-                "pagination offset {} exceeds maximum {}",
-                self.offset, MAX_PAGINATION_OFFSET
+                "pagination offset {offset} exceeds maximum {MAX_PAGINATION_OFFSET}"
             )));
         }
 
-        // Overflow check for offset + limit (defense-in-depth)
-        if self.offset.checked_add(self.limit).is_none() {
-            return Err(DomainError::InvalidInput(
-                "pagination offset + limit would overflow".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Create validated pagination with defaults
-    ///
-    /// # Errors
-    ///
-    /// Returns error if parameters fail validation
-    pub fn new_validated(offset: usize, limit: usize) -> DomainResult<Self> {
-        let pagination = Self {
+        Ok(Self {
             offset,
             limit,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-        pagination.validate()?;
-        Ok(pagination)
+            ..Self::default()
+        })
+    }
+
+    /// Sets the sort field and direction.
+    #[must_use]
+    pub fn with_sort(mut self, sort_by: S, sort_order: SortOrder) -> Self {
+        self.sort_by = Some(sort_by);
+        self.sort_order = sort_order;
+        self
+    }
+
+    /// Number of items to skip before returning results.
+    #[must_use]
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// Maximum number of items to return.
+    #[must_use]
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    /// Field to sort by, if any.
+    #[must_use]
+    pub fn sort_by(&self) -> Option<&S> {
+        self.sort_by.as_ref()
+    }
+
+    /// Sort direction applied to `sort_by`.
+    #[must_use]
+    pub fn sort_order(&self) -> &SortOrder {
+        &self.sort_order
     }
 }
 
@@ -342,68 +471,147 @@ pub struct SessionHealthSnapshot {
     pub metrics: HashMap<String, f64>,
 }
 
-/// Filter for stream queries
+/// Non-empty set of stream statuses for a [`StreamFilter`].
 ///
-/// # Validation
+/// An empty list would be ambiguous (match nothing or everything), so it is
+/// unrepresentable; leave the filter unset to match any status.
 ///
-/// Call `validate()` before using in queries to ensure constraints are met.
-/// Validation checks priority range consistency and empty statuses vec.
-#[derive(Debug, Clone, Default)]
-pub struct StreamFilter {
-    /// Filter by stream status
-    pub statuses: Option<Vec<StreamStatus>>,
+/// # Examples
+///
+/// ```
+/// use pjson_rs::domain::ports::StreamStatus;
+/// use pjson_rs::domain::ports::repositories::NonEmptyStatuses;
+///
+/// let statuses = NonEmptyStatuses::new(vec![StreamStatus::Active])?;
+/// assert_eq!(statuses.as_slice(), [StreamStatus::Active]);
+/// assert!(NonEmptyStatuses::new(vec![]).is_err());
+/// # Ok::<(), pjson_rs::domain::DomainError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonEmptyStatuses(Vec<StreamStatus>);
 
-    /// Minimum priority level (currently not implemented - silently ignored)
-    ///
-    /// NOTE: Stream entities don't expose a single priority value. This field is
-    /// reserved for future implementation when priority distribution tracking is added
-    /// to StreamStats.
-    pub min_priority: Option<Priority>,
-
-    /// Maximum priority level (currently not implemented - silently ignored)
-    ///
-    /// NOTE: Stream entities don't expose a single priority value. This field is
-    /// reserved for future implementation when priority distribution tracking is added
-    /// to StreamStats.
-    pub max_priority: Option<Priority>,
-
-    /// Filter by creation time
-    pub created_after: Option<DateTime<Utc>>,
-
-    /// Filter by presence of frames
-    pub has_frames: Option<bool>,
-}
-
-impl StreamFilter {
-    /// Validate filter constraints for logical consistency
+impl NonEmptyStatuses {
+    /// Wraps `statuses`.
     ///
     /// # Errors
     ///
-    /// Returns `DomainError::InvalidInput` if:
-    /// - `min_priority > max_priority` (when both are Some)
-    /// - `statuses` is an empty vec (use `None` for no filter)
-    pub fn validate(&self) -> DomainResult<()> {
-        use crate::domain::DomainError;
-
-        // Validate priority range consistency
-        if let (Some(min), Some(max)) = (self.min_priority, self.max_priority)
-            && min.value() > max.value()
-        {
-            return Err(DomainError::InvalidInput(
-                "min_priority cannot exceed max_priority".to_string(),
+    /// Returns `DomainError::InvalidInput` if `statuses` is empty.
+    pub fn new(statuses: Vec<StreamStatus>) -> DomainResult<Self> {
+        if statuses.is_empty() {
+            return Err(crate::domain::DomainError::InvalidInput(
+                "statuses filter cannot be empty (leave it unset for no filter)".to_string(),
             ));
         }
+        Ok(Self(statuses))
+    }
 
-        // Reject empty statuses vec (ambiguous semantics, consistent with SessionQueryCriteria)
-        if let Some(ref statuses) = self.statuses
-            && statuses.is_empty()
-        {
-            return Err(DomainError::InvalidInput(
-                "statuses filter cannot be empty (use None for no filter)".to_string(),
-            ));
-        }
+    /// The statuses, never empty.
+    #[must_use]
+    pub fn as_slice(&self) -> &[StreamStatus] {
+        &self.0
+    }
+}
 
-        Ok(())
+/// Whether a stream must have emitted frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FramePresence {
+    /// Match streams with at least one frame.
+    WithFrames,
+    /// Match streams with no frames.
+    WithoutFrames,
+}
+
+/// Filter for stream queries
+///
+/// Built through [`StreamFilter::builder`]; the default value matches every stream.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::domain::ports::StreamStatus;
+/// use pjson_rs::domain::ports::repositories::{FramePresence, StreamFilter};
+///
+/// let filter = StreamFilter::builder()
+///     .statuses(vec![StreamStatus::Active])
+///     .has_frames(FramePresence::WithFrames)
+///     .build()?;
+/// assert_eq!(filter.has_frames(), Some(FramePresence::WithFrames));
+/// # Ok::<(), pjson_rs::domain::DomainError>(())
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct StreamFilter {
+    statuses: Option<NonEmptyStatuses>,
+    created_after: Option<DateTime<Utc>>,
+    has_frames: Option<FramePresence>,
+}
+
+impl StreamFilter {
+    /// Starts a builder with no filters set.
+    #[must_use]
+    pub fn builder() -> StreamFilterBuilder {
+        StreamFilterBuilder::default()
+    }
+
+    /// Accepted stream statuses, if filtered.
+    #[must_use]
+    pub fn statuses(&self) -> Option<&NonEmptyStatuses> {
+        self.statuses.as_ref()
+    }
+
+    /// Lower bound on stream creation time, if filtered.
+    #[must_use]
+    pub fn created_after(&self) -> Option<DateTime<Utc>> {
+        self.created_after
+    }
+
+    /// Required frame presence, if filtered.
+    #[must_use]
+    pub fn has_frames(&self) -> Option<FramePresence> {
+        self.has_frames
+    }
+}
+
+/// Builder for [`StreamFilter`]; validation happens in [`Self::build`].
+#[derive(Debug, Default)]
+pub struct StreamFilterBuilder {
+    statuses: Option<Vec<StreamStatus>>,
+    created_after: Option<DateTime<Utc>>,
+    has_frames: Option<FramePresence>,
+}
+
+impl StreamFilterBuilder {
+    /// Sets the accepted stream statuses.
+    #[must_use]
+    pub fn statuses(mut self, statuses: Vec<StreamStatus>) -> Self {
+        self.statuses = Some(statuses);
+        self
+    }
+
+    /// Sets the lower bound on stream creation time.
+    #[must_use]
+    pub fn created_after(mut self, at: DateTime<Utc>) -> Self {
+        self.created_after = Some(at);
+        self
+    }
+
+    /// Requires streams to have (or not have) frames.
+    #[must_use]
+    pub fn has_frames(mut self, presence: FramePresence) -> Self {
+        self.has_frames = Some(presence);
+        self
+    }
+
+    /// Validates the filter and returns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::InvalidInput` if `statuses` was set to an empty list.
+    pub fn build(self) -> DomainResult<StreamFilter> {
+        Ok(StreamFilter {
+            statuses: self.statuses.map(NonEmptyStatuses::new).transpose()?,
+            created_after: self.created_after,
+            has_frames: self.has_frames,
+        })
     }
 }
 
@@ -677,84 +885,44 @@ mod tests {
         assert_eq!(cloned.sort_order, pagination.sort_order);
     }
 
-    // Tests for Pagination validation
+    // Tests for Pagination construction
     #[test]
-    fn test_pagination_validate_zero_limit_rejected() {
-        let pagination = SessionPagination {
-            offset: 0,
-            limit: 0,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-        let result = pagination.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+    fn test_pagination_new_zero_limit_rejected() {
+        let err = SessionPagination::new(0, 0).unwrap_err();
         assert!(matches!(err, DomainError::InvalidInput(_)));
         assert!(format!("{}", err).contains("at least 1"));
     }
 
     #[test]
-    fn test_pagination_validate_excessive_limit_rejected() {
-        let pagination = SessionPagination {
-            offset: 0,
-            limit: 10_000,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-        let result = pagination.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+    fn test_pagination_new_excessive_limit_rejected() {
+        let err = SessionPagination::new(0, 10_000).unwrap_err();
         assert!(format!("{}", err).contains("exceeds maximum"));
     }
 
     #[test]
-    fn test_pagination_validate_excessive_offset_rejected() {
-        let pagination = SessionPagination {
-            offset: 2_000_000,
-            limit: 10,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-        let result = pagination.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+    fn test_pagination_new_excessive_offset_rejected() {
+        let err = SessionPagination::new(2_000_000, 10).unwrap_err();
         assert!(format!("{}", err).contains("offset"));
     }
 
     #[test]
-    fn test_pagination_validate_extreme_offset_rejected() {
-        // Test that extreme offset values (e.g., usize::MAX) are rejected.
-        // With bounded limits, this is caught by the offset check rather than overflow.
-        let pagination = SessionPagination {
-            offset: usize::MAX,
-            limit: 1,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-        let result = pagination.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        // Caught by offset limit check (usize::MAX > MAX_PAGINATION_OFFSET)
+    fn test_pagination_new_extreme_offset_rejected() {
+        let err = SessionPagination::new(usize::MAX, 1).unwrap_err();
         assert!(format!("{}", err).contains("exceeds maximum"));
     }
 
     #[test]
-    fn test_pagination_validate_any_sort_field_accepted() {
-        // An invalid sort field is unrepresentable now that `sort_by` is typed
-        // as `SessionSortField` — every constructible variant must validate.
+    fn test_pagination_with_sort_accepts_every_sort_field() {
         for field in [
             SessionSortField::CreatedAt,
             SessionSortField::UpdatedAt,
             SessionSortField::StreamCount,
             SessionSortField::TotalBytes,
         ] {
-            let pagination = SessionPagination {
-                offset: 0,
-                limit: 10,
-                sort_by: Some(field),
-                sort_order: SortOrder::Ascending,
-            };
-            assert!(pagination.validate().is_ok());
+            let pagination = SessionPagination::new(0, 10)
+                .unwrap()
+                .with_sort(field, SortOrder::Ascending);
+            assert_eq!(pagination.sort_by(), Some(&field));
         }
     }
 
@@ -793,31 +961,15 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_pagination_new_validated_success() {
-        let result = SessionPagination::new_validated(0, 50);
-        assert!(result.is_ok());
-        let pagination = result.unwrap();
-        assert_eq!(pagination.offset, 0);
-        assert_eq!(pagination.limit, 50);
-    }
-
-    #[test]
-    fn test_pagination_new_validated_failure() {
-        let result = SessionPagination::new_validated(0, 0);
-        assert!(result.is_err());
-    }
-
-    /// #491 decoupling regression: `FramePagination` must be constructible and
-    /// validated using only `FrameSortField` — this only compiles if the frame
+    /// #491 decoupling regression: `FramePagination` must be constructible
+    /// using only `FrameSortField` — this only compiles if the frame
     /// bounded context no longer depends on `SessionSortField`.
     #[test]
     fn test_frame_pagination_decoupled_from_session_sort_field() {
-        let pagination = FramePagination {
-            sort_by: Some(FrameSortField::Sequence),
-            ..Default::default()
-        };
-        assert!(pagination.validate().is_ok());
+        let pagination = FramePagination::new(0, 10)
+            .unwrap()
+            .with_sort(FrameSortField::Sequence, SortOrder::Ascending);
+        assert_eq!(pagination.sort_by(), Some(&FrameSortField::Sequence));
     }
 
     // Tests for SortOrder
@@ -912,184 +1064,92 @@ mod tests {
 
     // Tests for SessionQueryCriteria validation
     #[test]
-    fn test_criteria_validate_min_greater_than_max_rejected() {
-        let criteria = SessionQueryCriteria {
-            min_stream_count: Some(10),
-            max_stream_count: Some(5),
-            ..Default::default()
-        };
-        let result = criteria.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+    fn test_criteria_build_min_greater_than_max_rejected() {
+        let err = SessionQueryCriteria::builder()
+            .min_stream_count(10)
+            .max_stream_count(5)
+            .build()
+            .unwrap_err();
+        assert!(matches!(err, DomainError::InvalidInput(_)));
         assert!(format!("{}", err).contains("min_stream_count"));
     }
 
     #[test]
-    fn test_criteria_validate_after_greater_than_before_rejected() {
+    fn test_criteria_build_after_greater_than_before_rejected() {
         let now = Utc::now();
-        let criteria = SessionQueryCriteria {
-            created_after: Some(now),
-            created_before: Some(now - chrono::Duration::hours(1)),
-            ..Default::default()
-        };
-        let result = criteria.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+        let err = SessionQueryCriteria::builder()
+            .created_after(now)
+            .created_before(now - chrono::Duration::hours(1))
+            .build()
+            .unwrap_err();
         assert!(format!("{}", err).contains("created_after"));
     }
 
     #[test]
-    fn test_criteria_validate_empty_states_rejected() {
-        let criteria = SessionQueryCriteria {
-            states: Some(vec![]),
-            ..Default::default()
-        };
-        let result = criteria.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+    fn test_criteria_build_empty_states_rejected() {
+        let err = SessionQueryCriteria::builder()
+            .states(vec![])
+            .build()
+            .unwrap_err();
         assert!(format!("{}", err).contains("empty"));
     }
 
     #[test]
-    fn test_criteria_validate_valid_criteria_accepted() {
+    fn test_criteria_build_valid_criteria_accepted() {
         let now = Utc::now();
-        let criteria = SessionQueryCriteria {
-            states: Some(vec!["active".to_string()]),
-            created_after: Some(now - chrono::Duration::hours(1)),
-            created_before: Some(now),
-            min_stream_count: Some(1),
-            max_stream_count: Some(10),
-            ..Default::default()
-        };
-        assert!(criteria.validate().is_ok());
+        let criteria = SessionQueryCriteria::builder()
+            .states(vec!["active".to_string()])
+            .created_after(now - chrono::Duration::hours(1))
+            .created_before(now)
+            .min_stream_count(1)
+            .max_stream_count(10)
+            .build()
+            .unwrap();
+        assert_eq!(criteria.states(), Some(["active".to_string()].as_slice()));
+        assert_eq!(criteria.min_stream_count(), Some(1));
     }
 
     // Tests for StreamFilter
     #[test]
     fn test_stream_filter_default() {
         let filter = StreamFilter::default();
-        assert!(filter.statuses.is_none());
-        assert!(filter.min_priority.is_none());
-        assert!(filter.max_priority.is_none());
-        assert!(filter.created_after.is_none());
-        assert!(filter.has_frames.is_none());
+        assert!(filter.statuses().is_none());
+        assert!(filter.created_after().is_none());
+        assert!(filter.has_frames().is_none());
     }
 
     #[test]
-    fn test_stream_filter_with_statuses() {
-        let filter = StreamFilter {
-            statuses: Some(vec![StreamStatus::Active, StreamStatus::Paused]),
-            ..Default::default()
-        };
-        let statuses = filter.statuses.unwrap();
-        assert_eq!(statuses.len(), 2);
-        assert!(statuses.contains(&StreamStatus::Active));
-        assert!(statuses.contains(&StreamStatus::Paused));
-    }
-
-    #[test]
-    fn test_stream_filter_with_priority_range() {
-        let filter = StreamFilter {
-            min_priority: Some(Priority::LOW),
-            max_priority: Some(Priority::CRITICAL),
-            ..Default::default()
-        };
-        assert!(filter.min_priority.is_some());
-        assert!(filter.max_priority.is_some());
-    }
-
-    #[test]
-    fn test_stream_filter_clone() {
-        let filter = StreamFilter {
-            has_frames: Some(true),
-            created_after: Some(Utc::now()),
-            ..Default::default()
-        };
-        let cloned = filter.clone();
-        assert_eq!(cloned.has_frames, filter.has_frames);
-        assert_eq!(cloned.created_after, filter.created_after);
-    }
-
-    // Tests for StreamFilter validation (INPUT-003)
-    #[test]
-    fn test_stream_filter_validate_min_priority_exceeds_max_rejected() {
-        let filter = StreamFilter {
-            min_priority: Some(Priority::CRITICAL),
-            max_priority: Some(Priority::LOW),
-            ..Default::default()
-        };
-        let result = filter.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+    fn test_stream_filter_build_empty_statuses_rejected() {
+        let err = StreamFilter::builder()
+            .statuses(vec![])
+            .build()
+            .unwrap_err();
         assert!(matches!(err, DomainError::InvalidInput(_)));
-        assert!(format!("{}", err).contains("min_priority"));
-    }
-
-    #[test]
-    fn test_stream_filter_validate_empty_statuses_rejected() {
-        let filter = StreamFilter {
-            statuses: Some(vec![]),
-            ..Default::default()
-        };
-        let result = filter.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
         assert!(format!("{}", err).contains("empty"));
     }
 
     #[test]
-    fn test_stream_filter_validate_valid_priority_range_accepted() {
-        let filter = StreamFilter {
-            min_priority: Some(Priority::LOW),
-            max_priority: Some(Priority::CRITICAL),
-            ..Default::default()
-        };
-        assert!(filter.validate().is_ok());
+    fn test_stream_filter_build_keeps_statuses_in_order() {
+        let filter = StreamFilter::builder()
+            .statuses(vec![StreamStatus::Active, StreamStatus::Paused])
+            .build()
+            .unwrap();
+        assert_eq!(
+            filter.statuses().unwrap().as_slice(),
+            [StreamStatus::Active, StreamStatus::Paused]
+        );
     }
 
     #[test]
-    fn test_stream_filter_validate_equal_priority_accepted() {
-        let filter = StreamFilter {
-            min_priority: Some(Priority::MEDIUM),
-            max_priority: Some(Priority::MEDIUM),
-            ..Default::default()
-        };
-        assert!(filter.validate().is_ok());
-    }
-
-    #[test]
-    fn test_stream_filter_validate_only_min_priority_accepted() {
-        let filter = StreamFilter {
-            min_priority: Some(Priority::HIGH),
-            max_priority: None,
-            ..Default::default()
-        };
-        assert!(filter.validate().is_ok());
-    }
-
-    #[test]
-    fn test_stream_filter_validate_only_max_priority_accepted() {
-        let filter = StreamFilter {
-            min_priority: None,
-            max_priority: Some(Priority::HIGH),
-            ..Default::default()
-        };
-        assert!(filter.validate().is_ok());
-    }
-
-    #[test]
-    fn test_stream_filter_validate_default_accepted() {
-        let filter = StreamFilter::default();
-        assert!(filter.validate().is_ok());
-    }
-
-    #[test]
-    fn test_stream_filter_validate_non_empty_statuses_accepted() {
-        let filter = StreamFilter {
-            statuses: Some(vec![StreamStatus::Active]),
-            ..Default::default()
-        };
-        assert!(filter.validate().is_ok());
+    fn test_stream_filter_clone() {
+        let filter = StreamFilter::builder()
+            .has_frames(FramePresence::WithFrames)
+            .created_after(Utc::now())
+            .build()
+            .unwrap();
+        let cloned = filter.clone();
+        assert_eq!(cloned.has_frames(), filter.has_frames());
+        assert_eq!(cloned.created_after(), filter.created_after());
     }
 
     // Tests for StreamStatus

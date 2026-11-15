@@ -47,16 +47,12 @@ pub const DEFAULT_FRAME_HISTORY_PER_STREAM: usize = 10_000;
 /// a single request can never itself evict a stream's frame history.
 pub const MAX_FRAMES_PER_REQUEST: usize = 1_000;
 
-/// Maximum allowed `SessionConfig::session_timeout_seconds` (7 days).
+/// Maximum allowed session timeout (7 days).
 ///
-/// Enforced by `CommandValidator::validate_create_session` at the
-/// application boundary, before `StreamSession::new` computes
-/// `now + chrono::Duration::seconds(session_timeout_seconds as i64)`. Any
-/// `u64` value here fits well within `chrono::Duration::seconds`'s valid
-/// range, so that addition can neither panic nor wrap into a negative
-/// (already-expired) duration. The 7-day ceiling itself is an operational
-/// choice, not a correctness requirement — sessions are not meant to be
-/// long-lived resources.
+/// Enforced by `SessionTimeout`'s validating constructor, so every
+/// `SessionConfig` and `StreamSession::extend_timeout` call is in range. The
+/// 7-day ceiling is an operational choice, not a correctness requirement —
+/// sessions are not meant to be long-lived resources.
 pub const MAX_SESSION_TIMEOUT_SECONDS: u64 = 604_800;
 
 #[cfg(test)]
@@ -92,10 +88,6 @@ mod tests {
     #[test]
     fn test_max_session_timeout_seconds_fits_chrono_duration() {
         assert_eq!(MAX_SESSION_TIMEOUT_SECONDS, 604_800);
-        // Must cast to i64 without overflow or sign flip, matching the
-        // `chrono::Duration::seconds(config.session_timeout_seconds as i64)`
-        // call in `StreamSession::with_time_provider`.
-        const { assert!(MAX_SESSION_TIMEOUT_SECONDS <= i64::MAX as u64) };
-        const { assert!((MAX_SESSION_TIMEOUT_SECONDS as i64) > 0) };
+        const { assert!(MAX_SESSION_TIMEOUT_SECONDS <= u32::MAX as u64) };
     }
 }

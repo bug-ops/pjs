@@ -1,6 +1,10 @@
 //! Collection of [`Stream`]s keyed only by each stream's own id.
 
-use crate::{entities::Stream, value_objects::StreamId};
+use crate::{
+    DomainResult,
+    entities::{Frame, Stream, frame::FramePatch, stream::StreamConfig},
+    value_objects::{Priority, StreamId},
+};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{MapAccess, Visitor},
@@ -13,8 +17,8 @@ use std::fmt;
 ///
 /// [`StreamMap::insert`] derives the key from the stream itself, and decoding
 /// rejects any entry whose key differs from its stream's id, so both ways of
-/// building a map uphold the invariant. [`StreamMap::get_mut`] hands out
-/// `&mut Stream`, so a caller holding it could still overwrite a whole value.
+/// building a map uphold the invariant. [`StreamMap::get_mut`] hands out a
+/// [`StreamMut`], which cannot replace the whole stream.
 ///
 /// On the wire this is a map keyed by the UUID string of each stream.
 ///
@@ -52,12 +56,10 @@ impl StreamMap {
         self.0.get(&id)
     }
 
-    /// Returns the stream with the given id for mutation.
-    ///
-    /// Replacing the whole value (`*map.get_mut(id)? = other`) can break the
-    /// key invariant, so only the owning aggregate should expose this.
-    pub fn get_mut(&mut self, id: StreamId) -> Option<&mut Stream> {
-        self.0.get_mut(&id)
+    /// Returns the stream with the given id for mutation through the
+    /// lifecycle operations of [`StreamMut`].
+    pub fn get_mut(&mut self, id: StreamId) -> Option<StreamMut<'_>> {
+        self.0.get_mut(&id).map(StreamMut)
     }
 
     /// Number of streams.
@@ -83,6 +85,84 @@ impl StreamMap {
     /// Removes and yields every stream, leaving the map empty.
     pub fn drain(&mut self) -> impl Iterator<Item = Stream> {
         self.0.drain().map(|(_, stream)| stream)
+    }
+}
+
+/// Mutable access to a [`Stream`] held in a [`StreamMap`].
+///
+/// Reads go through `Deref<Target = Stream>`; mutation is limited to the
+/// forwarded lifecycle methods, so the stream (and with it the map's
+/// key-equals-id invariant) can never be swapped for another value.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs_domain::entities::{Stream, StreamMap};
+/// use pjson_rs_domain::entities::stream::StreamConfig;
+/// use pjson_rs_domain::value_objects::{JsonData, SessionId};
+///
+/// let stream = Stream::new(SessionId::new(), JsonData::Null, StreamConfig::default());
+/// let id = stream.id();
+/// let mut streams = StreamMap::new();
+/// streams.insert(stream);
+///
+/// let mut handle = streams.get_mut(id).unwrap();
+/// handle.start_streaming().unwrap();
+/// assert!(handle.is_active());
+/// ```
+#[derive(Debug)]
+pub struct StreamMut<'a>(&'a mut Stream);
+
+impl std::ops::Deref for StreamMut<'_> {
+    type Target = Stream;
+
+    fn deref(&self) -> &Stream {
+        self.0
+    }
+}
+
+impl StreamMut<'_> {
+    /// Forwards to [`Stream::start_streaming`].
+    pub fn start_streaming(&mut self) -> DomainResult<()> {
+        self.0.start_streaming()
+    }
+
+    /// Forwards to [`Stream::complete`].
+    pub fn complete(&mut self) -> DomainResult<()> {
+        self.0.complete()
+    }
+
+    /// Forwards to [`Stream::fail`].
+    pub fn fail(&mut self, error: String) -> DomainResult<()> {
+        self.0.fail(error)
+    }
+
+    /// Forwards to [`Stream::cancel`].
+    pub fn cancel(&mut self) -> DomainResult<()> {
+        self.0.cancel()
+    }
+
+    /// Forwards to [`Stream::update_config`].
+    pub fn update_config(&mut self, config: StreamConfig) -> DomainResult<()> {
+        self.0.update_config(config)
+    }
+
+    /// Forwards to [`Stream::commit_patch_frames`].
+    pub fn commit_patch_frames(
+        &mut self,
+        patches: Vec<(FramePatch, Priority)>,
+        max_frames: usize,
+    ) -> DomainResult<Vec<Frame>> {
+        self.0.commit_patch_frames(patches, max_frames)
+    }
+
+    /// Forwards to [`Stream::finalize_patch_frame`].
+    pub fn finalize_patch_frame(
+        &mut self,
+        priority: Priority,
+        frame_patches: Vec<FramePatch>,
+    ) -> DomainResult<Frame> {
+        self.0.finalize_patch_frame(priority, frame_patches)
     }
 }
 

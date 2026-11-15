@@ -26,29 +26,29 @@ pub(crate) fn session_matches_criteria(
     session: &StreamSession,
     criteria: &SessionQueryCriteria,
 ) -> bool {
-    if let Some(states) = &criteria.states {
+    if let Some(states) = criteria.states() {
         let state_str = session.state().as_str();
         if !states.iter().any(|s| s.eq_ignore_ascii_case(state_str)) {
             return false;
         }
     }
 
-    if criteria.exclude_expired && session.is_expired() {
+    if criteria.exclude_expired() && session.is_expired() {
         return false;
     }
 
-    if let Some(after) = criteria.created_after
+    if let Some(after) = criteria.created_after()
         && session.created_at() < after
     {
         return false;
     }
-    if let Some(before) = criteria.created_before
+    if let Some(before) = criteria.created_before()
         && session.created_at() > before
     {
         return false;
     }
 
-    if let Some(has_active) = criteria.has_active_streams {
+    if let Some(has_active) = criteria.has_active_streams() {
         let has_active_streams = session.streams().values().any(|stream| stream.is_active());
         if has_active != has_active_streams {
             return false;
@@ -56,18 +56,18 @@ pub(crate) fn session_matches_criteria(
     }
 
     let stream_count = session.streams().len();
-    if let Some(min) = criteria.min_stream_count
+    if let Some(min) = criteria.min_stream_count()
         && stream_count < min
     {
         return false;
     }
-    if let Some(max) = criteria.max_stream_count
+    if let Some(max) = criteria.max_stream_count()
         && stream_count > max
     {
         return false;
     }
 
-    if let Some(pattern) = &criteria.client_info_pattern {
+    if let Some(pattern) = criteria.client_info_pattern() {
         match session.client_info() {
             Some(info) => {
                 if !info.to_lowercase().contains(&pattern.to_lowercase()) {
@@ -298,7 +298,7 @@ impl StreamRepositoryGat for MockRepository {
                 .collect();
             let total_count = sessions.len();
 
-            if let Some(sort_field) = pagination.sort_by {
+            if let Some(sort_field) = pagination.sort_by().copied() {
                 sessions.sort_by(|a, b| {
                     let cmp = match sort_field {
                         SessionSortField::CreatedAt => a.created_at().cmp(&b.created_at()),
@@ -308,7 +308,7 @@ impl StreamRepositoryGat for MockRepository {
                             a.stats().total_bytes.cmp(&b.stats().total_bytes)
                         }
                     };
-                    match pagination.sort_order {
+                    match pagination.sort_order() {
                         SortOrder::Ascending => cmp,
                         SortOrder::Descending => cmp.reverse(),
                     }
@@ -317,10 +317,10 @@ impl StreamRepositoryGat for MockRepository {
 
             let paginated: Vec<_> = sessions
                 .into_iter()
-                .skip(pagination.offset)
-                .take(pagination.limit)
+                .skip(pagination.offset())
+                .take(pagination.limit())
                 .collect();
-            let has_more = pagination.offset + paginated.len() < total_count;
+            let has_more = pagination.offset() + paginated.len() < total_count;
             Ok(SessionQueryResult {
                 sessions: paginated,
                 total_count,

@@ -8,31 +8,23 @@
 
 use std::future::Future;
 use std::pin::Pin;
-#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 use std::sync::Arc;
 
-#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
-use pjson_rs_domain::value_objects::SessionId;
+use pjson_rs_domain::value_objects::{SessionId, TrainedDictionary};
 
-#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
-use crate::compression::zstd::ZstdDictionary;
-
-use crate::Result;
+use crate::domain::DomainResult;
 
 /// Heap-allocated future returned by [`DictionaryStore`] methods.
 ///
 /// Using `Pin<Box<dyn Future + Send + '_>>` instead of `async_trait` keeps the
 /// dependency tree clean. The lifetime `'a` ties the future to the store borrow.
-pub type DictionaryFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+pub type DictionaryFuture<'a, T> = Pin<Box<dyn Future<Output = DomainResult<T>> + Send + 'a>>;
 
-/// Port for resolving and accumulating per-session zstd dictionaries.
+/// Port for resolving and accumulating per-session trained dictionaries.
 ///
 /// Implementations must be `Send + Sync` so they can be shared behind
-/// `Arc<dyn DictionaryStore>` across Tokio tasks.
-///
-/// The trait methods are gated on `#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]`
-/// so the trait itself compiles when the feature is disabled (the `dictionary_store`
-/// field on `PjsAppState` still exists, it just exposes no callable methods).
+/// `Arc<dyn DictionaryStore>` across Tokio tasks. The trait is identical in
+/// every feature configuration; codec-specific training lives in adapters.
 ///
 /// # Contract
 ///
@@ -48,25 +40,19 @@ pub trait DictionaryStore: Send + Sync {
     /// # Examples
     ///
     /// ```rust
-    /// # #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
-    /// # {
-    /// use std::sync::Arc;
     /// use pjson_rs::domain::ports::dictionary_store::{DictionaryStore, NoopDictionaryStore};
     /// use pjson_rs_domain::value_objects::SessionId;
     ///
     /// # tokio_test::block_on(async {
     /// let store = NoopDictionaryStore;
-    /// let sid = SessionId::new();
-    /// let result = store.get_dictionary(sid).await.unwrap();
+    /// let result = store.get_dictionary(SessionId::new()).await.unwrap();
     /// assert!(result.is_none(), "Noop store always returns None");
     /// # });
-    /// # }
     /// ```
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     fn get_dictionary<'a>(
         &'a self,
         session_id: SessionId,
-    ) -> DictionaryFuture<'a, Option<Arc<ZstdDictionary>>>;
+    ) -> DictionaryFuture<'a, Option<Arc<TrainedDictionary>>>;
 
     /// Append `sample` to the training corpus for `session_id`.
     ///
@@ -76,21 +62,15 @@ pub trait DictionaryStore: Send + Sync {
     /// # Examples
     ///
     /// ```rust
-    /// # #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
-    /// # {
-    /// use std::sync::Arc;
     /// use pjson_rs::domain::ports::dictionary_store::{DictionaryStore, NoopDictionaryStore};
     /// use pjson_rs_domain::value_objects::SessionId;
     ///
     /// # tokio_test::block_on(async {
     /// let store = NoopDictionaryStore;
-    /// let sid = SessionId::new();
     /// // No-op: always succeeds without training.
-    /// store.train_if_ready(sid, b"sample".to_vec()).await.unwrap();
+    /// store.train_if_ready(SessionId::new(), b"sample".to_vec()).await.unwrap();
     /// # });
-    /// # }
     /// ```
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     fn train_if_ready<'a>(
         &'a self,
         session_id: SessionId,
@@ -119,15 +99,13 @@ pub trait DictionaryStore: Send + Sync {
 pub struct NoopDictionaryStore;
 
 impl DictionaryStore for NoopDictionaryStore {
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     fn get_dictionary<'a>(
         &'a self,
         _: SessionId,
-    ) -> DictionaryFuture<'a, Option<Arc<ZstdDictionary>>> {
+    ) -> DictionaryFuture<'a, Option<Arc<TrainedDictionary>>> {
         Box::pin(async { Ok(None) })
     }
 
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     fn train_if_ready<'a>(&'a self, _: SessionId, _: Vec<u8>) -> DictionaryFuture<'a, ()> {
         Box::pin(async { Ok(()) })
     }
@@ -137,7 +115,6 @@ impl DictionaryStore for NoopDictionaryStore {
 mod tests {
     use super::*;
 
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     #[tokio::test]
     async fn test_noop_get_dictionary_returns_none() {
         let store = NoopDictionaryStore;
@@ -146,7 +123,6 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     #[tokio::test]
     async fn test_noop_train_if_ready_is_ok() {
         let store = NoopDictionaryStore;

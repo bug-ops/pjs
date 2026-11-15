@@ -288,10 +288,10 @@ impl StreamRepositoryGat for MockRepository {
             let total_count = sessions.len();
             let paginated: Vec<_> = sessions
                 .into_iter()
-                .skip(pagination.offset)
-                .take(pagination.limit)
+                .skip(pagination.offset())
+                .take(pagination.limit())
                 .collect();
-            let has_more = pagination.offset + paginated.len() < total_count;
+            let has_more = pagination.offset() + paginated.len() < total_count;
             Ok(SessionQueryResult {
                 sessions: paginated,
                 total_count,
@@ -539,11 +539,12 @@ impl SessionBuilder {
     }
 
     pub fn build(self) -> StreamSession {
-        use pjson_rs::domain::aggregates::stream_session::SessionConfig;
+        use pjson_rs::domain::aggregates::stream_session::{SessionConfig, SessionTimeout};
 
         let config = SessionConfig {
             max_concurrent_streams: self.max_concurrent_streams,
-            session_timeout_seconds: self.timeout_seconds,
+            session_timeout: SessionTimeout::try_from(self.timeout_seconds)
+                .expect("test timeout in range"),
             default_stream_config: Default::default(),
             enable_compression: self.enable_compression,
             metadata: Default::default(),
@@ -658,7 +659,7 @@ mod tests {
             .build();
 
         assert_eq!(session.config().max_concurrent_streams, 5);
-        assert_eq!(session.config().session_timeout_seconds, 1800);
+        assert_eq!(u64::from(session.config().session_timeout), 1800);
     }
 
     #[tokio::test]

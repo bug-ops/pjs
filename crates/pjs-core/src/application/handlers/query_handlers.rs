@@ -81,12 +81,7 @@ where
             let limit = query.limit.unwrap_or(MAX_PAGE_SIZE).min(MAX_PAGE_SIZE);
             let offset = query.offset.unwrap_or(0);
 
-            let pagination = SessionPagination {
-                offset,
-                limit,
-                sort_by: None,
-                sort_order: RepoSortOrder::Ascending,
-            };
+            let pagination = SessionPagination::new(offset, limit)?;
 
             let result = self
                 .repository
@@ -162,15 +157,23 @@ where
                 None => (Some(vec![SessionState::Active.as_str().to_string()]), true),
             };
 
-            let criteria = SessionQueryCriteria {
-                states,
-                exclude_expired,
-                created_after: query.filters.created_after,
-                created_before: query.filters.created_before,
-                client_info_pattern: query.filters.client_info,
-                has_active_streams: query.filters.has_active_streams,
-                ..SessionQueryCriteria::default()
-            };
+            let mut criteria = SessionQueryCriteria::builder().exclude_expired(exclude_expired);
+            if let Some(states) = states {
+                criteria = criteria.states(states);
+            }
+            if let Some(after) = query.filters.created_after {
+                criteria = criteria.created_after(after);
+            }
+            if let Some(before) = query.filters.created_before {
+                criteria = criteria.created_before(before);
+            }
+            if let Some(pattern) = query.filters.client_info {
+                criteria = criteria.client_info_pattern(pattern);
+            }
+            if let Some(active) = query.filters.has_active_streams {
+                criteria = criteria.has_active_streams(active);
+            }
+            let criteria = criteria.build()?;
 
             let sort_by = query.sort_by;
             let sort_order = match query.sort_order {
@@ -178,12 +181,10 @@ where
                 _ => RepoSortOrder::Ascending,
             };
 
-            let pagination = SessionPagination {
-                offset,
-                limit,
-                sort_by,
-                sort_order,
-            };
+            let mut pagination = SessionPagination::new(offset, limit)?;
+            if let Some(sort_by) = sort_by {
+                pagination = pagination.with_sort(sort_by, sort_order);
+            }
 
             let result = self
                 .repository
@@ -1813,13 +1814,20 @@ mod tests {
         completed.close().unwrap();
         repository.save_session(completed).await.unwrap();
 
-        let mut expired = StreamSession::new(SessionConfig {
-            session_timeout_seconds: 0,
-            ..SessionConfig::default()
-        });
+        struct PastClock;
+        impl crate::domain::ports::TimeProvider for PastClock {
+            fn now(&self) -> chrono::DateTime<Utc> {
+                Utc::now() - chrono::Duration::hours(2)
+            }
+        }
+        let mut expired =
+            StreamSession::with_time_provider(SessionConfig::default(), Arc::new(PastClock));
         expired.activate().unwrap();
-        // Give the real clock a moment to move past `expires_at`.
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        // The wire form drops the clock, so decoding restores the real one
+        // and the session (created two hours ago, one-hour timeout) is expired.
+        let expired: StreamSession =
+            serde_json::from_value(serde_json::to_value(&expired).unwrap()).unwrap();
+        assert!(expired.is_expired());
         repository.save_session(expired).await.unwrap();
 
         let handler = SessionQueryHandler::new(repository);
@@ -1840,7 +1848,7 @@ mod tests {
     }
 
     /// Regression test: `limit=0` and an offset beyond `MAX_PAGINATION_OFFSET`
-    /// must not surface `SessionPagination::validate()`'s `DomainError::InvalidInput`
+    /// must not surface `SessionPagination::new()`'s `DomainError::InvalidInput`
     /// (which the HTTP layer maps to a 500). The handler must clamp both
     /// before they reach the repository. Uses the real
     /// `GatInMemoryStreamRepository` so `SessionPagination::validate()` actually runs.

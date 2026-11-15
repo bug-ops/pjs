@@ -57,7 +57,7 @@ where
         return Ok((StatusCode::NOT_FOUND, "dictionary not yet trained").into_response());
     };
 
-    // ZstdDictionary's type invariant guarantees len() <= MAX_DICT_SIZE (112 KiB) —
+    // TrainedDictionary's type invariant guarantees len() <= 112 KiB —
     // no additional size check is needed here.
     //
     // Bytes::copy_from_slice performs a ~64 KiB memcpy per request (low frequency,
@@ -84,7 +84,7 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{
-        compression::zstd::{MAX_DICT_SIZE, N_TRAIN, ZstdDictCompressor, ZstdDictionary},
+        compression::zstd::{MAX_DICT_SIZE, N_TRAIN, ZstdDictCompressor},
         domain::ports::dictionary_store::{DictionaryFuture, DictionaryStore, NoopDictionaryStore},
         domain::{
             aggregates::StreamSession,
@@ -95,7 +95,7 @@ mod tests {
                 SessionQueryCriteria, SessionQueryResult, StreamFilter, StreamRepositoryGat,
                 StreamStatistics, StreamStatus, StreamStoreGat,
             },
-            value_objects::StreamId,
+            value_objects::{StreamId, TrainedDictionary},
         },
         infrastructure::{http::axum_adapter::PjsAppState, repositories::InMemoryDictionaryStore},
         security::CompressionBombDetector,
@@ -306,8 +306,8 @@ mod tests {
             async move {
                 let all: Vec<_> = self.0.lock().values().cloned().collect();
                 let total = all.len();
-                let page: Vec<_> = all.into_iter().skip(p.offset).take(p.limit).collect();
-                let has_more = p.offset + page.len() < total;
+                let page: Vec<_> = all.into_iter().skip(p.offset()).take(p.limit()).collect();
+                let has_more = p.offset() + page.len() < total;
                 Ok(SessionQueryResult {
                     sessions: page,
                     total_count: total,
@@ -440,10 +440,10 @@ mod tests {
         fn get_dictionary<'a>(
             &'a self,
             _: SessionId,
-        ) -> DictionaryFuture<'a, Option<Arc<ZstdDictionary>>> {
+        ) -> DictionaryFuture<'a, Option<Arc<TrainedDictionary>>> {
             Box::pin(async {
-                Err(crate::Error::other(
-                    "SENTINEL: /var/lib/pjs/secrets.db unreachable",
+                Err(crate::domain::DomainError::Logic(
+                    "SENTINEL: /var/lib/pjs/secrets.db unreachable".to_string(),
                 ))
             })
         }

@@ -23,43 +23,18 @@ mod entry_validation_tests {
 
     #[test]
     fn test_pagination_validation_rejects_zero_limit() {
-        let pagination = SessionPagination {
-            offset: 0,
-            limit: 0,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-
-        let result = pagination.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, DomainError::InvalidInput(_)));
+        let result = SessionPagination::new(0, 0);
+        assert!(matches!(result, Err(DomainError::InvalidInput(_))));
     }
 
     #[test]
     fn test_pagination_validation_rejects_excessive_limit() {
-        let pagination = SessionPagination {
-            offset: 0,
-            limit: MAX_PAGINATION_LIMIT + 1,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-
-        let result = pagination.validate();
-        assert!(result.is_err());
+        assert!(SessionPagination::new(0, MAX_PAGINATION_LIMIT + 1).is_err());
     }
 
     #[test]
     fn test_pagination_validation_rejects_excessive_offset() {
-        let pagination = SessionPagination {
-            offset: MAX_PAGINATION_OFFSET + 1,
-            limit: 10,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-
-        let result = pagination.validate();
-        assert!(result.is_err());
+        assert!(SessionPagination::new(MAX_PAGINATION_OFFSET + 1, 10).is_err());
     }
 
     #[test]
@@ -73,42 +48,29 @@ mod entry_validation_tests {
             SessionSortField::StreamCount,
             SessionSortField::TotalBytes,
         ] {
-            let pagination = SessionPagination {
-                offset: 0,
-                limit: 10,
-                sort_by: Some(field),
-                sort_order: SortOrder::Ascending,
-            };
+            let pagination = SessionPagination::new(0, 10)
+                .unwrap()
+                .with_sort(field, SortOrder::Ascending);
 
-            assert!(
-                pagination.validate().is_ok(),
-                "field '{:?}' should be allowed",
-                field
-            );
+            assert_eq!(pagination.sort_by(), Some(&field));
         }
     }
 
     #[test]
     fn test_criteria_validation_rejects_invalid_range() {
-        let criteria = SessionQueryCriteria {
-            min_stream_count: Some(100),
-            max_stream_count: Some(10), // Invalid: min > max
-            ..Default::default()
-        };
-
-        let result = criteria.validate();
-        assert!(result.is_err());
+        let result = SessionQueryCriteria::builder()
+            .min_stream_count(100)
+            .max_stream_count(10) // Invalid: min > max
+            .build();
+        assert!(matches!(result, Err(DomainError::InvalidInput(_))));
     }
 
     #[test]
     fn test_criteria_validation_rejects_empty_states() {
-        let criteria = SessionQueryCriteria {
-            states: Some(vec![]), // Invalid: empty vec
-            ..Default::default()
-        };
-
-        let result = criteria.validate();
-        assert!(result.is_err());
+        let result = SessionQueryCriteria::builder()
+            .states(vec![]) // Invalid: empty vec
+            .build();
+        assert!(matches!(result, Err(DomainError::InvalidInput(_))));
     }
 }
 
@@ -234,22 +196,14 @@ mod end_to_end_security_tests {
         }
 
         // Step 2: Simulate user pagination input - should pass validation
-        let user_pagination = SessionPagination {
-            offset: 0,
-            limit: 50, // Within limits, larger than dataset
-            sort_by: Some(SessionSortField::CreatedAt),
-            sort_order: SortOrder::Descending,
-        };
-
-        assert!(
-            user_pagination.validate().is_ok(),
-            "valid pagination should pass"
-        );
+        let user_pagination = SessionPagination::new(0, 50) // Within limits, larger than dataset
+            .expect("valid pagination should pass")
+            .with_sort(SessionSortField::CreatedAt, SortOrder::Descending);
 
         // Step 3: Execute bounded query
         let (results, limit_reached) = store.filter_limited(
             |v| v.contains("item_"),
-            user_pagination.limit,
+            user_pagination.limit(),
             MAX_SCAN_LIMIT,
         );
 
@@ -257,7 +211,7 @@ mod end_to_end_security_tests {
         let query_result = SessionQueryResult {
             sessions: vec![],
             total_count: results.len(),
-            has_more: results.len() == user_pagination.limit,
+            has_more: results.len() == user_pagination.limit(),
             query_duration_ms: 10,
             scan_limit_reached: limit_reached,
         };
@@ -278,18 +232,11 @@ mod end_to_end_security_tests {
         }
 
         // Request only 50 items
-        let user_pagination = SessionPagination {
-            offset: 0,
-            limit: 50,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-
-        assert!(user_pagination.validate().is_ok());
+        let user_pagination = SessionPagination::new(0, 50).unwrap();
 
         let (results, limit_reached) = store.filter_limited(
             |v| v.contains("item_"),
-            user_pagination.limit,
+            user_pagination.limit(),
             MAX_SCAN_LIMIT,
         );
 
@@ -307,14 +254,7 @@ mod end_to_end_security_tests {
         // "created_at; DELETE FROM sessions--" cannot be constructed at all.
 
         // Attempt resource exhaustion via huge offset
-        let dos_pagination = SessionPagination {
-            offset: usize::MAX / 2,
-            limit: 10,
-            sort_by: None,
-            sort_order: SortOrder::Ascending,
-        };
-
-        let result = dos_pagination.validate();
+        let result = SessionPagination::new(usize::MAX / 2, 10);
         assert!(result.is_err(), "DoS attempt should be rejected");
     }
 

@@ -10,6 +10,7 @@ mod json_data;
 mod json_path;
 mod priority;
 mod schema;
+mod trained_dictionary;
 
 pub use backpressure::BackpressureSignal;
 pub use depth_guard::{DepthGuard, enter_deserialize_depth};
@@ -18,3 +19,4 @@ pub use json_data::{JsonData, MAX_DESERIALIZE_DEPTH};
 pub use json_path::{JsonPath, PathSegment};
 pub use priority::Priority;
 pub use schema::{Schema, SchemaId, SchemaType, SchemaValidationError, SchemaValidationResult};
+pub use trained_dictionary::{MAX_TRAINED_DICTIONARY_BYTES, TrainedDictionary};

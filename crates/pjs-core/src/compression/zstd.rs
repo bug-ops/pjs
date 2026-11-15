@@ -14,6 +14,7 @@
 //! not `wasm32`.
 
 use crate::{Error, Result};
+use pjson_rs_domain::value_objects::{MAX_TRAINED_DICTIONARY_BYTES, TrainedDictionary};
 
 /// Maximum permitted dictionary size in bytes (112 KiB).
 ///
@@ -22,7 +23,7 @@ use crate::{Error, Result};
 /// can produce dictionaries up to 2 GiB, but large dicts inflate RSS on every
 /// session and slow context initialisation. 112 KiB covers the sweet spot for
 /// JSON-like payloads.
-pub const MAX_DICT_SIZE: usize = 112 * 1024;
+pub const MAX_DICT_SIZE: usize = MAX_TRAINED_DICTIONARY_BYTES;
 
 /// Number of training samples required before [`ZstdDictCompressor::train`] is
 /// called.  Libzstd requires at least 8 samples; `N_TRAIN` is set to 32 so
@@ -150,6 +151,25 @@ impl ZstdDictionary {
     /// Clippy's `len_without_is_empty` requirement.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl TryFrom<&TrainedDictionary> for ZstdDictionary {
+    type Error = Error;
+
+    /// Validates the zstd magic header on top of the size bounds already
+    /// guaranteed by [`TrainedDictionary`].
+    fn try_from(dictionary: &TrainedDictionary) -> Result<Self> {
+        Self::new_checked(dictionary.as_bytes().to_vec())
+    }
+}
+
+impl From<ZstdDictionary> for TrainedDictionary {
+    fn from(dictionary: ZstdDictionary) -> Self {
+        // Cannot fail: `ZstdDictionary` guarantees 1..=MAX_DICT_SIZE bytes, the same bound
+        // as `TrainedDictionary`.
+        Self::from_bytes(dictionary.0)
+            .expect("ZstdDictionary upholds the TrainedDictionary size invariant")
     }
 }
 
