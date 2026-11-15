@@ -50,7 +50,7 @@ Part of [[MOC-specs]]. Rules in [[constitution]]. Plan: [[040-buffer-pool-aligne
 
 ### FR-040-001 Aligned allocation primitive
 
-`AlignedAllocator::alloc_aligned(size, alignment)` shall return `DomainError::InvalidInput` when `alignment` is not a power of two or the `Layout` is invalid, and `DomainError::ResourceExhausted` when the allocator returns null. `realloc_aligned` and `dealloc_aligned` are `unsafe fn` and require the pointer and layout from `alloc_aligned`.
+`AlignedAllocator::alloc_aligned(size, alignment)` shall return `DomainError::InvalidInput` when `size` is zero, `alignment` is not a power of two or the `Layout` is invalid, and `DomainError::ResourceExhausted` when the allocator returns null. `realloc_aligned` and `dealloc_aligned` are `unsafe fn` and require the pointer and layout from `alloc_aligned`.
 Code: `parser/aligned_alloc.rs`. Tests: `tests/parser_allocator_comprehensive.rs`, unit tests in the module.
 Status: done.
 
@@ -164,7 +164,6 @@ Status: done.
 - `AlignedBuffer::clone` uses `.expect("Failed to clone buffer")`, a panic path on allocation failure.
 - `BufferLimits::max_pool_size` exists in the security config presets but is not read by `BufferPool`.
 - `PooledBuffer::buffer()`/`buffer_mut()` return `Option` although the inner value is always `Some` until drop.
-- `alloc_aligned` is a safe-to-reason-about `unsafe fn` but does not reject `size == 0`, and `std::alloc::alloc` with a zero-size layout is undefined behaviour; only `AlignedBuffer::new` guarantees a non-zero size today.
 - A dropped buffer is pooled without checking `max_total_memory` or its TTL; only `cleanup()` removes stale buffers, and nothing calls it.
 - `AlignedBuffer::new` allocates uninitialised memory; `len` starts at 0 so reads are bounded, but `as_mut_capacity_slice` is the only safe way to write into the spare capacity.
 - No production caller: usage is limited to `examples/zero_copy_demo.rs` and `tests/zero_copy_integration_test.rs`; no benchmark covers the pool.

@@ -161,7 +161,6 @@ All errors are `pjson_rs::domain::DomainError` (re-export of `pjson_rs_domain::D
 
 - `IncrementalParser::parse_available` is a stub that never yields values, and `has_complete_value` is a non-empty check. It is public API but cannot be used for streaming; test `test_incremental_parsing` only exercises `feed`. Decide: implement, or remove.
 - The `PhantomData<&'a ()>` field in `ZeroCopyParser` and `IncrementalParser` is redundant for `ZeroCopyParser` (it already holds `&'a [u8]`) and unused for `IncrementalParser` (its lifetime parameter is not tied to anything).
-- `ZeroCopyParser` does not enforce `max_array_length`, `max_object_keys` or `max_string_length` from `JsonLimits`.
 - `parse_lazy` ignores trailing garbage after the first value; callers must check `is_complete()`/`remaining()`. Not documented on the trait.
 - `parse_string` does not validate UTF-8 or reject raw control characters (< 0x20) inside strings, so it accepts text that RFC 8259 forbids. `NumberSlice` for `01` splits as noted above.
 - `LazyJsonValue` is not `#[non_exhaustive]` while most other public enums in the workspace are.

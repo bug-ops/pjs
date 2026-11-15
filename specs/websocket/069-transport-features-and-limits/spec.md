@@ -54,9 +54,9 @@ verified: 2026-11-15
 
 | Feature | Enables | Notes |
 |---|---|---|
-| `http-server` (default) | `infrastructure::http` (router, handlers, middleware, `auth`, `serve`, `streaming`, `axum_extension`), `infrastructure::websocket` module, deps `axum` (with `ws`), `tower`, `tower-http`, `hyper`, `hyper-util`, `subtle`, `hmac`, `sha2`, `getrandom`, `headers-accept`, `mediatype`, `async-stream` | |
-| `websocket-server` (default) | `http-server` | Re-exports `SecureWebSocketHandler` at crate root; test target `websocket_security` |
-| `websocket-client` (default) | `tokio-tungstenite`, `url`; `websocket::client` | Needs `http-server` in practice (#598); wire test target requires `http-server` + `websocket-client` |
+| `http-server` (default) | `infrastructure::http` (router, handlers, middleware, `auth`, `serve`, `streaming`, `axum_extension`), deps `axum` (with `ws`), `tokio-util`, `tower`, `tower-http`, `hyper`, `hyper-util`, `subtle`, `hmac`, `sha2`, `getrandom`, `headers-accept`, `mediatype`, `async-stream` | |
+| `websocket-server` (default) | `http-server` | Gates `infrastructure::websocket` server module and `SecureWebSocketHandler` (re-exported at crate root); test target `websocket_security` (#598) |
+| `websocket-client` (default) | `tokio-tungstenite`, `url`; `websocket::client` | Builds on its own (#598); wire test target requires `websocket-server` + `websocket-client` |
 | `http-auth-jwt` | `http-server` + `jsonwebtoken`; `JwtAuthLayer`, `JwtConfig` | Not accepted by router constructors |
 | `metrics` | `http-server` + `metrics` + `metrics-exporter-prometheus`; `/metrics` route; `pjs_frames_total` | Sets `feature(once_cell_try)` |
 | `compression` (default) | dictionary route `GET /pjs/sessions/{id}/dictionary` (not wasm32) | zstd dictionary training |
@@ -71,7 +71,7 @@ verified: 2026-11-15
 | Response body idle | 60 s | `RESPONSE_BODY_IDLE_TIMEOUT` |
 | In-flight handlers | 512 | `MAX_CONCURRENT_REQUESTS` |
 | CORS preflight max-age | 3600 s | `build_cors_layer_from_origins` |
-| Session timeout upper bound | 604 800 s | `MAX_SESSION_TIMEOUT_SECONDS` |
+| Session timeout (1..=upper bound, typed `SessionTimeout`) | 604 800 s | `MAX_SESSION_TIMEOUT_SECONDS` |
 | Frames per request | 1000 | `MAX_FRAMES_PER_REQUEST` |
 | `generate-frames` default frames | 16 | `handlers/streams.rs` |
 | Default session streams / timeout | 10 / 3600 s | `handlers/sessions.rs` |
@@ -84,7 +84,7 @@ verified: 2026-11-15
 
 ### FR-003 Connection limits
 
-See [[062-http-serve-connection-limits/spec|062]]: header timeout 10 s, duration 300 s, 1024 connections, 128 h2 streams, 64 per IP, h2 keep-alive 30 s / 20 s.
+See [[062-http-serve-connection-limits/spec|062]]: header timeout 10 s, duration 300 s, 1024 connections, 128 h2 streams, 64 per IP, h2 keep-alive 30 s / 20 s, header block cap off by default (`max_header_bytes`, minimum 8192). Drain timeout on shutdown: 30 s default, 600 s maximum ([[037-graceful-shutdown-serve-with-limits/spec|037]]).
 
 ### FR-004 WebSocket limits
 
@@ -96,19 +96,20 @@ See [[062-http-serve-connection-limits/spec|062]]: header timeout 10 s, duration
 | Messages per second (+burst) | 30 (+5) default; 100 (+20) `high_traffic`; 5 (+2) `low_resource` | `RateLimitConfig` |
 | Write timeout | 10 s default; 3 s `low_resource` | `RateLimitConfig::write_timeout`, `WRITE_TIMEOUT` |
 | Outgoing queue (server and client) | 1000 messages, 16 MiB | `OUTGOING_QUEUE_CAPACITY`, `MAX_QUEUED_OUTGOING_BYTES`, `MESSAGE_QUEUE_CAPACITY`, `MAX_QUEUED_MESSAGE_BYTES` |
-| Frame broadcast capacity | 1000 events | `AdaptiveStreamController::new` |
+| Live sessions per connection (server) | 64 default; `429` above | `DEFAULT_MAX_SESSIONS_PER_CONNECTION`, `with_max_sessions_per_connection` |
+| Client sessions | 1024 default (`NonZeroUsize`); 16 MiB per session | `WebSocketClientConfig` |
 | Session sweep | every 60 s, max age 3600 s | `SESSION_CLEANUP_INTERVAL`, `SESSION_MAX_AGE` |
 | Adaptive delay | 10 ms fast; 0.5 x avg ack ms if avg > 100 ms; max 1 s | `ClientMetrics`, `MAX_ADAPTIVE_FRAME_DELAY` |
 | Client sessions | 1024; idle TTL 300 s; 16 MiB per session | `WebSocketClientConfig` |
 
 ### FR-005 Re-export surface
 
-`infrastructure` (feature `http-server`) re-exports the HTTP items listed in [[060-http-rest-api/spec|060]] plus `ConnectionLimits`, `serve_with_limits`, `RateLimitConfig`, `RateLimitMiddleware`, `TrustedProxyConfig`, `BatchFrameStream`, `StreamFormat`, `StreamTransportError`, `HttpExtensionConfig`, `PjsExtension`, and WebSocket items `AdaptiveStreamController`, `AxumWebSocketTransport`, `ClientMetrics`, `ConnectionId`, `CreateSessionError`, `SecureWebSocketHandler`, `StreamOptions`, `WebSocketStreamSession`, `WebSocketTransport`, `WsMessage`, `create_websocket_router`; with `websocket-client`: `ClosedSession`, `PjsWebSocketClient`, `SessionIdleTtl`, `StreamStats`.
+`infrastructure` (feature `http-server`) re-exports the HTTP items listed in [[060-http-rest-api/spec|060]] plus `ConnectionLimits`, `HeaderSizeLimit`, `serve_with_limits`, `ShutdownConfig`, `ShutdownSignal`, `DrainTimeout`, `ShutdownOutcome`, `RateLimitConfig`, `RateLimitMiddleware`, `TrustedProxyConfig`, `BatchFrameStream`, `StreamFormat`, `StreamTransportError`, `HttpExtensionConfig`, `PjsExtension`, and WebSocket items `AdaptiveStreamController`, `AxumWebSocketTransport`, `ClientMetrics`, `ConnectionId`, `CreateSessionError`, `SecureWebSocketHandler`, `StreamOptions`, `WebSocketStreamSession`, `WebSocketTransport`, `WsMessage`, `create_websocket_router`; with `websocket-client`: `ClosedSession`, `PjsWebSocketClient`, `SessionIdleTtl`, `StreamStats`.
 
 ## Non-Functional Requirements
 
 - NFR-DOC-001: README feature table must match `Cargo.toml` (currently violated for `http-client`).
-- NFR-TEST-001: `Cargo.toml` test-target entries gate `websocket_security` (`websocket-server`) and `websocket_wire_level` (`http-server` + `websocket-client`).
+- NFR-TEST-001: `Cargo.toml` test-target entries gate `websocket_security` (`websocket-server`) and `websocket_wire_level` (`websocket-server` + `websocket-client`).
 
 ## Data Model
 
@@ -118,7 +119,7 @@ Not applicable; constants and config structs are listed in their owning specs.
 
 | Case | Behaviour |
 |---|---|
-| Build with `websocket-client` only | does not compile (#598) |
+| Build with `websocket-client` only | builds (#598) |
 | Build with `metrics` on stable | fails (`once_cell_try`); project is nightly-only anyway |
 | `jemalloc`/`mimalloc` | unrelated to this layer; mutually exclusive per CLAUDE.md |
 

@@ -30,9 +30,9 @@ verified: 2026-11-15
 
 **Problem.** Tower layers cannot detect a client that never finishes its headers or stops reading the response: hyper stops polling the body when its write buffer fills, so poll-driven timeouts never fire (documented on `RESPONSE_BODY_IDLE_TIMEOUT`, issues #515, #523, #525, #526).
 
-**Goal.** `serve_with_limits(listener, router, ConnectionLimits)` replaces `axum::serve` and owns the accept loop and connection lifetime.
+**Goal.** `serve_with_limits(listener, router, ConnectionLimits, ShutdownConfig)` replaces `axum::serve` and owns the accept loop and connection lifetime.
 
-**Out of scope.** Graceful shutdown (open: [[037-graceful-shutdown-serve-with-limits/spec|037]], issue #590); TLS; request header size cap (open issue #618).
+**Out of scope.** TLS. Graceful shutdown is specified in [[037-graceful-shutdown-serve-with-limits/spec|037]].
 
 Feature gate: `http-server`.
 
@@ -55,10 +55,11 @@ Feature gate: `http-server`.
 | `max_connections: usize` | 1024 | Global connection semaphore, acquired before `accept()` |
 | `max_concurrent_streams: Option<u32>` | `Some(128)` | HTTP/2 stream cap; `None` leaves hyper's default (200) |
 | `max_connections_per_ip: Option<usize>` | `Some(64)` | Accept-level per-source-IP cap; `None` constructs no limiter |
+| `max_header_bytes: Option<HeaderSizeLimit>` | `None` | Request header block cap (minimum 8192, validated at construction): HTTP/1 through hyper's read buffer (`431`), HTTP/2 as the header-list limit; `None` keeps hyper's defaults (#618) |
 
 ### FR-002 Serving behaviour
 
-The function shall: build a hyper-util `auto::Builder` with Tokio timers; set the HTTP/2 keep-alive PING interval 30 s and timeout 20 s (constants); serve each connection on its own task via `serve_connection_with_upgrades` (so WebSocket upgrades work); inject `ConnectInfo<SocketAddr>` with the peer address into each request; run until the process stops (no exit path today).
+The function shall: build a hyper-util `auto::Builder` with Tokio timers; set the HTTP/2 keep-alive PING interval 30 s and timeout 20 s (constants); serve each connection on its own task via `serve_connection_with_upgrades` (so WebSocket upgrades work); inject `ConnectInfo<SocketAddr>` with the peer address into each request; stop accepting when the `ShutdownSignal` fires, drain tracked connections for at most the `DrainTimeout` and return a `ShutdownOutcome` ([[037-graceful-shutdown-serve-with-limits/spec|037]]); a never-triggered signal (the `ShutdownConfig` default) runs until the process stops.
 
 ### FR-003 Accept loop
 
@@ -111,8 +112,7 @@ When `max_connection_duration` is `Some`, the connection future shall be cancell
 
 ## Open Questions
 
-- No graceful shutdown or cancellation token: the function returns only if the semaphore closes (never) ([[037-graceful-shutdown-serve-with-limits/spec|037]], #590).
-- Residual: single-byte-preface stall and `permit` acquired before the per-IP check (documented in code); no explicit request header size cap (#618).
+- Residual: single-byte-preface stall and `permit` acquired before the per-IP check (documented in code).
 - `ConnectionLimits` is not part of `config::` validation (`PjsConfig`); values are code-only [NEEDS CLARIFICATION: confirm no config-file binding].
 - The doc names `/pjs/ws/{session_id}` as the crate's upgrade route, but `create_websocket_router` mounts `/ws`; see [[066-websocket-server-transport/spec|066]].
 

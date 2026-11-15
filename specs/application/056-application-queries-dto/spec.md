@@ -65,7 +65,7 @@ Code: `application/queries/mod.rs`.
 `GetSessionQuery`, `GetSessionHealthQuery`, `GetSessionStatsQuery` shall call `find_session` and return `ApplicationError::NotFound("Session {id} not found")` when absent. Stats response carries `SessionStats`, stream count, active stream count, timestamps and `duration_ms`. Health response is `StreamSession::health_check()`.
 
 ### FR-004 GetActiveSessions
-The handler shall use `limit = query.limit.unwrap_or(100).min(100)`, `offset = query.offset.unwrap_or(0)`, `SessionQueryCriteria::default()` and ascending unsorted `SessionPagination`, and call `find_sessions_by_criteria`. A `limit` of 0 or an `offset` above `MAX_PAGINATION_OFFSET` is rejected by `Pagination::validate` and surfaces as `ApplicationError::Domain(InvalidInput)`.
+The handler shall use `limit = query.limit.unwrap_or(100).min(100)`, `offset = query.offset.unwrap_or(0)`, `SessionQueryCriteria::default()` and ascending unsorted `SessionPagination`, and call `find_sessions_by_criteria`. A `limit` of 0 or an `offset` above `MAX_PAGINATION_OFFSET` is rejected by `Pagination::new` and surfaces as `ApplicationError::Domain(InvalidInput)`.
 Status: done with drift. With default criteria the in-memory adapter matches sessions of **every** state and does not exclude expired ones, although the query is named "active".
 
 ### FR-005 SearchSessions

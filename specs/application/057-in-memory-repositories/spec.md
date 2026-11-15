@@ -69,7 +69,7 @@ Code: `generic_store.rs`. Iteration is weakly consistent and in arbitrary order.
 Code: `atomic_session_update`, `StreamRepositoryGat` impl.
 
 ### FR-005 Active and criteria queries
-`find_active_sessions` shall return `filter_limited(is_active, MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT)`. `find_sessions_by_criteria(criteria, pagination)` shall (1) call `criteria.validate()` and `pagination.validate()`, (2) `filter_limited` with `matches_criteria`, (3) set `total_count = filtered.len()` (after caps), (4) sort by `SessionSortField` if given (`CreatedAt`, `UpdatedAt`, `StreamCount`, `TotalBytes`; ascending or descending), (5) `skip(offset).take(limit)`, (6) `has_more = offset + page_len < total_count`, and return `SessionQueryResult` with `query_duration_ms` and `scan_limit_reached`.
+`find_active_sessions` shall return `filter_limited(is_active, MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT)`. `find_sessions_by_criteria(criteria, pagination)` shall (1) take `criteria` and `pagination`, which are valid by construction, (2) `filter_limited` with `matches_criteria`, (3) set `total_count = filtered.len()` (after caps), (4) sort by `SessionSortField` if given (`CreatedAt`, `UpdatedAt`, `StreamCount`, `TotalBytes`; ascending or descending), (5) `skip(offset).take(limit)`, (6) `has_more = offset + page_len < total_count`, and return `SessionQueryResult` with `query_duration_ms` and `scan_limit_reached`.
 `matches_criteria` shall AND these: `states` (ASCII case-insensitive compare with `SessionState::as_str`), `exclude_expired`, `created_after`/`created_before` (inclusive), `has_active_streams`, `min/max_stream_count`, `client_info_pattern` (case-insensitive substring; sessions without client info never match).
 
 ### FR-005a Ordering without sort
@@ -80,7 +80,7 @@ Without `sort_by` the order is the DashMap iteration order, which is not stable 
 
 ### FR-007 Stream store
 `GatInMemoryStreamStore` shall implement `StreamStoreGat` over `StreamStore`: `store_stream`, `get_stream`, `delete_stream` (no error if absent), `list_streams_for_session` and `find_streams_by_session` through `filter_limited` with the same caps, `update_stream_status`, `get_stream_statistics`.
-- `find_streams_by_session` shall match on session id, status (`Created`=`Preparing`, `Active`=`Streaming`, `Completed`, `Failed`, `Cancelled`), `created_after`, `has_frames`; `min_priority`/`max_priority` are ignored.
+- `find_streams_by_session` shall match on session id, status (`Created`=`Preparing`, `Active`=`Streaming`, `Completed`, `Failed`, `Cancelled`), `created_after`, `has_frames`. `StreamFilter` has no priority bounds (#604).
 - `update_stream_status` shall call `start_streaming` (`Active`), `complete`, `fail("Status update to Failed")`, `cancel`; `Paused` and `Created` return `InvalidStateTransition`; an unknown id returns `StreamNotFound`.
 - `get_stream_statistics` shall derive a `PriorityDistribution` where only `critical_frames` and `high_frames` are populated (approximate); `medium`, `low`, `background` are 0.
 
@@ -104,8 +104,8 @@ Without `sort_by` the order is the DashMap iteration order, which is not stable 
 | Case | Result |
 |---|---|
 | `*_atomic` on unknown session | `SessionNotFound` |
-| `Pagination.limit` 0 or above 1000 | `InvalidInput` (from `validate`) |
-| criteria with `states = Some([])` | `InvalidInput` |
+| `Pagination::new` with limit 0 or above 1000 | `InvalidInput` |
+| criteria built with `states = Some([])` | `InvalidInput` (from `build`) |
 | more than 10 000 sessions | scan stops, `scan_limit_reached = true`, `total_count` reflects only scanned matches |
 | `get_session_health` unknown id | `SessionNotFound` |
 | `update_stream_status(Paused)` | `InvalidStateTransition` |
@@ -126,7 +126,7 @@ Without `sort_by` the order is the DashMap iteration order, which is not stable 
 - `GatInMemoryStreamRepository::clone` shares `store` but copies `stats_cache` (`DashMap::clone`), so clones can serve stale `total_frames` up to 5 s after the other instance invalidates.
 - `stats_cache` uses wall-clock seconds from `SystemTime`, not the injected `TimeProvider`.
 - `GatInMemoryStreamStore` is constructed by `PjsAppState` but no query handler reads it (`StreamQueryHandler` ignores it); streams live inside `StreamSession`. Two sources of truth would result if it were used.
-- `StreamFilter.min_priority/max_priority` ignored (issue #604); `StreamStatus::Paused` unsupported.
+- `StreamStatus::Paused` unsupported.
 - Priority distribution in `get_stream_statistics` is derived from byte ratios, not counted per frame.
 - `find_sessions_by_criteria` clones up to 10 000 sessions per call, then sorts clones.
 - `InMemoryStore::filter` (unbounded) is `pub` and still available to callers.

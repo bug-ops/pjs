@@ -37,7 +37,7 @@ verified: 2026-11-15
 Part of [[MOC-specs]]; see [[constitution]]. Release is in [[079-release-pipeline/spec]].
 
 > [!info] Verification (2026-11-15)
-> Implemented. `.github/workflows/ci.yml` (903 lines), `dependabot-automerge.yml`, `labeler.yml`, `dependabot.yml`, `codecov.yml`, `deny.toml`, `osv-scanner.toml`, `rust-toolchain.toml`, `.cargo/config.toml` read in full. Related history: #180/#383 (JS tests in CI), #327/#344 (wasm native tests), #318 (demo in workspace). Open: #588 (workflow-level write permissions), #615 (per-feature build matrix), #616 (dependabot ignores majors).
+> Implemented. `.github/workflows/ci.yml` (903 lines), `dependabot-automerge.yml`, `labeler.yml`, `dependabot.yml`, `codecov.yml`, `deny.toml`, `osv-scanner.toml`, `rust-toolchain.toml`, `.cargo/config.toml` read in full. Related history: #180/#383 (JS tests in CI), #327/#344 (wasm native tests), #318 (demo in workspace). Since then: #588 (least-privilege permissions), #615 (per-feature matrix), #608 (MSRV job), #616 (dependabot proposes majors) and #619 (bench A/B procedure) are done.
 
 ## Overview
 
@@ -89,8 +89,12 @@ Status: done as reporting; there is no enforced gate.
 Job `security-osv` (pull_request, merge_group, schedule) shall run `google/osv-scanner-action` honouring `osv-scanner.toml` (three ignored advisories, each with a stated reason) and `fuzz/osv-scanner.toml`. Job `security-deny` shall run `cargo deny check` on the root and `check advisories bans sources` on `fuzz/Cargo.toml`. `deny.toml`: `yanked = "deny"`, allowed licenses MIT, Apache-2.0 (+LLVM-exception), BSD-2/3-Clause, ISC, Unicode-3.0, 0BSD, Zlib; `ring` license clarified; `multiple-versions = "warn"`; `unknown-registry`/`unknown-git = "warn"`; registry limited to crates.io.
 Status: done.
 
+### FR-015 Feature matrix and MSRV
+Job `feature-matrix` (nightly, `cargo-hack`) shall run `cargo hack check -p pjson-rs -p pjson-rs-domain --each-feature --no-dev-deps --keep-going`, so every feature compiles on its own and one run reports every broken combination (#615). Job `msrv` shall run `cargo +1.89 check -p pjson-rs-domain -p pjs-wasm --locked`; `rust-version` (1.89) is set only on crates that build on stable (`pjson-rs-domain`, `pjs-wasm`), and `pjson-rs` carries none (#608).
+Status: done.
+
 ### FR-011 Required-status aggregator
-Job `ci-success` (`if: always()`) shall fail when any of quality, fuzz, build, test, doctest, docs, wasm-native-tests, coverage, wasm-build, wasm-bundle-size, wasm-node-example, wasm-types-drift, wasm-package-validation, security-osv, security-deny, js-client-test finished `failure` or `cancelled`; skipped counts as pass. `fuzz-explore` is not part of it.
+Job `ci-success` (`if: always()`) shall fail when any of quality, feature-matrix, msrv, fuzz, build, test, doctest, docs, wasm-native-tests, coverage, wasm-build, wasm-bundle-size, wasm-node-example, wasm-types-drift, wasm-package-validation, security-osv, security-deny, js-client-test finished `failure` or `cancelled`; skipped counts as pass. `fuzz-explore` is not part of it.
 Status: done.
 
 ### FR-012 Toolchain and compile flags
@@ -102,18 +106,19 @@ All actions shall be pinned to full commit SHAs with a trailing version comment 
 Status: done.
 
 ### FR-014 Dependency automation
-`dependabot.yml` shall schedule weekly (Monday 09:00 GMT) updates for cargo (`/`), cargo (`/fuzz`) and github-actions, grouping minor and patch updates, ignoring semver-major, commit prefix `chore` (cargo) / `ci` (actions), labels `dependencies` + ecosystem. `dependabot-automerge.yml` (pull_request_target, only for `dependabot[bot]`) shall wait for all other checks (`wait-on-check-action`, allowed `success,skipped,neutral`) then `gh pr merge --auto --squash` for patch and minor updates, and label major updates `major-update`. `labeler.yml` applies path labels from `.github/labeler.yml` (core, domain, benchmarks, application, infrastructure, rust, documentation, ci/cd, dependencies, security, performance, testing, wasm, pjs-demo, pjs-js-client).
+`dependabot.yml` shall schedule weekly (Monday 09:00 GMT) updates for cargo (`/`), cargo (`/fuzz`) and github-actions, grouping minor and patch updates, also proposing semver-major updates (#616), commit prefix `chore` (cargo) / `ci` (actions), labels `dependencies` + ecosystem. `dependabot-automerge.yml` (pull_request_target, only when the PR author is `dependabot[bot]`) shall wait for all other checks (`wait-on-check-action`, allowed `success,skipped,neutral`) then `gh pr merge --auto --squash` only when every updated dependency is a patch update or a minor update from a version already >= 1.0.0 (a 0.x minor is breaking), and label other updates `major-update`. `labeler.yml` applies path labels from `.github/labeler.yml` (core, domain, benchmarks, application, infrastructure, rust, documentation, ci/cd, dependencies, security, performance, testing, wasm, pjs-demo, pjs-js-client).
 Status: done.
 
 ## Non-Functional Requirements
 
 - NFR-PERF-001: `quality` 20 min, `build` 45 min, `test` 30 min, `coverage` 30 min, `fuzz` 30 min timeouts.
 - NFR-SEC-001: untrusted-PR safety: `pull_request_target` workflows do not check out PR code (`dependabot-automerge`, `labeler`); `fuzz` jobs use `persist-credentials: false`.
+- NFR-SEC-002: workflow-level `permissions` are `contents: read`; each job that needs more (`pull-requests: write`, `security-events: write`, publish `id-token: write`, release `contents: write`) declares it itself (#588).
 - NFR-REL-001: a path-skipped job must not block merge (`ci-success` logic).
 
 ## Data Model
 
-Job graph: `changes` -> {`quality`, `fuzz`, `build`, `doctest`, `docs`, `wasm-native-tests`, `coverage`, `wasm-build`}; `build`+`quality` -> `test`; `wasm-build` -> {`wasm-bundle-size`, `wasm-node-example`, `wasm-types-drift`, `wasm-package-validation`, `js-client-test`}; independent: `security-osv`, `security-deny`, `fuzz-explore`; all required -> `ci-success`.
+Job graph: `changes` -> {`quality`, `feature-matrix`, `fuzz`, `build`, `doctest`, `docs`, `wasm-native-tests`, `coverage`, `wasm-build`}; `build`+`quality` -> `test`; `wasm-build` -> {`wasm-bundle-size`, `wasm-node-example`, `wasm-types-drift`, `wasm-package-validation`, `js-client-test`}; independent: `msrv`, `security-osv`, `security-deny`, `fuzz-explore`; all required -> `ci-success`.
 
 ## Edge Cases and Errors
 
@@ -139,9 +144,8 @@ Job graph: `changes` -> {`quality`, `fuzz`, `build`, `doctest`, `docs`, `wasm-na
 ## Open Questions
 
 - Root `CLAUDE.md` says "Coverage threshold is enforced in CI"; `codecov.yml` is informational and uploads never fail.
-- No benchmark job (see [[075-bench-suite/spec]]); no per-feature build matrix (#615); `CLAUDE.md` and `.claude/rules` mention a `jemalloc` feature, but no `Cargo.toml` defines it (the matrix covers `system` and `mimalloc`).
-- Workflow-level `permissions` include `pull-requests: write`, `statuses: write`, `security-events: write` for most jobs (#588).
-- Dependabot ignores semver-major (#616) and has no npm ecosystem entry for `crates/pjs-js-client` (so its `package-lock.json` is not auto-updated by this file).
+- No benchmark job (see [[075-bench-suite/spec]]); the quiet-machine A/B procedure is documented in `crates/pjs-bench/README.md` (#619); `CLAUDE.md` and `.claude/rules` mention a `jemalloc` feature, but no `Cargo.toml` defines it (the matrix covers `system` and `mimalloc`).
+- Dependabot has no npm ecosystem entry for `crates/pjs-js-client` (so its `package-lock.json` is not auto-updated by this file).
 - `crates/pjs-js-client/.github/workflows/ci.yml` (Node 18/20/21 matrix) is a nested workflow GitHub never runs.
 - Demo integration tests are not exercised in PR CI ([[077-demo-servers/spec]]); the comment near `coverage` ("zero tests") is stale.
 - `wasm-pack test` (documented in `.claude/rules/branching.md`) is not run in CI.

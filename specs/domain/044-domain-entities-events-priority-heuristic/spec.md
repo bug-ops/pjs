@@ -98,7 +98,7 @@ Status: done. `max_frame_size`, `max_frames_per_batch` and `enable_compression` 
 
 ### FR-044-008 `StreamMap`
 
-`StreamMap` shall index streams by their own id (`insert`, `get`, `get_mut`, `len`, `is_empty`, `iter`, `values`, `drain`); its wire format and decode checks are in [[043-domain-schema-depth-guard-wire-encoding/spec|043]] FR-043-009.
+`StreamMap` shall index streams by their own id (`insert`, `get`, `get_mut`, `len`, `is_empty`, `iter`, `values`, `drain`). `get_mut` returns a `StreamMut` guard that exposes only the state-transition and config methods (`start_streaming`, `complete`, `fail`, `cancel`, `update_config`) so a stream's identity cannot be changed through the map (#573); its wire format and decode checks are in [[043-domain-schema-depth-guard-wire-encoding/spec|043]] FR-043-009.
 Status: done.
 
 ### FR-044-009 Domain events

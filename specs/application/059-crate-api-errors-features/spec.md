@@ -34,7 +34,7 @@ verified: 2026-11-15
 # Spec 059: Crate Public API Surface, `pjson_rs::Error` and Feature-Flag Matrix
 
 > [!info] Verification (2026-11-15)
-> **State: partial.** The API surface and feature set exist and build with default and `--all-features`. Known defects: `websocket-client` does not compile alone (#598), `Error` is stringly typed (#599), no per-feature CI matrix (#615), `rust-version` 1.89 is not enforceable on a nightly-only crate (#608). `CLAUDE.md` still lists a removed `jemalloc` feature.
+> **State: partial.** The API surface and feature set exist and build with default and `--all-features`. Known defects: `Error` is stringly typed (#599), no per-feature CI matrix (#615), `rust-version` 1.89 is not enforceable on a nightly-only crate (#608). `CLAUDE.md` still lists a removed `jemalloc` feature.
 
 ## 1. Overview
 
@@ -64,7 +64,7 @@ The crate shall enable `#![feature(impl_trait_in_assoc_type)]` (nightly, require
 
 ### FR-003 Root re-exports
 The crate root shall re-export: domain types (`DomainError`, `DomainEvent`, `DomainResult`, `Frame as DomainFrame`, `JsonPath`, `PathSegment`, `Priority`, `SessionId`, `Stream`, `StreamId`, `StreamSession`, `JsonData`, `Schema`, `SchemaId`, `SchemaType`, `SchemaValidationError`, `SchemaValidationResult`); ports (`EventPublisherGat`, `FrameSinkGat`, `FrameSinkGatExt`, `FrameSourceGat`, `StreamRepositoryGat`, `StreamStoreGat`); services (`GatOrchestratorFactory`, `GatStreamingOrchestrator`, `HealthStatus`, `OrchestratorConfig`, `ValidationService`); `PriorityDistribution`, `PriorityPercentages`; application (`ApplicationError`, `ApplicationResult`, modules `commands` and `queries`, schema DTOs); config (`ConfigError`, `ParserConfig`, `PjsConfig`, `SecurityConfig`, `SimdConfig`, `StreamingConfig`, `Validate`, `Validated`, `ValidatedCompressionConfig`, `ValidatedSecurityConfig`, limit structs); compression, parser (`LazyParser`, `ZeroCopyParser`), security and stream types; `Error`, `Result`; `SchemaRepository`; `global_allocator_name`; hidden `__pastey`.
-`SecureWebSocketHandler` is re-exported when `websocket-client` or `websocket-server` is enabled.
+`SecureWebSocketHandler` is re-exported when `websocket-server` is enabled.
 Code: `lib.rs`.
 
 ### FR-004 Prelude
@@ -89,14 +89,14 @@ Three error types coexist: `DomainError` (`pjs-domain`, `#[non_exhaustive]`), `A
 | `simd-auto` | none (marker) | `build.rs` emits `cfg(pjs_simd)`; no code reads `pjs_simd` since #486/#488; sonic-rs dispatches at runtime |
 | `simd-avx512` | `sonic-rs/avx512` | needs `-C target-cpu=native` or `+avx512f`, `build.rs` warns otherwise ([[003-sonic-rs-avx512-feature/spec|003]]) |
 | `mimalloc` | `dep:mimalloc` | registers `#[global_allocator]` on non-wasm; `global_allocator_name()` returns `"mimalloc"` or `"system"` |
-| `compression` | `brotli`, `flate2`, `zstd` | gates `ZstdDictionary`, `DictionaryStore` methods, `InMemoryDictionaryStore` |
+| `compression` | `brotli`, `flate2`, `zstd` | gates `ZstdDictionary` and `InMemoryDictionaryStore`; the `DictionaryStore` port is not gated (#605) |
 | `partial-parse` | `jiter` | gates `JiterPartialParser` and a `SecurityConfig` field |
 | `schema-validation` | `regex` | enables `pattern` in `ValidationService` |
-| `http-server` | `axum`, `tower`, `tower-http`, `subtle`, `hmac`, `sha2`, `getrandom`, `headers-accept`, `mediatype`, `hyper`, `hyper-util`, `async-stream` | gates `infrastructure::http` and `infrastructure::websocket` |
+| `http-server` | `axum`, `tower`, `tower-http`, `subtle`, `hmac`, `sha2`, `getrandom`, `headers-accept`, `mediatype`, `hyper`, `hyper-util`, `async-stream`, `tokio-util` | gates `infrastructure::http` (including `ShutdownSignal`) |
 | `http-auth-jwt` | `http-server`, `jsonwebtoken` | `JwtAuthLayer` |
 | `metrics` | `http-server`, `metrics`, `metrics-exporter-prometheus` | also enables `once_cell_try` feature gate; `pjs_frames_total` counter ([[009-realtime-metrics-observability/spec|009]]) |
-| `websocket-server` | `http-server` | |
-| `websocket-client` | `tokio-tungstenite`, `url` | module gated on `http-server`; does not build alone (#598) |
+| `websocket-server` | `http-server` | gates the server module and `SecureWebSocketHandler` (#598) |
+| `websocket-client` | `tokio-tungstenite`, `url` | builds on its own (#598) |
 
 The `jemalloc` feature was removed (CHANGELOG, #160; README says v0.6.0); `CLAUDE.md` still lists it.
 
@@ -118,7 +118,7 @@ The package shall be published (`publish = true`) with `exclude = ["/target", "/
 
 | Case | Result |
 |---|---|
-| `--no-default-features --features websocket-client` | compile error E0432 at `lib.rs` (#598) |
+| `--no-default-features --features websocket-client` | builds (#598); the CI feature matrix checks each feature (#615) |
 | `mimalloc` enabled in a binary with another `#[global_allocator]` | link-time conflict (documented in `global_alloc.rs`) |
 | `simd-avx512` without AVX-512 target features | build warning, scalar fallback |
 | `Error::Io`, `Error::Serialization` | cause chain lost |
@@ -137,7 +137,6 @@ The package shall be published (`publish = true`) with `exclude = ["/target", "/
 - `Error` is stringly typed, `Clone`, not `#[non_exhaustive]`, no `#[source]` (issue #599).
 - `Error::SessionLimitReached` uses `NonZeroUsize`, the only typed payload; other variants could follow.
 - `simd-auto` is effectively a no-op marker (`pjs_simd` has no readers). [NEEDS CLARIFICATION: keep as compatibility flag or remove.]
-- `websocket-client` feature is mis-gated (#598); no `cargo hack --each-feature` job (#615).
 - `rust-version = "1.89"` is unenforceable with nightly-only features (#608).
 - Unused dependencies `bitflags`, `maplit` (#607).
 - `PjsConfig` is exported at the root while `Validate` coverage is incomplete (see [[018-config-validation-startup/spec|018]], issue #614).

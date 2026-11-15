@@ -53,7 +53,7 @@ sequenceDiagram
 
 | Function | Precondition | Postcondition | Undefined / notes |
 |---|---|---|---|
-| `serve_with_limits(listener, router, limits)` | bound listener; Tokio runtime; router state already supplied (`Router<()>`) | serves until process end | Returns `io::Result` but has no normal exit; per-connection errors never propagate |
+| `serve_with_limits(listener, router, limits, shutdown)` | bound listener; Tokio runtime; router state already supplied (`Router<()>`) | returns `ShutdownOutcome` after the signal fires and the drain ends; never returns with a never-triggered signal | per-connection errors never propagate |
 | `accept_rate_limit_key(ip)` | any IP | key per FR-004 | Pure |
 | `ConnectionLimits::default()` | none | values in FR-001 | `#[non_exhaustive]`: construct via default then mutate fields |
 

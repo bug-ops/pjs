@@ -50,8 +50,8 @@ flowchart LR
 | `create_stream_patch_frames_atomic` | stream `Streaming` | at most `max_frames` frames, stats and `FramesBatched` event committed | extraction runs on a snapshot; commit re-checks state |
 | `batch_generate_frames_atomic` | session active | frames across `Streaming` streams in descending priority, at most `max_frames` | a stream leaving `Streaming` between extract and commit is skipped |
 | `FrameStoreGat::get_frames` | none | frames ascending by sequence; `total_matching` is count before `limit` | `limit = None` is unbounded for the port (handler caps it) |
-| `Pagination::validate` | none | `Ok` iff limit in 1..=1000, offset <= 1_000_000 | `sort_by`/`sort_order` unchecked by design |
-| `DictionaryStore::train_if_ready` | feature `compression`, not wasm | corpus grows, trains once at `N_TRAIN` samples | best-effort: oversized or over-budget samples are skipped |
+| `Pagination::new` | none | `Ok` iff limit in 1..=1000, offset <= 1_000_000 | `sort_by`/`sort_order` unchecked by design |
+| `DictionaryStore::train_if_ready` | none (not feature-gated) | corpus grows, trains once at `N_TRAIN` samples | best-effort: oversized or over-budget samples are skipped |
 
 ## Testing strategy
 - Unit tests in `gat.rs` (mock `FrameSinkGat`, extension trait), `macros.rs` (generated traits compile), `repositories.rs` (pagination, criteria, filter validation, serde of `SessionSortField`), `limits.rs` (const relations), `writer.rs`.

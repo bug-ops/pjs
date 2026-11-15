@@ -78,8 +78,8 @@ The log shall hold at most `EVENT_LOG_CAPACITY` = 10 000 entries; when exceeded,
 Status: implemented, not wired.
 
 ### FR-007 Dictionary store training
-`InMemoryDictionaryStore::new(Arc<CompressionBombDetector>, target_dict_size)` (feature `compression`, not wasm) shall implement `DictionaryStore`. `train_if_ready(session, sample)` shall: return early if the dictionary exists; under the session's corpus mutex append the sample only if `corpus.len() < N_TRAIN` (32), `sample.len() <= 1 MiB` and the global reservation stays within `TOTAL_CORPUS_BYTE_BUDGET` (128 MiB), otherwise skip it; once 32 samples exist, snapshot the corpus and train once through `OnceCell::get_or_try_init` inside `spawn_blocking` using `ZstdDictCompressor::train(snapshot, target)`; validate the result with `CompressionBombDetector::validate_pre_decompression`; release the byte reservation through a drop guard (also on cancellation). `target_dict_size` is clamped to `MAX_DICT_SIZE` (112 KiB). PR #222, #360.
-`get_dictionary(session)` returns `Ok(Some(Arc<ZstdDictionary>))` after training, else `Ok(None)`, and refreshes `last_access`.
+`InMemoryDictionaryStore::new(Arc<CompressionBombDetector>, target_dict_size)` (adapter: feature `compression`, not wasm) shall implement `DictionaryStore`. `train_if_ready(session, sample)` shall: return early if the dictionary exists; under the session's corpus mutex append the sample only if `corpus.len() < N_TRAIN` (32), `sample.len() <= 1 MiB` and the global reservation stays within `TOTAL_CORPUS_BYTE_BUDGET` (128 MiB), otherwise skip it; once 32 samples exist, snapshot the corpus and train once through `OnceCell::get_or_try_init` inside `spawn_blocking` using `ZstdDictCompressor::train(snapshot, target)`; validate the result with `CompressionBombDetector::validate_pre_decompression`; release the byte reservation through a drop guard (also on cancellation). `target_dict_size` is clamped to `MAX_DICT_SIZE` (112 KiB). PR #222, #360.
+`get_dictionary(session)` returns `Ok(Some(Arc<TrainedDictionary>))` after training, else `Ok(None)`, and refreshes `last_access`.
 `register(session, dict)` shall validate the dictionary size with the bomb detector (`Error::CompressionError` on rejection) and set it if none exists.
 
 ### FR-008 Dictionary eviction
@@ -119,7 +119,7 @@ Session state shall be evicted after `SESSION_TTL` = 30 min of inactivity by a b
 - `InMemoryMetricsCollector` is unused in production; its `session_metrics`/`stream_metrics` maps and per-stream `processing_times` are unbounded (streams are never removed), counters are matched by `&str` names, and `export_prometheus` is not served by any route. [NEEDS CLARIFICATION: remove, or bound and wire.]
 - `StoredEvent.event_type` is a `String` (should reuse the domain discriminant), `session_id` is always `Some`.
 - Callbacks run inline in `publish`; a panicking or slow callback breaks or stalls publishing; in `publish_batch` they run on rayon worker threads from inside an async task (blocks the executor thread for the batch duration).
-- `DictionaryStore` trait shape is feature-dependent and depends on `crate::Result` (issue #605); the port lacks a remove method (`TODO(#144 follow-up)` in `dictionary_store.rs`).
+- The `DictionaryStore` port is not feature-gated and returns `DomainResult` (#605); it lacks a remove method (`TODO(#144 follow-up)` in `dictionary_store.rs`).
 - `InMemoryDictionaryStore::register` is public but only tests call it (`handlers/dictionary.rs` test); the production path is training only.
 - `max_time_series_entries` is fixed at 1000 with no builder.
 

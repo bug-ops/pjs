@@ -16,7 +16,7 @@ verified: 2026-11-15
 
 ## Architecture
 
-`pjs-wasm` is a `cdylib` + `rlib` (`Cargo.toml` `[lib] crate-type`). It depends on `pjson-rs-domain` (features `std`, `wasm`), `serde_json`, `serde-wasm-bindgen`, `tsify`, `js-sys`, `wasm-bindgen`, and optionally `console_error_panic_hook`. It does not depend on `pjson-rs` (core), keeping `sonic-rs`, tokio and axum out of the WASM binary.
+`pjs-wasm` is a `cdylib` + `rlib` (`Cargo.toml` `[lib] crate-type`). It depends on `pjson-rs-domain` (no features), `serde_json`, `serde-wasm-bindgen`, `tsify`, `js-sys`, `wasm-bindgen`, and optionally `console_error_panic_hook`. It does not depend on `pjson-rs` (core), keeping `sonic-rs`, tokio and axum out of the WASM binary.
 
 ```mermaid
 flowchart LR

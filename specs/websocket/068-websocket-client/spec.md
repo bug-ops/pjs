@@ -26,7 +26,7 @@ verified: 2026-11-15
 # `PjsWebSocketClient`: client sessions, caps and TTL
 
 > [!info] Status
-> `partial`: the client works against the in-tree server with bounded memory, session limit, idle TTL and explicit close. Open defects: #597 (task supervision in `connect`), #598 (feature does not compile standalone), #612 (`connect` blocks for the whole connection lifetime, undocumented).
+> `partial`: the client works against the in-tree server with session limit, idle TTL and explicit close. `connect` is documented as blocking for the connection lifetime, keeps both halves inside its future, reports write failures and can be called again after it returns (#597, #612); `websocket-client` builds on its own (#598). Remaining gap: no reconnect and no server-side session close notification.
 
 ## Overview
 
@@ -36,7 +36,7 @@ verified: 2026-11-15
 
 **Out of scope.** Reconnect, TLS configuration beyond `tokio-tungstenite` defaults, server-side session close notification, `http-client` (no such feature exists, see [[069-transport-features-and-limits/spec|069]]).
 
-Feature gate: `websocket-client` (deps `tokio-tungstenite`, `url`); in practice it requires the `http-server` stack because `websocket/mod.rs` and shared types depend on it (#598).
+Feature gate: `websocket-client` (deps `tokio-tungstenite`, `url`); builds without `http-server` (#598).
 
 ## User Stories
 
@@ -55,14 +55,14 @@ Feature gate: `websocket-client` (deps `tokio-tungstenite`, `url`); in practice 
 | `max_frame_size` | 1 MiB |
 | `max_sessions` (`NonZeroUsize`) | 1024 |
 | `session_idle_ttl` (`SessionIdleTtl`, always positive) | 300 s |
-| `max_session_bytes` | 16 MiB |
+| `max_session_bytes` (`NonZeroUsize`, serialized JSON size) | 16 MiB |
 | write timeout | 10 s (`WRITE_TIMEOUT`), unvalidated |
 
 The message/frame caps equal the server's inbound cap so the client does not sever a connection to the in-tree server, which answers `StreamInit` with the whole request data in one frame. `SessionIdleTtl::new(Duration::ZERO)` returns `ConfigError::MustBePositive`.
 
 ### FR-002 Connect
 
-`connect()` shall open the socket with `connect_async_with_config` using the caps, take the one-shot outgoing receiver (second call fails with `ClientError("Client already connected")`), spawn a send task (bounded `byte_bounded_channel`, 1000 messages / 16 MiB, writes through `send_with_write_timeout`) and a receive task, and return when either ends. It blocks for the connection lifetime (#612). Handshake failure maps to `PjsError::ConnectionFailed`; a transport error (including an oversize message or frame) ends `connect` with an error.
+`connect()` shall open the socket with `connect_async_with_config` using the caps, lease the outgoing receiver (a concurrent second call fails with `ClientError("Client already connected")`), then drive the send loop (bounded `byte_bounded_channel`, 1000 messages / 16 MiB, writes through `send_with_write_timeout`) and the receive loop inside the `connect` future, returning when either ends. It blocks for the connection lifetime, which the rustdoc states; nothing outlives the future, the lease is released on return, and a later `connect` sends messages queued in between (#597, #612). A write failure or timeout is returned as an error. Handshake failure maps to `PjsError::ConnectionFailed`; a transport error (including an oversize message or frame) ends `connect` with an error.
 
 ### FR-003 Request stream
 
@@ -78,7 +78,7 @@ On `StreamFrame` the client shall drop the session if expired; if the session ex
 
 ### FR-006 Completion and error messages
 
-`StreamComplete` marks the session complete (checksum logged, not verified). A server `Error` with a `session_id` removes that session. `Ping` is answered with `Pong` (same timestamp). Completed sessions are frozen: later frames do not refresh them, so they expire after the idle TTL.
+`StreamComplete` marks the session complete. A server `Error` with a `session_id` removes that session. `Ping` is answered with `Pong` (same timestamp). Completed sessions are frozen: later frames do not refresh them, so they expire after the idle TTL.
 
 ### FR-007 Reading and closing
 
@@ -86,7 +86,7 @@ On `StreamFrame` the client shall drop the session if expired; if the session ex
 
 ## Non-Functional Requirements
 
-- NFR-SEC-001: worst-case retained memory is `max_sessions * max_session_bytes` plus 16 MiB of queued outgoing bytes.
+- NFR-SEC-001: retained session data is bounded by `max_sessions * max_session_bytes` (serialized JSON bytes) plus 16 MiB of queued outgoing bytes.
 - NFR-SEC-002: inbound caps enforced by the transport (`WebSocketConfig`).
 - NFR-REL-001: a stalled write ends the send task after `write_timeout`.
 - NFR-TEST-001: 30 unit tests in `client.rs`; wire tests `test_client_max_message_size_cuts_oversize_message`, `..._max_frame_size_cuts_oversize_frame_below_message_cap`, `..._within_caps_message_is_accepted` in `tests/websocket_wire_level.rs`.
@@ -101,7 +101,8 @@ On `StreamFrame` the client shall drop the session if expired; if the session ex
 |---|---|
 | Invalid URL | `InvalidUrl` |
 | Handshake fails | `ConnectionFailed` |
-| Second `connect` | `ClientError("Client already connected")` |
+| Concurrent second `connect` | `ClientError("Client already connected")` |
+| `connect` after the first returned | allowed; queued messages are sent |
 | Session over `max_session_bytes` | session dropped, `ClientError` |
 | All sessions complete at limit | `SessionLimitReached` |
 | Expired session read | treated as unknown |
@@ -120,9 +121,7 @@ On `StreamFrame` the client shall drop the session if expired; if the session ex
 
 ## Open Questions
 
-- #597: `connect` detaches the losing task after `select!`, may report write failures as `Ok`, and cannot reconnect.
-- #598: `websocket-client` alone does not compile; it needs the `http-server` stack.
-- #612: `connect` rustdoc does not say it blocks for the whole connection lifetime.
+- No reconnect: a caller re-invokes `connect` itself.
 - The README describes `http-client` (reqwest) alongside; no such code exists.
 - Frame ordering is not enforced (`frame_id` unused when merging); the "reconstruction" is a shallow key merge, not the JSON Pointer reconstruction in the core `stream` module.
 - `ClientStreamSession.created_at` and `last_activity` use wall-clock `Instant` (not injectable for tests; tests use `close_session_at`).
