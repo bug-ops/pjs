@@ -5,14 +5,18 @@
  */
 
 import { EventEmitter } from 'events';
-import { Frame, PJSClientConfig } from '../types/index.js';
+import { Frame, PJSClientConfig, PJSError, PJSErrorType } from '../types/index.js';
 
 /** Name of the SSE event (and NDJSON marker key) a server sends before closing on shutdown. */
 export const SHUTDOWN_EVENT = 'shutdown';
 
 /** Type guard for the server shutdown marker `{ "event": "shutdown" }`. */
-export function isShutdownMarker(_v: unknown): _v is { event: typeof SHUTDOWN_EVENT } {
-  throw new Error('not implemented');
+export function isShutdownMarker(value: unknown): value is { event: typeof SHUTDOWN_EVENT } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return keys.length === 1 && keys[0] === 'event' && (value as { event: unknown }).event === SHUTDOWN_EVENT;
 }
 
 export interface ConnectResult {
@@ -91,6 +95,23 @@ export abstract class Transport extends EventEmitter {
    * Emit server shutdown event (used by implementations)
    */
   protected emitShutdown(): void {
-    throw new Error('not implemented');
+    // rawListeners keeps once() wrappers, so they unregister themselves as with emit().
+    for (const listener of this.rawListeners(SHUTDOWN_EVENT)) {
+      try {
+        listener.call(this);
+      } catch (error) {
+        // A throwing listener must not abort the shutdown flow for the others.
+        if (this.listenerCount('error') > 0) {
+          this.emitError(new PJSError(
+            PJSErrorType.ServerShutdown,
+            'Shutdown listener threw',
+            undefined,
+            error as Error
+          ));
+        } else if (this.config.debug) {
+          console.error('[PJS] Shutdown listener threw:', error);
+        }
+      }
+    }
   }
 }

@@ -104,16 +104,21 @@ Code: `json-reconstructor.ts` (`UNSAFE_KEYS`, `assertSafeKey`).
 Status: done.
 
 ### FR-011 Transports
-- `HttpTransport`: `POST {base}/pjs/sessions` with `client_info` body to obtain `session_id`; stream via `GET {base}/pjs/stream{endpoint}?session_id&stream_id&...` with `Accept: application/x-ndjson`, line-buffered NDJSON parse, abortable; request timeout via `AbortSignal.timeout(config.timeout)`.
-- `SSETransport`: `connect()` is local only; stream via `EventSource` at `{base}/pjs/stream{endpoint}/sse?...`, handling `message`, `frame` and server `error` events.
+- `HttpTransport`: `POST {base}/pjs/sessions` with `client_info` body to obtain `session_id`; stream via `GET {base}/pjs/stream{endpoint}?session_id&stream_id&...` with `Accept: application/x-ndjson`, line-buffered NDJSON parse, abortable; the terminal line `{"event":"shutdown"}` is a shutdown marker (FR-013), not a frame; request timeout via `AbortSignal.timeout(config.timeout)`.
+- `SSETransport`: `connect()` is local only; stream via `EventSource` at `{base}/pjs/stream{endpoint}/sse?...`, handling `message`, `frame`, server `error` and the named `shutdown` event (FR-013).
 - `WebSocketTransport`: connects to `{base with http->ws}/pjs/ws`, sends `{type:'start_stream', endpoint, session_id, stream_id, query_params, headers}` / `{type:'stop_stream'}`, expects `{type:'frame', frame}` or `{type:'error', error}`; reconnects with exponential backoff (base 1000 ms, up to 5 attempts) on non-1000 close.
-- `Transport` base class: `connect`, `disconnect`, `startStream`, `stopStream`; emits `frame`, `error`, `disconnect`.
+- `Transport` base class: `connect`, `disconnect`, `startStream`, `stopStream`; emits `frame`, `error`, `disconnect`, `shutdown` (`SHUTDOWN_EVENT`).
 Code: `transport/*.ts`.
 Status: done as code; endpoint compatibility with the server is unverified.
 
 ### FR-012 Public exports
 `src/index.ts` shall export `PJSClient`, `FrameProcessor`, `JsonReconstructor`, the transports, `WasmBackend`/`createWasmBackend`, `WasmParser`/`createWasmParser`, all types, `createPJSClient`, `validateFrame`, `parseJsonPath`, `VERSION`, `DEFAULT_CONFIG`, `quickStart`.
 Status: done.
+
+### FR-013 Server shutdown notification
+A stopping server (spec 037 FR-008) ends SSE and NDJSON streams with a marker: SSE `event: shutdown` with data `{"event":"shutdown"}`, NDJSON the terminal line `{"event":"shutdown"}`. `isShutdownMarker(value)` (`transport/base.ts`) accepts exactly an object whose only key is `event` with value `"shutdown"`; any other object (extra keys, other value) is an ordinary frame. A transport shall emit `shutdown` once per stream, never as a frame or an error: `SSETransport` closes the `EventSource` so it cannot auto-reconnect, `HttpTransport` cancels the reader and ignores everything after the marker. `PJSClient` shall emit `PJSEvent.ServerShutdown` (`server_shutdown`) and then `disconnected` with reason `server shutdown`, set the client disconnected, and reject a pending `stream()` that has not settled with `PJSError(PJSErrorType.ServerShutdown)` (`'SERVER_SHUTDOWN'`); an already settled promise is untouched. The client never reconnects on its own.
+Code: `transport/base.ts`, `transport/sse.ts`, `transport/http.ts`, `core/client.ts`.
+Status: done (#644). Tests: `tests/transport/{sse,http,shutdown-marker,client-shutdown}.test.ts`, `tests/core/client-shutdown-rejection.test.ts`.
 
 ## Non-Functional Requirements
 
@@ -124,7 +129,7 @@ Status: done.
 
 ## Data Model
 
-`Priority` enum (Critical 100, High 75, Medium 50, Low 25, Background 10); `FrameType` string enum; `Frame = SkeletonFrame | PatchFrame | CompleteFrame` (`frame_type`, `priority`, optional `stream_id`, `sequence`, `timestamp`, `metadata`); `PatchOperation { path: string; value: any; operation }`; `PJSClientConfig`; `PJSEvent` and `PJSEventData`; `StreamStats`, `ProgressInfo`, `PerformanceMetrics`; `PJSError(type, message, context?, originalError?)` with `PJSErrorType` (9 members); `StreamOptions`.
+`Priority` enum (Critical 100, High 75, Medium 50, Low 25, Background 10); `FrameType` string enum; `Frame = SkeletonFrame | PatchFrame | CompleteFrame` (`frame_type`, `priority`, optional `stream_id`, `sequence`, `timestamp`, `metadata`); `PatchOperation { path: string; value: any; operation }`; `PJSClientConfig`; `PJSEvent` and `PJSEventData`; `StreamStats`, `ProgressInfo`, `PerformanceMetrics`; `PJSError(type, message, context?, originalError?)` with `PJSErrorType` (10 members, including `ServerShutdown`); `StreamOptions`.
 
 ## Edge Cases and Errors
 
@@ -137,6 +142,7 @@ Status: done.
 | NDJSON line unparsable | `ParseError` emitted, stream continues |
 | WebSocket closes with code != 1000 | up to 5 reconnects |
 | No frames within timeout | `TimeoutError` |
+| Server shutdown marker (SSE event or NDJSON line) | `server_shutdown` then `disconnected`; pending `stream()` rejects with `ServerShutdown`; no reconnect |
 
 ## Success Criteria
 

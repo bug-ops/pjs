@@ -118,14 +118,16 @@ describe('PJSClient', () => {
     });
 
     test('should emit error events', (done: () => void) => {
-      client.on(PJSEvent.Error, ({ error, context }) => {
+      const timingOutClient = new PJSClient({ baseUrl: 'http://localhost:3000', timeout: 50 });
+      timingOutClient.on(PJSEvent.Error, ({ error, context }) => {
         expect(error).toBeInstanceOf(PJSError);
-        expect(context).toBeDefined();
+        expect(error.message).toMatch(/timeout/i);
+        expect(context).toBe('stream');
         done();
       });
 
-      // Trigger an error by trying to stream without connection
-      client.stream('/test').catch(() => {
+      // The mocked fetch streams no frames, so the stream times out and emits an error
+      timingOutClient.stream('/test').catch(() => {
         // Expected to fail
       });
     });

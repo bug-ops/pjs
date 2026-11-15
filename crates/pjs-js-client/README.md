@@ -152,7 +152,18 @@ client.on('stream_complete', ({ data, stats, totalTime }) => {
 client.on('progress_update', (progress) => {
   console.log(`Progress: ${progress.completionPercentage}%`);
 });
+
+client.on('server_shutdown', () => {
+  console.log('Server is shutting down; reconnect later');
+});
 ```
+
+A stopping server ends a stream with a shutdown marker: the named SSE event
+`shutdown` (data `{"event":"shutdown"}`) or, for HTTP, the terminal NDJSON line
+`{"event":"shutdown"}`. The client emits `server_shutdown`, then `disconnected`
+with reason `server shutdown`, never reconnects on its own, and rejects a
+pending `stream()` that has not completed with a `PJSError` of type
+`SERVER_SHUTDOWN`.
 
 ## 🌐 Transport Options
 

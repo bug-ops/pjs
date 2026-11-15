@@ -26,7 +26,7 @@ import { JsonReconstructor } from './json-reconstructor.js';
 import { HttpTransport } from '../transport/http.js';
 import { WebSocketTransport } from '../transport/websocket.js';
 import { SSETransport } from '../transport/sse.js';
-import { Transport } from '../transport/base.js';
+import { Transport, SHUTDOWN_EVENT } from '../transport/base.js';
 
 /**
  * Main PJS client class providing high-level API for streaming JSON
@@ -286,6 +286,12 @@ export class PJSClient extends EventEmitter {
       });
     });
 
+    this.transport.on(SHUTDOWN_EVENT, () => {
+      this.isConnected = false;
+      this.emitIsolated(PJSEvent.ServerShutdown, {});
+      this.emitIsolated(PJSEvent.Disconnected, { reason: 'server shutdown' });
+    });
+
     this.transport.on('disconnect', () => {
       this.isConnected = false;
       this.emit(PJSEvent.Disconnected, { reason: 'Transport disconnected' });
@@ -304,6 +310,23 @@ export class PJSClient extends EventEmitter {
         });
       }
     });
+  }
+
+  /** Emits an event; a throwing listener is reported as an `Error` event instead of propagating. */
+  private emitIsolated<K extends keyof PJSEventData>(event: K, data: PJSEventData[K]): void {
+    try {
+      this.emit(event, data);
+    } catch (error) {
+      this.emit(PJSEvent.Error, {
+        error: new PJSError(
+          PJSErrorType.ProtocolError,
+          `Listener for ${event} threw`,
+          { event },
+          error as Error
+        ),
+        context: 'listener'
+      });
+    }
   }
 
   private async processStream<T>(
@@ -332,6 +355,7 @@ export class PJSClient extends EventEmitter {
         settled = true;
         clearTimeout(timeout);
         this.removeListener(PJSEvent.FrameReceived, frameReceivedHandler);
+        this.transport.removeListener(SHUTDOWN_EVENT, shutdownHandler);
         if (error !== undefined) {
           reject(error);
         } else {
@@ -468,7 +492,16 @@ export class PJSClient extends EventEmitter {
         ));
       }, options.timeout || this.config.timeout);
 
+      const shutdownHandler = () => {
+        finish(undefined, new PJSError(
+          PJSErrorType.ServerShutdown,
+          'Server shut down during stream',
+          { endpoint, streamId }
+        ));
+      };
+
       this.on(PJSEvent.FrameReceived, frameReceivedHandler);
+      this.transport.on(SHUTDOWN_EVENT, shutdownHandler);
 
       this.transport.startStream(endpoint, {
         sessionId: this.sessionId!,

@@ -5,7 +5,7 @@
  * and event parsing for frame delivery.
  */
 
-import { Transport, ConnectResult, StreamOptions } from './base.js';
+import { Transport, ConnectResult, StreamOptions, SHUTDOWN_EVENT } from './base.js';
 import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 
 /**
@@ -14,6 +14,7 @@ import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 export class SSETransport extends Transport {
   private eventSource?: EventSource;
   private currentUrl?: string;
+  private shutdownSeen = false;
 
   async connect(): Promise<ConnectResult> {
     // SSE connection is established when starting stream
@@ -61,6 +62,7 @@ export class SSETransport extends Transport {
         });
       }
 
+      this.shutdownSeen = false;
       this.currentUrl = url.toString();
       this.eventSource = new EventSource(this.currentUrl);
       
@@ -114,6 +116,14 @@ export class SSETransport extends Transport {
     // Handle custom frame events
     this.eventSource.addEventListener('frame', (event) => {
       this.handleMessage((event as MessageEvent).data);
+    });
+
+    // Closing the source prevents EventSource from auto-reconnecting to a stopping server.
+    this.eventSource.addEventListener(SHUTDOWN_EVENT, () => {
+      if (this.shutdownSeen) return;
+      this.shutdownSeen = true;
+      this.eventSource?.close();
+      this.emitShutdown();
     });
 
     this.eventSource.addEventListener('error', (event) => {

@@ -5,7 +5,7 @@
  * and Server-Sent Events for frame delivery.
  */
 
-import { Transport, ConnectResult, StreamOptions } from './base.js';
+import { Transport, ConnectResult, StreamOptions, isShutdownMarker } from './base.js';
 import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 
 /**
@@ -190,35 +190,15 @@ export class HttpTransport extends Transport {
         buffer = lines.pop() || ''; // Keep incomplete line in buffer
         
         for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const frame = JSON.parse(line) as Frame;
-              this.emitFrame(frame);
-            } catch (error) {
-              this.emitError(new PJSError(
-                PJSErrorType.ParseError,
-                'Failed to parse frame from HTTP response',
-                { line },
-                error as Error
-              ));
-            }
+          if (line.trim() && this.handleLine(line, 'Failed to parse frame from HTTP response')) {
+            await reader.cancel();
+            return;
           }
         }
       }
       
-      // Process any remaining data in buffer
-      if (buffer.trim()) {
-        try {
-          const frame = JSON.parse(buffer) as Frame;
-          this.emitFrame(frame);
-        } catch (error) {
-          this.emitError(new PJSError(
-            PJSErrorType.ParseError,
-            'Failed to parse final frame from HTTP response',
-            { buffer },
-            error as Error
-          ));
-        }
+      if (buffer.trim() && this.handleLine(buffer, 'Failed to parse final frame from HTTP response')) {
+        await reader.cancel();
       }
       
     } catch (error) {
@@ -232,5 +212,30 @@ export class HttpTransport extends Transport {
     } finally {
       reader.releaseLock();
     }
+  }
+
+  /** Emits the line as a frame or a parse error; returns true when it was the shutdown marker. */
+  private handleLine(line: string, parseErrorMessage: string): boolean {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      this.emitParseError(parseErrorMessage, line, error as Error);
+      return false;
+    }
+    if (isShutdownMarker(parsed)) {
+      this.emitShutdown();
+      return true;
+    }
+    try {
+      this.emitFrame(parsed as Frame);
+    } catch (error) {
+      this.emitParseError(parseErrorMessage, line, error as Error);
+    }
+    return false;
+  }
+
+  private emitParseError(message: string, line: string, cause: Error): void {
+    this.emitError(new PJSError(PJSErrorType.ParseError, message, { line }, cause));
   }
 }

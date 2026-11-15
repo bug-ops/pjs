@@ -290,7 +290,8 @@ export enum PJSErrorType {
   TimeoutError = 'TIMEOUT_ERROR',
   ConfigurationError = 'CONFIGURATION_ERROR',
   InitializationError = 'INITIALIZATION_ERROR',
-  StreamError = 'STREAM_ERROR'
+  StreamError = 'STREAM_ERROR',
+  ServerShutdown = 'SERVER_SHUTDOWN'
 }
 
 /**

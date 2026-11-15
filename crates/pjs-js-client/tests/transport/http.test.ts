@@ -5,7 +5,6 @@
  * reading.
  */
 
-import { TextDecoder, TextEncoder } from 'node:util';
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { HttpTransport } from '../../src/transport/http.js';
 import {
@@ -13,9 +12,6 @@ import {
   TransportType,
   type PJSClientConfig
 } from '../../src/types/index.js';
-
-// jsdom does not expose the Node text codecs the transport relies on.
-Object.assign(globalThis, { TextDecoder, TextEncoder });
 
 const SKELETON_LINE = JSON.stringify({
   frame_type: 'skeleton',
