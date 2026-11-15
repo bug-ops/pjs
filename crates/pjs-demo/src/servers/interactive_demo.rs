@@ -420,7 +420,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting server on {}:{}", args.host, args.port);
     let listener = tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await?;
-    // The default connection-duration ceiling would kill every long-lived WebSocket session.
+    // Demo only: the ceiling would kill long-lived /ws sessions, and it cannot be set per route, so it is off for all routes.
     let mut limits = ConnectionLimits::default();
     limits.max_connection_duration = None;
     let outcome = serve_with_limits(listener, app, limits, shutdown).await?;
