@@ -1,0 +1,1 @@
+{"type":"StreamPatch","data":{"session_id":"550e8400-e29b-41d4-a716-446655440000","frame_id":0,"priority":80,"patches":[["set",[],{"a":{"b":[1,2]}}],["merge",["a"],{"c":1.5,"d":null}],["append",["a","b"],[3,4]],["append_str",["a","s"],"tail"]],"is_complete":true}}

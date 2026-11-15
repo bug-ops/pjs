@@ -177,6 +177,10 @@ Defaults cover the common server + browser path; everything else is opt-in.
 | `websocket-server` / `websocket-client` | WebSocket transport | ✅ |
 | `mimalloc` | mimalloc as global allocator | — |
 | `metrics` | Prometheus endpoint | — |
+| `float-roundtrip` | Exact `f64` round-trip in `serde_json` parsing (about 2x cost on float tokens; unifies across the whole build) | — |
+
+> [!NOTE]
+> Without `float-roundtrip`, `serde_json` may decode a float 1 ULP away from the exact value (for example in `WsMessage` payloads); enable the feature when bit-exact floats matter.
 
 > [!NOTE]
 > The `jemalloc` feature was removed in v0.6.0 — switch to `mimalloc` or the system allocator.
