@@ -416,6 +416,10 @@ impl AdaptiveStreamController {
 
     /// Start streaming frames for `owner`'s session.
     ///
+    /// A session streams once: calling this again for a session that is
+    /// already streaming leaves the running stream untouched and returns
+    /// `Ok(())`.
+    ///
     /// # Errors
     ///
     /// Returns [`PjsError::InvalidSession`] if `owner` has no such session.
@@ -434,6 +438,11 @@ impl AdaptiveStreamController {
             .get_mut(&session_id)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
 
+        if session.stream_task.is_some() {
+            debug!("Session {} is already streaming", session_id);
+            return Ok(());
+        }
+
         let generation = session.generation;
         let plan = std::mem::take(&mut session.plan);
         let connections_for_task = self.connections.clone();
@@ -451,12 +460,8 @@ impl AdaptiveStreamController {
 
         // Keep an abort handle so the task can be cancelled on session teardown,
         // and supervise the join handle to surface panics that would otherwise
-        // be silently swallowed by the runtime. Abort any previous task first —
-        // a repeated start_streaming call for the same session would otherwise
-        // overwrite the handle and leak the earlier task.
-        if let Some(previous) = session.stream_task.replace(handle.abort_handle()) {
-            previous.abort();
-        }
+        // be silently swallowed by the runtime.
+        session.stream_task = Some(handle.abort_handle());
         spawn_task(self.shutdown.as_ref(), async move {
             match handle.await {
                 Ok(()) => {}
@@ -485,7 +490,7 @@ impl AdaptiveStreamController {
         for (frame_id, frame) in plan.into_iter().enumerate() {
             let ws_message = WsMessage::StreamFrame {
                 session_id,
-                frame_id: frame_id as u32,
+                frame_id: u32::try_from(frame_id).unwrap_or(u32::MAX),
                 priority: frame.priority,
                 payload: frame.data,
                 is_complete: frame_id + 1 == frame_count,
@@ -1080,7 +1085,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_streaming_twice_does_not_panic_and_ends_with_a_single_stream_complete() {
+    async fn test_start_streaming_twice_leaves_the_running_stream_untouched() {
         let controller = AdaptiveStreamController::new();
         let owner = ConnectionId::new();
         let mut outbox = attach(&controller, owner);
@@ -1089,18 +1094,17 @@ mod tests {
         controller.start_streaming(owner, id).await.unwrap();
         controller.start_streaming(owner, id).await.unwrap();
 
-        let mut completes = 0;
+        let (mut frames, mut completes) = (0, 0);
         while let Ok(Some(envelope)) =
             tokio::time::timeout(Duration::from_millis(300), outbox.recv()).await
         {
-            if matches!(
-                serde_json::from_str::<WsMessage>(&envelope.into_inner()),
-                Ok(WsMessage::StreamComplete { .. })
-            ) {
-                completes += 1;
+            match serde_json::from_str::<WsMessage>(&envelope.into_inner()) {
+                Ok(WsMessage::StreamFrame { .. }) => frames += 1,
+                Ok(WsMessage::StreamComplete { .. }) => completes += 1,
+                other => panic!("unexpected message: {other:?}"),
             }
         }
-        assert_eq!(completes, 1);
+        assert_eq!((frames, completes), (1, 1));
         assert_eq!(controller.session_count(owner), 0);
     }
 
