@@ -28,6 +28,7 @@ use tower::Layer;
 use tracing::{debug, error, warn};
 
 use super::shutdown::{ShutdownConfig, ShutdownOutcome};
+use crate::config::ConfigError;
 use crate::security::rate_limit::{
     ClientRateLimiter, RateLimitConfig, RateLimitError, RateLimitGuard,
 };
@@ -50,6 +51,46 @@ const H2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(30);
 /// pinned explicitly here (rather than left implicit) so a future change to
 /// that upstream default doesn't silently change this crate's behavior.
 const H2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
+
+const MIN_HEADER_BYTES: u32 = 8192;
+
+/// Cap on the size of a request's header block, validated at construction.
+///
+/// Valid values are `8192..=u32::MAX` bytes: hyper's HTTP/1 buffer panics
+/// below 8192, and no real header block needs less.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::infrastructure::http::HeaderSizeLimit;
+///
+/// assert!(HeaderSizeLimit::new(16 * 1024).is_ok());
+/// assert!(HeaderSizeLimit::new(8191).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeaderSizeLimit(u32);
+
+impl HeaderSizeLimit {
+    /// Creates a limit of `bytes`.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::InconsistentBounds`] when `bytes` is below 8192.
+    pub fn new(bytes: u32) -> Result<Self, ConfigError> {
+        if bytes < MIN_HEADER_BYTES {
+            return Err(ConfigError::InconsistentBounds {
+                section: "http.limits",
+                message: "max_header_bytes must be at least 8192",
+            });
+        }
+        Ok(Self(bytes))
+    }
+
+    /// The limit in bytes.
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
 
 /// Connection-level limits enforced by [`serve_with_limits`], independent of
 /// (and in addition to) the request-level tower layers applied by this
@@ -162,6 +203,15 @@ pub struct ConnectionLimits {
     /// deployment behind such a proxy must set this to `None` and rely on
     /// the proxy's own per-client limiting instead.
     pub max_connections_per_ip: Option<usize>,
+
+    /// Cap on a request's header block size, `None` to leave hyper's own
+    /// per-protocol defaults in place.
+    ///
+    /// Defaults to `None`: HTTP/1 keeps hyper's 417_792-byte buffer and HTTP/2
+    /// its 16 KiB header-list limit. `Some(limit)` sets both, so an oversized
+    /// HTTP/1 request gets `431` and an oversized HTTP/2 header list is
+    /// refused.
+    pub max_header_bytes: Option<HeaderSizeLimit>,
 }
 
 impl Default for ConnectionLimits {
@@ -172,6 +222,7 @@ impl Default for ConnectionLimits {
             max_connections: 1024,
             max_concurrent_streams: Some(128),
             max_connections_per_ip: Some(64),
+            max_header_bytes: None,
         }
     }
 }
@@ -233,8 +284,12 @@ pub async fn serve_with_limits(
     listener: TcpListener,
     router: Router,
     limits: ConnectionLimits,
-    _shutdown: ShutdownConfig,
+    shutdown: ShutdownConfig,
 ) -> std::io::Result<ShutdownOutcome> {
+    let ShutdownConfig {
+        signal,
+        drain_timeout,
+    } = shutdown;
     let mut builder = Builder::new(TokioExecutor::new());
     builder.http1().timer(TokioTimer::new());
     builder.http2().timer(TokioTimer::new());
@@ -254,6 +309,12 @@ pub async fn serve_with_limits(
         .keep_alive_timeout(H2_KEEP_ALIVE_TIMEOUT);
     if let Some(header_read_timeout) = limits.header_read_timeout {
         builder.http1().header_read_timeout(header_read_timeout);
+    }
+    if let Some(limit) = limits.max_header_bytes {
+        builder
+            .http1()
+            .max_buf_size(usize::try_from(limit.get()).unwrap_or(usize::MAX));
+        builder.http2().max_header_list_size(limit.get());
     }
     let builder = Arc::new(builder);
     let semaphore = Arc::new(Semaphore::new(limits.max_connections));
@@ -284,10 +345,19 @@ pub async fn serve_with_limits(
         // semaphore is never closed, so `Err` here is unreachable in
         // practice; treat it as a benign "stop serving" signal rather than
         // panicking on an accept-loop hot path.
-        let Ok(permit) = Arc::clone(&semaphore).acquire_owned().await else {
-            return Ok(ShutdownOutcome::Drained);
+        let permit = tokio::select! {
+            biased;
+            () = signal.triggered() => break,
+            permit = Arc::clone(&semaphore).acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_closed) => break,
+            },
         };
-        let (stream, peer_addr) = accept_with_retry(&listener).await;
+        let (stream, peer_addr) = tokio::select! {
+            biased;
+            () = signal.triggered() => break,
+            accepted = accept_with_retry(&listener) => accepted,
+        };
 
         // Rejects fast, before the stream is ever wrapped or a task
         // spawned — this mitigates (does not fully close: `permit` above is
@@ -327,10 +397,11 @@ pub async fn serve_with_limits(
         };
 
         let peer_service = Extension(ConnectInfo(peer_addr)).layer(router.clone());
-        let service = TowerToHyperService::new(peer_service);
+        let service = TowerToHyperService::new(Extension(signal.clone()).layer(peer_service));
         let builder = Arc::clone(&builder);
+        let connection_signal = signal.clone();
 
-        tokio::spawn(async move {
+        signal.spawn_tracked(async move {
             let _permit = permit;
             let _guard = guard;
 
@@ -354,32 +425,53 @@ pub async fn serve_with_limits(
             // `ReadVersion`. `max_connections_per_ip` and `max_connections`
             // still bound that window.
             let mut first_byte = [0u8; 1];
-            if let Some(timeout) = header_read_timeout
-                && tokio::time::timeout(timeout, stream.peek(&mut first_byte))
-                    .await
-                    .is_err()
-            {
-                debug!(%peer_addr, "no bytes received within header_read_timeout, dropping");
-                return;
+            if let Some(timeout) = header_read_timeout {
+                tokio::select! {
+                    biased;
+                    () = connection_signal.triggered() => {
+                        debug!(%peer_addr, "shutdown before any request byte, dropping");
+                        return;
+                    }
+                    peeked = tokio::time::timeout(timeout, stream.peek(&mut first_byte)) => {
+                        if peeked.is_err() {
+                            debug!(%peer_addr, "no bytes received within header_read_timeout, dropping");
+                            return;
+                        }
+                    }
+                }
             }
 
             let io = TokioIo::new(stream);
             let conn = builder.serve_connection_with_upgrades(io, service);
+            let serving = async {
+                let mut conn = std::pin::pin!(conn);
+                tokio::select! {
+                    result = conn.as_mut() => result,
+                    () = connection_signal.triggered() => {
+                        conn.as_mut().graceful_shutdown();
+                        conn.await
+                    }
+                }
+            };
             let result = match max_connection_duration {
-                Some(deadline) => match tokio::time::timeout(deadline, conn).await {
+                Some(deadline) => match tokio::time::timeout(deadline, serving).await {
                     Ok(result) => result,
                     Err(_elapsed) => {
                         debug!("connection exceeded max_connection_duration, dropping");
                         return;
                     }
                 },
-                None => conn.await,
+                None => serving.await,
             };
             if let Err(error) = result {
                 debug!(%error, "connection closed with error");
             }
         });
     }
+
+    // Closed before the drain so connects during it are refused, not queued.
+    drop(listener);
+    Ok(signal.drain(drain_timeout).await)
 }
 
 /// Masks an IPv6 address down to its /64 network prefix for accept-level

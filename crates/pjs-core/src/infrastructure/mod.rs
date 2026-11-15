@@ -25,12 +25,13 @@ pub use bounded_channel::{
 #[cfg(feature = "http-server")]
 pub use http::{
     BatchFrameStream, ConnectionLimits, CreateSessionRequest, CreateSessionResponse, DrainTimeout,
-    HttpExtensionConfig, HttpServerConfig, PjsAppState, PjsError, PjsExtension, RateLimitConfig,
-    RateLimitMiddleware, ShutdownConfig, ShutdownOutcome, ShutdownSignal, StartStreamRequest,
-    StreamFormat, StreamParams, StreamTransportError, TrustedProxyConfig, create_pjs_router,
-    create_pjs_router_with_auth, create_pjs_router_with_config, create_pjs_router_with_rate_limit,
-    create_pjs_router_with_rate_limit_and_auth, create_pjs_router_with_rate_limit_and_config,
-    create_streaming_response, create_streaming_response_with_content_type, serve_with_limits,
+    HeaderSizeLimit, HttpExtensionConfig, HttpServerConfig, PjsAppState, PjsError, PjsExtension,
+    RateLimitConfig, RateLimitMiddleware, ShutdownConfig, ShutdownOutcome, ShutdownSignal,
+    StartStreamRequest, StreamFormat, StreamParams, StreamTransportError, TrustedProxyConfig,
+    create_pjs_router, create_pjs_router_with_auth, create_pjs_router_with_config,
+    create_pjs_router_with_rate_limit, create_pjs_router_with_rate_limit_and_auth,
+    create_pjs_router_with_rate_limit_and_config, create_streaming_response,
+    create_streaming_response_with_content_type, serve_with_limits,
 };
 pub use schema_repository::SchemaRepository;
 #[cfg(feature = "websocket-server")]

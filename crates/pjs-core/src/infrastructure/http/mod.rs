@@ -24,7 +24,7 @@ pub use axum_adapter::{create_pjs_router_with_auth, create_pjs_router_with_rate_
 pub use axum_extension::{HttpExtensionConfig, PjsExtension};
 pub use middleware::{RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig};
 #[cfg(feature = "http-server")]
-pub use serve::{ConnectionLimits, serve_with_limits};
+pub use serve::{ConnectionLimits, HeaderSizeLimit, serve_with_limits};
 #[cfg(feature = "http-server")]
 pub use shutdown::{DrainTimeout, ShutdownConfig, ShutdownOutcome, ShutdownSignal};
 pub use streaming::{

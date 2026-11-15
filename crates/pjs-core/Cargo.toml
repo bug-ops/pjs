@@ -122,8 +122,8 @@ workspace = true
 normal = ["axum", "tower", "tower-http", "hyper", "futures", "sha2"]
 
 [package.metadata.cargo-machete]
-# hyper only enables the features hyper-util needs; tokio-util is consumed by http/shutdown.rs (W0c) - drop its entry then.
-ignored = ["hyper", "tokio-util"]
+# hyper only enables the features hyper-util needs.
+ignored = ["hyper"]
 
 # Trusted publishing configuration for crates.io
 [package.metadata.release.publishers.crates-io]

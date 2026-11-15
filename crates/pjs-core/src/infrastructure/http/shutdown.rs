@@ -206,13 +206,6 @@ impl ShutdownSignal {
 
     /// Spawns `fut` on the tracker; it is dropped at its next poll once the
     /// drain is forced.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first caller lands with the serve and WebSocket shutdown windows"
-        )
-    )]
     pub(crate) fn spawn_tracked<F>(&self, fut: F) -> JoinHandle<()>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -256,13 +249,6 @@ impl ShutdownSignal {
     ///
     /// Returns within `timeout` plus 100 ms unless a tracked future never
     /// yields, which cannot be dropped and voids that bound.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first caller lands with the serve shutdown window"
-        )
-    )]
     pub(crate) async fn drain(&self, timeout: DrainTimeout) -> ShutdownOutcome {
         let tracker = &self.inner.tracker;
         tracker.close();
