@@ -1,11 +1,12 @@
 //! WebSocket client implementation for PJS streaming
 
 #[cfg(feature = "websocket-client")]
-use super::{StreamOptions, WsMessage};
+use super::{StreamOptions, WriteFailure, WsMessage};
 use crate::{
     Error as PjsError, Result as PjsResult,
     config::ConfigError,
     domain::SessionId,
+    error::{ErrorChain, LimitKind},
     infrastructure::bounded_channel::{ByteBoundedSender, Envelope, byte_bounded_channel},
 };
 use futures::{Sink, Stream, StreamExt};
@@ -217,10 +218,7 @@ struct ReceiverLease {
 
 impl ReceiverLease {
     fn acquire(slot: &ReceiverSlot) -> PjsResult<Self> {
-        let outbox = slot
-            .lock()
-            .take()
-            .ok_or_else(|| PjsError::ClientError("Client already connected".to_string()))?;
+        let outbox = slot.lock().take().ok_or(PjsError::AlreadyConnected)?;
         Ok(Self {
             slot: Arc::clone(slot),
             outbox: Some(outbox),
@@ -228,9 +226,7 @@ impl ReceiverLease {
     }
 
     fn outbox_mut(&mut self) -> PjsResult<&mut Outbox> {
-        self.outbox
-            .as_mut()
-            .ok_or_else(|| PjsError::ClientError("Receiver lease already released".to_string()))
+        self.outbox.as_mut().ok_or(PjsError::ChannelClosed)
     }
 }
 
@@ -313,10 +309,11 @@ impl ClientStreamSession {
             _ => json_size(payload),
         };
         if projected > max_bytes {
-            return Err(PjsError::ClientError(format!(
-                "Session {} exceeds the {max_bytes}-byte reconstructed data limit",
-                self.id
-            )));
+            return Err(PjsError::limit_exceeded(
+                LimitKind::SessionBytes,
+                projected,
+                max_bytes,
+            ));
         }
 
         match (self.reconstructed_data.as_object_mut(), payload.as_object()) {
@@ -417,7 +414,8 @@ fn reserve_session_slot(
 ///
 /// # Errors
 ///
-/// Returns [`PjsError::ConnectionFailed`] when a write fails or times out.
+/// Returns [`PjsError::Transport`] when a write fails and
+/// [`PjsError::WriteTimeout`] when it times out.
 async fn send_loop<W>(mut write: W, outbox: &mut Outbox, write_timeout: Duration) -> PjsResult<()>
 where
     W: Sink<Message, Error = WsError> + Unpin,
@@ -443,7 +441,10 @@ where
         .await
         {
             error!("Failed to send message: {}", e);
-            return Err(PjsError::ConnectionFailed(e));
+            return Err(match e {
+                WriteFailure::Sink(source) => PjsError::Transport(Box::new(source)),
+                WriteFailure::Stalled(timeout) => PjsError::WriteTimeout { timeout },
+            });
         }
         outbox.pending = None;
     }
@@ -476,7 +477,7 @@ fn redacted_url(url: &Url) -> String {
 ///
 /// # Errors
 ///
-/// Returns [`PjsError::ConnectionFailed`] on a transport error.
+/// Returns [`PjsError::Transport`] on a transport error.
 async fn receive_loop<R>(
     mut read: R,
     sessions: ClientSessions,
@@ -498,7 +499,7 @@ where
                     )
                     .await
                     {
-                        error!("Failed to handle incoming message: {}", e);
+                        error!("Failed to handle incoming message: {}", ErrorChain(&e));
                     }
                 }
                 Err(e) => {
@@ -531,7 +532,7 @@ where
             }
             Err(e) => {
                 error!("WebSocket error: {}", e);
-                return Err(PjsError::ConnectionFailed(e.to_string()));
+                return Err(PjsError::Transport(Box::new(e)));
             }
         }
     }
@@ -541,7 +542,7 @@ where
 impl PjsWebSocketClient {
     /// Create new WebSocket client
     pub fn new(url: impl AsRef<str>) -> PjsResult<Self> {
-        let url = Url::parse(url.as_ref()).map_err(|e| PjsError::InvalidUrl(e.to_string()))?;
+        let url = Url::parse(url.as_ref()).map_err(|e| PjsError::InvalidUrl(Box::new(e)))?;
 
         let (message_tx, message_rx) =
             byte_bounded_channel(MESSAGE_QUEUE_CAPACITY, MAX_QUEUED_MESSAGE_BYTES);
@@ -631,11 +632,12 @@ impl PjsWebSocketClient {
     ///
     /// # Errors
     ///
-    /// Returns [`PjsError::ClientError`] if a connection is already active,
-    /// [`PjsError::ConnectionFailed`] if the handshake fails, a write fails or
-    /// times out, or the connection is aborted by a transport error (including
-    /// a message or frame exceeding the configured [`WebSocketClientConfig`]
-    /// caps).
+    /// Returns [`PjsError::AlreadyConnected`] if a connection is already
+    /// active, [`PjsError::ConnectionFailed`] if the handshake fails,
+    /// [`PjsError::WriteTimeout`] if a write times out, or
+    /// [`PjsError::Transport`] if a write fails or the connection is aborted by
+    /// a transport error (including a message or frame exceeding the
+    /// configured [`WebSocketClientConfig`] caps).
     ///
     /// # Examples
     ///
@@ -674,7 +676,10 @@ impl PjsWebSocketClient {
             false,
         )
         .await
-        .map_err(|e| PjsError::ConnectionFailed(e.to_string()))?;
+        .map_err(|e| PjsError::ConnectionFailed {
+            url: redacted_url(&self.url),
+            source: Box::new(e),
+        })?;
 
         info!("WebSocket connection established");
 
@@ -729,9 +734,7 @@ impl PjsWebSocketClient {
             data,
             options,
         };
-        let json_str = serde_json::to_string(&message).map_err(|e| {
-            PjsError::ClientError(format!("Failed to serialize stream request: {e}"))
-        })?;
+        let json_str = serde_json::to_string(&message)?;
         let len = json_str.len();
 
         {
@@ -749,11 +752,10 @@ impl PjsWebSocketClient {
             remove_session_slot,
         );
 
-        self.message_tx.send(json_str, len).await.map_err(|_| {
-            PjsError::ClientError(
-                "Failed to send stream request: outgoing channel closed".to_string(),
-            )
-        })?;
+        self.message_tx
+            .send(json_str, len)
+            .await
+            .map_err(|_| PjsError::ChannelClosed)?;
         DropGuard::dismiss(slot);
 
         info!("Requested stream initialization: {}", session_id);
@@ -1382,7 +1384,13 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(PjsError::ClientError(_))));
+        assert!(matches!(
+            result,
+            Err(PjsError::LimitExceeded {
+                kind: LimitKind::SessionBytes,
+                ..
+            })
+        ));
         assert!(!sessions.read().await.contains_key(&id));
     }
 
@@ -1669,7 +1677,7 @@ mod tests {
 
         let result = send_loop(failing_sink, &mut outbox, Duration::from_secs(1)).await;
 
-        assert!(matches!(result, Err(PjsError::ConnectionFailed(_))));
+        assert!(matches!(result, Err(PjsError::Transport(_))));
     }
 
     #[tokio::test]
@@ -1727,7 +1735,7 @@ mod tests {
         let lease = ReceiverLease::acquire(&client.message_rx).unwrap();
         assert!(matches!(
             ReceiverLease::acquire(&client.message_rx),
-            Err(PjsError::ClientError(_))
+            Err(PjsError::AlreadyConnected)
         ));
         drop(lease);
         assert!(ReceiverLease::acquire(&client.message_rx).is_ok());

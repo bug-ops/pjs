@@ -177,14 +177,14 @@ async fn test_remove_session_removes_session_from_controller() {
 
     assert!(controller.remove_session(owner, session_id).await);
 
-    // Session must be gone — subsequent operations must return InvalidSession.
+    // Session must be gone — subsequent operations must return UnknownSession.
     let err = controller
         .handle_frame_ack(owner, session_id, 0, 10)
         .await
         .unwrap_err();
     assert!(
-        matches!(err, PjsError::InvalidSession(_)),
-        "expected InvalidSession, got {err:?}"
+        matches!(err, PjsError::UnknownSession(_)),
+        "expected UnknownSession, got {err:?}"
     );
 }
 
@@ -545,7 +545,7 @@ async fn test_full_websocket_lifecycle() {
         .handle_frame_ack(owner, session_id, 0, 0)
         .await
         .unwrap_err();
-    assert!(matches!(err, PjsError::InvalidSession(_)));
+    assert!(matches!(err, PjsError::UnknownSession(_)));
 }
 
 #[tokio::test]

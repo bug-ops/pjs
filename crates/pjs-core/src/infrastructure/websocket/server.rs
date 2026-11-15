@@ -1,12 +1,13 @@
 //! WebSocket server implementation for Axum
 
 use super::{
-    AdaptiveStreamController, ConnectionId, CreateSessionError, StreamOptions, WsMessage,
-    controller::spawn_task, protocol::CODE_CONFLICT, send_with_write_timeout,
+    AdaptiveStreamController, ConnectionId, CreateSessionError, StreamOptions, WriteFailure,
+    WsMessage, controller::spawn_task, protocol::CODE_CONFLICT, send_with_write_timeout,
 };
 use crate::{
     Error as PjsError, Result as PjsResult,
     domain::SessionId,
+    error::{ErrorChain, SessionIdViolation},
     infrastructure::{
         bounded_channel::{self, byte_bounded_channel},
         http::ShutdownSignal,
@@ -557,7 +558,8 @@ impl AxumWebSocketTransport {
         if let Err(e) = self.send_frame(connection, reply).await {
             warn!(
                 "Failed to queue error reply for connection {}: {}",
-                connection, e
+                connection,
+                ErrorChain(&e)
             );
         }
     }
@@ -636,7 +638,7 @@ impl AxumWebSocketTransport {
                 if session_id.as_uuid().is_nil() {
                     self.reply_error(connection, None, CODE_BAD_REQUEST, NIL_SESSION_ID)
                         .await;
-                    return Err(PjsError::InvalidSession(NIL_SESSION_ID.to_owned()));
+                    return Err(PjsError::InvalidSessionId(SessionIdViolation::Nil));
                 }
                 // The server streams one frame and applies none of the options,
                 // so anything but the default would be silently ignored.
@@ -648,9 +650,7 @@ impl AxumWebSocketTransport {
                         UNSUPPORTED_STREAM_OPTIONS,
                     )
                     .await;
-                    return Err(PjsError::InvalidSession(
-                        UNSUPPORTED_STREAM_OPTIONS.to_owned(),
-                    ));
+                    return Err(PjsError::UnsupportedStreamOptions);
                 }
                 match self
                     .controller
@@ -705,7 +705,10 @@ impl AxumWebSocketTransport {
                     .handle_frame_ack(connection, session_id, frame_id, processing_time_ms)
                     .await
                 {
-                    debug!("Ignored frame ack for connection {connection}: {e}");
+                    debug!(
+                        "Ignored frame ack for connection {connection}: {}",
+                        ErrorChain(&e)
+                    );
                 }
             }
             WsMessage::StreamCancel { session_id } => {
@@ -890,7 +893,8 @@ impl ConnectionLoop<'_> {
                         {
                             debug!(
                                 "Rejected message from connection {}: {}",
-                                self.connection_id, e
+                                self.connection_id,
+                                ErrorChain(&e)
                             );
                         }
                         ControlFlow::Continue(())
@@ -946,14 +950,24 @@ impl ConnectionLoop<'_> {
     }
 }
 
+/// Why [`send_reply`] failed.
+#[derive(Debug, thiserror::Error)]
+enum ReplyFailure {
+    #[error("serialize failed: {0}")]
+    Serialize(#[from] serde_json::Error),
+    #[error(transparent)]
+    Write(#[from] WriteFailure<axum::Error>),
+}
+
 /// Serializes `reply` and writes it straight to the socket.
 async fn send_reply(
     sender: &mut SplitSink<WebSocket, Message>,
     reply: &WsMessage,
     write_timeout: Duration,
-) -> Result<(), String> {
-    let json = serde_json::to_string(reply).map_err(|e| format!("serialize failed: {e}"))?;
-    send_with_write_timeout(sender, Message::Text(json.into()), write_timeout).await
+) -> Result<(), ReplyFailure> {
+    let json = serde_json::to_string(reply)?;
+    send_with_write_timeout(sender, Message::Text(json.into()), write_timeout).await?;
+    Ok(())
 }
 
 /// Helper function to create WebSocket router for Axum

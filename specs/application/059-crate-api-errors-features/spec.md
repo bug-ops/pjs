@@ -34,7 +34,7 @@ verified: 2026-11-15
 # Spec 059: Crate Public API Surface, `pjson_rs::Error` and Feature-Flag Matrix
 
 > [!info] Verification (2026-11-15)
-> **State: partial.** The API surface and feature set exist and build with default and `--all-features`. Known defects: `Error` is stringly typed (#599), no per-feature CI matrix (#615), `rust-version` 1.89 is not enforceable on a nightly-only crate (#608). `CLAUDE.md` still lists a removed `jemalloc` feature.
+> **State: partial.** The API surface and feature set exist and build with default and `--all-features`. Known defects: no per-feature CI matrix (#615), `rust-version` 1.89 is not enforceable on a nightly-only crate (#608). `CLAUDE.md` still lists a removed `jemalloc` feature.
 
 ## 1. Overview
 
@@ -71,11 +71,11 @@ Code: `lib.rs`.
 `pjson_rs::prelude` shall re-export: `ApplicationError`, `ApplicationResult`, `DomainError`, `DomainEvent`, `DomainFrame`, `DomainResult`, `Error`, `JsonData`, `JsonPath`, `JsonReconstructor`, `PathSegment`, `Priority`, `PriorityDistribution`, `PriorityPercentages`, `ProcessResult`, `Result`, `Schema`, `SchemaId`, `SchemaRepository`, `SchemaType`, `SchemaValidationError`, `SessionId`, `Stream`, `StreamId`, `StreamProcessor`, `StreamSession`, `ValidationService`.
 
 ### FR-005 Error type
-`pjson_rs::Error` shall be `#[derive(Debug, Clone, thiserror::Error)]` with 17 variants: `InvalidJson { position, message }`, `InvalidFrame`, `SchemaValidation`, `SemanticTypeMismatch { expected, actual }`, `Buffer`, `Memory`, `Io`, `ConnectionFailed`, `ClientError`, `InvalidSession`, `SessionLimitReached { limit: NonZeroUsize }`, `InvalidUrl`, `Serialization`, `Utf8`, `SecurityError`, `CompressionError`, `Other` (all other payloads are `String`). `Result<T> = std::result::Result<T, Error>`.
+`pjson_rs::Error` shall be a `#[non_exhaustive]` `#[derive(Debug, thiserror::Error)]` typed taxonomy (not `Clone`; #599) with 23 variants: `InvalidJson { position, source }`, `LimitExceeded { kind: LimitKind, actual: u64, max: u64 }`, `InvalidSessionId(SessionIdViolation)`, `CompressionBomb(CompressionBombError)`, `Codec { codec: CodecKind, operation: CodecOperation, source: io::Error }`, `CodecUnavailable { codec }`, `InvalidDictionary(DictionaryError)`, `Patch(PatchError)`, `Serialization(serde_json::Error)`, `ConnectionFailed { url, source }`, `Transport`, `WriteTimeout { timeout }`, `InvalidUrl(url::ParseError)`, `AlreadyConnected`, `ChannelClosed`, `SessionLimitReached { limit: NonZeroUsize }`, `UnknownSession(SessionId)`, `SessionAlreadyExists(SessionId)`, `TooManySessions { limit }`, `RateLimited(RateLimitError)`, `InvalidStreamOptions`, `PlanRejected`, `UnsupportedStreamOptions`. Wrapped dependency errors are reachable through `source()` and downcastable; `Display` never repeats the source text. `Result<T> = std::result::Result<T, Error>`.
 Code: `error.rs`.
 
 ### FR-006 Error helpers and conversions
-`Error` shall provide snake_case constructors for string variants (`invalid_json`, `invalid_frame`, `schema_validation`, `semantic_type_mismatch`, `buffer`, `memory`, `connection_failed`, `client_error`, `invalid_session`, `invalid_url`, `serialization`, `utf8`, `security_error`, `compression_error`, `other`; no constructor for `Io`), predicates (`is_json_error`, `is_network_error`, `is_validation_error`, `is_security_error`) and `category() -> &'static str` returning one of `json`, `validation`, `memory`, `network`, `client`, `encoding`, `security`, `compression`, `other`. `From<std::io::Error>`, `From<std::str::Utf8Error>`, `From<serde_json::Error>` map to `Io`, `Utf8`, `Serialization` via `to_string()` (source chain lost).
+`Error` shall provide predicates (`is_json_error`, `is_network_error`, `is_validation_error`, `is_security_error`) and `category() -> &'static str` returning one of `json`, `validation`, `security`, `network`, `compression`, `client`. `is_security_error` is `LimitExceeded | CompressionBomb | RateLimited`; `is_network_error` is `ConnectionFailed | Transport | WriteTimeout`; `is_validation_error` is `InvalidSessionId | InvalidStreamOptions | Patch`. `From<serde_json::Error>` keeps the source; `From<io::Error>` and `From<Utf8Error>` do not exist. Log sites print a crate `Error` through a crate-private `ErrorChain` that joins the source chain with `: `.
 
 ### FR-007 Error layering
 Three error types coexist: `DomainError` (`pjs-domain`, `#[non_exhaustive]`), `ApplicationError` (wraps `DomainError`, see [[055-application-commands/spec|055]]), and `pjson_rs::Error` (parser, stream, compression, security, WebSocket). `PjsError` in `infrastructure::http` maps `ApplicationError` to HTTP ([[017-axum-error-http-status-mapping/spec|017]]). There is no `From` between `Error` and `ApplicationError`.
@@ -97,6 +97,7 @@ Three error types coexist: `DomainError` (`pjs-domain`, `#[non_exhaustive]`), `A
 | `metrics` | `http-server`, `metrics`, `metrics-exporter-prometheus` | also enables `once_cell_try` feature gate; `pjs_frames_total` counter ([[009-realtime-metrics-observability/spec|009]]) |
 | `websocket-server` | `http-server` | gates the server module and `SecureWebSocketHandler` (#598) |
 | `websocket-client` | `tokio-tungstenite`, `url` | builds on its own (#598) |
+| `float-roundtrip` (off) | `serde_json/float_roundtrip` | exact f64 round-trip for serde_json parsing (~2x float-token cost, unifies to every serde_json in the build); off = best-effort, some floats differ by 1 ULP (#575) |
 
 The `jemalloc` feature was removed (CHANGELOG, #160; README says v0.6.0); `CLAUDE.md` still lists it.
 
@@ -121,7 +122,7 @@ The package shall be published (`publish = true`) with `exclude = ["/target", "/
 | `--no-default-features --features websocket-client` | builds (#598); the CI feature matrix checks each feature (#615) |
 | `mimalloc` enabled in a binary with another `#[global_allocator]` | link-time conflict (documented in `global_alloc.rs`) |
 | `simd-avx512` without AVX-512 target features | build warning, scalar fallback |
-| `Error::Io`, `Error::Serialization` | cause chain lost |
+| Wrapped dependency errors (`InvalidJson`, `Codec`, `Serialization`, `ConnectionFailed`, `Transport`) | reachable via `source()`, downcastable |
 
 ## 7. Success Criteria
 - `cargo build -p pjson-rs` and `cargo build -p pjson-rs --all-features` succeed on nightly.
@@ -134,8 +135,7 @@ The package shall be published (`publish = true`) with `exclude = ["/target", "/
 - Never: add a feature that is only additive when used with another undeclared feature; add a `#[global_allocator]` outside `global_alloc.rs`.
 
 ## 9. Open Questions
-- `Error` is stringly typed, `Clone`, not `#[non_exhaustive]`, no `#[source]` (issue #599).
-- `Error::SessionLimitReached` uses `NonZeroUsize`, the only typed payload; other variants could follow.
+- Resolved by #599: `Error` is a typed, `#[non_exhaustive]` taxonomy with `source()` chains.
 - `simd-auto` is effectively a no-op marker (`pjs_simd` has no readers). [NEEDS CLARIFICATION: keep as compatibility flag or remove.]
 - `rust-version = "1.89"` is unenforceable with nightly-only features (#608).
 - Unused dependencies `bitflags`, `maplit` (#607).

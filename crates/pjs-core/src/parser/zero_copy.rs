@@ -35,7 +35,7 @@ pub trait LazyParser<'a> {
 }
 
 fn security_violation(error: crate::Error) -> DomainError {
-    DomainError::SecurityViolation(error.to_string())
+    DomainError::SecurityViolation(crate::error::ErrorChain(&error).to_string())
 }
 
 /// Zero-copy JSON parser implementation

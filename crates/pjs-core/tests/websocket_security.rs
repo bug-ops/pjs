@@ -2,7 +2,7 @@
 #![cfg(feature = "websocket-server")]
 
 use pjson_rs::{
-    SecureWebSocketHandler,
+    Error, SecureWebSocketHandler,
     config::SecurityConfig,
     domain::SessionId,
     infrastructure::websocket::{AdaptiveStreamController, ConnectionId, StreamOptions, WsMessage},
@@ -96,19 +96,20 @@ async fn test_websocket_rate_limiting_integration() {
         .validate_message(owner, session_id, 512)
         .await;
     assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("Rate limit violation")
-    );
+    assert!(matches!(
+        result.unwrap_err(),
+        Error::RateLimited(RateLimitError::LimitExceeded { .. })
+    ));
 
     // Test frame size limits
     let result = stream_controller
         .validate_message(owner, session_id, 2048)
         .await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Frame size"));
+    assert!(matches!(
+        result.unwrap_err(),
+        Error::RateLimited(RateLimitError::FrameSizeExceeded { .. })
+    ));
 }
 
 /// Test security configuration profiles
@@ -283,7 +284,10 @@ async fn test_frame_size_validation() {
         .validate_message(owner, session_id, 1024)
         .await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Frame size"));
+    assert!(matches!(
+        result.unwrap_err(),
+        Error::RateLimited(RateLimitError::FrameSizeExceeded { .. })
+    ));
 }
 
 /// Test concurrent rate limiting

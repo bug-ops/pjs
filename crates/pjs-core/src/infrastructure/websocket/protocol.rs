@@ -62,15 +62,41 @@ pub(crate) async fn send_with_write_timeout<S, M>(
     sink: &mut S,
     message: M,
     timeout: Duration,
-) -> Result<(), String>
+) -> Result<(), WriteFailure<S::Error>>
 where
     S: Sink<M> + Unpin,
-    S::Error: std::fmt::Display,
 {
     match tokio::time::timeout(timeout, sink.send(message)).await {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(format!("send failed: {e}")),
-        Err(_elapsed) => Err(format!("write stalled for {timeout:?}")),
+        Ok(Err(e)) => Err(WriteFailure::Sink(e)),
+        Err(_elapsed) => Err(WriteFailure::Stalled(timeout)),
+    }
+}
+
+/// Why an outbound write did not complete.
+#[derive(Debug)]
+pub(crate) enum WriteFailure<E> {
+    /// The sink reported an error.
+    Sink(E),
+    /// The write did not complete within the deadline.
+    Stalled(Duration),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for WriteFailure<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sink(e) => write!(f, "send failed: {e}"),
+            Self::Stalled(timeout) => write!(f, "write stalled for {timeout:?}"),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for WriteFailure<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sink(e) => Some(e),
+            Self::Stalled(_) => None,
+        }
     }
 }
 
@@ -350,17 +376,19 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_send_with_write_timeout_times_out_on_stalled_sink() {
         let handle = tokio::spawn(async {
-            let mut sink = futures::sink::unfold((), |_, _item: &str| {
+            let mut sink = futures::sink::unfold((), |_, _item: String| {
                 futures::future::pending::<Result<(), std::io::Error>>()
             });
-            send_with_write_timeout(&mut sink, "hello", Duration::from_millis(200)).await
+            send_with_write_timeout(&mut sink, "hello".to_owned(), Duration::from_millis(200))
+                .await
+                .is_err()
         });
 
         tokio::time::advance(Duration::from_millis(201)).await;
 
-        let result = handle.await.expect("task panicked");
+        let timed_out = handle.await.expect("task panicked");
         assert!(
-            result.is_err(),
+            timed_out,
             "a write that never completes must time out, not hang forever"
         );
     }

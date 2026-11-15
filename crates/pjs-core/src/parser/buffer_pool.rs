@@ -153,7 +153,9 @@ impl BufferPool {
         self.config
             .validator
             .validate_buffer_size(size as usize)
-            .map_err(|e| DomainError::SecurityViolation(e.to_string()))?;
+            .map_err(|e| {
+                DomainError::SecurityViolation(crate::error::ErrorChain(&e).to_string())
+            })?;
 
         // Check if we would exceed total memory limit
         let current_usage = self.current_memory_usage().unwrap_or(0);

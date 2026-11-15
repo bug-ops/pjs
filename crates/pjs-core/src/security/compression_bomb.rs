@@ -6,8 +6,8 @@
 //! this codebase's HTTP/WebSocket layers. See [`crate::compression::secure::SecureCompressor`]
 //! for the protected decompression methods that are defined but not yet called from the public API.
 
+use crate::Result;
 use crate::config::ConfigError;
-use crate::{Error, Result};
 use std::io::Read;
 use thiserror::Error;
 
@@ -30,6 +30,24 @@ pub enum CompressionBombError {
         size: usize,
         /// Configured maximum size in bytes.
         max_size: usize,
+    },
+
+    /// Compressed input exceeded the configured maximum size.
+    #[error("Compressed size exceeded: {size} bytes > {max_size} bytes")]
+    CompressedSizeExceeded {
+        /// Observed compressed size in bytes.
+        size: usize,
+        /// Configured maximum compressed size in bytes.
+        max_size: usize,
+    },
+
+    /// Too many decompression streams are active at once.
+    #[error("Too many concurrent decompression streams: {active}/{max}")]
+    TooManyStreams {
+        /// Streams currently in flight.
+        active: usize,
+        /// Configured maximum number of concurrent streams.
+        max: usize,
     },
 
     /// Nested compression depth exceeded the configured maximum.
@@ -179,13 +197,11 @@ impl<R: Read> CompressionBombProtector<R> {
         depth: usize,
     ) -> Result<Self> {
         if depth > config.max_compression_depth {
-            return Err(Error::SecurityError(
-                CompressionBombError::DepthExceeded {
-                    depth,
-                    max_depth: config.max_compression_depth,
-                }
-                .to_string(),
-            ));
+            return Err(CompressionBombError::DepthExceeded {
+                depth,
+                max_depth: config.max_compression_depth,
+            }
+            .into());
         }
 
         Ok(Self {
@@ -199,29 +215,23 @@ impl<R: Read> CompressionBombProtector<R> {
     }
 
     /// Check current compression ratio and size limits
-    fn check_limits(&self) -> Result<()> {
+    fn check_limits(&self) -> std::result::Result<(), CompressionBombError> {
         // Check decompressed size limit
         if self.decompressed_size > self.config.max_decompressed_size {
-            return Err(Error::SecurityError(
-                CompressionBombError::SizeExceeded {
-                    size: self.decompressed_size,
-                    max_size: self.config.max_decompressed_size,
-                }
-                .to_string(),
-            ));
+            return Err(CompressionBombError::SizeExceeded {
+                size: self.decompressed_size,
+                max_size: self.config.max_decompressed_size,
+            });
         }
 
         // Check compression ratio (avoid division by zero)
         if self.compressed_size > 0 && self.decompressed_size > 0 {
             let ratio = self.decompressed_size as f64 / self.compressed_size as f64;
             if ratio > self.config.max_ratio {
-                return Err(Error::SecurityError(
-                    CompressionBombError::RatioExceeded {
-                        ratio,
-                        max_ratio: self.config.max_ratio,
-                    }
-                    .to_string(),
-                ));
+                return Err(CompressionBombError::RatioExceeded {
+                    ratio,
+                    max_ratio: self.config.max_ratio,
+                });
             }
         }
 
@@ -260,10 +270,7 @@ impl<R: Read> Read for CompressionBombProtector<R> {
         // Check limits periodically
         if self.bytes_since_check >= self.config.check_interval_bytes {
             if let Err(e) = self.check_limits() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e.to_string(),
-                ));
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e));
             }
             self.bytes_since_check = 0;
         }
@@ -309,11 +316,19 @@ impl CompressionBombDetector {
     /// `max_decompressed_size` — decompressed output is monitored by [`CompressionBombProtector`]
     /// during streaming.
     pub fn validate_pre_decompression(&self, compressed_size: usize) -> Result<()> {
+        Ok(self.check_compressed_size(compressed_size)?)
+    }
+
+    /// Typed form of [`validate_pre_decompression`](Self::validate_pre_decompression).
+    pub(crate) fn check_compressed_size(
+        &self,
+        compressed_size: usize,
+    ) -> std::result::Result<(), CompressionBombError> {
         if compressed_size > self.config.max_compressed_size {
-            return Err(Error::SecurityError(format!(
-                "Compressed data size {} exceeds maximum allowed compressed size {}",
-                compressed_size, self.config.max_compressed_size
-            )));
+            return Err(CompressionBombError::CompressedSizeExceeded {
+                size: compressed_size,
+                max_size: self.config.max_compressed_size,
+            });
         }
         Ok(())
     }
@@ -340,25 +355,21 @@ impl CompressionBombDetector {
     /// Validate decompression result after completion
     pub fn validate_result(&self, compressed_size: usize, decompressed_size: usize) -> Result<()> {
         if decompressed_size > self.config.max_decompressed_size {
-            return Err(Error::SecurityError(
-                CompressionBombError::SizeExceeded {
-                    size: decompressed_size,
-                    max_size: self.config.max_decompressed_size,
-                }
-                .to_string(),
-            ));
+            return Err(CompressionBombError::SizeExceeded {
+                size: decompressed_size,
+                max_size: self.config.max_decompressed_size,
+            }
+            .into());
         }
 
         if compressed_size > 0 {
             let ratio = decompressed_size as f64 / compressed_size as f64;
             if ratio > self.config.max_ratio {
-                return Err(Error::SecurityError(
-                    CompressionBombError::RatioExceeded {
-                        ratio,
-                        max_ratio: self.config.max_ratio,
-                    }
-                    .to_string(),
-                ));
+                return Err(CompressionBombError::RatioExceeded {
+                    ratio,
+                    max_ratio: self.config.max_ratio,
+                }
+                .into());
             }
         }
 
@@ -369,6 +380,7 @@ impl CompressionBombDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Error;
     use std::io::Cursor;
 
     #[test]
@@ -448,8 +460,10 @@ mod tests {
         // Should fail for size exceeding limit
         let result = detector.validate_result(100, 2048);
         assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Size exceeded") || error_msg.contains("Security error"));
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::CompressionBomb(CompressionBombError::SizeExceeded { .. })
+        ));
     }
 
     #[test]
@@ -462,13 +476,10 @@ mod tests {
 
         // Should fail for ratio exceeding limit (100 -> 2000 = 20x ratio)
         let result = detector.validate_result(100, 2000);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Compression ratio exceeded")
-        );
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::CompressionBomb(CompressionBombError::RatioExceeded { .. })
+        ));
     }
 
     #[test]
@@ -620,11 +631,13 @@ mod tests {
         let result = detector.protect_nested_reader(cursor, data.len(), 3);
         assert!(result.is_err());
 
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("Compression depth exceeded")
-                || error_msg.contains("Security error")
-        );
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::CompressionBomb(CompressionBombError::DepthExceeded {
+                depth: 3,
+                max_depth: 2
+            })
+        ));
     }
 
     #[test]
@@ -639,8 +652,13 @@ mod tests {
         let result = detector.validate_pre_decompression(2048);
         assert!(result.is_err());
 
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("exceeds maximum allowed"));
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::CompressionBomb(CompressionBombError::CompressedSizeExceeded {
+                size: 2048,
+                max_size: 1024
+            })
+        ));
     }
 
     #[test]
@@ -740,12 +758,12 @@ mod tests {
                 }
                 Err(e) => {
                     // Should detect bomb before all data is read
-                    // Error message can be either "Size exceeded" or generic security error
-                    let err_str = e.to_string();
+                    let bomb = e
+                        .get_ref()
+                        .and_then(|inner| inner.downcast_ref::<CompressionBombError>());
                     assert!(
-                        err_str.contains("Size exceeded") || err_str.contains("Security"),
-                        "Expected size limit error, got: {}",
-                        err_str
+                        matches!(bomb, Some(CompressionBombError::SizeExceeded { .. })),
+                        "Expected size limit error, got: {e}"
                     );
                     detected = true;
                     break;

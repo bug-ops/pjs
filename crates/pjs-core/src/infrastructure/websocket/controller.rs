@@ -200,7 +200,12 @@ pub enum CreateSessionError {
 
 impl From<CreateSessionError> for PjsError {
     fn from(error: CreateSessionError) -> Self {
-        PjsError::InvalidSession(error.to_string())
+        match error {
+            CreateSessionError::AlreadyExists(id) => PjsError::SessionAlreadyExists(id),
+            CreateSessionError::TooManySessions { limit } => PjsError::TooManySessions { limit },
+            CreateSessionError::InvalidOptions(e) => PjsError::InvalidStreamOptions(e),
+            CreateSessionError::PlanRejected(e) => PjsError::PlanRejected(e),
+        }
     }
 }
 
@@ -434,7 +439,7 @@ impl AdaptiveStreamController {
     ///
     /// # Errors
     ///
-    /// Returns [`PjsError::InvalidSession`] if `owner` has no such session.
+    /// Returns [`PjsError::UnknownSession`] if `owner` has no such session.
     pub async fn start_streaming(
         &self,
         owner: ConnectionId,
@@ -443,12 +448,12 @@ impl AdaptiveStreamController {
         let mut connections = self.connections.write();
         let entry = connections
             .get_mut(&owner)
-            .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
+            .ok_or(PjsError::UnknownSession(session_id))?;
         let outgoing = entry.outgoing.clone();
         let session = entry
             .sessions
             .get_mut(&session_id)
-            .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
+            .ok_or(PjsError::UnknownSession(session_id))?;
 
         if session.stream_task.is_some() {
             debug!("Session {} is already streaming", session_id);
@@ -588,14 +593,14 @@ impl AdaptiveStreamController {
             .get_mut(&owner)
             .and_then(|entry| entry.sessions.get_mut(&session_id))
             .map(f)
-            .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))
+            .ok_or(PjsError::UnknownSession(session_id))
     }
 
     /// Handle frame acknowledgment from `owner`.
     ///
     /// # Errors
     ///
-    /// Returns [`PjsError::InvalidSession`] if `owner` has no such live
+    /// Returns [`PjsError::UnknownSession`] if `owner` has no such live
     /// session; nothing is changed.
     pub async fn handle_frame_ack(
         &self,
@@ -649,12 +654,10 @@ impl AdaptiveStreamController {
         let session = connections
             .get(&owner)
             .and_then(|entry| entry.sessions.get(&session_id))
-            .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
+            .ok_or(PjsError::UnknownSession(session_id))?;
 
         if let Some(guard) = &session.rate_limit_guard {
-            guard
-                .check_message(frame_size)
-                .map_err(|e| PjsError::SecurityError(format!("Rate limit violation: {}", e)))?;
+            guard.check_message(frame_size)?;
         }
 
         Ok(())
@@ -1152,7 +1155,7 @@ mod tests {
             .handle_frame_ack(ConnectionId::new(), session_id, 0, 50)
             .await;
 
-        assert!(matches!(result, Err(PjsError::InvalidSession(_))));
+        assert!(matches!(result, Err(PjsError::UnknownSession(_))));
         let acked = controller
             .with_session_mut(owner, session_id, |s| s.client_metrics.frames_acknowledged)
             .unwrap();

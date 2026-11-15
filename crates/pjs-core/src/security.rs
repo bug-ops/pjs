@@ -2,7 +2,7 @@
 
 use crate::{
     config::{SecurityConfig, ValidatedSecurityConfig, security::MaxDepth},
-    error::{Error, Result},
+    error::{Error, LimitKind, Result, SessionIdViolation},
 };
 
 pub mod compression_bomb;
@@ -46,10 +46,11 @@ impl SecurityValidator {
     /// Validate input size against security limits
     pub fn validate_input_size(&self, size: usize) -> Result<()> {
         if size > self.config.json.max_input_size {
-            return Err(Error::Other(format!(
-                "Input size {} exceeds maximum allowed {} bytes",
-                size, self.config.json.max_input_size
-            )));
+            return Err(Error::limit_exceeded(
+                LimitKind::InputSize,
+                size,
+                self.config.json.max_input_size,
+            ));
         }
         Ok(())
     }
@@ -57,10 +58,11 @@ impl SecurityValidator {
     /// Validate JSON depth to prevent stack overflow
     pub fn validate_json_depth(&self, depth: usize) -> Result<()> {
         if depth > self.config.json.max_depth {
-            return Err(Error::Other(format!(
-                "JSON nesting depth {} exceeds maximum allowed {}",
-                depth, self.config.json.max_depth
-            )));
+            return Err(Error::limit_exceeded(
+                LimitKind::JsonDepth,
+                depth,
+                self.config.json.max_depth,
+            ));
         }
         Ok(())
     }
@@ -110,10 +112,11 @@ impl SecurityValidator {
     /// Validate array length
     pub fn validate_array_length(&self, length: usize) -> Result<()> {
         if length > self.config.json.max_array_length {
-            return Err(Error::Other(format!(
-                "Array length {} exceeds maximum allowed {}",
-                length, self.config.json.max_array_length
-            )));
+            return Err(Error::limit_exceeded(
+                LimitKind::ArrayLength,
+                length,
+                self.config.json.max_array_length,
+            ));
         }
         Ok(())
     }
@@ -121,10 +124,11 @@ impl SecurityValidator {
     /// Validate object key count
     pub fn validate_object_keys(&self, key_count: usize) -> Result<()> {
         if key_count > self.config.json.max_object_keys {
-            return Err(Error::Other(format!(
-                "Object key count {} exceeds maximum allowed {}",
-                key_count, self.config.json.max_object_keys
-            )));
+            return Err(Error::limit_exceeded(
+                LimitKind::ObjectKeys,
+                key_count,
+                self.config.json.max_object_keys,
+            ));
         }
         Ok(())
     }
@@ -132,10 +136,11 @@ impl SecurityValidator {
     /// Validate string length
     pub fn validate_string_length(&self, length: usize) -> Result<()> {
         if length > self.config.json.max_string_length {
-            return Err(Error::Other(format!(
-                "String length {} exceeds maximum allowed {}",
-                length, self.config.json.max_string_length
-            )));
+            return Err(Error::limit_exceeded(
+                LimitKind::StringLength,
+                length,
+                self.config.json.max_string_length,
+            ));
         }
         Ok(())
     }
@@ -145,17 +150,17 @@ impl SecurityValidator {
         let len = session_id.len();
 
         if len < self.config.sessions.min_session_id_length {
-            return Err(Error::Other(format!(
-                "Session ID too short: {} characters (minimum {})",
-                len, self.config.sessions.min_session_id_length
-            )));
+            return Err(Error::InvalidSessionId(SessionIdViolation::TooShort {
+                len,
+                min: self.config.sessions.min_session_id_length,
+            }));
         }
 
         if len > self.config.sessions.max_session_id_length {
-            return Err(Error::Other(format!(
-                "Session ID too long: {} characters (maximum {})",
-                len, self.config.sessions.max_session_id_length
-            )));
+            return Err(Error::InvalidSessionId(SessionIdViolation::TooLong {
+                len,
+                max: self.config.sessions.max_session_id_length,
+            }));
         }
 
         // Check for valid characters (alphanumeric + hyphens + underscores)
@@ -163,8 +168,8 @@ impl SecurityValidator {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
-            return Err(Error::Other(
-                "Session ID contains invalid characters (only alphanumeric, hyphens and underscores allowed)".to_string()
+            return Err(Error::InvalidSessionId(
+                SessionIdViolation::InvalidCharacter,
             ));
         }
 
@@ -174,10 +179,11 @@ impl SecurityValidator {
     /// Validate WebSocket frame size
     pub fn validate_websocket_frame_size(&self, size: usize) -> Result<()> {
         if size > self.config.network.max_websocket_frame_size {
-            return Err(Error::Other(format!(
-                "WebSocket frame size {} exceeds maximum allowed {}",
-                size, self.config.network.max_websocket_frame_size
-            )));
+            return Err(Error::limit_exceeded(
+                LimitKind::WebSocketFrameSize,
+                size,
+                self.config.network.max_websocket_frame_size,
+            ));
         }
         Ok(())
     }
@@ -185,10 +191,11 @@ impl SecurityValidator {
     /// Validate buffer size for pooling
     pub fn validate_buffer_size(&self, size: usize) -> Result<()> {
         if size > self.config.buffers.max_buffer_size {
-            return Err(Error::Other(format!(
-                "Buffer size {} exceeds maximum allowed {}",
-                size, self.config.buffers.max_buffer_size
-            )));
+            return Err(Error::limit_exceeded(
+                LimitKind::BufferSize,
+                size,
+                self.config.buffers.max_buffer_size,
+            ));
         }
         Ok(())
     }
@@ -223,11 +230,11 @@ impl DepthTracker {
     /// Enter a new nesting level (array/object)
     pub fn enter(&mut self) -> Result<()> {
         if self.current_depth >= self.max_depth.get() {
-            return Err(Error::Other(format!(
-                "JSON nesting depth {} would exceed maximum allowed {}",
+            return Err(Error::limit_exceeded(
+                LimitKind::JsonDepth,
                 self.current_depth + 1,
-                self.max_depth.get()
-            )));
+                self.max_depth.get(),
+            ));
         }
         self.current_depth += 1;
         Ok(())

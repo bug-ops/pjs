@@ -47,7 +47,7 @@ Feature gate: `websocket-client` (deps `tokio-tungstenite`, `url`); builds witho
 
 ### FR-001 Construction and config
 
-`PjsWebSocketClient::new(url)` shall parse the URL (`PjsError::InvalidUrl` on failure). `with_config(WebSocketClientConfig)` and `with_write_timeout(Duration)` are `#[must_use]` builders. Defaults:
+`PjsWebSocketClient::new(url)` shall parse the URL (`PjsError::InvalidUrl(url::ParseError)` on failure). `with_config(WebSocketClientConfig)` and `with_write_timeout(Duration)` are `#[must_use]` builders. Defaults:
 
 | Field | Default |
 |---|---|
@@ -62,11 +62,11 @@ The message/frame caps equal the server's inbound cap so the client does not sev
 
 ### FR-002 Connect
 
-`connect()` shall open the socket with `connect_async_with_config` using the caps, lease the outgoing receiver (a concurrent second call fails with `ClientError("Client already connected")`), then drive the send loop (bounded `byte_bounded_channel`, 1000 messages / 16 MiB, writes through `send_with_write_timeout`) and the receive loop inside the `connect` future, returning when either ends. It blocks for the connection lifetime, which the rustdoc states; nothing outlives the future, the lease is released on return, and a later `connect` sends messages queued in between (#597, #612). A write failure or timeout is returned as an error. Handshake failure maps to `PjsError::ConnectionFailed`; a transport error (including an oversize message or frame) ends `connect` with an error.
+`connect()` shall open the socket with `connect_async_with_config` using the caps, lease the outgoing receiver (a concurrent second call fails with `Error::AlreadyConnected`), then drive the send loop (bounded `byte_bounded_channel`, 1000 messages / 16 MiB, writes through `send_with_write_timeout`) and the receive loop inside the `connect` future, returning when either ends. It blocks for the connection lifetime, which the rustdoc states; nothing outlives the future, the lease is released on return, and a later `connect` sends messages queued in between (#597, #612). A write failure or timeout is returned as an error. Handshake failure maps to `PjsError::ConnectionFailed { url (redacted), source: tungstenite::Error }`; a read or write transport error (including an oversize message or frame) ends `connect` with `Error::Transport`; a write deadline gives `Error::WriteTimeout { timeout }`.
 
 ### FR-003 Request stream
 
-`request_stream(data, options)` shall generate a fresh `SessionId`, build `StreamInit` (default `StreamOptions` when `None`), reserve a session slot, queue the serialised message, and return the id. A guard (`SessionSlotGuard`) removes the slot if the call is cancelled before queueing. Errors: `ClientError` (serialise failure or channel closed), `SessionLimitReached { limit }`.
+`request_stream(data, options)` shall generate a fresh `SessionId`, build `StreamInit` (default `StreamOptions` when `None`), reserve a session slot, queue the serialised message, and return the id. A guard (`SessionSlotGuard`) removes the slot if the call is cancelled before queueing. Errors: `Serialization` (serialise failure), `ChannelClosed`, `SessionLimitReached { limit }`.
 
 ### FR-004 Session limit
 
@@ -100,10 +100,10 @@ On `StreamFrame` the client shall drop the session if expired; if the session ex
 | Case | Behaviour |
 |---|---|
 | Invalid URL | `InvalidUrl` |
-| Handshake fails | `ConnectionFailed` |
-| Concurrent second `connect` | `ClientError("Client already connected")` |
+| Handshake fails | `ConnectionFailed { url, source }` |
+| Concurrent second `connect` | `AlreadyConnected` |
 | `connect` after the first returned | allowed; queued messages are sent |
-| Session over `max_session_bytes` | session dropped, `ClientError` |
+| Session over `max_session_bytes` | session dropped, `LimitExceeded { kind: SessionBytes }` |
 | All sessions complete at limit | `SessionLimitReached` |
 | Expired session read | treated as unknown |
 | Binary / raw frames | logged, ignored |

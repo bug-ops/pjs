@@ -75,9 +75,9 @@ Status: done.
 
 ### FR-039-005 Bounds
 
-When `input.len() > JiterConfig::max_input_size` (default 100 MiB), the parser shall return `Error::Buffer`.
+When `input.len() > JiterConfig::max_input_size` (default 100 MiB), the parser shall return `Error::LimitExceeded { kind: InputSize, actual, max }`.
 When nesting reaches `JiterConfig::max_depth` (type `MaxDepth`, default 64, ceiling `MAX_SAFE_JSON_DEPTH` = 512), the parser shall return `Error::InvalidJson` carrying jiter's `RecursionLimitExceeded` message.
-Status: done. Note: the `max_depth` field doc says `Error::Buffer`; the code returns `InvalidJson` (see Open Questions).
+Status: done. Note: depth overflow returns `Error::InvalidJson` (see Open Questions).
 
 ### FR-039-006 Number handling
 
@@ -131,7 +131,7 @@ Status: done.
 | `42  ` | `Ok`, complete, `consumed = 4` |
 | `}` or malformed escape | `Err(Error::InvalidJson)` |
 | `1.`, `1e` | `Err(Error::InvalidJson)` |
-| length > `max_input_size` | `Err(Error::Buffer)` |
+| length > `max_input_size` | `Err(Error::LimitExceeded{InputSize})` |
 | depth >= `max_depth` | `Err(Error::InvalidJson)` (recursion limit) |
 | integer > `i64::MAX` | `Float` plus `BigIntLossyConversion` diagnostic |
 
@@ -150,7 +150,6 @@ Status: done.
 
 - `build_streaming_hint`/`collect_leaves` iterate a `HashMap`, so the tentative path is order-dependent. This violates the trait's own determinism contract for `streaming_hint`. Needs a follow-up decision (track insertion order in the walker rather than re-deriving it from `JsonData`).
 - `collect_leaves` replaces a key that `JsonPath::append_key` rejects (`.`, `[`, `]` or empty) with the parent path, so hints for such keys collapse onto the parent path.
-- `JiterConfig::max_depth` doc says `Error::Buffer`; code returns `Error::InvalidJson`.
 - `walk_number` uses `expect` on `f64` parse of a `BigInt` decimal string; documented as infallible, but it is a panic site in a parser for untrusted input.
 - `ParseDiagnostic` and `PartialParseResult` have no `#[non_exhaustive]`; adding a variant is a breaking change.
 - No production caller (module docs, CHANGELOG #485). Decide whether to wire it into streaming ingestion or keep it as an unexercised library capability.

@@ -43,7 +43,7 @@ use pjson_rs_domain::value_objects::{JsonData, JsonPath};
 
 use crate::Result;
 use crate::config::security::MaxDepth;
-use crate::error::Error;
+use crate::error::{BoxError, Error, LimitKind};
 
 mod private {
     /// Sealing token — external crates cannot implement [`super::PartialJsonParser`].
@@ -85,7 +85,7 @@ pub trait PartialJsonParser: private::Sealed {
     /// matching `{`, or a malformed `\u` escape sequence. Truncation alone is
     /// not an error.
     ///
-    /// Returns [`Error::Buffer`] when `input.len()` exceeds
+    /// Returns [`Error::LimitExceeded`] when `input.len()` exceeds
     /// [`JiterConfig::max_input_size`].
     fn parse_partial(&self, input: &[u8]) -> Result<PartialParseResult>;
 }
@@ -245,7 +245,7 @@ pub struct JiterConfig {
     /// Default: 100 MiB.
     pub max_input_size: usize,
 
-    /// Maximum nesting depth before returning [`Error::Buffer`].
+    /// Maximum nesting depth before returning [`Error::LimitExceeded`].
     ///
     /// Applied on top of jiter's hard recursion limit. Default: 64.
     pub max_depth: MaxDepth,
@@ -330,11 +330,11 @@ impl Default for JiterPartialParser {
 impl PartialJsonParser for JiterPartialParser {
     fn parse_partial(&self, input: &[u8]) -> Result<PartialParseResult> {
         if input.len() > self.config.max_input_size {
-            return Err(Error::Buffer(format!(
-                "input length {} exceeds max_input_size {}",
+            return Err(Error::limit_exceeded(
+                LimitKind::InputSize,
                 input.len(),
-                self.config.max_input_size
-            )));
+                self.config.max_input_size,
+            ));
         }
 
         // Empty or all-whitespace: nothing to parse.
@@ -394,7 +394,10 @@ impl PartialJsonParser for JiterPartialParser {
                     diagnostics,
                 })
             }
-            WalkOutcome::Hard(e) => Err(Error::invalid_json(e.index, e.error_type.to_string())),
+            WalkOutcome::Hard(e) => Err(Error::InvalidJson {
+                position: e.index,
+                source: hard_error_source(e),
+            }),
         }
     }
 }
@@ -402,6 +405,21 @@ impl PartialJsonParser for JiterPartialParser {
 // ---------------------------------------------------------------------------
 // Walker internals
 // ---------------------------------------------------------------------------
+
+/// Keeps the most specific jiter error as the source: pure JSON syntax errors
+/// surface as [`jiter::JsonError`], type mismatches as [`jiter::JiterError`].
+fn hard_error_source(e: jiter::JiterError) -> BoxError {
+    match e.error_type {
+        JiterErrorType::JsonError(error_type) => Box::new(jiter::JsonError {
+            error_type,
+            index: e.index,
+        }),
+        error_type @ JiterErrorType::WrongType { .. } => Box::new(jiter::JiterError {
+            error_type,
+            index: e.index,
+        }),
+    }
+}
 
 /// Internal outcome of a single recursive walk step.
 enum WalkOutcome {

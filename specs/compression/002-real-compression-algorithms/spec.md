@@ -44,7 +44,7 @@ verified: 2026-11-15
 ## Functional requirements
 
 ### FR-001: Real codecs behind `compression`
-When the `compression` feature is enabled, `SecureCompressor::compress` shall encode with `flate2` (Deflate, Gzip) or `brotli`; without the feature, non-`None` codecs return `Error::CompressionError("feature `compression` is not enabled")`.
+When the `compression` feature is enabled, `SecureCompressor::compress` shall encode with `flate2` (Deflate, Gzip) or `brotli`; without the feature, non-`None` codecs return `Error::CodecUnavailable { codec }`.
 Status: done. Code: `compression/secure.rs::SecureCompressor::encode`.
 
 ### FR-002: Output smaller than input for repetitive JSON

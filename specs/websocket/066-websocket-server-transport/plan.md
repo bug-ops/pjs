@@ -52,7 +52,7 @@ flowchart TB
 | `AxumWebSocketTransport::new` / `with_rate_limit_config` | inside a Tokio runtime | sweep task spawned; Origin policy `DenyAll` | Does not panic outside a runtime (#602) |
 | `upgrade_handler` | `ConnectInfo<SocketAddr>` present | 429, 403, or upgrade with size caps | Missing `ConnectInfo` yields 500 |
 | `create_session(id, owner, data, opts)` | none | inserts iff id free on this connection and the session cap is not reached | Never overwrites; `AlreadyExists` or `TooManySessions` otherwise |
-| `handle_frame_ack(owner, ...)` | session exists and owned by `owner` | appends ack, updates EMA | Otherwise `InvalidSession`, no state change |
+| `handle_frame_ack(owner, ...)` | session exists and owned by `owner` | appends ack, updates EMA | Otherwise `UnknownSession`, no state change |
 | `remove_sessions_owned_by(owner)` | none | removes and aborts all of owner's sessions, returns count | O(owner's sessions) |
 | `send_frame(conn, msg)` | none | `Ok(())` always; frame queued or dropped with warn | No delivery acknowledgement |
 | `cleanup_expired_sessions(max_age)` | none | sessions older than `max_age` removed and aborted | Age counts from creation, not activity |
