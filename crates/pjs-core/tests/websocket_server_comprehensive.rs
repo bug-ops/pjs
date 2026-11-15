@@ -16,8 +16,7 @@ use pjson_rs::{
     Error as PjsError,
     domain::{Priority, SessionId},
     infrastructure::websocket::{
-        AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, StreamOptions,
-        WebSocketTransport, WsMessage,
+        AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, StreamOptions, WsMessage,
     },
 };
 use serde_json::{Value, json};
@@ -71,53 +70,13 @@ async fn test_axum_websocket_transport_controller_access() {
 }
 
 // ============================================================================
-// WebSocketTransport Implementation Tests
+// AxumWebSocketTransport Message Handling Tests
 // ============================================================================
-
-#[tokio::test]
-async fn test_websocket_transport_start_stream() {
-    let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new(ConnectionId::new());
-
-    let data = json!({
-        "critical": {"id": 1, "status": "active"},
-        "metadata": {"created": "2024-01-15T12:00:00Z"}
-    });
-
-    let result = transport
-        .start_stream(connection, data, StreamOptions::default())
-        .await;
-
-    assert!(result.is_ok());
-    let session_id = result.unwrap();
-    assert!(!session_id.as_uuid().is_nil());
-}
-
-#[tokio::test]
-async fn test_websocket_transport_start_stream_with_custom_options() {
-    let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new(ConnectionId::new());
-
-    let data = json!({
-        "data": [1, 2, 3, 4, 5]
-    });
-
-    let options = StreamOptions {
-        max_frame_size: 1024,
-        client_fps: Some(30),
-        compression: false,
-        priority_mapping: None,
-    };
-
-    let result = transport.start_stream(connection, data, options).await;
-
-    assert!(result.is_ok());
-}
 
 #[tokio::test]
 async fn test_websocket_transport_handle_message_stream_init() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new(ConnectionId::new());
+    let connection = ConnectionId::new();
 
     let message = WsMessage::StreamInit {
         session_id: SessionId::new(),
@@ -136,8 +95,8 @@ async fn test_websocket_transport_handle_message_frame_ack() {
     let controller = transport.controller();
 
     // First create a session owned by the acknowledging connection
-    let connection = Arc::new(ConnectionId::new());
-    let session_id = create(&controller, *connection, json!({"test": "data"})).await;
+    let connection = ConnectionId::new();
+    let session_id = create(&controller, connection, json!({"test": "data"})).await;
 
     // Send frame acknowledgment
     let message = WsMessage::FrameAck {
@@ -154,7 +113,7 @@ async fn test_websocket_transport_handle_message_frame_ack() {
 #[tokio::test]
 async fn test_websocket_transport_handle_message_ping() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new(ConnectionId::new());
+    let connection = ConnectionId::new();
 
     let message = WsMessage::Ping {
         timestamp: 1234567890,
@@ -168,7 +127,7 @@ async fn test_websocket_transport_handle_message_ping() {
 #[tokio::test]
 async fn test_websocket_transport_handle_message_error() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new(ConnectionId::new());
+    let connection = ConnectionId::new();
 
     let message = WsMessage::Error {
         session_id: Some(SessionId::new()),
@@ -184,7 +143,7 @@ async fn test_websocket_transport_handle_message_error() {
 #[tokio::test]
 async fn test_websocket_transport_handle_message_pong() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new(ConnectionId::new());
+    let connection = ConnectionId::new();
 
     let message = WsMessage::Pong {
         timestamp: 1234567890,
@@ -196,23 +155,26 @@ async fn test_websocket_transport_handle_message_pong() {
 }
 
 #[tokio::test]
-async fn test_websocket_transport_close_stream() {
+async fn test_remove_unknown_session_is_a_no_op() {
     let transport = AxumWebSocketTransport::new();
 
-    let result = transport.close_stream(SessionId::new()).await;
+    let removed = transport
+        .controller()
+        .remove_session(SessionId::new())
+        .await;
 
-    assert!(result.is_ok());
+    assert!(!removed);
 }
 
 #[tokio::test]
-async fn test_close_stream_removes_session_from_controller() {
+async fn test_remove_session_removes_session_from_controller() {
     let transport = AxumWebSocketTransport::new();
     let controller = transport.controller();
 
     let owner = ConnectionId::new();
     let session_id = create(&controller, owner, json!({"k": "v"})).await;
 
-    transport.close_stream(session_id).await.unwrap();
+    assert!(controller.remove_session(session_id).await);
 
     // Session must be gone — subsequent operations must return InvalidSession.
     let err = controller
@@ -579,7 +541,7 @@ async fn test_full_websocket_lifecycle() {
         .unwrap();
 
     // 4. Close stream — session must be removed from the controller.
-    transport.close_stream(session_id).await.unwrap();
+    assert!(controller.remove_session(session_id).await);
 
     let err = controller
         .handle_frame_ack(owner, session_id, 0, 0)
@@ -627,8 +589,12 @@ async fn test_websocket_error_handling() {
     let transport = AxumWebSocketTransport::new();
 
     // Try to close non-existent stream
-    let result = transport.close_stream(SessionId::new()).await;
-    assert!(result.is_ok()); // Should not fail, just log
+    assert!(
+        !transport
+            .controller()
+            .remove_session(SessionId::new())
+            .await
+    );
 
     // Try to handle frame ack for non-existent session
     let controller = transport.controller();
@@ -641,7 +607,7 @@ async fn test_websocket_error_handling() {
 #[tokio::test]
 async fn test_websocket_send_frame() {
     let transport = AxumWebSocketTransport::new();
-    let connection = Arc::new(ConnectionId::new());
+    let connection = ConnectionId::new();
 
     let message = WsMessage::StreamFrame {
         session_id: SessionId::new(),

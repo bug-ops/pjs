@@ -7,15 +7,17 @@ use super::protocol::{StreamOptions, WsMessage};
 use crate::{
     Error as PjsError, Result as PjsResult, StreamFrame,
     domain::{Priority, SessionId},
+    infrastructure::http::ShutdownSignal,
     security::RateLimitGuard,
 };
+use parking_lot::RwLock;
 use serde_json::Value;
 use std::{
     collections::{HashMap, hash_map::Entry},
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{RwLock, broadcast};
+use tokio::{sync::broadcast, task::JoinHandle};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -71,19 +73,17 @@ impl std::fmt::Display for ConnectionId {
 /// See issue #239 for the full rationale and the deliberate split between
 /// the two session models.
 #[derive(Debug)]
-pub struct WebSocketStreamSession {
-    /// Transport-local session identifier.
-    pub id: SessionId,
+pub(crate) struct WebSocketStreamSession {
     /// Instant the session was created.
     pub created_at: Instant,
     /// Streaming options negotiated for this session.
+    #[expect(
+        dead_code,
+        reason = "recorded for the session; the planner that reads it is #600's deferred scope"
+    )]
     pub options: StreamOptions,
     /// Pre-computed delivery plan as an ordered list of frames.
     pub plan: Vec<StreamFrame>,
-    /// Index of the next frame to send.
-    pub current_frame: u32,
-    /// Frame indices acknowledged by the client so far.
-    pub acknowledged_frames: Vec<u32>,
     /// Adaptive streaming metrics derived from client acks.
     pub client_metrics: ClientMetrics,
     /// Rate-limit guard scoped to this session, if installed.
@@ -99,6 +99,7 @@ pub struct WebSocketStreamSession {
     stream_task: Option<tokio::task::AbortHandle>,
 }
 
+#[cfg(test)]
 impl WebSocketStreamSession {
     /// Connection that created this session.
     pub fn owner(&self) -> ConnectionId {
@@ -115,10 +116,6 @@ pub struct ClientMetrics {
     pub frames_acknowledged: u32,
     /// Instant of the most recent acknowledgement, if any.
     pub last_ack_time: Option<Instant>,
-    /// Estimated downlink bandwidth, in kilobits per second, if measured.
-    pub estimated_bandwidth_kbps: Option<f64>,
-    /// Round-trip time of the WebSocket connection, in milliseconds, if measured.
-    pub connection_rtt_ms: Option<u64>,
 }
 
 impl ClientMetrics {
@@ -193,6 +190,19 @@ pub type FrameEvent = (ConnectionId, SessionId, Arc<WsMessage>);
 pub struct AdaptiveStreamController {
     pub(super) sessions: Arc<RwLock<HashMap<SessionId, WebSocketStreamSession>>>,
     frame_tx: broadcast::Sender<FrameEvent>,
+    shutdown: Option<ShutdownSignal>,
+}
+
+/// Spawns `fut` on `signal`'s tracker when one is set, so a shutdown drain
+/// waits for it and can force-drop it; otherwise on the plain Tokio runtime.
+pub(super) fn spawn_task<F>(signal: Option<&ShutdownSignal>, fut: F) -> JoinHandle<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    match signal {
+        Some(signal) => signal.spawn_tracked(fut),
+        None => tokio::spawn(fut),
+    }
 }
 
 impl AdaptiveStreamController {
@@ -204,7 +214,25 @@ impl AdaptiveStreamController {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             frame_tx,
+            shutdown: None,
         }
+    }
+
+    /// Spawns every session task on `signal`'s tracker, so a shutdown drain
+    /// waits for them and can force-drop them.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::infrastructure::http::ShutdownSignal;
+    /// use pjson_rs::infrastructure::websocket::AdaptiveStreamController;
+    ///
+    /// let _controller = AdaptiveStreamController::new().with_shutdown(ShutdownSignal::new());
+    /// ```
+    #[must_use]
+    pub fn with_shutdown(mut self, signal: ShutdownSignal) -> Self {
+        self.shutdown = Some(signal);
+        self
     }
 
     /// Create a streaming session under `session_id`, owned by `owner`.
@@ -254,19 +282,16 @@ impl AdaptiveStreamController {
         }]; // Simplified for now
 
         let session = WebSocketStreamSession {
-            id: session_id,
             created_at: Instant::now(),
             options,
             plan,
-            current_frame: 0,
-            acknowledged_frames: Vec::new(),
             client_metrics: ClientMetrics::default(),
             rate_limit_guard: None, // Will be set when connection is established
             owner,
             stream_task: None, // Set when streaming starts
         };
 
-        match self.sessions.write().await.entry(session_id) {
+        match self.sessions.write().entry(session_id) {
             Entry::Occupied(_) => return Err(CreateSessionError::AlreadyExists(session_id)),
             Entry::Vacant(slot) => {
                 slot.insert(session);
@@ -279,7 +304,7 @@ impl AdaptiveStreamController {
 
     /// Start streaming frames for session
     pub async fn start_streaming(&self, session_id: SessionId) -> PjsResult<()> {
-        let mut sessions = self.sessions.write().await;
+        let mut sessions = self.sessions.write();
         let session = sessions
             .get_mut(&session_id)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
@@ -290,7 +315,7 @@ impl AdaptiveStreamController {
         let plan = session.plan.clone();
 
         let sessions_for_task = self.sessions.clone();
-        let handle = tokio::spawn(async move {
+        let handle = spawn_task(self.shutdown.as_ref(), async move {
             if let Err(e) =
                 Self::stream_frames(owner, session_id, plan, frame_tx, sessions_for_task).await
             {
@@ -306,7 +331,7 @@ impl AdaptiveStreamController {
         if let Some(previous) = session.stream_task.replace(handle.abort_handle()) {
             previous.abort();
         }
-        tokio::spawn(async move {
+        spawn_task(self.shutdown.as_ref(), async move {
             match handle.await {
                 Ok(()) => {}
                 Err(join_err) if join_err.is_panic() => {
@@ -345,7 +370,6 @@ impl AdaptiveStreamController {
 
             let delay = sessions
                 .read()
-                .await
                 .get(&session_id)
                 .map(|session| session.client_metrics.recommended_frame_delay())
                 .unwrap_or(Duration::from_millis(10));
@@ -371,13 +395,12 @@ impl AdaptiveStreamController {
         frame_id: u32,
         processing_time_ms: u64,
     ) -> PjsResult<()> {
-        let mut sessions = self.sessions.write().await;
+        let mut sessions = self.sessions.write();
         let session = sessions
             .get_mut(&session_id)
             .filter(|session| session.owner == owner)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
 
-        session.acknowledged_frames.push(frame_id);
         session
             .client_metrics
             .update_processing_time(processing_time_ms);
@@ -414,7 +437,7 @@ impl AdaptiveStreamController {
         session_id: SessionId,
         guard: RateLimitGuard,
     ) -> PjsResult<()> {
-        let mut sessions = self.sessions.write().await;
+        let mut sessions = self.sessions.write();
         let session = sessions
             .get_mut(&session_id)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
@@ -429,7 +452,7 @@ impl AdaptiveStreamController {
         session_id: SessionId,
         frame_size: usize,
     ) -> PjsResult<()> {
-        let sessions = self.sessions.read().await;
+        let sessions = self.sessions.read();
         let session = sessions
             .get(&session_id)
             .ok_or_else(|| PjsError::InvalidSession(session_id.to_string()))?;
@@ -471,7 +494,7 @@ impl AdaptiveStreamController {
     /// # }
     /// ```
     pub async fn remove_session(&self, session_id: SessionId) -> bool {
-        let mut sessions = self.sessions.write().await;
+        let mut sessions = self.sessions.write();
         let removed = sessions.remove(&session_id);
         match &removed {
             Some(session) => {
@@ -488,6 +511,7 @@ impl AdaptiveStreamController {
     /// Remove every session created by `owner`, aborting their streaming tasks.
     ///
     /// Returns the number of sessions removed. Used when a connection closes.
+    /// Synchronous so a connection's drop guard can call it.
     ///
     /// # Examples
     ///
@@ -507,12 +531,12 @@ impl AdaptiveStreamController {
     ///         .await
     ///         .unwrap();
     /// }
-    /// assert_eq!(controller.remove_sessions_owned_by(a).await, 2);
-    /// assert_eq!(controller.remove_sessions_owned_by(a).await, 0);
+    /// assert_eq!(controller.remove_sessions_owned_by(a), 2);
+    /// assert_eq!(controller.remove_sessions_owned_by(a), 0);
     /// # }
     /// ```
-    pub async fn remove_sessions_owned_by(&self, owner: ConnectionId) -> usize {
-        let mut sessions = self.sessions.write().await;
+    pub fn remove_sessions_owned_by(&self, owner: ConnectionId) -> usize {
+        let mut sessions = self.sessions.write();
         let before = sessions.len();
         sessions.retain(|id, session| {
             if session.owner != owner {
@@ -529,7 +553,7 @@ impl AdaptiveStreamController {
 
     /// Clean up expired sessions
     pub async fn cleanup_expired_sessions(&self, max_age: Duration) {
-        let mut sessions = self.sessions.write().await;
+        let mut sessions = self.sessions.write();
         let now = Instant::now();
 
         sessions.retain(|id, session| {
@@ -580,7 +604,7 @@ mod tests {
 
         let session_id = new_session(&controller, owner, data).await;
 
-        let sessions = controller.sessions.read().await;
+        let sessions = controller.sessions.read();
         assert_eq!(sessions[&session_id].owner(), owner);
     }
 
@@ -600,7 +624,7 @@ mod tests {
             .await;
 
         assert_eq!(result, Err(CreateSessionError::AlreadyExists(session_id)));
-        let sessions = controller.sessions.read().await;
+        let sessions = controller.sessions.read();
         assert_eq!(sessions[&session_id].owner(), first_owner);
         assert_eq!(sessions[&session_id].plan[0].data, json!({"v": 1}));
     }
@@ -616,9 +640,9 @@ mod tests {
             .await
             .unwrap();
 
-        let sessions = controller.sessions.read().await;
+        let sessions = controller.sessions.read();
         let session = sessions.get(&session_id).unwrap();
-        assert_eq!(session.acknowledged_frames, vec![0]);
+        assert_eq!(session.client_metrics.frames_acknowledged, 1);
         assert_eq!(session.client_metrics.average_processing_time_ms, 50.0);
     }
 
@@ -633,9 +657,8 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(PjsError::InvalidSession(_))));
-        let sessions = controller.sessions.read().await;
+        let sessions = controller.sessions.read();
         let session = &sessions[&session_id];
-        assert!(session.acknowledged_frames.is_empty());
         assert_eq!(session.client_metrics.frames_acknowledged, 0);
     }
 
@@ -647,9 +670,9 @@ mod tests {
         let a2 = new_session(&controller, a, json!({})).await;
         let b1 = new_session(&controller, b, json!({})).await;
 
-        assert_eq!(controller.remove_sessions_owned_by(a).await, 2);
+        assert_eq!(controller.remove_sessions_owned_by(a), 2);
 
-        let sessions = controller.sessions.read().await;
+        let sessions = controller.sessions.read();
         assert!(!sessions.contains_key(&a1) && !sessions.contains_key(&a2));
         assert!(sessions.contains_key(&b1));
     }
@@ -686,7 +709,7 @@ mod tests {
         // Long enough (10ms/frame) that the task is still far from done
         // when we abort it immediately below.
         {
-            let mut sessions = controller.sessions.write().await;
+            let mut sessions = controller.sessions.write();
             let session = sessions.get_mut(&session_id).unwrap();
             session.plan = (0..200)
                 .map(|_| StreamFrame {
@@ -771,7 +794,7 @@ mod tests {
             new_session(&controller, ConnectionId::new(), json!({"test": "data"})).await;
 
         {
-            let mut sessions = controller.sessions.write().await;
+            let mut sessions = controller.sessions.write();
             sessions
                 .get_mut(&session_id)
                 .unwrap()

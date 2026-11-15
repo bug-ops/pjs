@@ -37,8 +37,7 @@ pub use schema_repository::SchemaRepository;
 #[cfg(feature = "websocket-server")]
 pub use websocket::{
     AdaptiveStreamController, AxumWebSocketTransport, ClientMetrics, ConnectionId,
-    CreateSessionError, SecureWebSocketHandler, WebSocketStreamSession, WebSocketTransport,
-    create_websocket_router,
+    CreateSessionError, SecureWebSocketHandler, create_websocket_router,
 };
 #[cfg(feature = "websocket-client")]
 pub use websocket::{ClosedSession, PjsWebSocketClient, SessionIdleTtl, StreamStats};

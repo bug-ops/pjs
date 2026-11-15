@@ -222,11 +222,8 @@ impl ShutdownSignal {
 
     /// A token that keeps [`drain`](Self::drain) waiting while it is held.
     #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first caller lands with the WebSocket upgrade hand-off"
-        )
+        not(any(test, feature = "websocket-server")),
+        expect(dead_code, reason = "only the WebSocket upgrade hand-off calls this")
     )]
     pub(crate) fn token(&self) -> TaskTrackerToken {
         self.inner.tracker.token()
@@ -234,11 +231,8 @@ impl ShutdownSignal {
 
     /// Whether a drain has been forced.
     #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first caller lands with the WebSocket upgrade hand-off"
-        )
+        not(any(test, feature = "websocket-server")),
+        expect(dead_code, reason = "only the WebSocket upgrade hand-off calls this")
     )]
     pub(crate) fn is_forced(&self) -> bool {
         self.inner.force.is_cancelled()

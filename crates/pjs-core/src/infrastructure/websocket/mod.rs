@@ -23,7 +23,6 @@ pub use client::{
 #[cfg(feature = "websocket-server")]
 pub use controller::{
     AdaptiveStreamController, ClientMetrics, ConnectionId, CreateSessionError, FrameEvent,
-    WebSocketStreamSession,
 };
 #[cfg(feature = "websocket-client")]
 pub(crate) use protocol::WRITE_TIMEOUT;
@@ -32,4 +31,4 @@ pub use protocol::{StreamOptions, WsMessage};
 #[cfg(feature = "websocket-server")]
 pub use security::SecureWebSocketHandler;
 #[cfg(feature = "websocket-server")]
-pub use server::{AxumWebSocketTransport, WebSocketTransport, create_websocket_router};
+pub use server::{AxumWebSocketTransport, create_websocket_router};
