@@ -87,11 +87,17 @@ async fn test_connect_refused_exposes_tungstenite_source_and_redacted_url() {
         .expect_err("nothing listens on the port");
 
     let Error::ConnectionFailed { ref url, .. } = error else {
-        panic!("expected ConnectionFailed, got {error:?}");
+        panic!("expected ConnectionFailed");
     };
-    assert!(url.contains("127.0.0.1"), "{url}");
-    for secret in ["user", "secret", "token", "abc", "frag"] {
-        assert!(!url.contains(secret), "url `{url}` leaks `{secret}`");
+    assert!(url.contains("127.0.0.1"), "redacted url lost the host");
+    for (label, leaked) in [
+        ("userinfo name", url.contains("user")),
+        ("password", url.contains("secret")),
+        ("query key", url.contains("token")),
+        ("query value", url.contains("abc")),
+        ("fragment", url.contains("frag")),
+    ] {
+        assert!(!leaked, "the redacted url still carries the {label}");
     }
     assert!(
         source_of(&error)
