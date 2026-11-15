@@ -21,9 +21,7 @@ pub use client::{
     ClosedSession, PjsWebSocketClient, SessionIdleTtl, StreamStats, WebSocketClientConfig,
 };
 #[cfg(feature = "websocket-server")]
-pub use controller::{
-    AdaptiveStreamController, ClientMetrics, ConnectionId, CreateSessionError, FrameEvent,
-};
+pub use controller::{AdaptiveStreamController, ClientMetrics, ConnectionId, CreateSessionError};
 #[cfg(feature = "websocket-client")]
 pub(crate) use protocol::WRITE_TIMEOUT;
 pub(crate) use protocol::send_with_write_timeout;

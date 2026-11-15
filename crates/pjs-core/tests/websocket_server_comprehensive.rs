@@ -15,6 +15,7 @@
 use pjson_rs::{
     Error as PjsError,
     domain::{Priority, SessionId},
+    infrastructure::byte_bounded_channel,
     infrastructure::websocket::{
         AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, StreamOptions, WsMessage,
     },
@@ -160,7 +161,7 @@ async fn test_remove_unknown_session_is_a_no_op() {
 
     let removed = transport
         .controller()
-        .remove_session(SessionId::new())
+        .remove_session(ConnectionId::new(), SessionId::new())
         .await;
 
     assert!(!removed);
@@ -174,7 +175,7 @@ async fn test_remove_session_removes_session_from_controller() {
     let owner = ConnectionId::new();
     let session_id = create(&controller, owner, json!({"k": "v"})).await;
 
-    assert!(controller.remove_session(session_id).await);
+    assert!(controller.remove_session(owner, session_id).await);
 
     // Session must be gone — subsequent operations must return InvalidSession.
     let err = controller
@@ -214,9 +215,10 @@ async fn test_controller_start_streaming() {
         "values": [1, 2, 3]
     });
 
-    let session_id = create(&controller, ConnectionId::new(), data).await;
+    let owner = ConnectionId::new();
+    let session_id = create(&controller, owner, data).await;
 
-    let result = controller.start_streaming(session_id).await;
+    let result = controller.start_streaming(owner, session_id).await;
 
     assert!(result.is_ok());
 }
@@ -225,7 +227,9 @@ async fn test_controller_start_streaming() {
 async fn test_controller_start_streaming_invalid_session() {
     let controller = AdaptiveStreamController::new();
 
-    let result = controller.start_streaming(SessionId::new()).await;
+    let result = controller
+        .start_streaming(ConnectionId::new(), SessionId::new())
+        .await;
 
     assert!(result.is_err());
 }
@@ -278,23 +282,21 @@ async fn test_controller_handle_frame_ack_invalid_session() {
 }
 
 #[tokio::test]
-async fn test_controller_subscribe_frames() {
+async fn test_controller_delivers_frames_to_the_attached_connection() {
     let controller = AdaptiveStreamController::new();
+    let owner = ConnectionId::new();
+    let (tx, mut rx) = byte_bounded_channel::<String>(1000, 16 * 1024 * 1024);
+    controller.attach_connection(owner, tx);
 
-    let mut receiver = controller.subscribe_frames();
+    let session_id = create(&controller, owner, json!({"test": "data"})).await;
+    controller.start_streaming(owner, session_id).await.unwrap();
 
-    // Create and start a session
-    let session_id = create(&controller, ConnectionId::new(), json!({"test": "data"})).await;
-
-    controller.start_streaming(session_id).await.unwrap();
-
-    // Give some time for frames to be sent
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Try to receive a frame
-    let _result = receiver.try_recv();
-    // Should receive something or get Lagged/Closed error (which is okay in tests)
-    // We're just testing that the subscription mechanism works
+    let envelope = tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("a frame must be delivered")
+        .expect("channel open");
+    let message: WsMessage = serde_json::from_str(&envelope.into_inner()).unwrap();
+    assert!(matches!(message, WsMessage::StreamFrame { .. }));
 }
 
 // ============================================================================
@@ -524,12 +526,7 @@ async fn test_full_websocket_lifecycle() {
     let owner = ConnectionId::new();
     let session_id = create(&controller, owner, data).await;
 
-    // 2. Start streaming
-    controller.start_streaming(session_id).await.unwrap();
-
-    // 3. Simulate frame acknowledgments
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
+    // 2. Simulate frame acknowledgments
     controller
         .handle_frame_ack(owner, session_id, 0, 30)
         .await
@@ -540,8 +537,8 @@ async fn test_full_websocket_lifecycle() {
         .await
         .unwrap();
 
-    // 4. Close stream — session must be removed from the controller.
-    assert!(controller.remove_session(session_id).await);
+    // 3. Close stream — session must be removed from the controller.
+    assert!(controller.remove_session(owner, session_id).await);
 
     let err = controller
         .handle_frame_ack(owner, session_id, 0, 0)
@@ -564,9 +561,10 @@ async fn test_multiple_concurrent_sessions() {
             "data": format!("test-{}", i)
         });
 
-        let session_id = create(&controller, ConnectionId::new(), data).await;
+        let owner = ConnectionId::new();
+        let session_id = create(&controller, owner, data).await;
 
-        session_ids.push(session_id);
+        session_ids.push((owner, session_id));
     }
 
     assert_eq!(session_ids.len(), 5);
@@ -574,13 +572,17 @@ async fn test_multiple_concurrent_sessions() {
     // All sessions should be unique
     let unique_count = session_ids
         .iter()
+        .map(|(_, id)| id)
         .collect::<std::collections::HashSet<_>>()
         .len();
     assert_eq!(unique_count, 5);
 
     // Start streaming for all sessions
-    for session_id in &session_ids {
-        controller.start_streaming(*session_id).await.unwrap();
+    for (owner, session_id) in &session_ids {
+        controller
+            .start_streaming(*owner, *session_id)
+            .await
+            .unwrap();
     }
 }
 
@@ -592,7 +594,7 @@ async fn test_websocket_error_handling() {
     assert!(
         !transport
             .controller()
-            .remove_session(SessionId::new())
+            .remove_session(ConnectionId::new(), SessionId::new())
             .await
     );
 

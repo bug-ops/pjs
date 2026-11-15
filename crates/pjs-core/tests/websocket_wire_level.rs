@@ -83,7 +83,7 @@ fn stream_init(session_id: &str, data: serde_json::Value) -> Message {
             "options": {
                 "max_frame_size": 65536,
                 "client_fps": null,
-                "compression": false,
+                "compression": true,
                 "priority_mapping": null
             }
         }
@@ -382,10 +382,10 @@ async fn test_wire_frames_are_routed_only_to_the_owning_connection() {
     assert_silent(&mut bystander, Duration::from_millis(500)).await;
 }
 
-/// A second `StreamInit` for a live id is refused with a 409 and leaves the
-/// first session, and its owner's stream, untouched.
+/// The same session id on another connection is an unrelated session: both
+/// connections stream, and each only ever sees its own messages.
 #[tokio::test]
-async fn test_wire_duplicate_session_id_is_rejected_with_409() {
+async fn test_wire_same_session_id_on_two_connections_is_independent() {
     let (addr, _transport) = spawn_ws_test_server().await;
     let mut first = connect(addr).await;
     let mut second = connect(addr).await;
@@ -396,34 +396,37 @@ async fn test_wire_duplicate_session_id_is_rejected_with_409() {
         .send(stream_init(&uuid, json!({"owner": "first"})))
         .await
         .expect("send first StreamInit");
-    assert!(matches!(
-        next_ws_message(&mut first).await,
-        WsMessage::StreamFrame { .. }
-    ));
-
     second
         .send(stream_init(&uuid, json!({"owner": "second"})))
         .await
-        .expect("send duplicate StreamInit");
+        .expect("send second StreamInit");
 
-    assert!(matches!(
-        next_ws_message(&mut second).await,
-        WsMessage::Error { session_id: Some(rejected), code: 409, .. } if rejected == id
-    ));
-    assert_silent(&mut second, Duration::from_millis(300)).await;
+    for ws in [&mut first, &mut second] {
+        assert!(matches!(
+            next_ws_message(ws).await,
+            WsMessage::StreamFrame { session_id, .. } if session_id == id
+        ));
+        assert!(matches!(
+            next_ws_message(ws).await,
+            WsMessage::StreamComplete { session_id } if session_id == id
+        ));
+    }
 }
 
-/// Closing a connection removes exactly the sessions it owns.
+/// Closing a connection releases only its own registration; the other
+/// connection stays registered and keeps working.
 #[tokio::test]
-async fn test_wire_disconnect_removes_only_the_connections_own_sessions() {
+async fn test_wire_disconnect_releases_only_the_closing_connection() {
     let (addr, transport) = spawn_ws_test_server().await;
     let mut leaving = connect(addr).await;
     let mut staying = connect(addr).await;
-    let (leaving_id, staying_id) = (SessionId::new(), SessionId::new());
-    for (ws, id) in [(&mut leaving, leaving_id), (&mut staying, staying_id)] {
-        ws.send(stream_init(&id.as_uuid().to_string(), json!({"k": 1})))
-            .await
-            .expect("send StreamInit");
+    for ws in [&mut leaving, &mut staying] {
+        ws.send(stream_init(
+            &SessionId::new().as_uuid().to_string(),
+            json!({"k": 1}),
+        ))
+        .await
+        .expect("send StreamInit");
         next_ws_message(ws).await;
     }
 
@@ -431,24 +434,27 @@ async fn test_wire_disconnect_removes_only_the_connections_own_sessions() {
         .send(Message::Close(None))
         .await
         .expect("send Close");
-    let controller = transport.controller();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while controller.validate_message(leaving_id, 0).await.is_ok() {
+    while transport.active_connection_count().await != 1 {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for the leaving connection's session to be removed"
+            "timed out waiting for the leaving connection to be released"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    assert!(controller.validate_message(staying_id, 0).await.is_ok());
+    staying
+        .send(Message::Ping(b"alive".to_vec().into()))
+        .await
+        .expect("send ping");
+    expect_pong(&mut staying, b"alive").await;
 }
 
 /// A `FrameAck` for a session the sender does not own gets no reply and does
 /// not disturb the sender's connection or the owner's session.
 #[tokio::test]
 async fn test_wire_non_owner_frame_ack_is_ignored() {
-    let (addr, transport) = spawn_ws_test_server().await;
+    let (addr, _transport) = spawn_ws_test_server().await;
     let mut owner = connect(addr).await;
     let mut intruder = connect(addr).await;
     let id = SessionId::new();
@@ -472,7 +478,10 @@ async fn test_wire_non_owner_frame_ack_is_ignored() {
         .expect("send ping");
 
     expect_pong(&mut intruder, b"alive").await;
-    assert!(transport.controller().validate_message(id, 0).await.is_ok());
+    assert!(matches!(
+        next_ws_message(&mut owner).await,
+        WsMessage::StreamComplete { session_id } if session_id == id
+    ));
 }
 
 /// Verify that inbound application frames are subject to per-connection rate
@@ -729,7 +738,7 @@ async fn test_wire_low_resource_preset_enforces_smaller_frame_cap() {
 /// alongside this fix) to keep the test fast: a short deadline lets it
 /// observe a real stall without waiting out the 10s production default.
 /// The client requests one large stream and then never reads again, so
-/// the server's single ~32 MiB outbound frame cannot be delivered —
+/// the server's single ~15 MiB outbound frame cannot be delivered —
 /// cumulative undelivered bytes exceed any realistic OS socket-buffer
 /// size, so the write genuinely blocks rather than merely simulating a
 /// stall the way the unit tests in `websocket::mod`'s `write_timeout_tests`
@@ -748,16 +757,16 @@ async fn test_wire_stalled_write_times_out_and_closes_connection() {
         .await
         .expect("WebSocket handshake failed");
 
-    let big_data = "x".repeat(32 * 1024 * 1024);
+    let big_data = "x".repeat(15 * 1024 * 1024);
     let init = json!({
         "type": "StreamInit",
         "data": {
             "session_id": SessionId::new().as_uuid().to_string(),
             "data": big_data,
             "options": {
-                "max_frame_size": 64 * 1024 * 1024,
+                "max_frame_size": 64 * 1024,
                 "client_fps": null,
-                "compression": false,
+                "compression": true,
                 "priority_mapping": null
             }
         }
@@ -770,7 +779,7 @@ async fn test_wire_stalled_write_times_out_and_closes_connection() {
     // Never read from `ws` again, and keep it alive (not dropped): a
     // dropped/closed socket would make the server's next write fail fast
     // with a connection error, which isn't the scenario under test. Held
-    // open but undrained, the server's ~32 MiB outbound frame cannot be
+    // open but undrained, the server's ~15 MiB outbound frame cannot be
     // delivered, so the write genuinely blocks rather than completing
     // instantly into a generously-sized OS buffer.
     let _ws = ws;
@@ -816,16 +825,16 @@ async fn test_wire_stalled_write_stays_open_before_write_timeout() {
         .await
         .expect("WebSocket handshake failed");
 
-    let big_data = "x".repeat(32 * 1024 * 1024);
+    let big_data = "x".repeat(15 * 1024 * 1024);
     let init = json!({
         "type": "StreamInit",
         "data": {
             "session_id": SessionId::new().as_uuid().to_string(),
             "data": big_data,
             "options": {
-                "max_frame_size": 64 * 1024 * 1024,
+                "max_frame_size": 64 * 1024,
                 "client_fps": null,
-                "compression": false,
+                "compression": true,
                 "priority_mapping": null
             }
         }

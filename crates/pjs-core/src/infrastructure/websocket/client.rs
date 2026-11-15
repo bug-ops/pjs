@@ -564,6 +564,10 @@ impl PjsWebSocketClient {
     /// reached, expired sessions are dropped and then the incomplete session
     /// idle the longest is evicted (see [`WebSocketClientConfig::max_sessions`]).
     ///
+    /// The server applies none of the [`StreamOptions`] fields: it accepts only
+    /// `None` or [`StreamOptions::default`] and answers any other value with an
+    /// `Error` message (code 400) and no stream.
+    ///
     /// # Errors
     ///
     /// Returns [`PjsError::SessionLimitReached`] if every tracked session is

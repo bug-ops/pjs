@@ -173,6 +173,11 @@ pub enum WsMessage {
 
 /// Stream configuration options.
 ///
+/// The server applies none of these fields: a `StreamInit` is accepted only
+/// when its options equal [`StreamOptions::default`], and any other value is
+/// answered with an `Error` message (code 400) and no stream. The fields stay
+/// on the wire so existing peers, which always send `options`, keep working.
+///
 /// `priority_mapping` values are validated [`Priority`] values on the wire:
 /// decoding rejects an entry that [`Priority::new`] refuses.
 ///
