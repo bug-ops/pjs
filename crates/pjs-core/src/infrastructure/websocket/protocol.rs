@@ -130,6 +130,21 @@ pub enum WsMessage {
         /// Whether this frame completes the stream.
         is_complete: bool,
     },
+    /// Stream frame carrying patch operations
+    StreamPatch {
+        /// Identifier of the WebSocket session.
+        #[serde(with = "pjson_rs_domain::serde_support::session_id")]
+        session_id: SessionId,
+        /// Monotonic frame index within the session.
+        frame_id: u32,
+        /// Priority assigned to this frame.
+        #[serde(with = "pjson_rs_domain::serde_support::priority")]
+        priority: Priority,
+        /// Patch operations carried by the frame.
+        patches: Vec<WirePatch>,
+        /// Whether this frame completes the stream.
+        is_complete: bool,
+    },
     /// Client acknowledgment of frame
     FrameAck {
         /// Identifier of the WebSocket session.
@@ -184,6 +199,7 @@ impl WsMessage {
         match self {
             Self::StreamInit { .. } => "StreamInit",
             Self::StreamFrame { .. } => "StreamFrame",
+            Self::StreamPatch { .. } => "StreamPatch",
             Self::FrameAck { .. } => "FrameAck",
             Self::StreamComplete { .. } => "StreamComplete",
             Self::StreamCancel { .. } => "StreamCancel",
@@ -192,6 +208,63 @@ impl WsMessage {
             Self::Pong { .. } => "Pong",
         }
     }
+}
+
+/// Frame encoding negotiated for a stream.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Framing {
+    /// Top-level key merge frames
+    #[default]
+    Merge,
+    /// Patch operation frames
+    Patch,
+}
+
+/// One step of a [`WirePath`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireSegment {
+    /// Object member name
+    Key(String),
+    /// Array element index
+    Index(usize),
+}
+
+/// Location of a patch target inside the client's document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WirePath(pub Vec<WireSegment>);
+
+/// One patch operation of a [`WsMessage::StreamPatch`] frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum WirePatch {
+    /// Replace the value at `path`
+    Set {
+        /// Target location
+        path: WirePath,
+        /// New value
+        value: Value,
+    },
+    /// Insert or replace object entries at `path`
+    Merge {
+        /// Target location
+        path: WirePath,
+        /// Entries to insert
+        entries: serde_json::Map<String, Value>,
+    },
+    /// Append array elements at `path`
+    Append {
+        /// Target location
+        path: WirePath,
+        /// Elements to append
+        values: Vec<Value>,
+    },
+    /// Append text to the string at `path`
+    AppendStr {
+        /// Target location
+        path: WirePath,
+        /// Text to append
+        text: String,
+    },
 }
 
 /// Stream configuration options.
@@ -224,6 +297,9 @@ pub struct StreamOptions {
     /// Custom priority mapping
     #[serde(default, with = "option_priority_map")]
     pub priority_mapping: Option<HashMap<String, Priority>>,
+    /// Frame encoding the stream uses
+    #[serde(default)]
+    pub framing: Framing,
 }
 
 impl Default for StreamOptions {
@@ -233,6 +309,7 @@ impl Default for StreamOptions {
             client_fps: None,          // Auto-detect
             compression: true,
             priority_mapping: None,
+            framing: Framing::default(),
         }
     }
 }

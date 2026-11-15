@@ -678,6 +678,13 @@ impl AxumWebSocketTransport {
                         .await;
                         return Err(e.into());
                     }
+                    // TODO(#624): reply 400/429 once the controller produces these
+                    Err(
+                        e @ (CreateSessionError::InvalidOptions(_)
+                        | CreateSessionError::PlanRejected(_)),
+                    ) => {
+                        return Err(e.into());
+                    }
                 }
                 self.controller
                     .start_streaming(connection, session_id)

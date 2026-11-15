@@ -326,6 +326,7 @@ fn test_stream_options_custom() {
         client_fps: Some(60),
         compression: false,
         priority_mapping: Some(priority_mapping.clone()),
+        ..Default::default()
     };
 
     assert_eq!(options.max_frame_size, 1024 * 1024);

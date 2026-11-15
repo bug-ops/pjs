@@ -7,6 +7,14 @@
 import { EventEmitter } from 'events';
 import { Frame, PJSClientConfig } from '../types/index.js';
 
+/** Name of the SSE event (and NDJSON marker key) a server sends before closing on shutdown. */
+export const SHUTDOWN_EVENT = 'shutdown';
+
+/** Type guard for the server shutdown marker `{ "event": "shutdown" }`. */
+export function isShutdownMarker(_v: unknown): _v is { event: typeof SHUTDOWN_EVENT } {
+  throw new Error('not implemented');
+}
+
 export interface ConnectResult {
   sessionId?: string;
   supportedFeatures?: string[];
@@ -77,5 +85,12 @@ export abstract class Transport extends EventEmitter {
    */
   protected emitDisconnect(): void {
     this.emit('disconnect');
+  }
+
+  /**
+   * Emit server shutdown event (used by implementations)
+   */
+  protected emitShutdown(): void {
+    throw new Error('not implemented');
   }
 }

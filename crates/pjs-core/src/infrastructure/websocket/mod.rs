@@ -25,7 +25,7 @@ pub use controller::{AdaptiveStreamController, ClientMetrics, ConnectionId, Crea
 #[cfg(feature = "websocket-client")]
 pub(crate) use protocol::WRITE_TIMEOUT;
 pub(crate) use protocol::send_with_write_timeout;
-pub use protocol::{StreamOptions, WsMessage};
+pub use protocol::{Framing, StreamOptions, WirePatch, WirePath, WireSegment, WsMessage};
 #[cfg(feature = "websocket-server")]
 pub use security::SecureWebSocketHandler;
 #[cfg(feature = "websocket-server")]

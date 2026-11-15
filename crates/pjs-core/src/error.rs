@@ -436,3 +436,69 @@ mod tests {
         assert!(returns_error().is_err());
     }
 }
+
+/// Compression codec an error refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodecKind {
+    /// gzip
+    Gzip,
+}
+
+/// Codec operation that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodecOperation {
+    /// Decompression
+    Decompress,
+}
+
+/// Why a session id was rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionIdViolation {
+    /// Shorter than the minimum length
+    TooShort {
+        /// Actual length
+        len: usize,
+        /// Minimum length
+        min: usize,
+    },
+    /// Longer than the maximum length
+    TooLong {
+        /// Actual length
+        len: usize,
+        /// Maximum length
+        max: usize,
+    },
+    /// Contains a disallowed character
+    InvalidCharacter,
+}
+
+/// Why stream options were rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum StreamOptionsError {
+    /// `max_frame_size` below the minimum
+    #[error("max_frame_size {requested} is below the minimum {min}")]
+    MaxFrameSizeTooSmall {
+        /// Requested size
+        requested: usize,
+        /// Minimum size
+        min: usize,
+    },
+    /// `client_fps` of zero
+    #[error("client_fps must not be zero")]
+    ZeroClientFps,
+}
+
+/// Why a stream plan was rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PlanError {
+    /// The connection's live plan budget is exhausted
+    #[error("connection plan budget exhausted: {live} live + {requested} requested > {max}")]
+    ConnectionBudgetExhausted {
+        /// Bytes already reserved on the connection
+        live: usize,
+        /// Bytes the new plan needs
+        requested: usize,
+        /// Budget per connection
+        max: usize,
+    },
+}

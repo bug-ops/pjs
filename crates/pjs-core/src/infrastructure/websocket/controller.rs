@@ -7,6 +7,7 @@ use super::protocol::{StreamOptions, WsMessage};
 use crate::{
     Error as PjsError, Result as PjsResult, StreamFrame,
     domain::{Priority, SessionId},
+    error::{PlanError, StreamOptionsError},
     infrastructure::{bounded_channel::ByteBoundedSender, http::ShutdownSignal},
     security::RateLimitGuard,
 };
@@ -189,6 +190,12 @@ pub enum CreateSessionError {
         /// The per-connection cap that was reached.
         limit: NonZeroUsize,
     },
+    /// The stream options failed validation.
+    #[error("invalid stream options: {0}")]
+    InvalidOptions(StreamOptionsError),
+    /// The planned frames were rejected.
+    #[error("plan rejected: {0}")]
+    PlanRejected(PlanError),
 }
 
 impl From<CreateSessionError> for PjsError {
