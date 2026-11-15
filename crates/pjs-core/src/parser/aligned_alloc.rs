@@ -34,10 +34,26 @@ impl AlignedAllocator {
     /// deallocate it via [`AlignedAllocator::dealloc_aligned`] with the same
     /// `Layout`.
     ///
+    /// # Errors
+    ///
+    /// Returns [`DomainError::InvalidInput`] when `size` is zero (a zero-size
+    /// layout is undefined behavior for the global allocator), when `alignment`
+    /// is not a power of two, or when the layout is invalid, and
+    /// [`DomainError::ResourceExhausted`] when the allocation fails.
+    ///
     /// # Safety
     ///
     /// The returned pointer is valid for `size` bytes. The caller is
     /// responsible for ensuring the pointer is not used after deallocation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs::parser::aligned_allocator;
+    ///
+    /// // SAFETY: a zero-size request is rejected before reaching the global allocator.
+    /// assert!(unsafe { aligned_allocator().alloc_aligned(0, 16) }.is_err());
+    /// ```
     pub unsafe fn alloc_aligned(&self, size: usize, alignment: usize) -> DomainResult<NonNull<u8>> {
         if !alignment.is_power_of_two() {
             return Err(DomainError::InvalidInput(format!(
@@ -46,10 +62,16 @@ impl AlignedAllocator {
             )));
         }
 
+        if size == 0 {
+            return Err(DomainError::InvalidInput(
+                "Allocation size must be non-zero".to_string(),
+            ));
+        }
+
         let layout = Layout::from_size_align(size, alignment)
             .map_err(|e| DomainError::InvalidInput(format!("Invalid layout: {}", e)))?;
 
-        // SAFETY: layout is valid (size and alignment validated above).
+        // SAFETY: layout has non-zero size and a valid power-of-two alignment (checked above).
         let ptr = unsafe { alloc(layout) };
         if ptr.is_null() {
             return Err(DomainError::ResourceExhausted(format!(

@@ -23,15 +23,14 @@ pub struct SecurityConfig {
 
 /// Hard ceiling on [`JsonLimits::max_depth`], enforced by [`SecurityConfig::validate`].
 ///
-/// `sonic-rs` has no internal recursion limit, so `max_depth` is the only
-/// guard between untrusted input and unbounded parser recursion. This caps
-/// misconfiguration (e.g. an operator or deserialized config setting an
-/// unreasonably large limit) from reopening the stack-exhaustion risk fixed
-/// in #456; it does not by itself guarantee safety on every stack size.
+/// `sonic-rs` enforces its own recursion limit (about 200 levels in release builds),
+/// so this ceiling bounds misconfiguration (e.g. an operator or deserialized config
+/// setting an unreasonably large limit) and the recursion of PJS parsers; it does
+/// not by itself guarantee safety on every stack size.
 pub const MAX_SAFE_JSON_DEPTH: usize = 512;
 
-const MAX_DEPTH_EXCEEDED: &str = "max_depth exceeds MAX_SAFE_JSON_DEPTH (sonic-rs has no internal \
-     recursion limit; excessive depth risks stack exhaustion)";
+const MAX_DEPTH_EXCEEDED: &str = "max_depth exceeds MAX_SAFE_JSON_DEPTH (excessive depth risks \
+     stack exhaustion)";
 
 /// A JSON nesting limit in `1..=`[`MAX_SAFE_JSON_DEPTH`].
 ///
@@ -267,9 +266,12 @@ impl SecurityConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::MustBePositive`] when a size field is zero.
+    /// Returns [`ConfigError::MustBePositive`] when any limit, count or timeout is zero.
     /// Returns [`ConfigError::InconsistentBounds`] when min > max for session
-    /// ID length, or `max_depth` exceeds [`MAX_SAFE_JSON_DEPTH`].
+    /// ID length, `max_depth` exceeds [`MAX_SAFE_JSON_DEPTH`], or a limit exceeds
+    /// the budget that contains it (`buffers.max_buffer_size` and
+    /// `sessions.max_session_data_size` against `buffers.max_total_memory`,
+    /// `network.max_websocket_frame_size` against `json.max_input_size`).
     ///
     /// # Examples
     ///
@@ -348,6 +350,85 @@ impl SecurityConfig {
             "max_session_data_size",
             self.sessions.max_session_data_size
         );
+        must_be_positive!(
+            "security.json",
+            "max_object_keys",
+            self.json.max_object_keys
+        );
+        must_be_positive!(
+            "security.json",
+            "max_array_length",
+            self.json.max_array_length
+        );
+        must_be_positive!(
+            "security.buffers",
+            "max_pool_size",
+            self.buffers.max_pool_size
+        );
+        must_be_positive!(
+            "security.buffers",
+            "buffer_ttl_secs",
+            self.buffers.buffer_ttl_secs
+        );
+        must_be_positive!(
+            "security.buffers",
+            "max_buffers_per_bucket",
+            self.buffers.max_buffers_per_bucket
+        );
+        must_be_positive!(
+            "security.network",
+            "max_concurrent_connections",
+            self.network.max_concurrent_connections
+        );
+        must_be_positive!(
+            "security.network",
+            "connection_timeout_secs",
+            self.network.connection_timeout_secs
+        );
+        must_be_positive!(
+            "security.network",
+            "max_requests_per_second",
+            self.network.max_requests_per_second
+        );
+        must_be_positive!(
+            "security.network.rate_limiting",
+            "window_duration_secs",
+            self.network.rate_limiting.window_duration_secs
+        );
+        must_be_positive!(
+            "security.network.rate_limiting",
+            "max_connections_per_ip",
+            self.network.rate_limiting.max_connections_per_ip
+        );
+        must_be_positive!(
+            "security.sessions",
+            "max_streams_per_session",
+            self.sessions.max_streams_per_session
+        );
+        must_be_positive!(
+            "security.sessions",
+            "session_timeout_secs",
+            self.sessions.session_timeout_secs
+        );
+
+        if self.buffers.max_buffer_size > self.buffers.max_total_memory {
+            return Err(ConfigError::InconsistentBounds {
+                section: "security.buffers",
+                message: "max_buffer_size must be <= max_total_memory",
+            });
+        }
+        if self.network.max_websocket_frame_size > self.json.max_input_size {
+            return Err(ConfigError::InconsistentBounds {
+                section: "security.network",
+                message: "max_websocket_frame_size must be <= json.max_input_size",
+            });
+        }
+        if self.sessions.max_session_data_size > self.buffers.max_total_memory {
+            return Err(ConfigError::InconsistentBounds {
+                section: "security.sessions",
+                message: "max_session_data_size must be <= buffers.max_total_memory",
+            });
+        }
 
         Ok(())
     }
