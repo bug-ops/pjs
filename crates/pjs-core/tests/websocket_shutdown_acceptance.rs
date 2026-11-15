@@ -108,12 +108,7 @@ async fn test_shutdown_client_socket_reaches_end_of_stream_after_serve_returns()
     let _ = timeout(Duration::from_secs(6), server.serve).await;
 
     let ended = timeout(Duration::from_secs(1), async {
-        loop {
-            match ws.next().await {
-                Some(Ok(_)) => continue,
-                _ => break,
-            }
-        }
+        while let Some(Ok(_)) = ws.next().await {}
     })
     .await;
     assert!(ended.is_ok(), "client socket must reach EOF within 1 s");
