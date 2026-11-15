@@ -5,6 +5,8 @@
 //! which WebSocket feature is enabled.
 
 use crate::domain::{Priority, SessionId};
+#[cfg(any(feature = "websocket-client", test))]
+use crate::error::PatchError;
 use futures::{Sink, SinkExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -236,7 +238,21 @@ impl WsMessage {
     }
 }
 
-/// Frame encoding negotiated for a stream.
+/// Frame encoding a stream uses on the wire.
+///
+/// [`Framing::Merge`] is the original encoding: `StreamFrame` payloads that a
+/// receiver shallow-merges into its state. [`Framing::Patch`] sends
+/// [`WsMessage::StreamPatch`] frames whose [`WirePatch`] operations address any
+/// location by path, so arbitrarily large or deep documents can be split.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::infrastructure::websocket::Framing;
+///
+/// assert_eq!(Framing::default(), Framing::Merge);
+/// assert_eq!(serde_json::to_string(&Framing::Patch).unwrap(), "\"patch\"");
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Framing {
@@ -247,8 +263,25 @@ pub enum Framing {
     Patch,
 }
 
-/// One step of a [`WirePath`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl Framing {
+    /// `skip_serializing_if` hook: merge framing is the wire default, so it is
+    /// omitted to keep legacy `StreamInit` bytes unchanged.
+    fn is_merge(&self) -> bool {
+        matches!(self, Self::Merge)
+    }
+}
+
+/// Longest [`WirePath`] a patch may carry.
+///
+/// Receivers refuse longer paths so a hostile peer cannot grow their state's
+/// nesting without bound (recursive drop would overflow the stack); the server
+/// refuses to plan documents that need longer ones.
+pub const MAX_PATCH_PATH_DEPTH: usize = 128;
+
+/// One step of a [`WirePath`]: a JSON string addresses an object member and a
+/// JSON integer an array element, so every key (including `.`, `[`, `]` and
+/// the empty string) is expressible and `"0"` stays distinct from index `0`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireSegment {
     /// Object member name
     Key(String),
@@ -256,12 +289,73 @@ pub enum WireSegment {
     Index(usize),
 }
 
-/// Location of a patch target inside the client's document.
+impl Serialize for WireSegment {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Key(key) => serializer.serialize_str(key),
+            Self::Index(index) => serializer.serialize_u64(*index as u64),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WireSegment {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SegmentVisitor;
+
+        impl serde::de::Visitor<'_> for SegmentVisitor {
+            type Value = WireSegment;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a string key or a non-negative integer index")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<WireSegment, E> {
+                Ok(WireSegment::Key(v.to_owned()))
+            }
+
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<WireSegment, E> {
+                Ok(WireSegment::Key(v))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<WireSegment, E> {
+                usize::try_from(v)
+                    .map(WireSegment::Index)
+                    .map_err(|_| E::custom("array index does not fit in usize"))
+            }
+        }
+
+        deserializer.deserialize_any(SegmentVisitor)
+    }
+}
+
+/// Location of a patch target inside the receiver's document; the empty path
+/// is the document root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct WirePath(pub Vec<WireSegment>);
 
 /// One patch operation of a [`WsMessage::StreamPatch`] frame.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The wire form is the 3-array `[op, path, argument]` with `op` one of
+/// `"set"`, `"merge"`, `"append"`, `"append_str"`:
+///
+/// | op | argument | effect |
+/// |----|----------|--------|
+/// | `set` | any value | replaces the value at `path` (the document for `[]`); a parent object gets the key inserted, a parent array needs an existing index |
+/// | `merge` | object | inserts or replaces each entry of the object at `path` (shallow) |
+/// | `append` | array | appends the elements to the array at `path` |
+/// | `append_str` | string | appends the text to the string at `path` |
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::infrastructure::websocket::WirePatch;
+///
+/// let patch: WirePatch = serde_json::from_str(r#"["append_str", ["s"], "tail"]"#).unwrap();
+/// assert_eq!(serde_json::to_string(&patch).unwrap(), r#"["append_str",["s"],"tail"]"#);
+/// assert!(serde_json::from_str::<WirePatch>(r#"["merge", [], [1]]"#).is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq)]
 pub enum WirePatch {
     /// Replace the value at `path`
     Set {
@@ -291,6 +385,200 @@ pub enum WirePatch {
         /// Text to append
         text: String,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PatchOp {
+    Set,
+    Merge,
+    Append,
+    AppendStr,
+}
+
+impl Serialize for WirePatch {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+
+        let mut seq = serializer.serialize_seq(Some(3))?;
+        match self {
+            Self::Set { path, value } => {
+                seq.serialize_element("set")?;
+                seq.serialize_element(path)?;
+                seq.serialize_element(value)?;
+            }
+            Self::Merge { path, entries } => {
+                seq.serialize_element("merge")?;
+                seq.serialize_element(path)?;
+                seq.serialize_element(entries)?;
+            }
+            Self::Append { path, values } => {
+                seq.serialize_element("append")?;
+                seq.serialize_element(path)?;
+                seq.serialize_element(values)?;
+            }
+            Self::AppendStr { path, text } => {
+                seq.serialize_element("append_str")?;
+                seq.serialize_element(path)?;
+                seq.serialize_element(text)?;
+            }
+        }
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for WirePatch {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // A sequence visitor reads the op first and then decodes the argument
+        // directly into its typed form; an internally tagged or untagged enum
+        // would buffer every `Value` through serde's `Content`.
+        struct PatchVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for PatchVisitor {
+            type Value = WirePatch;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a 3-array [op, path, argument]")
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<WirePatch, A::Error> {
+                use serde::de::Error;
+
+                fn missing<E: Error>(index: usize) -> E {
+                    E::invalid_length(index, &"a 3-array [op, path, argument]")
+                }
+
+                let op: PatchOp = seq.next_element()?.ok_or_else(|| missing(0))?;
+                let path: WirePath = seq.next_element()?.ok_or_else(|| missing(1))?;
+                let patch = match op {
+                    PatchOp::Set => WirePatch::Set {
+                        path,
+                        value: seq.next_element()?.ok_or_else(|| missing(2))?,
+                    },
+                    PatchOp::Merge => WirePatch::Merge {
+                        path,
+                        entries: seq.next_element()?.ok_or_else(|| missing(2))?,
+                    },
+                    PatchOp::Append => WirePatch::Append {
+                        path,
+                        values: seq.next_element()?.ok_or_else(|| missing(2))?,
+                    },
+                    PatchOp::AppendStr => WirePatch::AppendStr {
+                        path,
+                        text: seq.next_element()?.ok_or_else(|| missing(2))?,
+                    },
+                };
+                if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    return Err(A::Error::invalid_length(
+                        4,
+                        &"a 3-array [op, path, argument]",
+                    ));
+                }
+                Ok(patch)
+            }
+        }
+
+        deserializer.deserialize_seq(PatchVisitor)
+    }
+}
+
+/// Applies `patch` to `state`.
+///
+/// `state` may already be partly modified when an error is returned; callers
+/// drop the stream in that case.
+///
+/// # Errors
+///
+/// Returns [`PatchError::PathTooDeep`] for a path longer than
+/// [`MAX_PATCH_PATH_DEPTH`], a resolution error ([`PatchError::KeyNotFound`],
+/// [`PatchError::IndexOutOfBounds`], [`PatchError::ExpectedObject`],
+/// [`PatchError::ExpectedArray`]) when the path does not resolve, and
+/// [`PatchError::ExpectedObject`] / [`PatchError::ExpectedArray`] /
+/// [`PatchError::ExpectedString`] when the target has the wrong kind for the op.
+#[cfg(any(feature = "websocket-client", test))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired into the client by the A2d change")
+)]
+pub(crate) fn apply_patch(state: &mut Value, patch: &WirePatch) -> Result<(), PatchError> {
+    let (WirePatch::Set { path, .. }
+    | WirePatch::Merge { path, .. }
+    | WirePatch::Append { path, .. }
+    | WirePatch::AppendStr { path, .. }) = patch;
+    let segments = path.0.as_slice();
+    if segments.len() > MAX_PATCH_PATH_DEPTH {
+        return Err(PatchError::PathTooDeep {
+            depth: segments.len(),
+            max: MAX_PATCH_PATH_DEPTH,
+        });
+    }
+
+    match patch {
+        WirePatch::Set { value, .. } => match segments.split_last() {
+            None => *state = value.clone(),
+            Some((last, parent_path)) => match (resolve(state, parent_path)?, last) {
+                (Value::Object(map), WireSegment::Key(key)) => {
+                    map.insert(key.clone(), value.clone());
+                }
+                (Value::Array(items), WireSegment::Index(index)) => {
+                    let len = items.len();
+                    *items
+                        .get_mut(*index)
+                        .ok_or(PatchError::IndexOutOfBounds { index: *index, len })? =
+                        value.clone();
+                }
+                (_, WireSegment::Key(_)) => return Err(PatchError::ExpectedObject),
+                (_, WireSegment::Index(_)) => return Err(PatchError::ExpectedArray),
+            },
+        },
+        WirePatch::Merge { entries, .. } => {
+            let Value::Object(target) = resolve(state, segments)? else {
+                return Err(PatchError::ExpectedObject);
+            };
+            target.extend(entries.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        WirePatch::Append { values, .. } => {
+            let Value::Array(target) = resolve(state, segments)? else {
+                return Err(PatchError::ExpectedArray);
+            };
+            target.extend(values.iter().cloned());
+        }
+        WirePatch::AppendStr { text, .. } => {
+            let Value::String(target) = resolve(state, segments)? else {
+                return Err(PatchError::ExpectedString);
+            };
+            target.push_str(text);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "websocket-client", test))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired into the client by the A2d change")
+)]
+fn resolve<'a>(state: &'a mut Value, path: &[WireSegment]) -> Result<&'a mut Value, PatchError> {
+    let mut node = state;
+    for segment in path {
+        node = match (node, segment) {
+            (Value::Object(map), WireSegment::Key(key)) => map
+                .get_mut(key)
+                .ok_or_else(|| PatchError::KeyNotFound(key.clone()))?,
+            (Value::Array(items), WireSegment::Index(index)) => {
+                let len = items.len();
+                items
+                    .get_mut(*index)
+                    .ok_or(PatchError::IndexOutOfBounds { index: *index, len })?
+            }
+            (_, WireSegment::Key(_)) => return Err(PatchError::ExpectedObject),
+            (_, WireSegment::Index(_)) => return Err(PatchError::ExpectedArray),
+        };
+    }
+    Ok(node)
 }
 
 /// Stream configuration options.
@@ -323,8 +611,8 @@ pub struct StreamOptions {
     /// Custom priority mapping
     #[serde(default, with = "option_priority_map")]
     pub priority_mapping: Option<HashMap<String, Priority>>,
-    /// Frame encoding the stream uses
-    #[serde(default)]
+    /// Frame encoding the stream uses; omitted on the wire when [`Framing::Merge`]
+    #[serde(default, skip_serializing_if = "Framing::is_merge")]
     pub framing: Framing,
 }
 
@@ -400,6 +688,171 @@ mod tests {
         send_with_write_timeout(&mut sink, "hello", WRITE_TIMEOUT)
             .await
             .expect("a sink that accepts immediately must not be treated as stalled");
+    }
+
+    fn key(k: &str) -> WireSegment {
+        WireSegment::Key(k.to_owned())
+    }
+
+    fn set(path: Vec<WireSegment>, value: Value) -> WirePatch {
+        WirePatch::Set {
+            path: WirePath(path),
+            value,
+        }
+    }
+
+    #[test]
+    fn test_apply_set_root_replaces_state() {
+        let mut state = json!({"old": 1});
+        apply_patch(&mut state, &set(vec![], json!([1]))).unwrap();
+        assert_eq!(state, json!([1]));
+    }
+
+    #[test]
+    fn test_apply_set_inserts_replaces_key_and_replaces_existing_index() {
+        let mut state = json!({"a": [0, 1]});
+        apply_patch(&mut state, &set(vec![key("b")], json!(2))).unwrap();
+        apply_patch(
+            &mut state,
+            &set(vec![key("a"), WireSegment::Index(1)], json!("x")),
+        )
+        .unwrap();
+        assert_eq!(state, json!({"a": [0, "x"], "b": 2}));
+    }
+
+    #[test]
+    fn test_apply_set_index_out_of_bounds_is_rejected() {
+        let mut state = json!([0]);
+        let err = apply_patch(&mut state, &set(vec![WireSegment::Index(1)], json!(1))).unwrap_err();
+        assert_eq!(err, PatchError::IndexOutOfBounds { index: 1, len: 1 });
+    }
+
+    #[test]
+    fn test_apply_set_wrong_parent_kind_is_rejected() {
+        let mut state = json!({"a": 1});
+        assert_eq!(
+            apply_patch(&mut state, &set(vec![WireSegment::Index(0)], json!(1))).unwrap_err(),
+            PatchError::ExpectedArray
+        );
+        let mut state = json!([1]);
+        assert_eq!(
+            apply_patch(&mut state, &set(vec![key("k")], json!(1))).unwrap_err(),
+            PatchError::ExpectedObject
+        );
+    }
+
+    #[test]
+    fn test_apply_merge_extends_object_and_rejects_non_object() {
+        let mut state = json!({"o": {"a": 1}, "n": 5});
+        let merge = |path: &str, entries: Value| WirePatch::Merge {
+            path: WirePath(vec![key(path)]),
+            entries: entries.as_object().unwrap().clone(),
+        };
+        apply_patch(&mut state, &merge("o", json!({"a": 2, "b": 3}))).unwrap();
+        assert_eq!(state["o"], json!({"a": 2, "b": 3}));
+        assert_eq!(
+            apply_patch(&mut state, &merge("n", json!({}))).unwrap_err(),
+            PatchError::ExpectedObject
+        );
+    }
+
+    #[test]
+    fn test_apply_append_and_append_str_check_target_kind() {
+        let mut state = json!({"l": [1], "s": "ab"});
+        let at = |k: &str| WirePath(vec![key(k)]);
+        apply_patch(
+            &mut state,
+            &WirePatch::Append {
+                path: at("l"),
+                values: vec![json!(2), json!(null)],
+            },
+        )
+        .unwrap();
+        apply_patch(
+            &mut state,
+            &WirePatch::AppendStr {
+                path: at("s"),
+                text: "cd".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(state, json!({"l": [1, 2, null], "s": "abcd"}));
+        assert_eq!(
+            apply_patch(
+                &mut state,
+                &WirePatch::Append {
+                    path: at("s"),
+                    values: vec![]
+                }
+            )
+            .unwrap_err(),
+            PatchError::ExpectedArray
+        );
+        assert_eq!(
+            apply_patch(
+                &mut state,
+                &WirePatch::AppendStr {
+                    path: at("l"),
+                    text: String::new()
+                }
+            )
+            .unwrap_err(),
+            PatchError::ExpectedString
+        );
+    }
+
+    #[test]
+    fn test_apply_unresolvable_path_is_rejected() {
+        let mut state = json!({"a": 1});
+        assert_eq!(
+            apply_patch(&mut state, &set(vec![key("zz"), key("k")], json!(1))).unwrap_err(),
+            PatchError::KeyNotFound("zz".into())
+        );
+        assert_eq!(
+            apply_patch(&mut state, &set(vec![key("a"), key("k")], json!(1))).unwrap_err(),
+            PatchError::ExpectedObject
+        );
+    }
+
+    #[test]
+    fn test_apply_path_deeper_than_cap_is_rejected_before_resolving() {
+        let mut state = json!({});
+        let at_cap = vec![key("k"); MAX_PATCH_PATH_DEPTH];
+        let too_deep = vec![key("k"); MAX_PATCH_PATH_DEPTH + 1];
+        assert!(!matches!(
+            apply_patch(&mut state, &set(at_cap, json!(1))),
+            Err(PatchError::PathTooDeep { .. })
+        ));
+        assert_eq!(
+            apply_patch(&mut state, &set(too_deep, json!(1))).unwrap_err(),
+            PatchError::PathTooDeep {
+                depth: MAX_PATCH_PATH_DEPTH + 1,
+                max: MAX_PATCH_PATH_DEPTH
+            }
+        );
+    }
+
+    #[test]
+    fn test_wire_patch_rejects_trailing_element_and_oversized_index() {
+        assert!(serde_json::from_str::<WirePatch>(r#"["set", [], 1, 2]"#).is_err());
+        assert!(
+            serde_json::from_str::<WirePatch>(r#"["set", [18446744073709551616], 1]"#).is_err()
+        );
+    }
+
+    #[test]
+    fn test_stream_patch_kind_is_its_wire_tag() {
+        let message = WsMessage::StreamPatch {
+            session_id: SessionId::new(),
+            frame_id: 0,
+            priority: Priority::HIGH,
+            patches: vec![],
+            is_complete: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&message).unwrap()["type"],
+            message.kind()
+        );
     }
 
     #[test]

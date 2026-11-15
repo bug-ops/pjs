@@ -167,10 +167,22 @@ pub enum PatchError {
     /// The path contains a segment kind the operation cannot follow
     #[error("unsupported path segment")]
     UnsupportedSegment,
+    /// The target of a string operation is not a string
+    #[error("expected a string")]
+    ExpectedString,
+    /// The path is longer than the permitted maximum
+    #[error("path depth {depth} exceeds the maximum {max}")]
+    PathTooDeep {
+        /// Path length
+        depth: usize,
+        /// Permitted maximum
+        max: usize,
+    },
 }
 
 /// Why stream options were rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum StreamOptionsError {
     /// `max_frame_size` below the minimum
     #[error("max_frame_size {requested} is below the minimum {min}")]
@@ -187,7 +199,40 @@ pub enum StreamOptionsError {
 
 /// Why a stream plan was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum PlanError {
+    /// One indivisible piece of the document does not fit the outgoing budget
+    #[error("indivisible unit of {size} bytes exceeds the outgoing budget of {budget} bytes")]
+    UnitExceedsBudget {
+        /// Serialized size of the unit
+        size: usize,
+        /// Outgoing byte budget
+        budget: usize,
+    },
+    /// The plan needs more frames than allowed
+    #[error("plan needs {frames} frames, at most {max} are allowed")]
+    TooManyFrames {
+        /// Frames the plan needs
+        frames: usize,
+        /// Frame cap
+        max: usize,
+    },
+    /// The serialized plan is larger than allowed for this document
+    #[error("plan of {bytes} bytes exceeds the cap of {max} bytes")]
+    PlanBytesExceeded {
+        /// Serialized plan size
+        bytes: usize,
+        /// Plan size cap
+        max: usize,
+    },
+    /// A patch path would be longer than the wire maximum
+    #[error("patch path depth {depth} exceeds the maximum {max}")]
+    PathTooDeep {
+        /// Path length the document needs
+        depth: usize,
+        /// Wire maximum
+        max: usize,
+    },
     /// The connection's live plan budget is exhausted
     #[error("connection plan budget exhausted: {live} live + {requested} requested > {max}")]
     ConnectionBudgetExhausted {

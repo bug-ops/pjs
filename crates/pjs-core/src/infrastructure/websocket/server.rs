@@ -741,8 +741,16 @@ impl AxumWebSocketTransport {
                     error.len()
                 );
             }
-            _ => {
-                warn!("Unhandled message type from connection {connection}");
+            // Server-to-client messages: a client sending them gets no reply
+            // (no amplification); a new variant must be classified here.
+            WsMessage::StreamFrame { .. }
+            | WsMessage::StreamPatch { .. }
+            | WsMessage::StreamComplete { .. }
+            | WsMessage::Pong { .. } => {
+                debug!(
+                    "Ignored server-bound message {} from connection {connection}",
+                    message.kind()
+                );
             }
         }
         Ok(())
