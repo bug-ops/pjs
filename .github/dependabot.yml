@@ -10,6 +10,9 @@ updates:
       time: "09:00"
       timezone: "Etc/GMT-0"
     open-pull-requests-limit: 10
+    ignore:
+      # headers-accept 0.3 pins mediatype 0.21; types must match until it updates
+      - dependency-name: "mediatype"
     labels:
       - "dependencies"
       - "rust"
@@ -33,6 +36,9 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Etc/GMT-0"
+    ignore:
+      # headers-accept 0.3 pins mediatype 0.21; types must match until it updates
+      - dependency-name: "mediatype"
     labels:
       - "dependencies"
       - "rust"
