@@ -82,6 +82,32 @@ async fn request(addr: SocketAddr, raw: &str) -> String {
     String::from_utf8_lossy(&response).into_owned()
 }
 
+/// Reads the response while the request is still being written and returns as soon as the
+/// status line is complete; a reset after that point (the server closes with unread request
+/// bytes) is tolerated.
+async fn request_status_line(addr: SocketAddr, raw: String) -> String {
+    let client = TcpStream::connect(addr).await.expect("connect");
+    let (mut reader, mut writer) = client.into_split();
+    let writer_task = tokio::spawn(async move {
+        let _ = writer.write_all(raw.as_bytes()).await;
+        writer
+    });
+    let mut received = Vec::new();
+    let mut chunk = [0u8; 256];
+    timeout(Duration::from_secs(5), async {
+        while !received.windows(2).any(|w| w == b"\r\n") {
+            match reader.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => received.extend_from_slice(&chunk[..n]),
+            }
+        }
+    })
+    .await
+    .expect("status line in time");
+    drop(writer_task);
+    String::from_utf8_lossy(&received).into_owned()
+}
+
 fn get_close(path: &str) -> String {
     format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
 }
@@ -251,7 +277,7 @@ async fn test_max_header_bytes_some_rejects_oversized_h1_header_with_431() {
     limits.max_header_bytes = Some(HeaderSizeLimit::new(16 * 1024).expect("valid"));
     let server = start(router(), limits, drain(500)).await;
 
-    let rejected = request(server.addr, &request_with_header(20_000)).await;
+    let rejected = request_status_line(server.addr, request_with_header(20_000)).await;
     assert!(rejected.starts_with("HTTP/1.1 431"), "{rejected}");
     let accepted = request(server.addr, &request_with_header(8_000)).await;
     assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
