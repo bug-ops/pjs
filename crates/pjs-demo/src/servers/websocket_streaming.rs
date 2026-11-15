@@ -3,6 +3,7 @@
 //! This server provides WebSocket endpoints for streaming PJS data
 //! with priority-based frame delivery and compression support.
 
+use crate::utils::trigger_on_ctrl_c;
 use axum::{
     Json, Router,
     extract::{
@@ -24,7 +25,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    num::NonZeroUsize,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{sync::watch, time::sleep};
@@ -36,6 +41,15 @@ pub struct AppState {
     active_sessions: Arc<Mutex<HashMap<SessionId, SessionInfo>>>,
     compressor: Arc<SchemaCompressor>,
     server_started_at: Instant,
+    totals: Arc<LifetimeTotals>,
+}
+
+/// Frames and bytes delivered over the server's whole lifetime; unlike the
+/// per-session map they survive session removal, so `/metrics` stays monotonic.
+#[derive(Debug, Default)]
+struct LifetimeTotals {
+    frames: AtomicU64,
+    bytes: AtomicU64,
 }
 
 /// Information about active streaming session
@@ -49,8 +63,7 @@ struct SessionInfo {
     /// upgrade requests for the same `session_id` could both pass a plain
     /// existence check and both attach a stream to it.
     bound: bool,
-    frame_count: usize,
-    total_bytes: u64,
+    config: StreamConfig,
 }
 
 /// Outcome of attempting to atomically claim a session for one WebSocket connection.
@@ -63,29 +76,64 @@ enum SessionBind {
     NotFound,
 }
 
-/// WebSocket streaming configuration
+/// Largest accepted per-frame delay; bounds how long one stream can be held open per frame.
+const MAX_FRAME_DELAY_MS: u64 = 5000;
+const DEFAULT_MAX_FRAMES: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+
+/// Delay between frames in milliseconds, validated to `0..=5000`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct FrameDelay(u64);
+
+impl TryFrom<u64> for FrameDelay {
+    type Error = String;
+
+    fn try_from(millis: u64) -> Result<Self, String> {
+        if millis > MAX_FRAME_DELAY_MS {
+            return Err(format!(
+                "frame_delay_ms must be at most {MAX_FRAME_DELAY_MS}"
+            ));
+        }
+        Ok(Self(millis))
+    }
+}
+
+impl From<FrameDelay> for u64 {
+    fn from(delay: FrameDelay) -> Self {
+        delay.0
+    }
+}
+
+impl FrameDelay {
+    fn as_duration(self) -> Duration {
+        Duration::from_millis(self.0)
+    }
+}
+
+/// WebSocket streaming configuration.
+///
+/// Every field is applied by the streaming path; omitted fields take their
+/// defaults and unknown fields are rejected.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct StreamConfig {
-    /// Priority threshold (0-255)
-    priority_threshold: Option<u8>,
-    /// Enable compression
-    enable_compression: Option<bool>,
-    /// Compression strategy
-    compression_strategy: Option<String>,
-    /// Frame delay in milliseconds
-    frame_delay_ms: Option<u64>,
+    /// Frames below this priority are not sent
+    priority_threshold: u8,
+    /// Compress low-priority and large frames
+    enable_compression: bool,
+    /// Delay after each frame, in milliseconds (at most 5000)
+    frame_delay_ms: FrameDelay,
     /// Maximum frames to send
-    max_frames: Option<usize>,
+    max_frames: NonZeroUsize,
 }
 
 impl Default for StreamConfig {
     fn default() -> Self {
         Self {
-            priority_threshold: Some(50),
-            enable_compression: Some(true),
-            compression_strategy: Some("adaptive".to_string()),
-            frame_delay_ms: Some(10),
-            max_frames: Some(1000),
+            priority_threshold: 50,
+            enable_compression: true,
+            frame_delay_ms: FrameDelay(10),
+            max_frames: DEFAULT_MAX_FRAMES,
         }
     }
 }
@@ -94,7 +142,8 @@ impl Default for StreamConfig {
 #[derive(Debug, Deserialize)]
 pub struct StreamRequest {
     data_type: String,
-    config: Option<StreamConfig>,
+    #[serde(default)]
+    config: StreamConfig,
 }
 
 /// Streaming response with session info
@@ -149,19 +198,23 @@ impl AppState {
             active_sessions: Arc::new(Mutex::new(HashMap::new())),
             compressor: Arc::new(SchemaCompressor::new()),
             server_started_at: Instant::now(),
+            totals: Arc::new(LifetimeTotals::default()),
         }
     }
 
     /// Register a new streaming session, created via `POST /stream`.
     pub fn add_session(&self, session_id: SessionId) {
+        self.add_session_with_config(session_id, StreamConfig::default());
+    }
+
+    fn add_session_with_config(&self, session_id: SessionId, config: StreamConfig) {
         let mut sessions = self.active_sessions.lock().unwrap();
         sessions.insert(
             session_id,
             SessionInfo {
                 started_at: Instant::now(),
                 bound: false,
-                frame_count: 0,
-                total_bytes: 0,
+                config,
             },
         );
     }
@@ -185,12 +238,16 @@ impl AppState {
         }
     }
 
-    fn update_session_stats(&self, session_id: &SessionId, bytes_sent: u64) {
-        let mut sessions = self.active_sessions.lock().unwrap();
-        if let Some(session) = sessions.get_mut(session_id) {
-            session.frame_count += 1;
-            session.total_bytes += bytes_sent;
-        }
+    fn session_config(&self, session_id: &SessionId) -> Option<StreamConfig> {
+        let sessions = self.active_sessions.lock().unwrap();
+        sessions
+            .get(session_id)
+            .map(|session| session.config.clone())
+    }
+
+    fn record_frame_sent(&self, bytes_sent: u64) {
+        self.totals.frames.fetch_add(1, Ordering::Relaxed);
+        self.totals.bytes.fetch_add(bytes_sent, Ordering::Relaxed);
     }
 }
 
@@ -226,9 +283,12 @@ pub async fn run() -> ApplicationResult<()> {
 
     let mut limits = ConnectionLimits::default();
     limits.max_connection_duration = None;
-    serve_with_limits(listener, app(app_state), limits, ShutdownConfig::default())
+    let shutdown = ShutdownConfig::default();
+    trigger_on_ctrl_c(shutdown.signal.clone());
+    let outcome = serve_with_limits(listener, app(app_state), limits, shutdown)
         .await
         .map_err(|e| ApplicationError::from(DomainError::Logic(format!("Server error: {e}"))))?;
+    info!(?outcome, "server stopped");
 
     Ok(())
 }
@@ -244,9 +304,9 @@ async fn create_stream(
     Json(request): Json<StreamRequest>,
 ) -> Result<Json<StreamResponse>, StatusCode> {
     let session_id = SessionId::new();
-    let config = request.config.unwrap_or_default();
+    let config = request.config;
 
-    state.add_session(session_id);
+    state.add_session_with_config(session_id, config.clone());
 
     info!(
         "Created streaming session {} for data type: {}",
@@ -386,7 +446,12 @@ async fn stream_data(
     let sample_data = generate_sample_streaming_data();
 
     // Create simple frames from sample data for demonstration
-    let frames = create_demo_frames(&sample_data)?;
+    let config = state.session_config(&session_id).unwrap_or_default();
+    let frames: Vec<_> = create_demo_frames(&sample_data)?
+        .into_iter()
+        .filter(|frame| frame.priority.value() >= config.priority_threshold)
+        .take(config.max_frames.get())
+        .collect();
 
     info!(
         "Streaming {} frames for session: {}",
@@ -399,7 +464,8 @@ async fn stream_data(
         wait_while_paused(&mut cmd_rx).await;
 
         // Apply compression if enabled
-        let compressed_data = if should_compress(frame) {
+        let compress = config.enable_compression && should_compress(frame);
+        let compressed_data = if compress {
             match state.compressor.compress(&frame.data) {
                 Ok(compressed) => compressed.data,
                 Err(e) => {
@@ -417,7 +483,7 @@ async fn stream_data(
             "@session_id": session_id.to_string(),
             "@frame_index": index,
             "@priority": frame.priority.value(),
-            "@compressed": should_compress(frame),
+            "@compressed": compress,
             "@timestamp": chrono::Utc::now(),
             "data": compressed_data
         });
@@ -435,10 +501,9 @@ async fn stream_data(
         }
 
         // Update session statistics
-        state.update_session_stats(&session_id, message_text.len() as u64);
+        state.record_frame_sent(message_text.len() as u64);
 
-        // Add delay between frames for demonstration
-        sleep(Duration::from_millis(10)).await;
+        sleep(config.frame_delay_ms.as_duration()).await;
 
         info!(
             "Sent frame {} with priority {} for session: {}",
@@ -569,8 +634,8 @@ async fn health_check() -> Json<serde_json::Value> {
 async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
     let sessions = state.active_sessions.lock().unwrap();
     let session_count = sessions.len();
-    let total_frames: usize = sessions.values().map(|s| s.frame_count).sum();
-    let total_bytes: u64 = sessions.values().map(|s| s.total_bytes).sum();
+    let total_frames = state.totals.frames.load(Ordering::Relaxed);
+    let total_bytes = state.totals.bytes.load(Ordering::Relaxed);
     let avg_session_age_seconds = if session_count > 0 {
         sessions
             .values()

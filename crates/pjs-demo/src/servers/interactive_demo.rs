@@ -11,14 +11,18 @@ use axum::{
     routing::get,
 };
 use clap::Parser;
+use pjs_demo::utils::trigger_on_ctrl_c;
 use pjs_demo::{
     data::{DatasetSize, DatasetType, generate_dataset, generate_metadata},
     utils::{NetworkType, PerfTimer, simulate_network_latency},
 };
-use pjson_rs::infrastructure::http::{ConnectionLimits, ShutdownConfig, serve_with_limits};
+use pjson_rs::infrastructure::{
+    AxumWebSocketTransport, create_websocket_router,
+    http::{ConnectionLimits, ShutdownConfig, serve_with_limits},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::time::sleep;
 use tracing::info;
 
@@ -59,9 +63,7 @@ struct DemoResponse {
 
 /// Application state
 #[derive(Clone)]
-struct AppState {
-    // WebSocket support will be added later when infrastructure is stable
-}
+struct AppState {}
 
 /// Generate and serve dataset with traditional approach
 async fn traditional_endpoint(
@@ -317,6 +319,17 @@ fn generate_skeleton(dataset_type: DatasetType) -> Value {
     }
 }
 
+/// `Origin` values a browser page served by this server sends, so the page may open `/ws`.
+fn own_origins(host: &str, port: u16) -> Vec<String> {
+    let mut origins = vec![format!("http://{host}:{port}")];
+    for loopback in ["localhost", "127.0.0.1"] {
+        if loopback != host {
+            origins.push(format!("http://{loopback}:{port}"));
+        }
+    }
+    origins
+}
+
 /// Serve interactive web demo page
 async fn demo_page() -> Html<&'static str> {
     Html(include_str!("../static/performance_comparison.html"))
@@ -364,21 +377,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     subscriber.init();
 
-    let state = AppState {
-        // WebSocket support will be added later
-    };
+    let state = AppState {};
+    let shutdown = ShutdownConfig::default();
+    trigger_on_ctrl_c(shutdown.signal.clone());
 
-    // Build router
+    let transport = Arc::new(
+        AxumWebSocketTransport::new()
+            .with_shutdown(shutdown.signal.clone())
+            .with_allowed_origins(own_origins(&args.host, args.port)),
+    );
+
     let app = Router::new()
         .route("/", get(demo_page))
         .route("/traditional", get(traditional_endpoint))
         .route("/pjs-streaming", get(pjs_streaming_endpoint))
         .route("/performance", get(performance_comparison))
         .route("/api/info", get(api_info))
-        // WebSocket will be added later when infrastructure is stable
-        .with_state(state);
-
-    let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
+        .with_state(state)
+        .merge(create_websocket_router().with_state(transport));
 
     println!();
     println!("🚀 PJS Interactive Demo Server");
@@ -402,15 +418,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("💡 Try different combinations to see PJS benefits!");
     println!();
 
-    info!("Starting server on {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    serve_with_limits(
-        listener,
-        app,
-        ConnectionLimits::default(),
-        ShutdownConfig::default(),
-    )
-    .await?;
+    info!("Starting server on {}:{}", args.host, args.port);
+    let listener = tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await?;
+    // The default connection-duration ceiling would kill every long-lived WebSocket session.
+    let mut limits = ConnectionLimits::default();
+    limits.max_connection_duration = None;
+    let outcome = serve_with_limits(listener, app, limits, shutdown).await?;
+    info!(?outcome, "server stopped");
 
     Ok(())
 }

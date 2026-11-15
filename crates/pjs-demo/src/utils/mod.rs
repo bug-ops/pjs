@@ -100,3 +100,19 @@ pub fn format_duration(duration: Duration) -> String {
         format!("{:.1}s", duration.as_secs_f64())
     }
 }
+
+/// Triggers `signal` on the first Ctrl-C, so the demo servers drain and exit.
+///
+/// A failure to install the signal handler is logged and leaves the signal
+/// untriggered, i.e. the server keeps running until the process is killed.
+pub fn trigger_on_ctrl_c(signal: pjson_rs::infrastructure::http::ShutdownSignal) {
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                tracing::info!("Ctrl-C received, shutting down");
+                signal.trigger();
+            }
+            Err(error) => tracing::error!(%error, "failed to listen for Ctrl-C"),
+        }
+    });
+}
