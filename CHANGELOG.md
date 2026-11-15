@@ -55,7 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING** `StreamMut` guards mutation of `Stream`, and session decoding cross-checks stream ids instead of trusting the payload (#573)
 - **BREAKING** WebSocket stream ids are scoped per connection, so two connections can reuse the same id without clashing (#572)
 - **BREAKING** `WebSocketStreamSession` is no longer part of the public API (#601)
-- Dependabot also proposes semver-major updates (#616)
+- **BREAKING** `ClientMetrics` drops `estimated_bandwidth_kbps` and `connection_rtt_ms`, and the WebSocket server module and `SecureWebSocketHandler` are gated by `websocket-server` instead of `http-server` (#601, #598)
+- Dependabot also proposes semver-major updates, and its auto-merge is limited to patch bumps and minor bumps of dependencies at 1.0 or above (#616, #633)
 
 ### Fixed
 
