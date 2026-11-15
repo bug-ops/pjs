@@ -764,14 +764,25 @@ impl PjsWebSocketClient {
     ///
     /// Frees the session's slot, including a completed one that the session
     /// limit never evicts. Returns `None` for unknown and expired sessions.
-    /// The server is not told: it may keep streaming, and later frames for
-    /// the id are ignored.
+    ///
+    /// For a session that is not complete, also queues a best-effort
+    /// `StreamCancel` so the server stops streaming it (expired sessions
+    /// included, since the server may still be sending). The cancel goes out on
+    /// the current or next connection; it is dropped, with a warning, when the
+    /// outgoing queue is full. Late frames for the id are ignored either way.
     pub async fn close_session(&self, session_id: SessionId) -> Option<ClosedSession> {
         self.close_session_at(session_id, Instant::now()).await
     }
 
     async fn close_session_at(&self, session_id: SessionId, now: Instant) -> Option<ClosedSession> {
         let session = self.sessions.write().await.remove(&session_id)?;
+        if !session.is_complete {
+            Self::try_send_control_message(
+                &self.message_tx,
+                &WsMessage::StreamCancel { session_id },
+                "stream cancel",
+            );
+        }
         if session.is_expired(now, self.config.session_idle_ttl) {
             return None;
         }
@@ -1468,6 +1479,73 @@ mod tests {
         assert_eq!(closed.stats.total_frames, 1);
         assert!(client.close_session(id).await.is_none());
         assert!(client.close_session(SessionId::new()).await.is_none());
+    }
+
+    async fn queued_messages(client: &PjsWebSocketClient) -> Vec<WsMessage> {
+        let mut receiver = client.message_rx.lock().take().expect("receiver present");
+        let mut messages = Vec::new();
+        while let Ok(envelope) = receiver.try_recv() {
+            let (json_str, _permit) = envelope.split();
+            messages.push(serde_json::from_str(&json_str).expect("valid message"));
+        }
+        *client.message_rx.lock() = Some(receiver);
+        messages
+    }
+
+    #[tokio::test]
+    async fn test_close_session_queues_stream_cancel_for_incomplete_session() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+        let id = client.request_stream(json!({}), None).await.unwrap();
+
+        client.close_session(id).await.expect("known session");
+
+        let messages = queued_messages(&client).await;
+        assert!(matches!(messages[0], WsMessage::StreamInit { .. }));
+        assert!(matches!(
+            messages.as_slice(),
+            [_, WsMessage::StreamCancel { session_id }] if *session_id == id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_close_session_of_expired_session_still_queues_stream_cancel() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+        let id = client.request_stream(json!({}), None).await.unwrap();
+        let later =
+            Instant::now() + client.config.session_idle_ttl.as_duration() + Duration::from_secs(1);
+
+        assert!(client.close_session_at(id, later).await.is_none());
+
+        assert!(matches!(
+            queued_messages(&client).await.as_slice(),
+            [_, WsMessage::StreamCancel { session_id }] if *session_id == id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_close_session_of_complete_session_sends_no_cancel() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+        let id = client.request_stream(json!({}), None).await.unwrap();
+        client
+            .sessions
+            .write()
+            .await
+            .get_mut(&id)
+            .unwrap()
+            .is_complete = true;
+
+        client.close_session(id).await.expect("known session");
+
+        assert_eq!(queued_messages(&client).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_close_session_of_unknown_session_sends_no_cancel() {
+        let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
+
+        assert!(client.close_session(SessionId::new()).await.is_none());
+
+        assert!(queued_messages(&client).await.is_empty());
     }
 
     #[tokio::test]
