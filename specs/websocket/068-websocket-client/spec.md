@@ -1,0 +1,132 @@
+---
+aliases:
+  - PjsWebSocketClient
+  - WebSocket client
+tags:
+  - sdd
+  - spec
+  - websocket
+  - client
+created: 2026-11-15
+status: partial
+priority: P2
+related:
+  - "[[constitution]]"
+  - "[[MOC-specs]]"
+  - "[[067-websocket-wire-protocol/spec|WebSocket wire protocol]]"
+  - "[[066-websocket-server-transport/spec|WebSocket server transport]]"
+  - "[[069-transport-features-and-limits/spec|Features and limits]]"
+code:
+  - crates/pjs-core/src/infrastructure/websocket/client.rs
+  - crates/pjs-core/src/infrastructure/websocket/mod.rs
+  - crates/pjs-core/tests/websocket_wire_level.rs
+verified: 2026-11-15
+---
+
+# `PjsWebSocketClient`: client sessions, caps and TTL
+
+> [!info] Status
+> `partial`: the client works against the in-tree server with bounded memory, session limit, idle TTL and explicit close. Open defects: #597 (task supervision in `connect`), #598 (feature does not compile standalone), #612 (`connect` blocks for the whole connection lifetime, undocumented).
+
+## Overview
+
+**Problem.** A Rust consumer of a PJS WebSocket stream must reconstruct data from frames without unbounded memory from an untrusted server.
+
+**Goal.** `PjsWebSocketClient` connects, sends `StreamInit`, applies frames into per-session JSON, acknowledges them and exposes the result.
+
+**Out of scope.** Reconnect, TLS configuration beyond `tokio-tungstenite` defaults, server-side session close notification, `http-client` (no such feature exists, see [[069-transport-features-and-limits/spec|069]]).
+
+Feature gate: `websocket-client` (deps `tokio-tungstenite`, `url`); in practice it requires the `http-server` stack because `websocket/mod.rs` and shared types depend on it (#598).
+
+## User Stories
+
+- As a consumer I call `request_stream(data, options)`, `connect()`, then read `get_current_data` and `is_stream_complete`.
+- As an operator I bound session count, idle time and per-session bytes.
+
+## Functional Requirements
+
+### FR-001 Construction and config
+
+`PjsWebSocketClient::new(url)` shall parse the URL (`PjsError::InvalidUrl` on failure). `with_config(WebSocketClientConfig)` and `with_write_timeout(Duration)` are `#[must_use]` builders. Defaults:
+
+| Field | Default |
+|---|---|
+| `max_message_size` | 1 MiB (`DEFAULT_MAX_INBOUND_FRAME_SIZE`) |
+| `max_frame_size` | 1 MiB |
+| `max_sessions` (`NonZeroUsize`) | 1024 |
+| `session_idle_ttl` (`SessionIdleTtl`, always positive) | 300 s |
+| `max_session_bytes` | 16 MiB |
+| write timeout | 10 s (`WRITE_TIMEOUT`), unvalidated |
+
+The message/frame caps equal the server's inbound cap so the client does not sever a connection to the in-tree server, which answers `StreamInit` with the whole request data in one frame. `SessionIdleTtl::new(Duration::ZERO)` returns `ConfigError::MustBePositive`.
+
+### FR-002 Connect
+
+`connect()` shall open the socket with `connect_async_with_config` using the caps, take the one-shot outgoing receiver (second call fails with `ClientError("Client already connected")`), spawn a send task (bounded `byte_bounded_channel`, 1000 messages / 16 MiB, writes through `send_with_write_timeout`) and a receive task, and return when either ends. It blocks for the connection lifetime (#612). Handshake failure maps to `PjsError::ConnectionFailed`; a transport error (including an oversize message or frame) ends `connect` with an error.
+
+### FR-003 Request stream
+
+`request_stream(data, options)` shall generate a fresh `SessionId`, build `StreamInit` (default `StreamOptions` when `None`), reserve a session slot, queue the serialised message, and return the id. A guard (`SessionSlotGuard`) removes the slot if the call is cancelled before queueing. Errors: `ClientError` (serialise failure or channel closed), `SessionLimitReached { limit }`.
+
+### FR-004 Session limit
+
+When `max_sessions` is reached a new request shall first drop expired sessions, then evict the incomplete session idle longest; completed sessions are never evicted, so a full set of completed sessions yields `SessionLimitReached` until `close_session` frees one.
+
+### FR-005 Frame application
+
+On `StreamFrame` the client shall drop the session if expired; if the session exists and is incomplete, merge the payload (object payloads merge key by key; any other payload replaces the data) provided the projected size stays within `max_session_bytes` (otherwise the session is removed and an error returned); mark complete on `is_complete`; refresh `last_activity`; record per-frame processing time; and queue a best-effort `FrameAck` (`try_send`, dropped with a warning if the channel is full). Frames for unknown, expired, closed or completed sessions are ignored without an ack.
+
+### FR-006 Completion and error messages
+
+`StreamComplete` marks the session complete (checksum logged, not verified). A server `Error` with a `session_id` removes that session. `Ping` is answered with `Pong` (same timestamp). Completed sessions are frozen: later frames do not refresh them, so they expire after the idle TTL.
+
+### FR-007 Reading and closing
+
+`get_current_data(id)` returns `Ok(Option<Value>)`; `is_stream_complete(id)`, `get_stream_stats(id)` return `false`/`None` for unknown or expired sessions; `close_session(id)` removes the session and returns `ClosedSession { data, stats }` (or `None` if unknown or expired). The server is not told and may keep streaming. `StreamStats`: `session_id`, `total_frames`, `is_complete`, `duration`, `average_processing_time`.
+
+## Non-Functional Requirements
+
+- NFR-SEC-001: worst-case retained memory is `max_sessions * max_session_bytes` plus 16 MiB of queued outgoing bytes.
+- NFR-SEC-002: inbound caps enforced by the transport (`WebSocketConfig`).
+- NFR-REL-001: a stalled write ends the send task after `write_timeout`.
+- NFR-TEST-001: 30 unit tests in `client.rs`; wire tests `test_client_max_message_size_cuts_oversize_message`, `..._max_frame_size_cuts_oversize_frame_below_message_cap`, `..._within_caps_message_is_accepted` in `tests/websocket_wire_level.rs`.
+
+## Data Model
+
+`PjsWebSocketClient { url, config, sessions, message_tx, message_rx, write_timeout }`, `WebSocketClientConfig` (`Copy`), `SessionIdleTtl`, `StreamStats`, `ClosedSession`, private `ClientStreamSession`.
+
+## Edge Cases and Errors
+
+| Case | Behaviour |
+|---|---|
+| Invalid URL | `InvalidUrl` |
+| Handshake fails | `ConnectionFailed` |
+| Second `connect` | `ClientError("Client already connected")` |
+| Session over `max_session_bytes` | session dropped, `ClientError` |
+| All sessions complete at limit | `SessionLimitReached` |
+| Expired session read | treated as unknown |
+| Binary / raw frames | logged, ignored |
+
+## Success Criteria
+
+- A request against the in-tree server yields complete data, `is_stream_complete == true`, and `close_session` returns the reconstructed object.
+- Oversize server messages terminate the connection rather than buffering.
+
+## Agent Boundaries
+
+- Always: keep memory bounded by config; use `try_send` for control messages from the read loop.
+- Ask first: adding reconnect or auto-close semantics.
+- Never: await a full outgoing channel inside the receive loop.
+
+## Open Questions
+
+- #597: `connect` detaches the losing task after `select!`, may report write failures as `Ok`, and cannot reconnect.
+- #598: `websocket-client` alone does not compile; it needs the `http-server` stack.
+- #612: `connect` rustdoc does not say it blocks for the whole connection lifetime.
+- The README describes `http-client` (reqwest) alongside; no such code exists.
+- Frame ordering is not enforced (`frame_id` unused when merging); the "reconstruction" is a shallow key merge, not the JSON Pointer reconstruction in the core `stream` module.
+- `ClientStreamSession.created_at` and `last_activity` use wall-clock `Instant` (not injectable for tests; tests use `close_session_at`).
+
+## See Also
+
+- [[067-websocket-wire-protocol/spec|067]], [[066-websocket-server-transport/spec|066]], [[069-transport-features-and-limits/spec|069]]
