@@ -258,7 +258,7 @@ Other enforced patterns: sealed `PartialJsonParser` (`parser/partial.rs`, featur
 | `pjs-core` HTTP | `PjsError` (implements `IntoResponse`) | `infrastructure/http/axum_adapter.rs` |
 | others | `ConfigError`, `CompressionBombError`, `RateLimitError`, `StreamTransportError`, `StreamExtensionError`, `CreateSessionError`, `AuthConfigError`, `TrySendError` | per module |
 
-`PjsError::into_response` maps `ApplicationError` variants: `NotFound` 404, `Validation` 400, `Authorization` 401, `Concurrency`/`Conflict` 409, `Domain`/`Logic` 500 (closes #173); parse errors in the HTTP layer map to 400. **Rule:** classify new errors in that mapping; do not default to 500 for a classifiable error.
+`PjsError::into_response` maps `ApplicationError` variants: `NotFound` 404, `Validation` 400, `Authorization` 401, `Concurrency`/`Conflict` 409, `Domain` 500 except `DomainError::InvalidInput` 400 (#621), `Logic` 500 (closes #173); parse errors in the HTTP layer map to 400. **Rule:** classify new errors in that mapping; do not default to 500 for a classifiable error.
 
 ---
 

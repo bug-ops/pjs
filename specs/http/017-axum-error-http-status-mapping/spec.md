@@ -53,7 +53,7 @@ verified: 2026-11-15
 ### FR-003: Authorization -> 401. Status: done.
 ### FR-004: Conflict -> 409. Status: done.
 ### FR-005: Concurrency -> 409. Status: done.
-### FR-006: Domain -> 500. Status: done.
+### FR-006: Domain -> 500, except `DomainError::InvalidInput` -> 400 (#621; `GET /pjs/sessions?limit=0` returns 400). Status: done.
 ### FR-007: Logic -> 500. Status: done.
 ### FR-008: JSON body `{ "error": "<message>" }`. Status: done.
 ### FR-009: Exhaustive mapping (compile-time). Status: done.
@@ -70,7 +70,8 @@ verified: 2026-11-15
 | `Validation` | 400 |
 | `Authorization` | 401 |
 | `Concurrency`, `Conflict` | 409 |
-| `Domain`, `Logic` | 500 |
+| `Domain` | 500; `DomainError::InvalidInput` -> 400 |
+| `Logic` | 500 |
 
 ## Success Criteria
 

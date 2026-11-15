@@ -141,7 +141,7 @@ Status: done.
 ## Open Questions
 
 1. Two parallel configs exist: `security::RateLimitConfig` (used by the limiter) and `config::security::RateLimitingConfig` inside `SecurityConfig.network`; the latter and `NetworkLimits.compression_bomb` are not read by any limiter or detector (grep: no consumers outside `config/`). `[NEEDS CLARIFICATION: intended wiring]`.
-2. `CompressionBombConfig` and `RateLimitConfig` are `Deserialize`-able with no validation (zero limits, `max_ratio <= 0`, NaN ratio accepted).
+2. `CompressionBombConfig` has `validate()` (#627), also run by `SecurityConfig::validate`: it rejects non-finite or non-positive `max_ratio`, zero `max_decompressed_size`/`max_compressed_size` (`ConfigError::MustBePositive`) and `check_interval_bytes > max_decompressed_size` (`ConfigError::InconsistentBounds`). `RateLimitConfig` remains `Deserialize`-able with no validation.
 3. `CompressionBombError` is flattened into `Error::SecurityError(String)`; callers cannot match variants (#599).
 4. `CompressionBombDetector` has one production caller: `InMemoryDictionaryStore` uses `validate_pre_decompression` as a dictionary size gate. `SecureCompressor` decode paths have none ([[049-secure-byte-compression/spec|spec 049]]).
 5. `RateLimitConfig.write_timeout` lives in the rate-limit config but is a WebSocket sink concern; the WebSocket module has an independent `WRITE_TIMEOUT` constant (documented as needing manual mirroring).

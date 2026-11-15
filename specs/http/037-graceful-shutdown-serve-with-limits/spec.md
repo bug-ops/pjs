@@ -42,7 +42,7 @@ verified: 2026-11-15
 > **Deviations from the original draft (approved)**
 > - **DV1**: no `ShutdownSignal::child()` and no hyper-util `GracefulShutdown` / `server-graceful` feature. Each connection runs a per-connection `select!` plus `UpgradeableConnection::graceful_shutdown()`; the signal holds two `CancellationToken`s (shutdown, force) and a `TaskTracker` (`tokio-util` dependency). Clones of one signal are passed to both `serve_with_limits` and the WebSocket transport.
 > - **DV2**: in all three demo servers Ctrl-C triggers the `ShutdownSignal` given to `serve_with_limits`; only `interactive-demo` (which mounts `AxumWebSocketTransport`) also passes it to `with_shutdown`. `websocket-streaming` keeps its own upgrade handler, so Ctrl-C there drains HTTP only. This replaces the Out of Scope line about demo draining.
-> - **FR-008** is satisfied by inserting the `ShutdownSignal` as a request extension; the terminal SSE/NDJSON frame is deferred (#625).
+> - **FR-008** is satisfied by inserting the `ShutdownSignal` as a request extension and by the terminal SSE/NDJSON frame (#625): see FR-008.
 > - Decisions: `DrainTimeout` default 30 s, maximum 600 s, zero rejected; dropping every signal clone never triggers shutdown; the signature of `serve_with_limits` was broken in place (no sibling function).
 
 > [!info] Metadata
@@ -182,9 +182,11 @@ WHILE shutdown is in progress THE SYSTEM SHALL keep enforcing `ConnectionLimits`
 
 WHEN shutdown fires THE SYSTEM SHALL make the shutdown signal observable by request handlers (via request extensions) so SSE/NDJSON streaming handlers can end the stream with a terminal frame.
 
+SSE and NDJSON response bodies keep forwarding during the drain so finite responses finish normally. Only a body still open once `drain_timeout` is nearly spent shall get a terminal frame, appended at `drain_timeout - drain_timeout/10` after the signal fires (`ShutdownBodyState::terminal_frame_deadline`) so it is flushed before the drain aborts the connection; a body that ends earlier gets none. The deadline is measured from the instant the signal fired (stamped once by a task into a shared `Arc<OnceLock<Instant>>` in `ShutdownBodyState::new`), not from when a body first observed it: a body that sees the signal late gets the frame at the same absolute deadline, or immediately if it has already passed. In the draining phase the deadline is polled first (`biased`), so an always-ready body cannot starve the frame. Only responses whose `Content-Type` is NDJSON or SSE are affected. NDJSON `{"event":"shutdown"}\n`, SSE `event: shutdown\ndata: {"event":"shutdown"}\n\n`. A response with a `Content-Encoding` header passes through untouched (#625).
+
 **Priority**: should
 
-**Status**: implemented (extension only; the terminal frame itself is deferred, #625)
+**Status**: implemented (extension and terminal frame, #625)
 
 ### FR-009
 
@@ -240,7 +242,7 @@ MSRV 1.89 and nightly toolchain; new dependencies limited to what is justified i
 | Signal fires while the loop waits on the connection semaphore | The wait is raced with the signal; loop exits without accepting |
 | Signal fires during `accept_with_retry` backoff sleep | Backoff is raced with the signal; exits promptly |
 | Signal fires before first request on a connection (header-read peek pending) | Connection dropped immediately; nothing to drain |
-| Client keeps an SSE stream open forever | Aborted at the drain deadline (terminal frame deferred, #625) |
+| Client keeps an SSE stream open forever | Receives the terminal `shutdown` frame at `drain_timeout - drain_timeout/10` after the signal fired (10% margin before the deadline; immediately if a late-observing body is already past it), unless the response has a `Content-Encoding` (then it passes through untouched), then is aborted at the deadline |
 | Upgraded WebSocket (hyper no longer tracks it after upgrade) | Tracked separately via the WS task tracker (FR-003) |
 | `max_connection_duration` shorter than drain timeout | Connection-duration deadline still wins (FR-007) |
 | Signal triggered twice | Idempotent |
@@ -251,7 +253,7 @@ MSRV 1.89 and nightly toolchain; new dependencies limited to what is justified i
 
 | ID | Metric | Target |
 |----|--------|--------|
-| SC-001 | In-flight stream completion on shutdown within the timeout | 100% in integration test |
+| SC-001 | In-flight stream completion on shutdown within the timeout (finite responses finish during the drain; open SSE/NDJSON bodies end with the terminal frame before the deadline) | 100% in integration test |
 | SC-002 | Leaked tasks after return | 0 |
 | SC-003 | Return time after shutdown with a stalled client | <= drain timeout + 100 ms |
 | SC-004 | Accept-path benchmark delta | < 2% |
@@ -267,7 +269,6 @@ MSRV 1.89 and nightly toolchain; new dependencies limited to what is justified i
 ### Ask First
 - Adding `tokio-util` or enabling hyper-util `server-graceful` (new dependency or feature).
 - Changing the public signature of `serve_with_limits` vs adding a sibling function.
-- Defining the wire format of the terminal frame for SSE/NDJSON.
 
 ### Never
 - Put shutdown types in `domain/` or `application/`.
@@ -278,9 +279,7 @@ MSRV 1.89 and nightly toolchain; new dependencies limited to what is justified i
 ## 9. Open Questions
 
 > [!question] Open items
-> - [NEEDS CLARIFICATION: terminal frame format for SSE and NDJSON and whether it is part of the public protocol; tracked in #625]
->
-> Resolved: default `DrainTimeout` 30 s with a 600 s cap; `serve_with_limits` signature broken in place; dropped trigger never shuts down; the WebSocket transport takes the same signal through `with_shutdown`; `tokio-util` approved as a dependency.
+> Resolved: terminal frame wire format (NDJSON `{"event":"shutdown"}\n`, SSE `event: shutdown` with the same JSON data) appended at drain_timeout minus 10%, measured from the signal instant, only to bodies still open, none for encoded responses (#625); default `DrainTimeout` 30 s with a 600 s cap; `serve_with_limits` signature broken in place; dropped trigger never shuts down; the WebSocket transport takes the same signal through `with_shutdown`; `tokio-util` approved as a dependency.
 
 ## 10. See Also
 

@@ -11,6 +11,7 @@ categories = { workspace = true }
 publish = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
 chrono = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 futures = { workspace = true }
@@ -18,7 +19,7 @@ pjson-rs = { workspace = true }
 pjson-rs-domain = { workspace = true }
 serde_json = { workspace = true }
 sonic-rs = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "time"] }
 uuid = { workspace = true }
 dhat = { workspace = true }
 
@@ -46,4 +47,8 @@ harness = false
 
 [[bench]]
 name = "http_streaming"
+harness = false
+
+[[bench]]
+name = "http_serve_lifecycle"
 harness = false

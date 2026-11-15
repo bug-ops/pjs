@@ -148,7 +148,6 @@ Tests that pin a previously fixed defect or a cross-crate invariant. Names are r
 | Item | Issue |
 |---|---|
 | WebSocket transport never prioritizes (real planner) | #624 |
-| Terminal SSE/NDJSON frame on shutdown | #625 |
 | Run `wasm_bindgen_test` suite in CI | [NEEDS CLARIFICATION: no issue found] |
 | Run integration tests on all OSes (switch `test` job to include `--tests`, or add a job) | [NEEDS CLARIFICATION: no issue found] |
 

@@ -124,6 +124,17 @@ impl PriorityStreamer {
 
         // Extract patches by priority
         let mut patches = Vec::new();
+        if Self::needs_root_set(json) {
+            // Pushed first so the stable priority sort applies it before any
+            // other CRITICAL patch; later patches then refine its value.
+            patches.push(JsonPatch {
+                path: JsonPath::root(),
+                operation: PatchOperation::Set {
+                    value: Self::skeletonize_arrays(json),
+                },
+                priority: Priority::CRITICAL,
+            });
+        }
         self.extract_patches(json, &JsonPath::root(), &mut patches)?;
 
         // Group patches by priority
@@ -165,6 +176,22 @@ impl PriorityStreamer {
         Ok(plan)
     }
 
+    /// Whether `JsonPath` can encode `key` as an object member segment.
+    fn is_encodable_key(key: &str) -> bool {
+        JsonPath::root().append_key(key).is_ok()
+    }
+
+    /// Whether the root cannot be rebuilt from path-addressed patches alone:
+    /// a scalar root has no path-addressable children, and an object root with
+    /// a key `JsonPath` cannot encode has no patch that could carry that key.
+    fn needs_root_set(json: &JsonValue) -> bool {
+        match json {
+            JsonValue::Object(map) => map.keys().any(|key| !Self::is_encodable_key(key)),
+            JsonValue::Array(_) => false,
+            _ => true,
+        }
+    }
+
     /// Generate skeleton structure with null/empty values
     fn generate_skeleton(&self, json: &JsonValue) -> JsonValue {
         match json {
@@ -202,9 +229,13 @@ impl PriorityStreamer {
             JsonValue::Object(map) => {
                 let skeleton = map
                     .iter()
-                    .map(|(key, v)| match JsonPath::root().append_key(key) {
-                        Ok(_) => (key.clone(), Self::skeletonize_arrays(v)),
-                        Err(_) => (key.clone(), v.clone()),
+                    .map(|(key, v)| {
+                        let value = if Self::is_encodable_key(key) {
+                            Self::skeletonize_arrays(v)
+                        } else {
+                            v.clone()
+                        };
+                        (key.clone(), value)
                     })
                     .collect();
                 JsonValue::Object(skeleton)
@@ -708,6 +739,39 @@ mod tests {
             101,
             "expected all 101 elements to survive the round trip"
         );
+    }
+
+    #[test]
+    fn test_round_trip_scalar_roots() {
+        let streamer = PriorityStreamer::new();
+        for payload in [
+            json!(42),
+            json!("text"),
+            json!(true),
+            json!(null),
+            json!(1.5),
+        ] {
+            assert_eq!(round_trip(&streamer, &payload), payload);
+        }
+    }
+
+    #[test]
+    fn test_round_trip_top_level_unencodable_keys() {
+        let streamer = PriorityStreamer::new();
+        for payload in [
+            json!({"a.b": 1, "ok": 2}),
+            json!({"a[0]": "v"}),
+            json!({"a.b": [1, 2, 3], "id": 7, "list": [1, 2], "n": {"x": [1]}}),
+        ] {
+            assert_eq!(round_trip(&streamer, &payload), payload);
+        }
+    }
+
+    #[test]
+    fn test_round_trip_large_string_field() {
+        let streamer = PriorityStreamer::new();
+        let payload = json!({"blob": "x".repeat(70 * 1024)});
+        assert_eq!(round_trip(&streamer, &payload), payload);
     }
 
     #[test]

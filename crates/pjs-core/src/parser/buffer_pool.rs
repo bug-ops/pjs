@@ -90,10 +90,10 @@ pub struct AlignedBuffer {
     last_used: Instant,
 }
 
-// Safety: AlignedBuffer can be safely sent between threads
+// SAFETY: `ptr` is uniquely owned (never aliased) and the remaining fields are plain data.
 unsafe impl Send for AlignedBuffer {}
 
-// Safety: AlignedBuffer can be safely shared between threads (no interior mutability)
+// SAFETY: no interior mutability; `&self` methods only read through `ptr`.
 unsafe impl Sync for AlignedBuffer {}
 
 impl std::fmt::Debug for AlignedBuffer {
@@ -392,7 +392,7 @@ impl AlignedBuffer {
         let allocator = aligned_allocator();
 
         // Allocate aligned memory using the appropriate allocator backend
-        // Safety: alignment has been validated above
+        // SAFETY: `aligned_capacity` > 0, `alignment` is a power of two, layout overflow ruled out above.
         let ptr = unsafe { allocator.alloc_aligned(aligned_capacity, alignment)? };
 
         let now = Instant::now();
@@ -651,7 +651,7 @@ impl Drop for AlignedBuffer {
         // Use the global SIMD allocator for deallocation
         let allocator = aligned_allocator();
 
-        // Safety: We allocated this memory with the same layout
+        // SAFETY: `self.ptr` came from `alloc_aligned`/`realloc_aligned` with `self.layout`, and Drop runs once.
         unsafe {
             allocator.dealloc_aligned(self.ptr, self.layout);
         }
@@ -985,9 +985,9 @@ mod tests {
         assert_eq!(buffer.capacity(), 1024); // Capacity should remain
 
         // Test unsafe set_len
+        fill_uninit(buffer.as_mut_capacity_slice(), b"SIMD!");
+        // SAFETY: the first 5 bytes were initialized above and 5 <= capacity.
         unsafe {
-            // Write some data directly
-            fill_uninit(buffer.as_mut_capacity_slice(), b"SIMD!");
             buffer.set_len(5);
         }
         assert_eq!(buffer.len(), 5);
@@ -1277,6 +1277,7 @@ mod tests {
         // Perform various operations that should NOT move the buffer
         buffer.clear();
         buffer.extend_from_slice(b"test").unwrap();
+        // SAFETY: 2 <= 4 initialized bytes written by `extend_from_slice` above.
         unsafe {
             buffer.set_len(2);
         }
@@ -1505,15 +1506,15 @@ mod tests {
     #[test]
     fn test_simd_performance_oriented_allocation() {
         // Test that allocation pattern is suitable for high-performance SIMD
-        let buffer = AlignedBuffer::new_avx512(4096).unwrap();
+        let mut buffer = AlignedBuffer::new_avx512(4096).unwrap();
+        let capacity = buffer.capacity();
 
-        // Verify the buffer can be used for actual SIMD-like operations
-        let slice = unsafe { std::slice::from_raw_parts_mut(buffer.ptr.as_ptr(), buffer.capacity) };
-
-        // Fill with test pattern
-        for (i, byte) in slice.iter_mut().enumerate() {
-            *byte = (i % 256) as u8;
+        for (i, slot) in buffer.as_mut_capacity_slice().iter_mut().enumerate() {
+            slot.write((i % 256) as u8);
         }
+        // SAFETY: every byte of the capacity was initialized by the loop above.
+        unsafe { buffer.set_len(capacity) };
+        let slice = buffer.as_slice();
 
         // Verify alignment is maintained through operations
         assert!(buffer.is_aligned());

@@ -1040,6 +1040,9 @@ impl IntoResponse for PjsError {
                     ApplicationError::Concurrency(_) | ApplicationError::Conflict(_) => {
                         StatusCode::CONFLICT
                     }
+                    ApplicationError::Domain(crate::domain::DomainError::InvalidInput(_)) => {
+                        StatusCode::BAD_REQUEST
+                    }
                     ApplicationError::Domain(_) | ApplicationError::Logic(_) => {
                         StatusCode::INTERNAL_SERVER_ERROR
                     }

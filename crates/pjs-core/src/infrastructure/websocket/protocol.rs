@@ -174,6 +174,26 @@ pub enum WsMessage {
     },
 }
 
+impl WsMessage {
+    /// Returns the wire name of this message's variant, with no payload.
+    ///
+    /// Safe to log in place of the message itself, which may carry
+    /// client-controlled data.
+    #[must_use]
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::StreamInit { .. } => "StreamInit",
+            Self::StreamFrame { .. } => "StreamFrame",
+            Self::FrameAck { .. } => "FrameAck",
+            Self::StreamComplete { .. } => "StreamComplete",
+            Self::StreamCancel { .. } => "StreamCancel",
+            Self::Error { .. } => "Error",
+            Self::Ping { .. } => "Ping",
+            Self::Pong { .. } => "Pong",
+        }
+    }
+}
+
 /// Stream configuration options.
 ///
 /// The server applies none of these fields: a `StreamInit` is accepted only
@@ -275,6 +295,43 @@ mod tests {
         send_with_write_timeout(&mut sink, "hello", WRITE_TIMEOUT)
             .await
             .expect("a sink that accepts immediately must not be treated as stalled");
+    }
+
+    #[test]
+    fn test_kind_matches_wire_type_tag_for_every_variant() {
+        let session_id = SessionId::new();
+        let messages = [
+            WsMessage::StreamInit {
+                session_id,
+                data: json!(null),
+                options: StreamOptions::default(),
+            },
+            WsMessage::StreamFrame {
+                session_id,
+                frame_id: 0,
+                priority: Priority::HIGH,
+                payload: json!(null),
+                is_complete: false,
+            },
+            WsMessage::FrameAck {
+                session_id,
+                frame_id: 0,
+                processing_time_ms: 0,
+            },
+            WsMessage::StreamComplete { session_id },
+            WsMessage::StreamCancel { session_id },
+            WsMessage::Error {
+                session_id: None,
+                error: String::new(),
+                code: 0,
+            },
+            WsMessage::Ping { timestamp: 0 },
+            WsMessage::Pong { timestamp: 0 },
+        ];
+        for message in &messages {
+            let wire = serde_json::to_value(message).unwrap();
+            assert_eq!(wire["type"], message.kind());
+        }
     }
 
     #[test]

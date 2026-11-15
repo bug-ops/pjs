@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SessionTimeout`, `TrainedDictionary` in `pjs-domain`, and `StreamFilter`/`SessionQueryCriteria` builders that validate at construction (#596, #604, #605)
 - CI jobs for the per-feature build matrix and the MSRV check, and a documented quiet-machine A/B bench procedure (#615, #608, #619)
 - `WsMessage::StreamCancel` and a Pong reply to Ping on the WebSocket server (#572, #601)
+- `serve_with_limits` sends a terminal `shutdown` frame on SSE and NDJSON streams, and a `http_serve_lifecycle` benchmark covers the connection lifecycle (#625, #630, #645)
 
 ### Changed
 
@@ -60,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `PriorityStreamer` plan/reconstruct round trip keeps scalar roots and top-level keys that `JsonPath` cannot encode (#626, #645)
+- `SecurityConfig::validate` rejects invalid `max_ratio`, zero compression-bomb sizes, zero rate-limit rates and `check_interval_bytes` above `max_decompressed_size` (**BREAKING**) (#627, #645)
+- `PjsWebSocketClient` bounds logged server content and omits URL userinfo, query and fragment (#628, #645)
+- `GET /pjs/sessions?limit=0` returns 400 and domain `InvalidInput` maps to 400 in the HTTP adapter (#621, #645)
+- `sonic-rs` is optimized in this workspace's dev profile so nested-array parsing no longer overflows the default test stack; downstream debug builds are unaffected (#622, #645)
+- `test_decompression_stats_tracking` no longer depends on measured wall-clock time (#623, #645)
+- `dependabot-automerge` workflow grants `checks: read` (#634, #645)
+- Parser `unsafe` blocks carry `SAFETY:` comments with preconditions and a test no longer builds a slice over uninitialised memory (#632, #645)
+- WebSocket session cap documented as defence in depth under the default rate limit and `StreamSessionWire` field list pinned by a round-trip test (#631, #629, #645)
 - `StreamFormat::from_accept_header` rustdoc describes wildcard matching accurately (#529, #568)
 - Bump `rustls` to 0.23.46 and `pjs-js-client` dev deps (`handlebars`, `shell-quote`) for OSV advisories; de-flake the EMA duration test (#562)
 - Tighten `StreamingDecompressor` run-length and dictionary decompression size limits (#552)

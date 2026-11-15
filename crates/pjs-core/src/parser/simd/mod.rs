@@ -326,17 +326,16 @@ mod tests {
         }
     }
 
-    /// Parses on a large stack: unoptimized frames overflow the default 2 MiB test stack at ~50 levels.
+    /// Runs on the default test-thread stack: the workspace `profile.dev.package.sonic-rs`
+    /// override keeps sonic-rs frames small enough for depths up to its own limit (#622).
     fn parses_nested_arrays(depth: usize) -> bool {
-        std::thread::Builder::new()
-            .stack_size(256 * 1024 * 1024)
-            .spawn(move || {
-                let json = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
-                sonic_rs::from_str::<SonicValue>(&json).is_ok()
-            })
-            .unwrap()
-            .join()
-            .unwrap()
+        let json = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+        sonic_rs::from_str::<SonicValue>(&json).is_ok()
+    }
+
+    #[test]
+    fn test_sonic_accepts_nesting_beyond_debug_stack_threshold() {
+        assert!(parses_nested_arrays(200));
     }
 
     #[test]

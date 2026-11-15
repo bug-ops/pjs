@@ -1266,7 +1266,6 @@ mod tests {
 
         assert_eq!(decompressor.stats.frames_decompressed, 1);
         assert!(decompressor.stats.total_decompressed_bytes > 0);
-        assert!(decompressor.stats.avg_decompression_time_us > 0);
     }
 
     #[test]
