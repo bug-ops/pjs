@@ -29,6 +29,14 @@ This project adheres to the Rust Project Code of Conduct. By participating, you 
 rustc --version  # Should show "nightly"
 ```
 
+#### Bumping the nightly pin
+
+`rust-toolchain.toml` is the single source of truth for the dated nightly. CI and release jobs install it through the local composite action `.github/actions/setup-rust`, which reads the channel from that file (the `msrv` job is the only exception and pins `1.89`). To bump:
+
+1. Change `channel` in `rust-toolchain.toml` to the new `nightly-YYYY-MM-DD`.
+2. Run the full check suite locally on the new nightly (fmt, clippy, nextest, doc tests, doc gate).
+3. Open one PR with that change; CI must pass on it. No other file needs editing.
+
 ### Clone and Build
 
 ```bash
