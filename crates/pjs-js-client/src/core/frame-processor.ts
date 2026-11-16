@@ -200,7 +200,8 @@ export class FrameProcessor {
 
   private isValidJsonPath(path: JsonPath): boolean {
     if (!path.startsWith('$')) return false;
-    const pathRegex = /^\$(\.[a-zA-Z_][a-zA-Z0-9_]*(\[\d+\])?)*$/;
+    // Key grammar mirrors Rust `JsonPath::is_valid_key`: any non-empty key without `.`, `[` or `]`.
+    const pathRegex = /^\$(\.[^.[\]]+(\[\d+\])?)*$/;
     return pathRegex.test(path);
   }
 }

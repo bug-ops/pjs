@@ -73,7 +73,7 @@ Status: done.
 
 ### FR-005 Frame generation algorithm
 The system shall implement frame generation once, in `frame_generation::generate_frames`, shared by `PjsParser` and `PriorityStream`:
-1. Skeleton frame (sequence 0): same shape as the input, leaves replaced by `null` (strings), `0`, `0.0`, `false`; arrays replaced by `[]`; recursion truncated to `null` at `max_depth` (from `SecurityConfig.maxDepth`).
+1. Skeleton frame (sequence 0): same shape as the input, leaves replaced by `null` (strings), `0`, `0.0`, `false`; arrays replaced by `[]`; values under keys that `JsonPath::is_valid_key` rejects (`.`, `[`, `]`, empty) kept verbatim at any depth below `max_depth`, since no patch can address them; recursion truncated to `null` at `max_depth` (from `SecurityConfig.maxDepth`).
 2. Fields extracted recursively through objects and arrays up to `max_depth`, each assigned a `Priority` by `PriorityAssigner`.
 3. Fields grouped by priority, priorities sorted descending; groups below `min_priority` skipped; each remaining group becomes one patch frame of `set` patches.
 4. Completion frame last. Sequence numbers are contiguous from 0.
