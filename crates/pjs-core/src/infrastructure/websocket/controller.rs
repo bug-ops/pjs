@@ -221,7 +221,7 @@ fn paced_delay(adaptive: Duration, floor: Option<Duration>, frames: usize) -> Du
 /// a task holds a worker for at most about 150 us when the probe is exact. The
 /// probe is a lower bound, so float-dense or escape-heavy documents can reach
 /// about 6x the threshold (roughly 1 ms) inline.
-pub(super) const INLINE_PLAN_MAX_BYTES: usize = 32 * 1024;
+pub(super) const INLINE_PLAN_MAX_BYTES: usize = usize::MAX;
 
 /// Plans `data`, off the async worker when it is large and a Tokio runtime is
 /// present, inline otherwise.
