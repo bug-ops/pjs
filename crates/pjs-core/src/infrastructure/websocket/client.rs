@@ -1890,10 +1890,10 @@ mod tests {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
 
         let lease = ReceiverLease::acquire(&client.message_rx).unwrap();
-        assert!(matches!(
-            ReceiverLease::acquire(&client.message_rx),
-            Err(PjsError::AlreadyConnected)
-        ));
+        assert_matches!(
+            ReceiverLease::acquire(&client.message_rx).err(),
+            Some(PjsError::AlreadyConnected)
+        );
         drop(lease);
         assert!(ReceiverLease::acquire(&client.message_rx).is_ok());
     }

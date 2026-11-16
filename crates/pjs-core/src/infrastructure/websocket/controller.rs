@@ -211,14 +211,16 @@ fn paced_delay(adaptive: Duration, floor: Option<Duration>, frames: usize) -> Du
         .min(PACING_BUDGET / frames)
 }
 
-/// Documents whose size lower bound exceeds this many bytes are planned on the
-/// blocking pool instead of the async worker.
+/// Documents that `planner::exceeds_size` proves larger than this many bytes
+/// are planned on the blocking pool instead of the async worker.
 ///
-/// Measured with `cargo bench -p pjs-bench --bench websocket_controller`: inline
-/// planning costs about 205 MiB/s, i.e. 73 us at 16 KiB and 153 us at 32 KiB,
-/// against 6 us for a `spawn_blocking` round trip. 32 KiB is the smallest
-/// power of two whose planning exceeds 100 us, the longest a task should hold
-/// a worker without yielding.
+/// Measured with `cargo bench -p pjs-bench --bench websocket_controller`
+/// (below the threshold, where planning is inline): about 205 MiB/s, i.e. 73 us
+/// at 16 KiB and 153 us at 32 KiB, against 6 us for a `spawn_blocking` round
+/// trip. 32 KiB is the smallest power of two whose planning exceeds 100 us, so
+/// a task holds a worker for at most about 150 us when the probe is exact. The
+/// probe is a lower bound, so float-dense or escape-heavy documents can reach
+/// about 6x the threshold (roughly 1 ms) inline.
 pub(super) const INLINE_PLAN_MAX_BYTES: usize = 32 * 1024;
 
 /// Plans `data`, off the async worker when it is large and a Tokio runtime is
@@ -519,8 +521,10 @@ impl AdaptiveStreamController {
     ///
     /// The document is split into messages according to `options`
     /// (see [`StreamOptions`]); planning costs O(payload) and runs on the
-    /// blocking pool for documents above 32 KiB (`INLINE_PLAN_MAX_BYTES`) when called
-    /// inside a Tokio runtime, inline otherwise. Frames are paced per
+    /// blocking pool for documents proven larger than 32 KiB (`INLINE_PLAN_MAX_BYTES`)
+    /// when called inside a Tokio runtime, inline otherwise. The proof is a
+    /// lower bound on the serialized size, so a document of floats or escaped
+    /// strings somewhat above 32 KiB can still plan inline. Frames are paced per
     /// `StreamOptions::client_fps` and the clients' acknowledgments, but the total
     /// pacing time is capped at 30 seconds, so very large plans stream faster than
     /// either asks for.
@@ -1578,10 +1582,9 @@ mod tests {
             kinds.push(serde_json::from_str::<WsMessage>(&envelope.into_inner()).unwrap());
         }
         assert_matches!(
-                kinds.last(),
-                Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
-                    if error == FixedError::STREAM_STALLED.reason && *reported == id
-            ,
+            kinds.last(),
+            Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
+                if error == FixedError::STREAM_STALLED.reason && *reported == id,
             "{kinds:?}"
         );
         assert_eq!(controller.session_count(owner), 0);
@@ -1622,10 +1625,9 @@ mod tests {
             messages.push(serde_json::from_str::<WsMessage>(&envelope.into_inner()).unwrap());
         }
         assert_matches!(
-                messages.last(),
-                Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
-                    if error == FixedError::STREAM_DEADLINE_EXCEEDED.reason && *reported == id
-            ,
+            messages.last(),
+            Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
+                if error == FixedError::STREAM_DEADLINE_EXCEEDED.reason && *reported == id,
             "{messages:?}"
         );
         assert_eq!(controller.session_count(owner), 0);

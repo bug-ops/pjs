@@ -1144,7 +1144,9 @@ mod tests {
 
         assert!(result.is_err());
         let reply = serde_json::from_str::<WsMessage>(&rx.try_recv().unwrap().into_inner());
-        assert_matches!(&reply, Ok(WsMessage::Error { code: 400, error, .. }) if error == INVALID_STREAM_OPTIONS,
+        assert_matches!(
+            &reply,
+            Ok(WsMessage::Error { code: 400, error, .. }) if error == INVALID_STREAM_OPTIONS,
             "{reply:?}"
         );
         assert_eq!(transport.controller.session_count(connection), 0);

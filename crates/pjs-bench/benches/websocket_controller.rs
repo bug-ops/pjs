@@ -1,7 +1,9 @@
 //! Benchmarks for `AdaptiveStreamController` (#664).
 //!
-//! - `create_session`: cost of planning a document of 1 KiB to 1 MiB inline,
-//!   the input for the `spawn_blocking` threshold of #658.
+//! - `create_session`: cost of planning a document of 1 KiB to 1 MiB, the input
+//!   for the `spawn_blocking` threshold of #658. Sizes above the threshold (64 KiB
+//!   and up) now include the blocking-pool hop (about 6 us); the inline cost of
+//!   those sizes is the pre-#658 figure in spec 066.
 //! - `spawn_blocking_round_trip`: fixed cost of the blocking-pool hop.
 //! - `handle_frame_ack`: throughput of a per-frame global-lock operation on
 //!   500 connections from 1, 4, 8 and 16 concurrent tasks, the proxy for the
