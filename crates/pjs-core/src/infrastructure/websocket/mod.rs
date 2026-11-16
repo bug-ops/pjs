@@ -17,6 +17,8 @@ pub mod controller;
 pub mod fuzzing;
 #[cfg(feature = "websocket-server")]
 mod planner;
+#[cfg(all(test, feature = "websocket-server"))]
+mod planner_exceeds_size_acceptance;
 mod protocol;
 #[cfg(feature = "websocket-server")]
 pub mod security;

@@ -149,6 +149,43 @@ pub(super) fn plan_stream(
     planner.frames.finish()
 }
 
+/// Whether `value` certainly serializes to more than `limit` bytes.
+///
+/// Sums a cheap lower bound (strings and keys `len() + 2`, containers 2,
+/// `null` and booleans 4, other scalars 1) and stops at the first sum above
+/// `limit`, so the work is bounded by `limit` and independent of the
+/// document's size. Iterative, so it is stack-safe at any nesting depth.
+/// `false` means "not provably over", not "small".
+pub(super) fn exceeds_size(value: &Value, limit: usize) -> bool {
+    let mut bound = 0_usize;
+    let mut pending = vec![value];
+    while let Some(node) = pending.pop() {
+        // Every child adds at least 1, so later ones can never be reached.
+        let room = limit.saturating_sub(bound).saturating_add(1);
+        bound = bound.saturating_add(match node {
+            Value::String(s) => s.len().saturating_add(2),
+            Value::Null | Value::Bool(_) => 4,
+            Value::Number(_) => 1,
+            Value::Array(items) => {
+                pending.extend(items.iter().take(room));
+                2
+            }
+            Value::Object(map) => {
+                let mut keys = 2_usize;
+                for (key, child) in map.iter().take(room) {
+                    keys = keys.saturating_add(key.len().saturating_add(2));
+                    pending.push(child);
+                }
+                keys
+            }
+        });
+        if bound > limit {
+            return true;
+        }
+    }
+    false
+}
+
 /// Serialized size and shape of one value.
 #[derive(Debug, Clone, Copy)]
 struct Measure {
