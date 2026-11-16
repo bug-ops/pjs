@@ -97,6 +97,7 @@ function evaluateEsmGlueAsCjs(
   // the real ES module this replaces is always strict.
   const globalsPreamble = "'use strict';\nconst { TextEncoder, TextDecoder } = require('util');\n";
 
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- evaluates the trusted wasm-bindgen glue as a CommonJS module
   const moduleFactory = new Function(
     'exports',
     'require',
@@ -130,6 +131,7 @@ async function loadWasmModuleForNode(): Promise<typeof import('pjs-wasm')> {
       const { pathToFileURL } = await import('url');
 
       const pkgPath = require.resolve('pjs-wasm/package.json');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- resolved at runtime from the installed package
       const pkg = require(pkgPath) as { main?: unknown };
       if (typeof pkg.main !== 'string') {
         throw new Error(`pjs-wasm's package.json has no usable "main" field (got ${JSON.stringify(pkg.main)})`);

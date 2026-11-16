@@ -406,7 +406,7 @@ impl ClientRateLimiter {
     /// Lets tests assert that a call site (e.g. `RateLimitMiddleware::new`/
     /// `from_limiter`) actually wired up `spawn_cleanup_task` without waiting
     /// for a real cleanup pass on the production [`DEFAULT_CLEANUP_INTERVAL`].
-    #[cfg(test)]
+    #[cfg(all(test, feature = "http-server"))]
     pub(crate) fn is_cleanup_task_spawned(&self) -> bool {
         self.cleanup_spawned.load(Ordering::Acquire)
     }

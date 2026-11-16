@@ -173,9 +173,13 @@ cargo fuzz list
 # Replay the committed seeds deterministically (what CI gates on)
 cargo fuzz run ws_message_decode fuzz/seeds/ws_message_decode -- -runs=0
 
-# Explore for 60 seconds, using the seeds as extra corpus
-cargo fuzz run ws_message_decode -- -max_total_time=60 "$PWD/fuzz/seeds/ws_message_decode"
+# Explore for 60 seconds into the git-ignored scratch corpus, seeds as extra input
+cargo fuzz run ws_message_decode "$PWD/fuzz/corpus/ws_message_decode" "$PWD/fuzz/seeds/ws_message_decode" -- -max_total_time=60
 ```
+
+libFuzzer writes every new input into the first corpus directory, so never pass `fuzz/seeds/<target>` first (or alone) when exploring: the run would add generated files to the tracked seeds. Explore into `fuzz/corpus/<target>`, minimize with `cargo fuzz cmin <target>`, and copy only selected inputs into `fuzz/seeds/<target>` deliberately.
+
+The `fuzzing` entry points of `pjson-rs` are compiled only under `--cfg fuzzing` (`cargo fuzz` sets it); to build or lint the fuzz crate directly use `RUSTFLAGS="--cfg fuzzing" cargo build --manifest-path fuzz/Cargo.toml`.
 
 The fuzz crate builds without `serde_json/float_roundtrip`, so it runs the production float parsing path; `ws_message_decode` therefore compares round trips with a 1-ULP float tolerance (`approx_eq` in the `pjs_fuzz` library, `fuzz/src/lib.rs`). The opt-in `float-roundtrip` feature is covered by `crates/pjs-core/tests/float_roundtrip.rs`.
 

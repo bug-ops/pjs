@@ -23,12 +23,13 @@
 use super::protocol::{
     Framing, MAX_PATCH_PATH_DEPTH, StreamOptions, WirePatch, WirePath, WireSegment, WsMessage,
 };
+use crate::serialized_len::json_len;
 use crate::{
     domain::{Priority, SessionId},
     error::{PlanError, StreamOptionsError},
 };
 use serde_json::{Map, Value};
-use std::{collections::HashMap, io, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 /// Cumulative byte budget of one connection's outgoing channel, and therefore
 /// the largest message the planner may produce.
@@ -149,29 +150,84 @@ pub(super) fn plan_stream(
     planner.frames.finish()
 }
 
+/// Total weight of one float, digits included, in the offload gate.
+///
+/// A float costs about 27.6 ns to plan against 4.65 ns per byte (#669), so it
+/// weighs about 6 bytes however many digits it prints; the probe never formats
+/// it. One more for headroom.
+const FLOAT_COST: usize = 7;
+
+/// Extra weight of one integer on top of its digits in the offload gate.
+const INT_COST: usize = 0;
+
+/// Per-value weights of one early-exit walk.
+#[derive(Clone, Copy)]
+struct Weights {
+    float: usize,
+    int_extra: usize,
+}
+
+const SIZE_BOUND: Weights = Weights {
+    float: 3,
+    int_extra: 0,
+};
+
+const PLAN_COST: Weights = Weights {
+    float: FLOAT_COST,
+    int_extra: INT_COST,
+};
+
 /// Whether `value` certainly serializes to more than `limit` bytes.
 ///
-/// Sums a cheap lower bound: strings `len() + 2` (escapes uncounted), object
-/// keys `len() + 2` plus a colon each, containers 2 plus their separators,
-/// `null` and booleans 4, integers their digits, other numbers 3. It stops as
-/// soon as the sum, together with 1 byte per still-pending node, passes
-/// `limit`, so time and the pending stack are O(`limit`), independent of the
-/// document's size, and it is stack-safe at any depth.
+/// A certain lower bound: strings and object keys are counted exactly with
+/// their escapes, `false` is 5, `true` and `null` 4, an integer its digits, a
+/// float 3 (its minimum `d.d`), containers 2 plus their separators. The walk
+/// stops as soon as the sum, together with 1 byte per still-pending node,
+/// passes `limit`, so time and the pending stack are O(`limit`), independent
+/// of the document's size, and it is stack-safe at any depth.
 ///
-/// `true` is certain. `false` means "not proven over", not "small": the bound
-/// undercounts floats (3 bytes against up to 24) and escaped strings, so a
-/// document of such values can be up to about 6x `limit` and still return
-/// `false`.
+/// `true` implies the serialized length is above `limit`; the converse holds
+/// for float-free documents. `false` for a document with floats means "not
+/// proven over". The result is monotonic in `limit`. With `arbitrary_precision`
+/// numbers the bound still holds, every number counting at least its minimum.
 pub(super) fn exceeds_size(value: &Value, limit: usize) -> bool {
+    exceeds(value, limit, SIZE_BOUND)
+}
+
+/// Whether planning `value` is too expensive for an async worker.
+///
+/// The budget is in byte-equivalents of planning time, not a size bound:
+/// strings, keys and containers weigh their exact serialized bytes, an integer
+/// its digits plus `INT_COST`, a float the fixed `FLOAT_COST`. A string-only
+/// document therefore costs exactly its serialized size, while a float-dense
+/// document reaches the budget at a smaller size, in step with the time it
+/// takes to plan. The estimate assumes the default `serde_json::Number`.
+///
+/// This is an estimate, not a guarantee: the per-entry planning overhead of
+/// many short entries is not weighted, so entry-dense documents under the
+/// budget plan in a few hundred microseconds, about 2-3x the 160 us measured
+/// for the reference shapes.
+///
+/// Time and the pending stack are O(`budget`); the result is monotonic in
+/// `budget`.
+pub(super) fn exceeds_plan_cost(value: &Value, budget: usize) -> bool {
+    exceeds(value, budget, PLAN_COST)
+}
+
+fn exceeds(value: &Value, limit: usize, weights: Weights) -> bool {
     let mut bound = 0_usize;
     let mut pending = vec![value];
     while let Some(node) = pending.pop() {
-        // Every child adds at least 1, so later ones can never be reached.
+        // Every pending child adds at least 1, so later ones can never be reached.
         let room = limit.saturating_sub(bound).saturating_add(1);
-        bound = bound.saturating_add(match node {
-            Value::String(s) => s.len().saturating_add(2),
-            Value::Null | Value::Bool(_) => 4,
-            Value::Number(n) => number_size_lower_bound(n),
+        let weight = match node {
+            Value::String(s) => match string_size_within(s, room) {
+                Some(size) => size,
+                None => return true,
+            },
+            Value::Null | Value::Bool(true) => 4,
+            Value::Bool(false) => 5,
+            Value::Number(n) => number_weight(n, weights),
             Value::Array(items) => {
                 pending.extend(items.iter().take(room));
                 2 + items.len().saturating_sub(1)
@@ -179,12 +235,16 @@ pub(super) fn exceeds_size(value: &Value, limit: usize) -> bool {
             Value::Object(map) => {
                 let mut size = 2 + map.len().saturating_sub(1);
                 for (key, child) in map.iter().take(room) {
-                    size = size.saturating_add(key.len().saturating_add(3));
+                    let Some(key_size) = string_size_within(key, room.saturating_sub(size)) else {
+                        return true;
+                    };
+                    size = size.saturating_add(key_size + 1);
                     pending.push(child);
                 }
                 size
             }
-        });
+        };
+        bound = bound.saturating_add(weight);
         if bound.saturating_add(pending.len()) > limit {
             return true;
         }
@@ -192,28 +252,29 @@ pub(super) fn exceeds_size(value: &Value, limit: usize) -> bool {
     false
 }
 
-/// Whether `value` is too expensive to plan on an async worker (stub, #669).
-#[allow(dead_code, reason = "stub until the cost gate lands")]
-pub(super) fn exceeds_plan_cost(_value: &Value, _budget: usize) -> bool {
-    todo!("#669: offload gate in byte-equivalents of planning time")
+/// Exact serialized size of `s`, or `None` when it certainly reaches `room`.
+///
+/// Scans only when `s.len() + 2 < room`, so one call costs O(`room`).
+fn string_size_within(s: &str, room: usize) -> Option<usize> {
+    (s.len().saturating_add(2) < room).then(|| string_size(s))
+}
+
+/// Weight of `n`: its digits for an integer, `weights.float` for a float.
+fn number_weight(n: &serde_json::Number, weights: Weights) -> usize {
+    let digits = |magnitude: u64| magnitude.checked_ilog10().map_or(1, |d| d as usize + 1);
+    if let Some(u) = n.as_u64() {
+        digits(u) + weights.int_extra
+    } else if let Some(i) = n.as_i64() {
+        1 + digits(i.unsigned_abs()) + weights.int_extra
+    } else {
+        weights.float
+    }
 }
 
 #[cfg(test)]
 mod plan_cost_acceptance;
-
-/// Fewest bytes `n` serializes to: its digits for an integer, `d.d` for a float.
-fn number_size_lower_bound(n: &serde_json::Number) -> usize {
-    if let Some(u) = n.as_u64() {
-        u.checked_ilog10().map_or(1, |digits| digits as usize + 1)
-    } else if let Some(i) = n.as_i64() {
-        1 + i
-            .unsigned_abs()
-            .checked_ilog10()
-            .map_or(1, |d| d as usize + 1)
-    } else {
-        3
-    }
-}
+#[cfg(test)]
+mod weights_acceptance;
 
 /// Serialized size and shape of one value.
 #[derive(Debug, Clone, Copy)]
@@ -287,14 +348,13 @@ fn settle(out: &mut [Measure], slot: usize, size: usize, depth: usize, before: u
 
 /// Serialized length of a string value, quotes included.
 fn string_size(s: &str) -> usize {
-    2 + s
-        .chars()
-        .map(|c| match c {
-            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
-            c if (c as u32) < 0x20 => 6,
-            c => c.len_utf8(),
-        })
-        .sum::<usize>()
+    // Only ASCII bytes are ever escaped, and UTF-8 continuation bytes are >= 0x80.
+    let extra = |byte: u8| match byte {
+        b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 1,
+        0..0x20 => 5,
+        _ => 0,
+    };
+    2 + s.len() + s.bytes().map(extra).sum::<usize>()
 }
 
 fn scalar_size(value: &Value) -> usize {
@@ -303,25 +363,7 @@ fn scalar_size(value: &Value) -> usize {
         Value::Null => 4,
         Value::Bool(true) => 4,
         Value::Bool(false) => 5,
-        other => {
-            let mut counter = Counter(0);
-            // Writing into a counter cannot fail; a failure counts as empty.
-            let _ = serde_json::to_writer(&mut counter, other);
-            counter.0
-        }
-    }
-}
-
-struct Counter(usize);
-
-impl io::Write for Counter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0 += buf.len();
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        other => json_len(other),
     }
 }
 
@@ -989,11 +1031,15 @@ mod tests {
 
     #[test]
     fn test_string_size_matches_serde_json() {
+        let every_ascii: String = (0..=0x7f_u8).map(char::from).collect();
         for s in [
             "",
             "plain",
             "q\"b\\n\n\t\r\u{8}\u{c}\u{1}\u{1f}",
             "\u{e9}\u{1f600}\u{7f}",
+            "\u{7ff}\u{800}\u{ffff}\u{10000}\u{10ffff}\"\u{e9}\\",
+            "\u{1}\u{1}\u{1}\u{1}\"\"\"\"\u{e9}\u{1f600}\n\n",
+            every_ascii.as_str(),
         ] {
             assert_eq!(
                 string_size(s),

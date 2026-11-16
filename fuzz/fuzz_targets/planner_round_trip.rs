@@ -12,6 +12,7 @@ use pjson_rs::infrastructure::{
 use serde_json::{Map, Value};
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const HEAD_BYTES: usize = 4;
 
 fn replay_patches(messages: &[WsMessage]) -> Value {
     let mut harness = ClientPatchHarness::new();
@@ -76,8 +77,35 @@ fn is_splittable(message: &WsMessage) -> bool {
     }
 }
 
+/// 24-bit little-endian size: covers every value up to the planner's 16 MiB cap.
+fn frame_size(head: &[u8; HEAD_BYTES]) -> usize {
+    let size = u32::from_le_bytes([head[1], head[2], head[3], 0]);
+    usize::try_from(size).unwrap_or(usize::MAX)
+}
+
+fn check_merge_root(messages: &[WsMessage], document: &Value) {
+    if document.is_object() {
+        assert!(
+            approx_eq(&replay_merge(messages), document),
+            "merge round trip drifted"
+        );
+        return;
+    }
+    let [
+        WsMessage::StreamFrame {
+            payload,
+            is_complete: true,
+            ..
+        },
+    ] = messages
+    else {
+        panic!("non-object merge root must be one complete frame: {messages:?}");
+    };
+    assert!(approx_eq(payload, document), "whole payload drifted");
+}
+
 fuzz_target!(|data: &[u8]| {
-    let Some((head, body)) = data.split_first_chunk::<3>() else {
+    let Some((head, body)) = data.split_first_chunk::<HEAD_BYTES>() else {
         return;
     };
     let Ok(document) = serde_json::from_slice::<Value>(body) else {
@@ -89,7 +117,7 @@ fuzz_target!(|data: &[u8]| {
         Framing::Patch
     };
     let options = StreamOptions {
-        max_frame_size: usize::from(u16::from_le_bytes([head[1], head[2]])),
+        max_frame_size: frame_size(head),
         framing,
         ..StreamOptions::default()
     };
@@ -116,10 +144,11 @@ fuzz_target!(|data: &[u8]| {
         );
     }
 
-    let replayed = match framing {
-        Framing::Patch => replay_patches(&messages),
-        Framing::Merge if document.is_object() => replay_merge(&messages),
-        Framing::Merge => return,
-    };
-    assert!(approx_eq(&replayed, &document), "round trip drifted");
+    match framing {
+        Framing::Patch => assert!(
+            approx_eq(&replay_patches(&messages), &document),
+            "round trip drifted"
+        ),
+        Framing::Merge => check_merge_root(&messages, &document),
+    }
 });

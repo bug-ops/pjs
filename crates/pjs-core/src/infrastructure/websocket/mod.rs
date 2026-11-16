@@ -12,7 +12,10 @@ pub mod client;
 mod client_patch_acceptance;
 #[cfg(feature = "websocket-server")]
 pub mod controller;
-#[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
+#[cfg(all(
+    any(feature = "websocket-client", feature = "websocket-server"),
+    any(fuzzing, pjs_bench)
+))]
 #[doc(hidden)]
 pub mod fuzzing;
 #[cfg(feature = "websocket-server")]
@@ -29,6 +32,21 @@ pub mod server;
 pub use client::{
     ClosedSession, PjsWebSocketClient, SessionIdleTtl, StreamStats, WebSocketClientConfig,
 };
+/// The fuzzing entry points exist only under `--cfg fuzzing` or `--cfg pjs_bench`.
+///
+/// ```compile_fail,E0432
+/// use pjson_rs::infrastructure::websocket::fuzzing::plan_messages;
+/// ```
+///
+/// ```compile_fail,E0432
+/// use pjson_rs::infrastructure::websocket::fuzzing::ClientPatchHarness;
+/// ```
+#[cfg(all(
+    any(feature = "websocket-client", feature = "websocket-server"),
+    not(any(fuzzing, pjs_bench))
+))]
+mod fuzzing_gate {}
+
 #[cfg(feature = "websocket-server")]
 pub use controller::{AdaptiveStreamController, ClientMetrics, ConnectionId, CreateSessionError};
 #[cfg(feature = "websocket-client")]

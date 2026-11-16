@@ -137,18 +137,25 @@ async fn test_offload_plan_keeps_its_permit_while_the_plan_runs_after_the_future
 async fn max_concurrent_plans(permits: usize, tasks: usize, rendezvous: bool) -> usize {
     let semaphore = Arc::new(Semaphore::new(permits));
     let running = Arc::new(AtomicUsize::new(0));
+    // Never decremented: a plan that leaves early cannot strand the others.
+    let arrived = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
     for _ in 0..tasks {
-        let (running, peak) = (Arc::clone(&running), Arc::clone(&peak));
+        let (running, arrived, peak) = (
+            Arc::clone(&running),
+            Arc::clone(&arrived),
+            Arc::clone(&peak),
+        );
         handles.push(tokio::spawn(offload_plan(
             Arc::clone(&semaphore),
             move || {
                 let now = running.fetch_add(1, Ordering::SeqCst) + 1;
                 peak.fetch_max(now, Ordering::SeqCst);
+                arrived.fetch_add(1, Ordering::SeqCst);
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
                 if rendezvous {
-                    while running.load(Ordering::SeqCst) < tasks
+                    while arrived.load(Ordering::SeqCst) < tasks
                         && std::time::Instant::now() < deadline
                     {
                         std::thread::sleep(Duration::from_millis(1));
@@ -263,4 +270,58 @@ async fn test_create_session_reports_the_planned_size_when_the_room_is_large() {
     };
     assert_eq!((live, max), (0, 100_000));
     assert!(requested >= 120_002, "planned size, got {requested}");
+}
+
+#[test]
+fn test_new_controller_has_one_plan_permit_per_cpu() {
+    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+
+    let controller = AdaptiveStreamController::new();
+
+    assert_eq!(controller.plan_permits.available_permits(), cpus);
+}
+
+fn live_plan_bytes(controller: &AdaptiveStreamController, owner: ConnectionId) -> usize {
+    controller
+        .connections
+        .read()
+        .get(&owner)
+        .map_or(0, |entry| entry.live_plan_bytes)
+}
+
+fn budget_exhausted(result: Result<(), CreateSessionError>) -> (usize, usize, usize) {
+    let Err(CreateSessionError::PlanRejected(PlanError::ConnectionBudgetExhausted {
+        live,
+        requested,
+        max,
+    })) = result
+    else {
+        panic!("expected ConnectionBudgetExhausted, got {result:?}");
+    };
+    (live, requested, max)
+}
+
+/// A document of exactly `room` serialized bytes is not provably too big, so it
+/// is planned and refused by the exact check with the planned size; one byte
+/// more is refused before planning with `room + 1`.
+#[tokio::test]
+async fn test_create_session_pre_plan_reject_starts_one_byte_above_the_room() {
+    let controller = controller_with_budget(40_000);
+    let owner = ConnectionId::new();
+    create(&controller, owner, string_of(10_000))
+        .await
+        .expect("first session fits");
+    let live = live_plan_bytes(&controller, owner);
+    let room = 40_000 - live;
+
+    let at_room = budget_exhausted(create(&controller, owner, string_of(room - 2)).await);
+    let over_room = budget_exhausted(create(&controller, owner, string_of(room - 1)).await);
+
+    assert_eq!(at_room.0, live);
+    assert!(
+        at_room.1 > room + 1,
+        "planned size expected, got {}",
+        at_room.1
+    );
+    assert_eq!(over_room, (live, room + 1, 40_000));
 }

@@ -5,7 +5,7 @@
  * and Server-Sent Events for frame delivery.
  */
 
-import { Transport, ConnectResult, StreamOptions, isShutdownMarker } from './base.js';
+import { ConnectResult, isShutdownMarker, StreamOptions, Transport } from './base.js';
 import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 
 /**

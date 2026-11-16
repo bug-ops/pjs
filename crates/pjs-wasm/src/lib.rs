@@ -82,6 +82,8 @@ pub mod priority_assignment;
 mod priority_config;
 mod priority_constants;
 #[cfg(test)]
+mod root_depth_acceptance;
+#[cfg(test)]
 mod root_patch_acceptance;
 pub mod security;
 mod streaming;

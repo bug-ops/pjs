@@ -9,7 +9,7 @@
 //! - `create_pjs_router_with_auth` — health is public, sessions require auth
 //! - `create_pjs_router_with_rate_limit_and_auth` — rate limit wraps auth
 
-#![feature(impl_trait_in_assoc_type)]
+#![cfg_attr(feature = "http-server", feature(impl_trait_in_assoc_type))]
 #![cfg(feature = "http-server")]
 
 mod common;

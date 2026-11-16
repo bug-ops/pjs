@@ -49,6 +49,10 @@ pub(crate) fn build_skeleton(data: &JsonData, current_depth: usize, max_depth: u
 
 /// Generate priority-ordered frames for `data`: a skeleton frame, one patch frame per
 /// priority level at or above `min_priority`, then a completion frame.
+///
+/// A non-object root (array or scalar) is sent as a single `Priority::CRITICAL` root
+/// `set` patch exempt from `min_priority`, because indexed patches need the array to
+/// exist and the skeleton alone would lose the value.
 pub(crate) fn generate_frames(
     priority_assigner: &PriorityAssigner,
     data: &JsonData,
@@ -66,6 +70,16 @@ pub(crate) fn generate_frames(
     let skeleton = build_skeleton(data, 0, max_depth);
     frames.push(Frame::skeleton(stream_id, sequence, skeleton));
     sequence += 1;
+
+    if !matches!(data, JsonData::Object(_)) {
+        let root = FramePatch::set(JsonPath::root(), data.clone());
+        let frame = Frame::patch(stream_id, sequence, Priority::CRITICAL, vec![root])
+            .map_err(|e| format!("Failed to create patch frame: {:?}", e))?;
+        frames.push(frame);
+        sequence += 1;
+        frames.push(Frame::complete(stream_id, sequence, None));
+        return Ok(frames);
+    }
 
     // 2. Extract all fields with priorities (depth-limited)
     let prioritized_fields =

@@ -1,6 +1,6 @@
 //! Acceptance test for #596: `POST /pjs/sessions` returns the aggregate's stored `expires_at`.
 
-#![feature(impl_trait_in_assoc_type)]
+#![cfg_attr(feature = "http-server", feature(impl_trait_in_assoc_type))]
 #![cfg(feature = "http-server")]
 
 mod common;

@@ -25,7 +25,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::{runtime::Handle, task::JoinHandle};
+use tokio::{runtime::Handle, sync::Semaphore, task::JoinHandle};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -211,35 +211,67 @@ fn paced_delay(adaptive: Duration, floor: Option<Duration>, frames: usize) -> Du
         .min(PACING_BUDGET / frames)
 }
 
-/// Documents that `planner::exceeds_size` proves larger than this many bytes
-/// are planned on the blocking pool instead of the async worker.
+/// Documents whose planning cost (`planner::exceeds_plan_cost`) passes this many
+/// byte-equivalents are planned on the blocking pool instead of the async worker.
 ///
 /// Measured with `cargo bench -p pjs-bench --bench websocket_controller`
-/// (below the threshold, where planning is inline): about 205 MiB/s, i.e. 73 us
-/// at 16 KiB and 153 us at 32 KiB, against 6 us for a `spawn_blocking` round
-/// trip. 32 KiB is the smallest power of two whose planning exceeds 100 us, so
-/// a task holds a worker for at most about 150 us when the probe is exact. The
-/// probe is a lower bound, so float-dense or escape-heavy documents can reach
-/// about 6x the threshold (roughly 1 ms) inline.
+/// (below the threshold, where planning is inline): about 330-370 MiB/s, i.e.
+/// 45 us at 16 KiB and 92-96 us at 32 KiB (indicative, spec 075 FR-008),
+/// against 6 us for a `spawn_blocking` round trip. 32 KiB is the smallest power of two whose planning reaches about 100 us.
+/// The gate estimates worker time rather than size: for strings it equals the
+/// serialized size, and a float carries a fixed weight. Calibrated on mixed,
+/// float and small-integer documents, the largest one kept inline plans in about
+/// 160 us. Entry-dense documents (a flat object of short strings, many small
+/// numbers) are not weighted per entry and measure 2-3x that (about 440-520 us)
+/// at the same cost, so the gate bounds worker time only to a few hundred
+/// microseconds (#669).
 pub(super) const INLINE_PLAN_MAX_BYTES: usize = 32 * 1024;
 
-/// Plans `data`, off the async worker when it is large and a Tokio runtime is
-/// present, inline otherwise.
+/// Plans `data`, off the async worker when its cost passes the gate and a Tokio
+/// runtime is present, inline otherwise.
 ///
 /// A panic in the planner is propagated to the caller. Cancellation of the
 /// blocking task happens only while the runtime shuts down; the future then
 /// never completes, like any task dropped by a shutting-down runtime.
 async fn plan_stream_offloaded(
+    permits: Arc<Semaphore>,
     session_id: SessionId,
     data: Value,
     options: PlanOptions,
 ) -> Result<Plan, PlanError> {
-    if !planner::exceeds_size(&data, INLINE_PLAN_MAX_BYTES) || Handle::try_current().is_err() {
+    if !planner::exceeds_plan_cost(&data, INLINE_PLAN_MAX_BYTES) || Handle::try_current().is_err() {
         return planner::plan_stream(session_id, data, &options);
     }
-    match tokio::task::spawn_blocking(move || planner::plan_stream(session_id, data, &options))
+    offload_plan(permits, move || {
+        planner::plan_stream(session_id, data, &options)
+    })
+    .await
+}
+
+/// Runs `plan` on the blocking pool under a permit from `permits`.
+///
+/// The permit moves into the blocking task, so it is held until the plan has
+/// finished even when this future is dropped first: abandoned plans keep
+/// counting against the limit while they use the CPU. Waiting for a permit
+/// suspends only the caller.
+///
+/// A panic in `plan` is propagated to the caller. A cancelled blocking task
+/// (only while the runtime shuts down) leaves this future pending forever.
+async fn offload_plan<F>(permits: Arc<Semaphore>, plan: F) -> Result<Plan, PlanError>
+where
+    F: FnOnce() -> Result<Plan, PlanError> + Send + 'static,
+{
+    // The semaphore is never closed, so acquiring cannot fail.
+    let permit = permits
+        .acquire_owned()
         .await
-    {
+        .expect("plan permits are never closed");
+    let joined = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        plan()
+    })
+    .await;
+    match joined {
         Ok(plan) => plan,
         Err(join_error) => match join_error.try_into_panic() {
             Ok(payload) => std::panic::resume_unwind(payload),
@@ -248,16 +280,9 @@ async fn plan_stream_offloaded(
     }
 }
 
-/// Runs `plan` on the blocking pool under a permit from `permits` (stub, #673).
-#[allow(dead_code, reason = "stub until the offload seam lands")]
-async fn offload_plan<F>(
-    _permits: std::sync::Arc<tokio::sync::Semaphore>,
-    _plan: F,
-) -> Result<Plan, PlanError>
-where
-    F: FnOnce() -> Result<Plan, PlanError> + Send + 'static,
-{
-    todo!("#673: offload seam with permits")
+/// Plans one controller runs on the blocking pool at once: one per CPU.
+fn default_plan_permits() -> usize {
+    std::thread::available_parallelism().map_or(1, NonZeroUsize::get)
 }
 
 #[cfg(test)]
@@ -401,6 +426,7 @@ pub struct AdaptiveStreamController {
     next_generation: AtomicU64,
     max_sessions_per_connection: NonZeroUsize,
     connection_plan_budget: NonZeroUsize,
+    plan_permits: Arc<Semaphore>,
     shutdown: Option<ShutdownSignal>,
 }
 
@@ -472,6 +498,7 @@ impl AdaptiveStreamController {
             next_generation: AtomicU64::new(0),
             max_sessions_per_connection: DEFAULT_MAX_SESSIONS_PER_CONNECTION,
             connection_plan_budget: DEFAULT_CONNECTION_PLAN_BUDGET,
+            plan_permits: Arc::new(Semaphore::new(default_plan_permits())),
             shutdown: None,
         }
     }
@@ -536,10 +563,23 @@ impl AdaptiveStreamController {
     ///
     /// The document is split into messages according to `options`
     /// (see [`StreamOptions`]); planning costs O(payload) and runs on the
-    /// blocking pool for documents proven larger than 32 KiB (`INLINE_PLAN_MAX_BYTES`)
-    /// when called inside a Tokio runtime, inline otherwise. The proof is a
-    /// lower bound on the serialized size, so a document of floats or escaped
-    /// strings somewhat above 32 KiB can still plan inline. Frames are paced per
+    /// blocking pool for documents whose planning cost passes 32 KiB
+    /// (`INLINE_PLAN_MAX_BYTES`) when called inside a Tokio runtime, inline
+    /// otherwise. The cost equals the size for strings and weighs a float as a
+    /// fixed few bytes, so it tracks planning time rather than size. Blocking-pool
+    /// plans share one permit pool per controller (one permit per CPU; a server
+    /// normally shares one controller across its connections), so a burst of
+    /// large documents queues for a permit instead of occupying the pool. The wait
+    /// holds the calling connection's loop, as an inline plan did before.
+    ///
+    /// A connection with at most 32 KiB of plan budget left refuses a larger
+    /// document before it takes a permit or plans anything: the
+    /// `requested` bytes of the resulting
+    /// [`PlanError::ConnectionBudgetExhausted`] are then the lower bound
+    /// `max - live + 1`, not a planned size. Because that check runs first, a
+    /// document that planning would refuse permanently on a nearly full
+    /// connection gets the transient budget error (HTTP-style 429) before the
+    /// permanent one (413). Frames are paced per
     /// `StreamOptions::client_fps` and the clients' acknowledgments, but the total
     /// pacing time is capped at 30 seconds, so very large plans stream faster than
     /// either asks for.
@@ -593,14 +633,31 @@ impl AdaptiveStreamController {
         let plan_options =
             PlanOptions::try_from(&options).map_err(CreateSessionError::InvalidOptions)?;
         // Cheap rejections first: planning is O(payload) and would be wasted on
-        // a duplicate id or a full connection. The connection budget needs the
-        // plan size, so it is checked after planning; everything is re-checked
-        // under the write lock below.
-        self.check_slot(owner, session_id)?;
+        // a duplicate id or a full connection. The exact budget check needs the
+        // plan size and runs after planning; everything is re-checked under the
+        // write lock below.
+        let live = self.check_slot(owner, session_id)?;
+        let max = self.connection_plan_budget.get();
+        let room = max.saturating_sub(live);
+        // No await between reading `live` and this reject, and no permit is held.
+        if room <= INLINE_PLAN_MAX_BYTES && planner::exceeds_size(&data, room) {
+            return Err(CreateSessionError::PlanRejected(
+                PlanError::ConnectionBudgetExhausted {
+                    live,
+                    requested: room + 1,
+                    max,
+                },
+            ));
+        }
         let frame_interval = plan_options.frame_interval;
-        let plan = plan_stream_offloaded(session_id, data, plan_options)
-            .await
-            .map_err(CreateSessionError::PlanRejected)?;
+        let plan = plan_stream_offloaded(
+            Arc::clone(&self.plan_permits),
+            session_id,
+            data,
+            plan_options,
+        )
+        .await
+        .map_err(CreateSessionError::PlanRejected)?;
 
         let session = WebSocketStreamSession {
             created_at: Instant::now(),
@@ -645,15 +702,15 @@ impl AdaptiveStreamController {
     }
 
     /// Rejects a duplicate id or a connection at its session cap without
-    /// touching any state.
+    /// touching any state; otherwise returns the plan bytes `owner` holds.
     fn check_slot(
         &self,
         owner: ConnectionId,
         session_id: SessionId,
-    ) -> Result<(), CreateSessionError> {
+    ) -> Result<usize, CreateSessionError> {
         let connections = self.connections.read();
         let Some(entry) = connections.get(&owner) else {
-            return Ok(());
+            return Ok(0);
         };
         if entry.sessions.contains_key(&session_id) {
             Err(CreateSessionError::AlreadyExists(session_id))
@@ -662,7 +719,7 @@ impl AdaptiveStreamController {
                 limit: self.max_sessions_per_connection,
             })
         } else {
-            Ok(())
+            Ok(entry.live_plan_bytes)
         }
     }
 
@@ -1670,6 +1727,36 @@ mod tests {
 
         assert_eq!(duplicate, Err(CreateSessionError::AlreadyExists(id)));
         assert_matches!(capped, Err(CreateSessionError::TooManySessions { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_budget_reject_happens_before_a_plan_permit_is_taken() {
+        let mut controller = AdaptiveStreamController::new()
+            .with_connection_plan_budget(NonZeroUsize::new(20_000).unwrap());
+        controller.plan_permits = Arc::new(Semaphore::new(0));
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            controller.create_session(
+                SessionId::new(),
+                ConnectionId::new(),
+                Value::String("x".repeat(40_000)),
+                StreamOptions::default(),
+            ),
+        )
+        .await
+        .expect("a refusal needs no permit, so it must not wait for one");
+
+        assert_eq!(
+            result,
+            Err(CreateSessionError::PlanRejected(
+                PlanError::ConnectionBudgetExhausted {
+                    live: 0,
+                    requested: 20_001,
+                    max: 20_000,
+                }
+            ))
+        );
     }
 
     #[tokio::test(start_paused = true)]

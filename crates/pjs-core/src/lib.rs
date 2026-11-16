@@ -17,10 +17,6 @@ pub mod global_alloc;
 pub mod infrastructure;
 pub mod parser;
 pub mod security;
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "stub until the shared counter lands")
-)]
 mod serialized_len;
 pub mod stream;
 #[cfg(test)]

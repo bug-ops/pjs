@@ -5,7 +5,7 @@
  * and event parsing for frame delivery.
  */
 
-import { Transport, ConnectResult, StreamOptions, SHUTDOWN_EVENT } from './base.js';
+import { ConnectResult, SHUTDOWN_EVENT, StreamOptions, Transport } from './base.js';
 import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 
 /**
@@ -115,7 +115,7 @@ export class SSETransport extends Transport {
 
     // Handle custom frame events
     this.eventSource.addEventListener('frame', (event) => {
-      this.handleMessage((event as MessageEvent).data);
+      this.handleMessage(event.data);
     });
 
     // Closing the source prevents EventSource from auto-reconnecting to a stopping server.

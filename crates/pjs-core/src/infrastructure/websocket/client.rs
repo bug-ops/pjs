@@ -28,6 +28,7 @@ use tracing::{debug, error, info, warn};
 
 use super::protocol::{CODE_CONFLICT, WirePatch, apply_patch};
 use crate::security::rate_limit::DEFAULT_MAX_INBOUND_FRAME_SIZE;
+use crate::serialized_len::{json_len, json_str_len};
 use url::Url;
 
 /// Capacity of the client's outgoing message channel.
@@ -262,7 +263,7 @@ impl ClientStreamSession {
             frames_received: 0,
             total_processing_time: Duration::ZERO,
             reconstructed_data: serde_json::json!({}),
-            reconstructed_bytes: json_size(&serde_json::json!({})),
+            reconstructed_bytes: json_len(&serde_json::json!({})),
             is_complete: false,
         }
     }
@@ -299,7 +300,7 @@ impl ClientStreamSession {
             (Some(data_map), Some(payload_map)) => {
                 merged_bytes(self.reconstructed_bytes, Some(data_map), payload_map)
             }
-            _ => json_size(payload),
+            _ => json_len(payload),
         };
         if projected > max_bytes {
             return Err(PjsError::limit_exceeded(
@@ -351,7 +352,7 @@ impl ClientStreamSession {
         let data = &self.reconstructed_data;
         match patch {
             WirePatch::Set { path, value } => match path.0.split_last() {
-                None => json_size(value),
+                None => json_len(value),
                 Some((WireSegment::Key(key), parent)) => {
                     let old = lookup(data, parent)
                         .and_then(Value::as_object)
@@ -361,8 +362,8 @@ impl ClientStreamSession {
                         .saturating_sub(old.map_or(0, |old| entry_size(key, old)))
                 }
                 Some((WireSegment::Index(_), _)) => {
-                    let old = lookup(data, &path.0).map_or(0, json_size);
-                    bytes.saturating_add(json_size(value)).saturating_sub(old)
+                    let old = lookup(data, &path.0).map_or(0, json_len);
+                    bytes.saturating_add(json_len(value)).saturating_sub(old)
                 }
             },
             WirePatch::Merge { path, entries } => merged_bytes(
@@ -371,10 +372,10 @@ impl ClientStreamSession {
                 entries,
             ),
             WirePatch::Append { values, .. } => values.iter().fold(bytes, |acc, value| {
-                acc.saturating_add(json_size(value)).saturating_add(1)
+                acc.saturating_add(json_len(value)).saturating_add(1)
             }),
             WirePatch::AppendStr { text, .. } => {
-                bytes.saturating_add(str_json_size(text).saturating_sub(2))
+                bytes.saturating_add(json_str_len(text).saturating_sub(2))
             }
         }
     }
@@ -407,22 +408,12 @@ fn lookup<'a>(state: &'a Value, path: &[WireSegment]) -> Option<&'a Value> {
         })
 }
 
-/// Serialized size of `value`; saturates so a failure counts against the cap.
-fn json_size(value: &Value) -> usize {
-    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
-}
-
 /// Upper bound on the serialized size of one object entry: quoted key, colon,
 /// value and a separating comma.
 fn entry_size(key: &str, value: &Value) -> usize {
-    str_json_size(key)
+    json_str_len(key)
         .saturating_add(2)
-        .saturating_add(json_size(value))
-}
-
-/// Serialized size of `text` as a quoted, escaped JSON string.
-fn str_json_size(text: &str) -> usize {
-    serde_json::to_vec(text).map_or(usize::MAX, |bytes| bytes.len())
+        .saturating_add(json_len(value))
 }
 
 /// Removes the session from the map; used as a drop guard so a cancelled
@@ -1520,7 +1511,7 @@ mod tests {
         session.apply_frame(&json!({"k": "bbbb"}), 1024).unwrap();
 
         assert_eq!(session.reconstructed_bytes, after_first);
-        assert!(session.reconstructed_bytes >= json_size(&session.reconstructed_data));
+        assert!(session.reconstructed_bytes >= json_len(&session.reconstructed_data));
     }
 
     fn patch(value: Value) -> WirePatch {
@@ -1547,7 +1538,7 @@ mod tests {
             session.reconstructed_data,
             json!({"a": "xx\"quoted\"", "list": [1000, 2, 3], "n": {"k": 7, "z": null}})
         );
-        assert!(session.reconstructed_bytes >= json_size(&session.reconstructed_data));
+        assert!(session.reconstructed_bytes >= json_len(&session.reconstructed_data));
     }
 
     #[test]

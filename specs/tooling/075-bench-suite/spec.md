@@ -32,7 +32,7 @@ verified: 2026-11-15
 Part of [[MOC-specs]]; see [[constitution]].
 
 > [!info] Verification (2026-11-15)
-> Implemented: five Criterion benches exist and compile as workspace member `pjs-bench` (workspace isolation history in [[021-bench-crate-workspace-isolation/spec]]). No CI job runs them; regression checking is manual per `.claude/rules/continuous-improvement.md` (more than 10% regression is a P1 issue). Open: #619 (document quiet-machine A/B procedure).
+> Implemented: Criterion benches (FR-002 to FR-006, FR-008, FR-009) exist and compile as workspace member `pjs-bench` (workspace isolation history in [[021-bench-crate-workspace-isolation/spec]]). No CI job runs them; regression checking is manual per `.claude/rules/continuous-improvement.md` (more than 10% regression is a P1 issue). Open: #619 (document quiet-machine A/B procedure).
 
 ## Overview
 
@@ -45,7 +45,7 @@ Part of [[MOC-specs]]; see [[constitution]].
 ## Functional Requirements
 
 ### FR-001 Crate layout
-`pjs-bench` shall be a workspace member (root `members = ["crates/*"]`, not in `default-members`), `publish = false`, with `harness = false` for each of the five `[[bench]]` targets, depending on `criterion` (html_reports), `pjson-rs`, `pjson-rs-domain`, `serde_json`, `sonic-rs`, `tokio`, `futures`, `chrono`, `uuid`, with dev-dependency `dhat` and an empty feature `dhat-heap`. `src/lib.rs` contains documentation only.
+`pjs-bench` shall be a workspace member (root `members = ["crates/*"]`, not in `default-members`), `publish = false`, with `harness = false` for each `[[bench]]` target, depending on `criterion` (html_reports), `pjson-rs`, `pjson-rs-domain`, `serde_json`, `sonic-rs`, `tokio`, `futures`, `chrono`, `uuid`, with dev-dependency `dhat` and an empty feature `dhat-heap`. `src/lib.rs` contains documentation only.
 Code: `crates/pjs-bench/Cargo.toml`, `src/lib.rs`.
 Status: done.
 
@@ -79,6 +79,17 @@ The suite shall run with `cargo bench -p pjs-bench [--bench <name>]`, using the 
 Code: `scripts/profile.sh`.
 Status: partial. See Open Questions.
 
+### FR-008 websocket_controller
+The bench shall measure `AdaptiveStreamController` (#664, #674): `ws_controller_create_session` (planning a 1 KiB to 1 MiB document; the input for `INLINE_PLAN_MAX_BYTES` and the byte-equivalent cost model of `planner::exceeds_plan_cost`), `ws_controller_spawn_blocking_round_trip` and `ws_controller_handle_frame_ack` (500 connections, 1/4/8/16 tasks; proxy for the `release_sent` global write lock). Run: `cargo bench -p pjs-bench --bench websocket_controller`. Its recorded baseline lives in the `crates/pjs-bench` row of `.local/testing/coverage-status.md`; the per-cycle benchmark run compares against it (regression above 10% is P1), the baseline is re-recorded when `planner.rs` or the gate changes, and the figures quoted in `controller.rs` and spec 066 (planning rate, 16/32 KiB planning time, `spawn_blocking` hop, lock ops/s, sessions supported) are re-checked when a group moves by more than 10%.
+Guards: the offload threshold of #658 and the keep-the-lock decision of #664.
+Code: `crates/pjs-bench/benches/websocket_controller.rs`.
+Status: done (#674).
+
+### FR-009 client_apply_patches
+The bench shall measure `ClientStreamSession::apply_patches` (#670) through the `fuzzing::ClientPatchHarness` entry point, which exists only under `--cfg pjs_bench`. Run: `RUSTFLAGS="-C target-cpu=native --cfg pjs_bench" cargo bench -p pjs-bench --bench client_apply_patches`; without the cfg the target prints that command and exits. Its baseline is recorded in the same `coverage-status.md` row and compared per cycle like FR-008.
+Code: `crates/pjs-bench/benches/client_apply_patches.rs`.
+Status: done (#670).
+
 ## Non-Functional Requirements
 
 - NFR-PERF-001: no regression above 10% on any benchmark between cycles (policy in `.claude/rules/continuous-improvement.md`, manual).
@@ -98,7 +109,7 @@ Fixtures are inline: `SMALL_JSON`, `MEDIUM_JSON`, `generate_large_json()` (1000 
 
 ## Success Criteria
 
-1. `cargo bench -p pjs-bench --no-run` compiles all five targets.
+1. `cargo bench -p pjs-bench --no-run` compiles all targets (`client_apply_patches` compiles to a stub without `--cfg pjs_bench`).
 2. A run of each target completes and writes `target/criterion/`.
 
 ## Agent Boundaries

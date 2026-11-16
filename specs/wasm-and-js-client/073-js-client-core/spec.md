@@ -94,7 +94,7 @@ Code: `frame-processor.ts`.
 Status: implemented but unused by the client (tested in `tests/core/frame-processor.test.ts`).
 
 ### FR-009 JSON reconstruction
-`JsonReconstructor` shall: `processSkeleton` (deep clone payload; reject a second call), `applyPatch` (per patch: path `$` addresses the root, where `set` replaces the state with a deep clone of the value and `merge` shallow-merges plain objects (otherwise replaces), while `append`/`delete` at the root are skipped; every other path must start with `$.`; operations `set`, `append` (push scalar or spread array), `merge` (shallow object merge, otherwise replace), `delete` (array index splice or own-property delete); unknown operations/paths counted as skipped), `getCurrentState()` (deep clone), `reset`, `markComplete`, `getMetadata`. Path grammar: dot-separated segments with optional `[n]` index. Missing intermediate object segments are created; a missing indexed parent throws and the patch is skipped.
+`JsonReconstructor` shall: `processSkeleton` (deep clone payload; reject a second call), `applyPatch` (per patch: path `$` addresses the root, where `set` replaces the state with a deep clone of the value and `merge` shallow-merges plain objects (otherwise replaces), while `append`/`delete` at the root are skipped; every other path must match the grammar below; operations `set`, `append` (push scalar or spread array), `merge` (shallow object merge, otherwise replace), `delete` (array index splice or own-property delete); unknown operations/paths counted as skipped), `getCurrentState()` (deep clone), `reset`, `markComplete`, `getMetadata`. Path grammar (`core/json-path.ts`, internal, shared with `FrameProcessor` and `parseJsonPath`): `$` followed by any number of `.key` or `[n]` segments; a key is non-empty without `.`, `[`, `]` (the Rust `JsonPath::is_valid_key` rule), `n` is a decimal safe integer. `$` alone addresses the root and `$[0]...` indexes an array root. Resolution is strict: missing intermediate object keys followed by a key are created, but every index must already exist (`n < length`, on an array), so an out-of-range, non-array or under-a-missing-key index skips the patch instead of creating sparse arrays or literal keys. Root `merge` of two plain objects mutates the state in place.
 Code: `json-reconstructor.ts`.
 Status: done.
 
@@ -136,10 +136,11 @@ Status: done (#644). Tests: `tests/transport/{sse,http,shutdown-marker,client-sh
 | Condition | Result |
 |-----------|--------|
 | Patch before skeleton (`PJSClient`) | `PJSError(ProtocolError)` |
-| Patch path neither `$` nor `$.`-prefixed | skipped |
+| Patch path not matching the grammar (no `$`, empty segment, bad index) | skipped; rejected by `FrameProcessor.validateFrame` |
+| Index past the end, on a non-array, or under a missing key | patch skipped, no sparse array or literal key created |
 | Root `$` `append`/`delete` | skipped |
 | Unsafe key in path | patch skipped (error caught) |
-| `delete` on missing key | no-op counted as applied |
+| `delete` on missing key | no-op counted as applied; out-of-range index skipped |
 | NDJSON line unparsable | `ParseError` emitted, stream continues |
 | WebSocket closes with code != 1000 | up to 5 reconnects |
 | No frames within timeout | `TimeoutError` |

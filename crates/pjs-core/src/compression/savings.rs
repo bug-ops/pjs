@@ -6,37 +6,17 @@
 use super::{
     CompressionConfig, MAX_DECOMPRESSED_ELEMENTS, MAX_DELTA_ARRAY_SIZE, MAX_RLE_COUNT, as_integer,
 };
+use crate::serialized_len::json_len;
 use serde_json::Value as JsonValue;
-use std::io;
 
 /// Length of `{"delta_base":,"delta_type":"numeric_sequence"}` plus the extra array separator.
 const DELTA_HEADER_LEN: usize = 48;
 /// Length of `{"rle_value":,"rle_count":}`.
 const RLE_ENVELOPE_LEN: usize = 27;
 
-struct ByteCount(usize);
-
-impl io::Write for ByteCount {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0 += buf.len();
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 /// Number of base-10 digits in `n`'s decimal representation (`0` has 1 digit).
 pub(super) fn decimal_digits(n: u64) -> usize {
     n.checked_ilog10().map_or(1, |d| d as usize + 1)
-}
-
-fn json_len(value: &JsonValue) -> usize {
-    let mut counter = ByteCount(0);
-    // Serializing a `Value` into an infallible writer cannot fail.
-    let _ = serde_json::to_writer(&mut counter, value);
-    counter.0
 }
 
 /// Structural equality that distinguishes `0.0` from `-0.0`, so run-length encoding preserves

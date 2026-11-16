@@ -7,10 +7,12 @@
 
 import {
   FrameType,
-  Priority,
+  JsonPath,
   PJSErrorType,
-  JsonPath
+  Priority
 } from '../types/index.js';
+
+import { tokenizeJsonPath } from './json-path.js';
 
 /**
  * Processes and validates PJS frames according to protocol specification
@@ -43,8 +45,9 @@ export class FrameProcessor {
       return { isValid: false, errors };
     }
 
-    if (!Object.values(FrameType).includes(candidate.frame_type as FrameType)) {
-      errors.push(`Invalid frame type: ${candidate.frame_type}`);
+    const frameType = candidate.frame_type as FrameType;
+    if (!Object.values(FrameType).includes(frameType)) {
+      errors.push(`Invalid frame type: ${frameType}`);
       return { isValid: false, errors };
     }
 
@@ -199,9 +202,6 @@ export class FrameProcessor {
   }
 
   private isValidJsonPath(path: JsonPath): boolean {
-    if (!path.startsWith('$')) return false;
-    // Key grammar mirrors Rust `JsonPath::is_valid_key`: any non-empty key without `.`, `[` or `]`.
-    const pathRegex = /^\$(\.[^.[\]]+(\[\d+\])?)*$/;
-    return pathRegex.test(path);
+    return tokenizeJsonPath(path).ok;
   }
 }
