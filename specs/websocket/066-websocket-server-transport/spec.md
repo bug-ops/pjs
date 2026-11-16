@@ -130,6 +130,7 @@ At session creation the server shall plan the stream (`planner.rs`, `plan_stream
 - NFR-SEC-002: inbound cap default 1 MiB (`DEFAULT_MAX_INBOUND_FRAME_SIZE`); `low_resource` 256 KiB.
 - NFR-SEC-003: error replies use fixed text; decode errors are never echoed; client-supplied `Error.error` is logged by length only.
 - NFR-REL-001: a stalled peer is disconnected after `write_timeout`.
+- NFR-PERF-001: the per-frame bookkeeping (`release_sent`) takes the controller's global write lock once per sent frame (#664). Measured with `cargo bench -p pjs-bench --bench websocket_controller` (`handle_frame_ack` as proxy: same lock, lookup and O(1) update) on 500 connections: 17.4 M ops/s from 1 task, 11.7 M from 4, 10.3 M from 8 and 10.3 M from 16 tasks (8 worker threads). Sizing rule: sessions supported = 10 % lock utilisation / (2 lock operations per frame x 137 frames/s, the fastest pacing `paced_delay` allows for a 4096-frame plan) = ops/s / 2740, so about 3700 concurrently streaming sessions at 10.3 M ops/s, well above the 1000 threshold. Decision: keep the single lock; no atomics redesign.
 - NFR-TEST-001: `tests/websocket_wire_level.rs` (real sockets: handshake, close cleanup, malformed 400, nil id, duplicate 409, owner routing, owner-only ack, per-connection cleanup, rate limit, frame-cap boundary exact and plus-one, low-resource cap, stalled write with negative control), `tests/websocket_security.rs`, `tests/websocket_server_comprehensive.rs`, fuzz target `ws_message_decode`.
 
 ## Data Model
