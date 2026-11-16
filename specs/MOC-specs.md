@@ -125,7 +125,7 @@ Counts across 79 spec folders: 54 implemented, 20 partial, 0 draft, 5 obsolete.
 | 073 | [[073-js-client-core/spec\|TypeScript client core (client, transports, reconstruction)]] | partial | P2 | #178 |
 | 074 | [[074-js-client-wasm-integration/spec\|TypeScript client WASM integration]] | implemented | P2 | #383 |
 | 075 | [[075-bench-suite/spec\|pjs-bench benchmark suite]] | implemented | P2 | #514 |
-| 076 | [[076-fuzz-targets/spec\|cargo-fuzz targets and CI replay]] | implemented | P2 | #575 |
+| 076 | [[076-fuzz-targets/spec\|cargo-fuzz targets and CI replay]] | implemented | P2 | #575, #660 |
 | 077 | [[077-demo-servers/spec\|pjs-demo servers, datasets and tests]] | implemented | P3 | #406 |
 | 078 | [[078-ci-pipeline/spec\|CI pipeline and supply-chain gates]] | implemented | P1 |  |
 | 079 | [[079-release-pipeline/spec\|release and publish pipeline]] | implemented | P1 |  |

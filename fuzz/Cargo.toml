@@ -17,7 +17,7 @@ serde_json = "1"
 [dependencies.pjson-rs]
 path = "../crates/pjs-core"
 default-features = false
-features = ["compression", "partial-parse", "http-server", "websocket-server"]
+features = ["compression", "partial-parse", "http-server", "websocket-client", "websocket-server"]
 
 [workspace]
 members = ["."]
@@ -65,6 +65,20 @@ bench = false
 [[bin]]
 name = "zstd_dict_codec"
 path = "fuzz_targets/zstd_dict_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_apply_patches"
+path = "fuzz_targets/client_apply_patches.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "planner_round_trip"
+path = "fuzz_targets/planner_round_trip.rs"
 test = false
 doc = false
 bench = false

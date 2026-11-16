@@ -12,6 +12,9 @@ pub mod client;
 mod client_patch_acceptance;
 #[cfg(feature = "websocket-server")]
 pub mod controller;
+#[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
+#[doc(hidden)]
+pub mod fuzzing;
 #[cfg(feature = "websocket-server")]
 mod planner;
 mod protocol;
