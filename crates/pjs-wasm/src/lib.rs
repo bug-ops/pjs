@@ -75,6 +75,8 @@
 use wasm_bindgen::prelude::*;
 
 mod frame_generation;
+#[cfg(test)]
+mod frame_generation_acceptance;
 mod parser;
 pub mod priority_assignment;
 mod priority_config;
