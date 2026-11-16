@@ -100,7 +100,6 @@ async fn test_create_session_large_document_streams_the_complete_document() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore]
 async fn test_create_session_large_document_lets_other_tasks_run_while_planning() {
     let (controller, owner, _rx) = attached_controller();
     let ticks = Arc::new(AtomicUsize::new(0));
