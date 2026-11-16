@@ -607,6 +607,7 @@ impl Drop for RateLimitGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
     use std::net::Ipv4Addr;
     use std::thread;
     use std::time::Duration;
@@ -1121,10 +1122,10 @@ mod tests {
         // not just across sweeps.
         let overflow_ip = IpAddr::V4(Ipv4Addr::from(MAX_TRACKED_CLIENTS as u32));
         let result = limiter.check_request(overflow_ip);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(RateLimitError::CapacityExceeded { max }) if max == MAX_TRACKED_CLIENTS
-        ));
+        );
         assert_eq!(limiter.stats().total_clients, MAX_TRACKED_CLIENTS);
 
         // An already-tracked IP is unaffected by the cap.

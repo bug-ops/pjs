@@ -595,6 +595,7 @@ impl SecurityConfig {
 mod tests {
     use super::*;
     use crate::config::ConfigError;
+    use core::assert_matches;
 
     #[test]
     fn test_default_security_config() {
@@ -620,13 +621,13 @@ mod tests {
         config.sessions.min_session_id_length = 200;
         config.sessions.max_session_id_length = 100;
         let err = config.validate().unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             ConfigError::InconsistentBounds {
                 section: "security.sessions",
                 ..
             }
-        ));
+        );
     }
 
     #[test]
@@ -634,13 +635,13 @@ mod tests {
         let mut config = SecurityConfig::default();
         config.json.max_depth = MAX_SAFE_JSON_DEPTH + 1;
         let err = config.validate().unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             ConfigError::InconsistentBounds {
                 section: "security.json",
                 ..
             }
-        ));
+        );
     }
 
     #[test]

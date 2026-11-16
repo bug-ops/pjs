@@ -447,6 +447,7 @@ mod tests {
     use crate::domain::entities::Frame;
     use crate::domain::value_objects::{JsonData, StreamId};
     use axum::http::header;
+    use core::assert_matches;
     use futures::StreamExt;
     use futures::stream;
     use std::pin::Pin;
@@ -523,7 +524,7 @@ mod tests {
         headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
 
         let format = StreamFormat::from_accept_header(&headers);
-        assert!(matches!(format, StreamFormat::ServerSentEvents));
+        assert_matches!(format, StreamFormat::ServerSentEvents);
     }
 
     /// Each output line must be a valid JSON object (NDJSON-of-objects, #167).

@@ -711,6 +711,7 @@ mod option_priority_map {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
     use serde_json::json;
 
     #[tokio::test(start_paused = true)]
@@ -948,13 +949,13 @@ mod tests {
     fn test_error_message_without_session_id_field_decodes_to_none() {
         let decoded: WsMessage =
             serde_json::from_str(r#"{"type":"Error","data":{"error":"x","code":1}}"#).unwrap();
-        assert!(matches!(
+        assert_matches!(
             decoded,
             WsMessage::Error {
                 session_id: None,
                 ..
             }
-        ));
+        );
     }
 
     #[test]
@@ -1006,7 +1007,7 @@ mod tests {
         let wire = serde_json::to_string(&WsMessage::StreamCancel { session_id: id }).unwrap();
         assert!(wire.contains(r#""type":"StreamCancel""#));
         let decoded: WsMessage = serde_json::from_str(&wire).unwrap();
-        assert!(matches!(decoded, WsMessage::StreamCancel { session_id } if session_id == id));
+        assert_matches!(decoded, WsMessage::StreamCancel { session_id } if session_id == id);
     }
 
     #[test]

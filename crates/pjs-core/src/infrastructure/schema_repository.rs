@@ -203,6 +203,7 @@ impl Clone for SchemaRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     fn create_test_schema() -> Schema {
         Schema::integer(Some(0), Some(100))
@@ -218,7 +219,7 @@ mod tests {
         assert!(repo.exists(&id));
 
         let retrieved = repo.get(&id).unwrap();
-        assert!(matches!(*retrieved, Schema::Integer { .. }));
+        assert_matches!(*retrieved, Schema::Integer { .. });
     }
 
     #[test]
@@ -243,10 +244,10 @@ mod tests {
         repo.store(id.clone(), schema1).unwrap();
         let previous = repo.update(id.clone(), schema2).unwrap();
 
-        assert!(matches!(*previous, Schema::Integer { .. }));
+        assert_matches!(*previous, Schema::Integer { .. });
 
         let current = repo.get(&id).unwrap();
-        assert!(matches!(*current, Schema::String { .. }));
+        assert_matches!(*current, Schema::String { .. });
     }
 
     #[test]
@@ -263,7 +264,7 @@ mod tests {
         // Update
         let result = repo.store_or_update(id.clone(), schema2).unwrap();
         assert!(result.is_some());
-        assert!(matches!(*result.unwrap(), Schema::Integer { .. }));
+        assert_matches!(*result.unwrap(), Schema::Integer { .. });
     }
 
     #[test]
@@ -276,7 +277,7 @@ mod tests {
         assert!(repo.exists(&id));
 
         let deleted = repo.delete(&id).unwrap();
-        assert!(matches!(*deleted, Schema::Integer { .. }));
+        assert_matches!(*deleted, Schema::Integer { .. });
         assert!(!repo.exists(&id));
     }
 

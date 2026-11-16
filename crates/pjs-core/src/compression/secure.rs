@@ -516,6 +516,7 @@ pub struct DecompressionContextStats {
 mod tests {
     use super::*;
     use crate::security::CompressionBombConfig;
+    use core::assert_matches;
 
     #[test]
     fn test_secure_compressor_creation() {
@@ -717,12 +718,12 @@ mod tests {
         assert!(context.start_stream(1024).is_ok());
 
         // Third stream exceeds limit.
-        assert!(matches!(
+        assert_matches!(
             context.start_stream(1024),
             Err(Error::CompressionBomb(
                 CompressionBombError::TooManyStreams { active: 2, max: 2 }
             ))
-        ));
+        );
 
         context.finish_stream();
         assert!(context.start_stream(1024).is_ok());
@@ -804,6 +805,7 @@ mod tests {
         use super::*;
         use crate::compression::zstd::{MAX_DICT_SIZE, N_TRAIN, ZstdDictCompressor};
         use crate::security::CompressionBombConfig;
+        use core::assert_matches;
         use std::sync::Arc;
 
         fn repetitive_json() -> Vec<u8> {
@@ -832,7 +834,7 @@ mod tests {
             let data = repetitive_json();
 
             let compressed = compressor.compress(&data).unwrap();
-            assert!(matches!(compressed.codec, ByteCodec::ZstdDict(_)));
+            assert_matches!(compressed.codec, ByteCodec::ZstdDict(_));
             assert!(
                 compressed.data.len() < data.len(),
                 "zstd dict must reduce size on repetitive data"

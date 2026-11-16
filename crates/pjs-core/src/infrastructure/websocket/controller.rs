@@ -1081,6 +1081,7 @@ mod tests {
     use super::*;
     use crate::domain::Priority;
     use crate::infrastructure::bounded_channel::{Envelope, byte_bounded_channel};
+    use core::assert_matches;
     use serde_json::json;
     use tokio::sync::mpsc;
 
@@ -1203,14 +1204,14 @@ mod tests {
         for _ in 0..3 {
             let id = new_session(&controller, owner, json!({})).await;
             controller.start_streaming(owner, id).await.unwrap();
-            assert!(matches!(
+            assert_matches!(
                 next_message(&mut outbox).await,
                 WsMessage::StreamFrame { .. }
-            ));
-            assert!(matches!(
+            );
+            assert_matches!(
                 next_message(&mut outbox).await,
                 WsMessage::StreamComplete { .. }
-            ));
+            );
         }
     }
 
@@ -1293,10 +1294,10 @@ mod tests {
         let id = new_session(&controller, owner, json!({})).await;
         poison_metrics(&controller, owner, id);
         controller.start_streaming(owner, id).await.unwrap();
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
+        );
 
         assert!(controller.remove_session(owner, id).await);
         new_session_with_id(&controller, owner, id).await;
@@ -1305,10 +1306,10 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(controller.session_count(owner), 1);
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1319,10 +1320,10 @@ mod tests {
         let id = new_session(&controller, owner, json!({})).await;
         poison_metrics(&controller, owner, id);
         controller.start_streaming(owner, id).await.unwrap();
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
+        );
 
         assert!(controller.remove_session(owner, id).await);
 
@@ -1343,10 +1344,10 @@ mod tests {
 
         controller.start_streaming(a, id).await.unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut a_outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(b_outbox.try_recv().is_err());
     }
@@ -1365,14 +1366,14 @@ mod tests {
 
         controller.start_streaming(healthy, id).await.unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut healthy_outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             next_message(&mut healthy_outbox).await,
             WsMessage::StreamComplete { .. }
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1385,10 +1386,10 @@ mod tests {
 
         controller.start_streaming(owner, id).await.unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::Error { code: 413, session_id: Some(reported), .. } if reported == id
-        ));
+        );
         assert_eq!(controller.session_count(owner), 0);
     }
 
@@ -1448,7 +1449,7 @@ mod tests {
             .handle_frame_ack(ConnectionId::new(), session_id, 0, 50)
             .await;
 
-        assert!(matches!(result, Err(PjsError::UnknownSession(_))));
+        assert_matches!(result, Err(PjsError::UnknownSession(_)));
         let acked = controller
             .with_session_mut(owner, session_id, |s| s.client_metrics.frames_acknowledged)
             .unwrap();
@@ -1576,12 +1577,11 @@ mod tests {
         while let Ok(envelope) = outbox.try_recv() {
             kinds.push(serde_json::from_str::<WsMessage>(&envelope.into_inner()).unwrap());
         }
-        assert!(
-            matches!(
+        assert_matches!(
                 kinds.last(),
                 Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
                     if error == FixedError::STREAM_STALLED.reason && *reported == id
-            ),
+            ,
             "{kinds:?}"
         );
         assert_eq!(controller.session_count(owner), 0);
@@ -1621,12 +1621,11 @@ mod tests {
         while let Ok(envelope) = outbox.try_recv() {
             messages.push(serde_json::from_str::<WsMessage>(&envelope.into_inner()).unwrap());
         }
-        assert!(
-            matches!(
+        assert_matches!(
                 messages.last(),
                 Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
                     if error == FixedError::STREAM_DEADLINE_EXCEEDED.reason && *reported == id
-            ),
+            ,
             "{messages:?}"
         );
         assert_eq!(controller.session_count(owner), 0);
@@ -1653,10 +1652,7 @@ mod tests {
             .await;
 
         assert_eq!(duplicate, Err(CreateSessionError::AlreadyExists(id)));
-        assert!(matches!(
-            capped,
-            Err(CreateSessionError::TooManySessions { .. })
-        ));
+        assert_matches!(capped, Err(CreateSessionError::TooManySessions { .. }));
     }
 
     #[tokio::test(start_paused = true)]
@@ -1678,14 +1674,14 @@ mod tests {
             .create_session(first, owner, data.clone(), options.clone())
             .await
             .unwrap();
-        assert!(matches!(
+        assert_matches!(
             controller
                 .create_session(SessionId::new(), owner, data.clone(), options.clone())
                 .await,
             Err(CreateSessionError::PlanRejected(
                 PlanError::ConnectionBudgetExhausted { .. }
             ))
-        ));
+        );
 
         controller.start_streaming(owner, first).await.unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;

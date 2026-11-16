@@ -714,6 +714,7 @@ mod tests {
     use super::super::gat::CacheGat;
     use super::*;
     use crate::domain::DomainError;
+    use core::assert_matches;
     use std::future::Future;
     use std::sync::Arc;
     use std::time::Duration;
@@ -889,7 +890,7 @@ mod tests {
     #[test]
     fn test_pagination_new_zero_limit_rejected() {
         let err = SessionPagination::new(0, 0).unwrap_err();
-        assert!(matches!(err, DomainError::InvalidInput(_)));
+        assert_matches!(err, DomainError::InvalidInput(_));
         assert!(format!("{}", err).contains("at least 1"));
     }
 
@@ -1070,7 +1071,7 @@ mod tests {
             .max_stream_count(5)
             .build()
             .unwrap_err();
-        assert!(matches!(err, DomainError::InvalidInput(_)));
+        assert_matches!(err, DomainError::InvalidInput(_));
         assert!(format!("{}", err).contains("min_stream_count"));
     }
 
@@ -1124,7 +1125,7 @@ mod tests {
             .statuses(vec![])
             .build()
             .unwrap_err();
-        assert!(matches!(err, DomainError::InvalidInput(_)));
+        assert_matches!(err, DomainError::InvalidInput(_));
         assert!(format!("{}", err).contains("empty"));
     }
 

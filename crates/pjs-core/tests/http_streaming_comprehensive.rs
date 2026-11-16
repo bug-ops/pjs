@@ -11,6 +11,7 @@
 #![cfg(feature = "http-server")]
 
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use core::assert_matches;
 use futures::StreamExt;
 use pjson_rs::{
     domain::entities::{Frame, frame::FramePatch},
@@ -33,7 +34,7 @@ fn test_stream_format_from_accept_header_sse() {
     );
 
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::ServerSentEvents));
+    assert_matches!(format, StreamFormat::ServerSentEvents);
 }
 
 #[test]
@@ -45,7 +46,7 @@ fn test_stream_format_from_accept_header_ndjson() {
     );
 
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::NdJson));
+    assert_matches!(format, StreamFormat::NdJson);
 }
 
 #[test]
@@ -57,7 +58,7 @@ fn test_stream_format_from_accept_header_binary() {
     );
 
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Binary));
+    assert_matches!(format, StreamFormat::Binary);
 }
 
 #[test]
@@ -66,7 +67,7 @@ fn test_stream_format_from_accept_header_default() {
     headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
 
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 #[test]
@@ -74,7 +75,7 @@ fn test_stream_format_from_accept_header_missing() {
     let headers = HeaderMap::new();
 
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 // ----------------------------------------------------------------------------
@@ -93,49 +94,49 @@ fn accept_headers(value: &str) -> HeaderMap {
 fn test_stream_format_from_accept_header_q_value_preference() {
     let headers = accept_headers("application/json, text/event-stream;q=0.1");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 #[test]
 fn test_stream_format_from_accept_header_sse_beats_lower_q_ndjson() {
     let headers = accept_headers("text/event-stream;q=0.9, application/x-ndjson;q=0.8");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::ServerSentEvents));
+    assert_matches!(format, StreamFormat::ServerSentEvents);
 }
 
 #[test]
 fn test_stream_format_from_accept_header_ndjson_beats_lower_q_sse() {
     let headers = accept_headers("application/x-ndjson;q=0.9, text/event-stream;q=0.8");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::NdJson));
+    assert_matches!(format, StreamFormat::NdJson);
 }
 
 #[test]
 fn test_stream_format_from_accept_header_q_zero_is_explicit_rejection() {
     let headers = accept_headers("text/event-stream;q=0");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 #[test]
 fn test_stream_format_from_accept_header_wildcard_falls_back_to_json() {
     let headers = accept_headers("*/*");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 #[test]
 fn test_stream_format_from_accept_header_unrecognized_type_falls_back_to_json() {
     let headers = accept_headers("application/xml");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 #[test]
 fn test_stream_format_from_accept_header_case_and_whitespace_tolerant() {
     let headers = accept_headers("TEXT/EVENT-STREAM ; Q=0.5");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::ServerSentEvents));
+    assert_matches!(format, StreamFormat::ServerSentEvents);
 }
 
 /// Exact media-range matching kills the substring-match regression: a longer,
@@ -144,7 +145,7 @@ fn test_stream_format_from_accept_header_case_and_whitespace_tolerant() {
 fn test_stream_format_from_accept_header_no_substring_match() {
     let headers = accept_headers("application/x-ndjson-plus");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 /// S8: a high-q wildcard must beat a low-q explicit type — the same bug class
@@ -153,7 +154,7 @@ fn test_stream_format_from_accept_header_no_substring_match() {
 fn test_stream_format_from_accept_header_wildcard_beats_lower_q_explicit_type() {
     let headers = accept_headers("text/event-stream;q=0.1, */*");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 /// SC-002: a tied `q` between a wildcard and an exact match is broken by RFC
@@ -162,8 +163,9 @@ fn test_stream_format_from_accept_header_wildcard_beats_lower_q_explicit_type() 
 fn test_stream_format_from_accept_header_specificity_breaks_tied_q() {
     let headers = accept_headers("application/*;q=1.0, application/x-ndjson;q=1.0");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::NdJson),
+    assert_matches!(
+        format,
+        StreamFormat::NdJson,
         "the more specific application/x-ndjson must win a tied q over application/*"
     );
 }
@@ -174,7 +176,7 @@ fn test_stream_format_from_accept_header_specificity_breaks_tied_q() {
 fn test_stream_format_from_accept_header_unparsable_q_drops_entry() {
     let headers = accept_headers("text/event-stream;q=abc");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 /// S9: `f32::from_str` parses `"nan"`/`"inf"`/`"-inf"` successfully, and the
@@ -187,8 +189,9 @@ fn test_stream_format_from_accept_header_unparsable_q_drops_entry() {
 fn test_stream_format_from_accept_header_q_nan_drops_entry() {
     let headers = accept_headers("text/event-stream;q=nan, application/x-ndjson");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::NdJson),
+    assert_matches!(
+        format,
+        StreamFormat::NdJson,
         "a NaN q must not win by default"
     );
 }
@@ -199,8 +202,9 @@ fn test_stream_format_from_accept_header_q_nan_drops_entry() {
 fn test_stream_format_from_accept_header_q_nan_drops_entry_reverse_order() {
     let headers = accept_headers("application/json;q=1.0, text/event-stream;q=nan");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::Json),
+    assert_matches!(
+        format,
+        StreamFormat::Json,
         "a NaN q appearing after a valid entry must still be dropped, not override it"
     );
 }
@@ -209,14 +213,14 @@ fn test_stream_format_from_accept_header_q_nan_drops_entry_reverse_order() {
 fn test_stream_format_from_accept_header_q_infinity_drops_entry() {
     let headers = accept_headers("text/event-stream;q=inf");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 #[test]
 fn test_stream_format_from_accept_header_q_negative_infinity_drops_entry() {
     let headers = accept_headers("text/event-stream;q=-inf");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 /// M8: entries beyond `MAX_ACCEPT_ENTRIES` (16) are ignored, not just "don't
@@ -230,8 +234,9 @@ fn test_stream_format_from_accept_header_bounds_entries() {
     let headers = accept_headers(&header_value);
 
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::Json),
+    assert_matches!(
+        format,
+        StreamFormat::Json,
         "the 17th entry must be ignored beyond MAX_ACCEPT_ENTRIES"
     );
 }
@@ -247,8 +252,9 @@ fn test_stream_format_from_accept_header_bounds_entries_honors_last_entry() {
     let headers = accept_headers(&header_value);
 
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::ServerSentEvents),
+    assert_matches!(
+        format,
+        StreamFormat::ServerSentEvents,
         "the 16th entry is still within MAX_ACCEPT_ENTRIES and must be honored"
     );
 }
@@ -264,8 +270,9 @@ fn test_stream_format_from_accept_header_flood_beyond_bound_dropped() {
     let headers = accept_headers(&header_value);
 
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::Binary),
+    assert_matches!(
+        format,
+        StreamFormat::Binary,
         "only the first MAX_ACCEPT_ENTRIES (16) of a 50-entry flood must reach the parser"
     );
 }
@@ -278,8 +285,9 @@ fn test_stream_format_from_accept_header_flood_beyond_bound_dropped() {
 fn test_stream_format_from_accept_header_malformed_entry_preserves_others() {
     let headers = accept_headers("text/event-stream, garbage!!");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::ServerSentEvents),
+    assert_matches!(
+        format,
+        StreamFormat::ServerSentEvents,
         "a malformed entry must be dropped individually, not discard the whole header"
     );
 }
@@ -293,8 +301,9 @@ fn test_stream_format_from_accept_header_malformed_entry_preserves_others() {
 fn test_stream_format_from_accept_header_quoted_comma_param_entry() {
     let headers = accept_headers("text/event-stream;message=\"a, b\", application/x-ndjson");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::ServerSentEvents),
+    assert_matches!(
+        format,
+        StreamFormat::ServerSentEvents,
         "the corrupted fragment from the quoted comma must be dropped, keeping the well-formed entries"
     );
 }
@@ -306,8 +315,9 @@ fn test_stream_format_from_accept_header_quoted_comma_param_entry() {
 fn test_stream_format_from_accept_header_out_of_range_q_clamped_and_kept() {
     let headers = accept_headers("text/event-stream;q=5");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::ServerSentEvents),
+    assert_matches!(
+        format,
+        StreamFormat::ServerSentEvents,
         "a finite out-of-range q must be clamped to 1.0 and the entry kept, not dropped"
     );
 }
@@ -320,7 +330,7 @@ fn test_stream_format_from_accept_header_out_of_range_q_clamped_and_kept() {
 fn test_stream_format_from_accept_header_negative_out_of_range_q_is_excluded() {
     let headers = accept_headers("text/event-stream;q=-5");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 /// #518 review finding S3: floor-rounding a tiny positive `q` to 3 decimal
@@ -331,8 +341,9 @@ fn test_stream_format_from_accept_header_negative_out_of_range_q_is_excluded() {
 fn test_stream_format_from_accept_header_tiny_positive_q_survives() {
     let headers = accept_headers("text/event-stream;q=0.0004");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::ServerSentEvents),
+    assert_matches!(
+        format,
+        StreamFormat::ServerSentEvents,
         "a tiny positive q must not be rounded down to 0.000"
     );
 }
@@ -346,8 +357,9 @@ fn test_stream_format_from_accept_header_tiny_positive_q_survives() {
 fn test_stream_format_from_accept_header_bare_wildcard_subtype_is_rejected() {
     let headers = accept_headers("text/event-stream;q=0.5, */x-ndjson;q=1.0");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::ServerSentEvents),
+    assert_matches!(
+        format,
+        StreamFormat::ServerSentEvents,
         "*/x-ndjson must be dropped, not outrank the lower-q but valid text/event-stream entry"
     );
 }
@@ -359,7 +371,7 @@ fn test_stream_format_from_accept_header_bare_wildcard_subtype_is_rejected() {
 fn test_stream_format_from_accept_header_type_wildcard_other_than_application_is_rejected() {
     let headers = accept_headers("text/*;q=1.0");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(matches!(format, StreamFormat::Json));
+    assert_matches!(format, StreamFormat::Json);
 }
 
 /// #518 review finding N1 (round 2): `headers_accept::Accept::negotiate` locks
@@ -374,8 +386,9 @@ fn test_stream_format_from_accept_header_type_wildcard_other_than_application_is
 fn test_stream_format_from_accept_header_q_zero_concrete_type_falls_through_to_wildcard() {
     let headers = accept_headers("application/json;q=0, */*");
     let format = StreamFormat::from_accept_header(&headers);
-    assert!(
-        matches!(format, StreamFormat::ServerSentEvents),
+    assert_matches!(
+        format,
+        StreamFormat::ServerSentEvents,
         "rejecting application/json specifically must not also exclude the separately-stated */* wildcard"
     );
 }

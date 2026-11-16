@@ -12,6 +12,7 @@
 
 #![cfg(feature = "websocket-server")]
 
+use core::assert_matches;
 use pjson_rs::{
     Error as PjsError,
     domain::{Priority, SessionId},
@@ -182,8 +183,9 @@ async fn test_remove_session_removes_session_from_controller() {
         .handle_frame_ack(owner, session_id, 0, 10)
         .await
         .unwrap_err();
-    assert!(
-        matches!(err, PjsError::UnknownSession(_)),
+    assert_matches!(
+        err,
+        PjsError::UnknownSession(_),
         "expected UnknownSession, got {err:?}"
     );
 }
@@ -296,7 +298,7 @@ async fn test_controller_delivers_frames_to_the_attached_connection() {
         .expect("a frame must be delivered")
         .expect("channel open");
     let message: WsMessage = serde_json::from_str(&envelope.into_inner()).unwrap();
-    assert!(matches!(message, WsMessage::StreamFrame { .. }));
+    assert_matches!(message, WsMessage::StreamFrame { .. });
 }
 
 // ============================================================================
@@ -545,7 +547,7 @@ async fn test_full_websocket_lifecycle() {
         .handle_frame_ack(owner, session_id, 0, 0)
         .await
         .unwrap_err();
-    assert!(matches!(err, PjsError::UnknownSession(_)));
+    assert_matches!(err, PjsError::UnknownSession(_));
 }
 
 #[tokio::test]

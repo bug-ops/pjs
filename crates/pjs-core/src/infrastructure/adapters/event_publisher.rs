@@ -459,6 +459,7 @@ mod tests {
         events::DomainEvent,
         value_objects::{SessionId, StreamId},
     };
+    use core::assert_matches;
 
     #[tokio::test]
     async fn test_in_memory_event_publisher() {
@@ -662,11 +663,9 @@ mod tests {
         };
         let size = event.approx_byte_size();
 
-        assert!(
-            matches!(
-                tx.try_send(event, size),
-                Err(crate::infrastructure::bounded_channel::TrySendError::BudgetExceeded(_))
-            ),
+        assert_matches!(
+            tx.try_send(event, size),
+            Err(crate::infrastructure::bounded_channel::TrySendError::BudgetExceeded(_)),
             "an event whose approximate size exceeds the byte budget must be rejected"
         );
     }

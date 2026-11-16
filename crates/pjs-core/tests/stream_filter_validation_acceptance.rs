@@ -4,6 +4,7 @@
 //! `DomainError::InvalidInput` variant, not its text.
 
 use chrono::{Duration, Utc};
+use core::assert_matches;
 use pjson_rs::domain::DomainError;
 use pjson_rs::domain::config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET};
 use pjson_rs::domain::entities::{Stream, frame::FramePatch};
@@ -17,8 +18,9 @@ use pjson_rs::domain::value_objects::{JsonData, JsonPath, Priority, SessionId};
 use pjson_rs::infrastructure::adapters::gat_memory_repository::GatInMemoryStreamStore;
 
 fn assert_invalid_input<T: std::fmt::Debug>(result: Result<T, DomainError>) {
-    assert!(
-        matches!(result, Err(DomainError::InvalidInput(_))),
+    assert_matches!(
+        result,
+        Err(DomainError::InvalidInput(_)),
         "expected InvalidInput, got {result:?}"
     );
 }

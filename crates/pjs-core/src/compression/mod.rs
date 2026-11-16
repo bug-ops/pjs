@@ -645,6 +645,7 @@ impl Default for SchemaCompressor {
 mod tests {
     use super::*;
     use crate::config::Validate;
+    use core::assert_matches;
     use serde_json::json;
 
     #[test]
@@ -1190,7 +1191,7 @@ mod tests {
         let long = "premium_subscription_tier";
         let data = json!({"seq": ints(5_000_000, 100), "tags": [long, long, long, "x"]});
         let (strategy, wire) = round_trip(&data);
-        assert!(matches!(strategy, CompressionStrategy::Hybrid { .. }));
+        assert_matches!(strategy, CompressionStrategy::Hybrid { .. });
         assert!(wire < original_len(&data));
     }
 
@@ -1298,10 +1299,10 @@ mod tests {
             min_numeric_sequence_size: 2,
             ..CompressionConfig::default()
         };
-        assert!(matches!(
+        assert_matches!(
             config.validated(),
             Err(ConfigError::InconsistentBounds { .. })
-        ));
+        );
     }
 
     #[test]

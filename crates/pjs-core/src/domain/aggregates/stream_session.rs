@@ -1085,6 +1085,7 @@ pub struct SessionHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     #[test]
     fn test_session_creation_and_activation() {
@@ -1395,7 +1396,7 @@ mod tests {
         session.complete_stream(stream_id).unwrap();
 
         let result = session.commit_patch_frames_for_stream(stream_id, patches, 16);
-        assert!(matches!(result, Err(DomainError::InvalidStreamState(_))));
+        assert_matches!(result, Err(DomainError::InvalidStreamState(_)));
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! struct-level unit tests in `websocket_server_comprehensive.rs` cannot reach.
 #![cfg(all(feature = "websocket-server", feature = "websocket-client"))]
 
+use core::assert_matches;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -348,10 +349,10 @@ async fn test_wire_nil_session_id_is_rejected_with_400() {
         .await
         .expect("send StreamInit");
 
-    assert!(matches!(
+    assert_matches!(
         next_ws_message(&mut ws).await,
         WsMessage::Error { code: 400, .. }
-    ));
+    );
     assert_silent(&mut ws, Duration::from_millis(300)).await;
 }
 
@@ -375,10 +376,10 @@ async fn test_wire_frames_are_routed_only_to_the_owning_connection() {
         .await
         .expect("send StreamInit");
 
-    assert!(matches!(
+    assert_matches!(
         next_ws_message(&mut owner).await,
         WsMessage::StreamFrame { session_id, .. } if session_id == id
-    ));
+    );
     assert_silent(&mut bystander, Duration::from_millis(500)).await;
 }
 
@@ -402,14 +403,14 @@ async fn test_wire_same_session_id_on_two_connections_is_independent() {
         .expect("send second StreamInit");
 
     for ws in [&mut first, &mut second] {
-        assert!(matches!(
+        assert_matches!(
             next_ws_message(ws).await,
             WsMessage::StreamFrame { session_id, .. } if session_id == id
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             next_ws_message(ws).await,
             WsMessage::StreamComplete { session_id } if session_id == id
-        ));
+        );
     }
 }
 
@@ -478,10 +479,10 @@ async fn test_wire_non_owner_frame_ack_is_ignored() {
         .expect("send ping");
 
     expect_pong(&mut intruder, b"alive").await;
-    assert!(matches!(
+    assert_matches!(
         next_ws_message(&mut owner).await,
         WsMessage::StreamComplete { session_id } if session_id == id
-    ));
+    );
 }
 
 /// Verify that inbound application frames are subject to per-connection rate
@@ -1101,10 +1102,10 @@ async fn test_client_full_of_completed_sessions_refuses_until_one_is_closed() {
     wait_until_complete(&client, first).await;
     wait_until_complete(&client, second).await;
 
-    assert!(matches!(
+    assert_matches!(
         client.request_stream(json!({}), None).await,
         Err(PjsError::SessionLimitReached { .. })
-    ));
+    );
     let closed = client.close_session(first).await.expect("first is tracked");
     assert_eq!(closed.data, json!({"k": 1}));
     client.request_stream(json!({}), None).await.unwrap();

@@ -7,6 +7,7 @@
 //! `serve_with_limits(listener, router, limits, ShutdownConfig) -> io::Result<ShutdownOutcome>`.
 #![cfg(feature = "http-server")]
 
+use core::assert_matches;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -200,10 +201,7 @@ async fn test_serve_with_limits_stalled_reader_forces_shutdown_within_timeout() 
         .expect("serve returns")
         .expect("join")
         .expect("io ok");
-    assert!(
-        matches!(outcome, ShutdownOutcome::Forced { .. }),
-        "{outcome:?}"
-    );
+    assert_matches!(outcome, ShutdownOutcome::Forced { .. }, "{outcome:?}");
     assert!(started.elapsed() < Duration::from_millis(1_500));
     drop(client);
 }

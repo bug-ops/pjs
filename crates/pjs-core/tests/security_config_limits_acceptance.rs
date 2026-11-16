@@ -1,6 +1,7 @@
 //! Acceptance tests for #613 (parser enforces JSON limits), #614 (stricter
 //! `SecurityConfig::validate`) and #591.1 (`alloc_aligned` rejects size 0).
 
+use core::assert_matches;
 use pjson_rs::config::ConfigError;
 use pjson_rs::parser::aligned_allocator;
 use pjson_rs::{DomainError, LazyParser, SecurityConfig, Validate, ZeroCopyParser};
@@ -24,8 +25,9 @@ fn tight_string(c: &mut SecurityConfig) {
 }
 
 fn assert_security_violation<T: std::fmt::Debug>(result: Result<T, DomainError>) {
-    assert!(
-        matches!(result, Err(DomainError::SecurityViolation(_))),
+    assert_matches!(
+        result,
+        Err(DomainError::SecurityViolation(_)),
         "expected SecurityViolation, got {result:?}"
     );
 }
@@ -157,8 +159,9 @@ fn test_validate_zero_field_rejected_as_must_be_positive() {
     for (name, mutate) in cases {
         let mut config = SecurityConfig::default();
         mutate(&mut config);
-        assert!(
-            matches!(config.validate(), Err(ConfigError::MustBePositive { .. })),
+        assert_matches!(
+            config.validate(),
+            Err(ConfigError::MustBePositive { .. }),
             "{name} = 0 must be rejected as MustBePositive"
         );
     }
@@ -168,30 +171,30 @@ fn test_validate_zero_field_rejected_as_must_be_positive() {
 fn test_validate_buffer_larger_than_total_memory_rejected() {
     let mut config = SecurityConfig::default();
     config.buffers.max_buffer_size = config.buffers.max_total_memory * 2;
-    assert!(matches!(
+    assert_matches!(
         config.validate(),
         Err(ConfigError::InconsistentBounds { .. })
-    ));
+    );
 }
 
 #[test]
 fn test_validate_websocket_frame_larger_than_json_input_rejected() {
     let mut config = SecurityConfig::default();
     config.network.max_websocket_frame_size = config.json.max_input_size * 2;
-    assert!(matches!(
+    assert_matches!(
         config.validate(),
         Err(ConfigError::InconsistentBounds { .. })
-    ));
+    );
 }
 
 #[test]
 fn test_validate_session_data_larger_than_total_memory_rejected() {
     let mut config = SecurityConfig::default();
     config.sessions.max_session_data_size = usize::MAX;
-    assert!(matches!(
+    assert_matches!(
         config.validate(),
         Err(ConfigError::InconsistentBounds { .. })
-    ));
+    );
 }
 
 #[test]
@@ -210,5 +213,5 @@ fn test_validate_default_and_presets_accepted() {
 fn test_alloc_aligned_zero_size_rejected_with_invalid_input() {
     // SAFETY: a zero-size request must be rejected before reaching the global allocator.
     let result = unsafe { aligned_allocator().alloc_aligned(0, 16) };
-    assert!(matches!(result, Err(DomainError::InvalidInput(_))));
+    assert_matches!(result, Err(DomainError::InvalidInput(_)));
 }

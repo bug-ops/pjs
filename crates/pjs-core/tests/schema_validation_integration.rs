@@ -2,6 +2,7 @@
 //!
 //! Tests the complete workflow of schema definition, storage, retrieval, and validation.
 
+use core::assert_matches;
 use pjson_rs::prelude::*;
 use std::collections::HashMap;
 
@@ -278,7 +279,7 @@ fn test_schema_repository_crud_operations() {
 
     // Verify update
     let retrieved = repo.get(&id).unwrap();
-    assert!(matches!(*retrieved, Schema::Integer { .. }));
+    assert_matches!(*retrieved, Schema::Integer { .. });
 
     // Delete
     assert!(repo.delete(&id).is_ok());

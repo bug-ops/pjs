@@ -1,6 +1,7 @@
 //! Acceptance tests for #597: `PjsWebSocketClient::connect` lifecycle.
 #![cfg(feature = "websocket-client")]
 
+use core::assert_matches;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,10 +73,7 @@ async fn test_connect_second_concurrent_call_fails_with_client_error() {
     let second = timeout(Duration::from_secs(3), client.connect())
         .await
         .expect("second concurrent connect must fail fast, not block");
-    assert!(
-        matches!(second, Err(PjsError::AlreadyConnected)),
-        "{second:?}"
-    );
+    assert_matches!(second, Err(PjsError::AlreadyConnected), "{second:?}");
     first.abort();
 }
 
@@ -85,8 +83,5 @@ async fn test_connect_unreachable_server_fails_with_connection_failed() {
     let addr = listener.local_addr().expect("addr");
     drop(listener);
     let result = client(addr).connect().await;
-    assert!(
-        matches!(result, Err(PjsError::ConnectionFailed { .. })),
-        "{result:?}"
-    );
+    assert_matches!(result, Err(PjsError::ConnectionFailed { .. }), "{result:?}");
 }

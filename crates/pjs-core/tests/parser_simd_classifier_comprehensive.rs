@@ -16,16 +16,14 @@ use pjson_rs::parser::simd::{
 
 mod value_classification_tests {
     use super::*;
+    use core::assert_matches;
 
     #[test]
     fn test_classify_integer() {
         let json = "42";
         let value: sonic_rs::Value = sonic_rs::from_str(json).unwrap();
         let class = SimdClassifier::classify_value_type(&value);
-        assert!(matches!(
-            class,
-            ValueClass::Integer | ValueClass::UnsignedInteger
-        ));
+        assert_matches!(class, ValueClass::Integer | ValueClass::UnsignedInteger);
     }
 
     #[test]
@@ -33,10 +31,7 @@ mod value_classification_tests {
         let json = "12345";
         let value: sonic_rs::Value = sonic_rs::from_str(json).unwrap();
         let class = SimdClassifier::classify_value_type(&value);
-        assert!(matches!(
-            class,
-            ValueClass::Integer | ValueClass::UnsignedInteger
-        ));
+        assert_matches!(class, ValueClass::Integer | ValueClass::UnsignedInteger);
     }
 
     #[test]
@@ -116,10 +111,7 @@ mod value_classification_tests {
         let json = "0";
         let value: sonic_rs::Value = sonic_rs::from_str(json).unwrap();
         let class = SimdClassifier::classify_value_type(&value);
-        assert!(matches!(
-            class,
-            ValueClass::Integer | ValueClass::UnsignedInteger
-        ));
+        assert_matches!(class, ValueClass::Integer | ValueClass::UnsignedInteger);
     }
 
     #[test]

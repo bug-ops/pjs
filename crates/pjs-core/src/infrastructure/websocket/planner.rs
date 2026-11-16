@@ -839,6 +839,7 @@ fn scalar_or_empty_size(value: &Value) -> usize {
 mod tests {
     use super::*;
     use crate::infrastructure::websocket::protocol::apply_patch;
+    use core::assert_matches;
     use serde_json::json;
 
     fn options(framing: Framing, max_frame_size: usize) -> PlanOptions {
@@ -1091,10 +1092,7 @@ mod tests {
     fn test_document_nested_beyond_the_measure_cap_is_rejected() {
         let data = nested(MAX_PATCH_PATH_DEPTH + 3);
         let result = plan_stream(SessionId::new(), data, &options(Framing::Patch, 64 * 1024));
-        assert!(
-            matches!(result, Err(PlanError::PathTooDeep { .. })),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(PlanError::PathTooDeep { .. }), "{result:?}");
     }
 
     #[test]
@@ -1104,10 +1102,7 @@ mod tests {
             data = json!({"k": data});
         }
         let result = plan_stream(SessionId::new(), data, &options(Framing::Patch, 1024));
-        assert!(
-            matches!(result, Err(PlanError::PathTooDeep { .. })),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(PlanError::PathTooDeep { .. }), "{result:?}");
     }
 
     #[test]
@@ -1157,8 +1152,9 @@ mod tests {
     fn test_merge_entry_above_the_budget_is_a_unit_error() {
         let data = json!({"huge": "x".repeat(MAX_QUEUED_OUTGOING_BYTES + 1), "small": 1});
         let result = plan_stream(SessionId::new(), data, &options(Framing::Merge, 64 * 1024));
-        assert!(
-            matches!(result, Err(PlanError::UnitExceedsBudget { .. })),
+        assert_matches!(
+            result,
+            Err(PlanError::UnitExceedsBudget { .. }),
             "{result:?}"
         );
     }
@@ -1171,11 +1167,9 @@ mod tests {
                 .collect(),
         );
         let result = plan_stream(SessionId::new(), data, &options(Framing::Patch, 1024));
-        assert!(
-            matches!(
-                result,
-                Err(PlanError::TooManyFrames { .. } | PlanError::PlanBytesExceeded { .. })
-            ),
+        assert_matches!(
+            result,
+            Err(PlanError::TooManyFrames { .. } | PlanError::PlanBytesExceeded { .. }),
             "{result:?}"
         );
     }
@@ -1230,8 +1224,9 @@ mod tests {
 
         let result = plan_stream(SessionId::new(), data, &options(Framing::Patch, 1024));
 
-        assert!(
-            matches!(result, Err(PlanError::PlanBytesExceeded { .. })),
+        assert_matches!(
+            result,
+            Err(PlanError::PlanBytesExceeded { .. }),
             "{result:?}"
         );
     }

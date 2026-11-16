@@ -999,6 +999,7 @@ fn collect_leaves(value: &JsonData, path: &JsonPath, out: &mut Vec<JsonPath>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     fn parser() -> JiterPartialParser {
         JiterPartialParser::default()
@@ -1067,7 +1068,7 @@ mod tests {
         assert_eq!(r.consumed, 0);
         assert!(!r.is_complete);
         assert!(r.diagnostics.is_empty());
-        assert!(matches!(r.value, JsonData::Null));
+        assert_matches!(r.value, JsonData::Null);
     }
 
     #[test]
@@ -1082,7 +1083,7 @@ mod tests {
         let r = parser().parse_partial(b"[").unwrap();
         assert_eq!(r.consumed, 0, "open array must not advance consumed");
         assert!(!r.is_complete);
-        assert!(matches!(r.value, JsonData::Array(ref v) if v.is_empty()));
+        assert_matches!(r.value, JsonData::Array(ref v) if v.is_empty());
     }
 
     #[test]
@@ -1090,7 +1091,7 @@ mod tests {
         let r = parser().parse_partial(b"{").unwrap();
         assert_eq!(r.consumed, 0, "open object must not advance consumed");
         assert!(!r.is_complete);
-        assert!(matches!(r.value, JsonData::Object(ref m) if m.is_empty()));
+        assert_matches!(r.value, JsonData::Object(ref m) if m.is_empty());
     }
 
     #[test]
@@ -1098,7 +1099,7 @@ mod tests {
         let r = parser().parse_partial(b"null").unwrap();
         assert!(r.is_complete);
         assert_eq!(r.consumed, 4);
-        assert!(matches!(r.value, JsonData::Null));
+        assert_matches!(r.value, JsonData::Null);
     }
 
     #[test]
@@ -1106,7 +1107,7 @@ mod tests {
         let r = parser().parse_partial(b"42 ").unwrap();
         assert!(r.is_complete);
         assert_eq!(r.consumed, 3);
-        assert!(matches!(r.value, JsonData::Integer(42)));
+        assert_matches!(r.value, JsonData::Integer(42));
     }
 
     #[test]
@@ -1139,10 +1140,10 @@ mod tests {
     fn test_complete_array() {
         let r = parser().parse_partial(b"[1,2,3]").unwrap();
         assert!(r.is_complete);
-        assert!(matches!(
+        assert_matches!(
             r.value,
             JsonData::Array(ref v) if v.len() == 3
-        ));
+        );
     }
 
     // --- Truncated input ---
@@ -1187,7 +1188,7 @@ mod tests {
             "mid-hex-escape is tolerated by jiter 0.14 partial-string mode"
         );
         let r = result.unwrap();
-        assert!(matches!(r.value, JsonData::String(_)));
+        assert_matches!(r.value, JsonData::String(_));
         assert_eq!(r.consumed, 5, "all 5 bytes consumed");
         assert!(r.is_complete, "consumed == input.len() so is_complete");
     }
@@ -1211,7 +1212,7 @@ mod tests {
         let r = parser().parse_partial(b"{\"ke").unwrap();
         assert!(!r.is_complete);
         // No panic; the partial key is dropped.
-        assert!(matches!(r.value, JsonData::Object(_)));
+        assert_matches!(r.value, JsonData::Object(_));
     }
 
     #[test]

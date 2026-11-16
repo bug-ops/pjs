@@ -596,6 +596,7 @@ mod tests {
         aggregates::stream_session::SessionConfig, events::DomainEvent, ports::EventPublisherGat,
     };
     use crate::test_support::MockRepository;
+    use core::assert_matches;
 
     struct MockEventPublisher;
 
@@ -918,10 +919,7 @@ mod tests {
 
         let result = handler.handle(create_stream_cmd).await;
         assert!(result.is_err());
-        assert!(matches!(
-            result.err().unwrap(),
-            ApplicationError::NotFound(_)
-        ));
+        assert_matches!(result.err().unwrap(), ApplicationError::NotFound(_));
     }
 
     #[tokio::test]
@@ -973,10 +971,7 @@ mod tests {
 
         let result = handler.handle(start_stream_cmd).await;
         assert!(result.is_err());
-        assert!(matches!(
-            result.err().unwrap(),
-            ApplicationError::NotFound(_)
-        ));
+        assert_matches!(result.err().unwrap(), ApplicationError::NotFound(_));
     }
 
     #[tokio::test]
@@ -1107,10 +1102,7 @@ mod tests {
 
         let result = handler.handle(close_session_cmd).await;
         assert!(result.is_err());
-        assert!(matches!(
-            result.err().unwrap(),
-            ApplicationError::NotFound(_)
-        ));
+        assert_matches!(result.err().unwrap(), ApplicationError::NotFound(_));
     }
 
     #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
@@ -1404,7 +1396,7 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+        assert_matches!(result, Err(ApplicationError::Validation(_)));
     }
 
     #[tokio::test]
@@ -1423,7 +1415,7 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+        assert_matches!(result, Err(ApplicationError::Validation(_)));
     }
 
     #[tokio::test]
@@ -1441,7 +1433,7 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+        assert_matches!(result, Err(ApplicationError::Validation(_)));
     }
 
     #[tokio::test]
@@ -1459,7 +1451,7 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(result, Err(ApplicationError::Validation(_))));
+        assert_matches!(result, Err(ApplicationError::Validation(_)));
     }
 
     #[tokio::test]
@@ -1547,7 +1539,7 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(result, Err(ApplicationError::NotFound(_))));
+        assert_matches!(result, Err(ApplicationError::NotFound(_)));
     }
 
     #[tokio::test]
@@ -1746,12 +1738,12 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(ApplicationError::Domain(
                 crate::domain::DomainError::InvalidSessionState(_)
             ))
-        ));
+        );
     }
 
     /// Regression test for #477: `BatchGenerateFramesCommand` must not lose

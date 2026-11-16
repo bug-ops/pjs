@@ -12,6 +12,7 @@
     feature = "partial-parse"
 ))]
 
+use core::assert_matches;
 use std::error::Error as StdError;
 use std::io;
 
@@ -61,7 +62,7 @@ fn test_new_client_invalid_url_exposes_url_parse_error_source() {
         panic!("an unparsable URL must be rejected");
     };
 
-    assert!(matches!(error, Error::InvalidUrl(_)), "{error:?}");
+    assert_matches!(error, Error::InvalidUrl(_), "{error:?}");
     assert!(
         source_of(&error)
             .downcast_ref::<url::ParseError>()
@@ -115,7 +116,7 @@ fn test_from_serde_json_error_exposes_it_as_source() {
 
     let error = Error::from(parse_error);
 
-    assert!(matches!(error, Error::Serialization(_)), "{error:?}");
+    assert_matches!(error, Error::Serialization(_), "{error:?}");
     assert!(
         source_of(&error)
             .downcast_ref::<serde_json::Error>()
@@ -191,11 +192,9 @@ fn test_decompress_protected_ratio_bomb_is_compression_bomb_error() {
         .decompress_protected(&bomb)
         .expect_err("a ratio far above 300x must be refused");
 
-    assert!(
-        matches!(
-            error,
-            Error::CompressionBomb(CompressionBombError::RatioExceeded { .. })
-        ),
+    assert_matches!(
+        error,
+        Error::CompressionBomb(CompressionBombError::RatioExceeded { .. }),
         "{error:?}"
     );
     assert!(error.is_security_error());
@@ -230,18 +229,18 @@ fn test_validate_session_id_violations_are_typed() {
         .validate_session_id("has space!")
         .expect_err("space is not allowed");
 
-    assert!(matches!(
+    assert_matches!(
         short,
         Error::InvalidSessionId(SessionIdViolation::TooShort { len: 5, min: 8 })
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         long,
         Error::InvalidSessionId(SessionIdViolation::TooLong { len: 129, max: 128 })
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         bad_char,
         Error::InvalidSessionId(SessionIdViolation::InvalidCharacter)
-    ));
+    );
     assert_eq!(short.category(), "validation");
 }
 
@@ -253,6 +252,6 @@ fn test_from_create_session_error_maps_to_typed_variants() {
     let exists = Error::from(CreateSessionError::AlreadyExists(id));
     let too_many = Error::from(CreateSessionError::TooManySessions { limit });
 
-    assert!(matches!(exists, Error::SessionAlreadyExists(got) if got == id));
-    assert!(matches!(too_many, Error::TooManySessions { limit: got } if got == limit));
+    assert_matches!(exists, Error::SessionAlreadyExists(got) if got == id);
+    assert_matches!(too_many, Error::TooManySessions { limit: got } if got == limit);
 }

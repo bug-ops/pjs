@@ -639,6 +639,7 @@ impl Default for StreamingDecompressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
     use serde_json::json;
 
     #[test]
@@ -2038,7 +2039,7 @@ mod tests {
     #[test]
     fn test_decompress_delta_integer_sum_overflow_is_error() {
         let result = decode_delta(json!([delta_header(json!(1)), u64::MAX]));
-        assert!(matches!(result, Err(DomainError::CompressionError(_))));
+        assert_matches!(result, Err(DomainError::CompressionError(_)));
     }
 
     #[test]
@@ -2061,7 +2062,7 @@ mod tests {
         });
         let mut compressor = SchemaCompressor::new();
         let strategy = compressor.analyze_and_optimize(&data).unwrap().clone();
-        assert!(matches!(strategy, CompressionStrategy::Hybrid { .. }));
+        assert_matches!(strategy, CompressionStrategy::Hybrid { .. });
 
         let mut streaming = StreamingCompressor::with_strategies(strategy.clone(), strategy);
         let frame = StreamFrame {

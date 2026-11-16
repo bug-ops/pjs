@@ -1,6 +1,7 @@
 //! WebSocket security integration tests
 #![cfg(feature = "websocket-server")]
 
+use core::assert_matches;
 use pjson_rs::{
     Error, SecureWebSocketHandler,
     config::SecurityConfig,
@@ -39,10 +40,7 @@ async fn test_websocket_rate_limiting_integration() {
     // Third request should be rate limited
     let result = security_handler.check_upgrade_request(client_ip);
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        RateLimitError::LimitExceeded { .. }
-    ));
+    assert_matches!(result.unwrap_err(), RateLimitError::LimitExceeded { .. });
 
     // Test connection limiting
     let guard = security_handler.create_connection_guard(client_ip).unwrap();
@@ -50,10 +48,10 @@ async fn test_websocket_rate_limiting_integration() {
     // Second connection should fail
     let result = security_handler.create_connection_guard(client_ip);
     assert!(result.is_err());
-    assert!(matches!(
+    assert_matches!(
         result.unwrap_err(),
         RateLimitError::ConnectionLimitExceeded { .. }
-    ));
+    );
 
     // Test streaming session with rate limiting
     let test_data = json!({
@@ -96,20 +94,20 @@ async fn test_websocket_rate_limiting_integration() {
         .validate_message(owner, session_id, 512)
         .await;
     assert!(result.is_err());
-    assert!(matches!(
+    assert_matches!(
         result.unwrap_err(),
         Error::RateLimited(RateLimitError::LimitExceeded { .. })
-    ));
+    );
 
     // Test frame size limits
     let result = stream_controller
         .validate_message(owner, session_id, 2048)
         .await;
     assert!(result.is_err());
-    assert!(matches!(
+    assert_matches!(
         result.unwrap_err(),
         Error::RateLimited(RateLimitError::FrameSizeExceeded { .. })
-    ));
+    );
 }
 
 /// Test security configuration profiles
@@ -284,10 +282,10 @@ async fn test_frame_size_validation() {
         .validate_message(owner, session_id, 1024)
         .await;
     assert!(result.is_err());
-    assert!(matches!(
+    assert_matches!(
         result.unwrap_err(),
         Error::RateLimited(RateLimitError::FrameSizeExceeded { .. })
-    ));
+    );
 }
 
 /// Test concurrent rate limiting
