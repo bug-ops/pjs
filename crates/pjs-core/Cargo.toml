@@ -139,6 +139,16 @@ repository = "bug-ops/pjs"
 workflow = "release.yml"
 
 [[test]]
+name = "websocket_server_acceptance"
+path = "tests/websocket_server_acceptance.rs"
+required-features = ["websocket-server", "websocket-client"]
+
+[[test]]
+name = "websocket_shutdown_acceptance"
+path = "tests/websocket_shutdown_acceptance.rs"
+required-features = ["websocket-server", "websocket-client"]
+
+[[test]]
 name = "websocket_security"
 path = "tests/websocket_security.rs"
 required-features = ["websocket-server"]
