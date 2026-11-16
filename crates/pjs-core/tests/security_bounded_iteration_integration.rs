@@ -20,11 +20,12 @@ use pjson_rs::infrastructure::adapters::{
 /// Test the complete security path: validation at entry point
 mod entry_validation_tests {
     use super::*;
+    use core::assert_matches;
 
     #[test]
     fn test_pagination_validation_rejects_zero_limit() {
         let result = SessionPagination::new(0, 0);
-        assert!(matches!(result, Err(DomainError::InvalidInput(_))));
+        assert_matches!(result, Err(DomainError::InvalidInput(_)));
     }
 
     #[test]
@@ -62,7 +63,7 @@ mod entry_validation_tests {
             .min_stream_count(100)
             .max_stream_count(10) // Invalid: min > max
             .build();
-        assert!(matches!(result, Err(DomainError::InvalidInput(_))));
+        assert_matches!(result, Err(DomainError::InvalidInput(_)));
     }
 
     #[test]
@@ -70,7 +71,7 @@ mod entry_validation_tests {
         let result = SessionQueryCriteria::builder()
             .states(vec![]) // Invalid: empty vec
             .build();
-        assert!(matches!(result, Err(DomainError::InvalidInput(_))));
+        assert_matches!(result, Err(DomainError::InvalidInput(_)));
     }
 }
 

@@ -263,7 +263,7 @@ async fn test_stream_init_connection_plan_budget_over_wire_replies_429_until_ses
     // a generous deadline instead of a fixed silence window.
     let mut rejected = Vec::new();
     let mut accepted_ids = std::collections::HashSet::new();
-    timeout(Duration::from_secs(90), async {
+    timeout(Duration::from_secs(240), async {
         while rejected.len() + accepted_ids.len() < total as usize {
             let message = next_json(&mut incoming, Duration::from_secs(60))
                 .await

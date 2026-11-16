@@ -531,7 +531,7 @@ impl<'de> Deserialize<'de> for WirePatch {
     }
 }
 
-/// Applies `patch` to `state`.
+/// Applies `patch` to `state`, moving its payload into the state.
 ///
 /// `state` may already be partly modified when an error is returned; callers
 /// drop the stream in that case.
@@ -545,11 +545,11 @@ impl<'de> Deserialize<'de> for WirePatch {
 /// [`PatchError::ExpectedObject`] / [`PatchError::ExpectedArray`] /
 /// [`PatchError::ExpectedString`] when the target has the wrong kind for the op.
 #[cfg(any(feature = "websocket-client", test))]
-pub(crate) fn apply_patch(state: &mut Value, patch: &WirePatch) -> Result<(), PatchError> {
+pub(crate) fn apply_patch(state: &mut Value, patch: WirePatch) -> Result<(), PatchError> {
     let (WirePatch::Set { path, .. }
     | WirePatch::Merge { path, .. }
     | WirePatch::Append { path, .. }
-    | WirePatch::AppendStr { path, .. }) = patch;
+    | WirePatch::AppendStr { path, .. }) = &patch;
     let segments = path.0.as_slice();
     if segments.len() > MAX_PATCH_PATH_DEPTH {
         return Err(PatchError::PathTooDeep {
@@ -559,40 +559,39 @@ pub(crate) fn apply_patch(state: &mut Value, patch: &WirePatch) -> Result<(), Pa
     }
 
     match patch {
-        WirePatch::Set { value, .. } => match segments.split_last() {
-            None => *state = value.clone(),
+        WirePatch::Set { path, value } => match path.0.split_last() {
+            None => *state = value,
             Some((last, parent_path)) => match (resolve(state, parent_path)?, last) {
                 (Value::Object(map), WireSegment::Key(key)) => {
-                    map.insert(key.clone(), value.clone());
+                    map.insert(key.clone(), value);
                 }
                 (Value::Array(items), WireSegment::Index(index)) => {
                     let len = items.len();
                     *items
                         .get_mut(*index)
-                        .ok_or(PatchError::IndexOutOfBounds { index: *index, len })? =
-                        value.clone();
+                        .ok_or(PatchError::IndexOutOfBounds { index: *index, len })? = value;
                 }
                 (_, WireSegment::Key(_)) => return Err(PatchError::ExpectedObject),
                 (_, WireSegment::Index(_)) => return Err(PatchError::ExpectedArray),
             },
         },
-        WirePatch::Merge { entries, .. } => {
-            let Value::Object(target) = resolve(state, segments)? else {
+        WirePatch::Merge { path, entries } => {
+            let Value::Object(target) = resolve(state, &path.0)? else {
                 return Err(PatchError::ExpectedObject);
             };
-            target.extend(entries.iter().map(|(k, v)| (k.clone(), v.clone())));
+            target.extend(entries);
         }
-        WirePatch::Append { values, .. } => {
-            let Value::Array(target) = resolve(state, segments)? else {
+        WirePatch::Append { path, values } => {
+            let Value::Array(target) = resolve(state, &path.0)? else {
                 return Err(PatchError::ExpectedArray);
             };
-            target.extend(values.iter().cloned());
+            target.extend(values);
         }
-        WirePatch::AppendStr { text, .. } => {
-            let Value::String(target) = resolve(state, segments)? else {
+        WirePatch::AppendStr { path, text } => {
+            let Value::String(target) = resolve(state, &path.0)? else {
                 return Err(PatchError::ExpectedString);
             };
-            target.push_str(text);
+            target.push_str(&text);
         }
     }
     Ok(())
@@ -712,6 +711,7 @@ mod option_priority_map {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
     use serde_json::json;
 
     #[tokio::test(start_paused = true)]
@@ -757,17 +757,17 @@ mod tests {
     #[test]
     fn test_apply_set_root_replaces_state() {
         let mut state = json!({"old": 1});
-        apply_patch(&mut state, &set(vec![], json!([1]))).unwrap();
+        apply_patch(&mut state, set(vec![], json!([1]))).unwrap();
         assert_eq!(state, json!([1]));
     }
 
     #[test]
     fn test_apply_set_inserts_replaces_key_and_replaces_existing_index() {
         let mut state = json!({"a": [0, 1]});
-        apply_patch(&mut state, &set(vec![key("b")], json!(2))).unwrap();
+        apply_patch(&mut state, set(vec![key("b")], json!(2))).unwrap();
         apply_patch(
             &mut state,
-            &set(vec![key("a"), WireSegment::Index(1)], json!("x")),
+            set(vec![key("a"), WireSegment::Index(1)], json!("x")),
         )
         .unwrap();
         assert_eq!(state, json!({"a": [0, "x"], "b": 2}));
@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn test_apply_set_index_out_of_bounds_is_rejected() {
         let mut state = json!([0]);
-        let err = apply_patch(&mut state, &set(vec![WireSegment::Index(1)], json!(1))).unwrap_err();
+        let err = apply_patch(&mut state, set(vec![WireSegment::Index(1)], json!(1))).unwrap_err();
         assert_eq!(err, PatchError::IndexOutOfBounds { index: 1, len: 1 });
     }
 
@@ -784,12 +784,12 @@ mod tests {
     fn test_apply_set_wrong_parent_kind_is_rejected() {
         let mut state = json!({"a": 1});
         assert_eq!(
-            apply_patch(&mut state, &set(vec![WireSegment::Index(0)], json!(1))).unwrap_err(),
+            apply_patch(&mut state, set(vec![WireSegment::Index(0)], json!(1))).unwrap_err(),
             PatchError::ExpectedArray
         );
         let mut state = json!([1]);
         assert_eq!(
-            apply_patch(&mut state, &set(vec![key("k")], json!(1))).unwrap_err(),
+            apply_patch(&mut state, set(vec![key("k")], json!(1))).unwrap_err(),
             PatchError::ExpectedObject
         );
     }
@@ -801,10 +801,10 @@ mod tests {
             path: WirePath(vec![key(path)]),
             entries: entries.as_object().unwrap().clone(),
         };
-        apply_patch(&mut state, &merge("o", json!({"a": 2, "b": 3}))).unwrap();
+        apply_patch(&mut state, merge("o", json!({"a": 2, "b": 3}))).unwrap();
         assert_eq!(state["o"], json!({"a": 2, "b": 3}));
         assert_eq!(
-            apply_patch(&mut state, &merge("n", json!({}))).unwrap_err(),
+            apply_patch(&mut state, merge("n", json!({}))).unwrap_err(),
             PatchError::ExpectedObject
         );
     }
@@ -815,7 +815,7 @@ mod tests {
         let at = |k: &str| WirePath(vec![key(k)]);
         apply_patch(
             &mut state,
-            &WirePatch::Append {
+            WirePatch::Append {
                 path: at("l"),
                 values: vec![json!(2), json!(null)],
             },
@@ -823,7 +823,7 @@ mod tests {
         .unwrap();
         apply_patch(
             &mut state,
-            &WirePatch::AppendStr {
+            WirePatch::AppendStr {
                 path: at("s"),
                 text: "cd".into(),
             },
@@ -833,7 +833,7 @@ mod tests {
         assert_eq!(
             apply_patch(
                 &mut state,
-                &WirePatch::Append {
+                WirePatch::Append {
                     path: at("s"),
                     values: vec![]
                 }
@@ -844,7 +844,7 @@ mod tests {
         assert_eq!(
             apply_patch(
                 &mut state,
-                &WirePatch::AppendStr {
+                WirePatch::AppendStr {
                     path: at("l"),
                     text: String::new()
                 }
@@ -858,11 +858,11 @@ mod tests {
     fn test_apply_unresolvable_path_is_rejected() {
         let mut state = json!({"a": 1});
         assert_eq!(
-            apply_patch(&mut state, &set(vec![key("zz"), key("k")], json!(1))).unwrap_err(),
+            apply_patch(&mut state, set(vec![key("zz"), key("k")], json!(1))).unwrap_err(),
             PatchError::KeyNotFound("zz".into())
         );
         assert_eq!(
-            apply_patch(&mut state, &set(vec![key("a"), key("k")], json!(1))).unwrap_err(),
+            apply_patch(&mut state, set(vec![key("a"), key("k")], json!(1))).unwrap_err(),
             PatchError::ExpectedObject
         );
     }
@@ -873,11 +873,11 @@ mod tests {
         let at_cap = vec![key("k"); MAX_PATCH_PATH_DEPTH];
         let too_deep = vec![key("k"); MAX_PATCH_PATH_DEPTH + 1];
         assert!(!matches!(
-            apply_patch(&mut state, &set(at_cap, json!(1))),
+            apply_patch(&mut state, set(at_cap, json!(1))),
             Err(PatchError::PathTooDeep { .. })
         ));
         assert_eq!(
-            apply_patch(&mut state, &set(too_deep, json!(1))).unwrap_err(),
+            apply_patch(&mut state, set(too_deep, json!(1))).unwrap_err(),
             PatchError::PathTooDeep {
                 depth: MAX_PATCH_PATH_DEPTH + 1,
                 max: MAX_PATCH_PATH_DEPTH
@@ -949,13 +949,13 @@ mod tests {
     fn test_error_message_without_session_id_field_decodes_to_none() {
         let decoded: WsMessage =
             serde_json::from_str(r#"{"type":"Error","data":{"error":"x","code":1}}"#).unwrap();
-        assert!(matches!(
+        assert_matches!(
             decoded,
             WsMessage::Error {
                 session_id: None,
                 ..
             }
-        ));
+        );
     }
 
     #[test]
@@ -1007,7 +1007,7 @@ mod tests {
         let wire = serde_json::to_string(&WsMessage::StreamCancel { session_id: id }).unwrap();
         assert!(wire.contains(r#""type":"StreamCancel""#));
         let decoded: WsMessage = serde_json::from_str(&wire).unwrap();
-        assert!(matches!(decoded, WsMessage::StreamCancel { session_id } if session_id == id));
+        assert_matches!(decoded, WsMessage::StreamCancel { session_id } if session_id == id);
     }
 
     #[test]

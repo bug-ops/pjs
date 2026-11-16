@@ -84,7 +84,7 @@ Code: `client.ts`; `getStreamStats()`.
 Status: partial.
 
 ### FR-007 Frame validation
-`FrameProcessor.validateFrame` shall return `{isValid, errors}`: frame must be an object with a known `frame_type` (`Skeleton|Patch|Complete|Error`), numeric `priority` in 0..=100, skeleton requires `payload`, patch requires non-empty `payload.patches` with each patch having a path matching `^\$(\.[A-Za-z_][A-Za-z0-9_]*(\[\d+\])?)*$` and `operation` in `set|append|merge|delete`.
+`FrameProcessor.validateFrame` shall return `{isValid, errors}`: frame must be an object with a known `frame_type` (`Skeleton|Patch|Complete|Error`), numeric `priority` in 0..=100, skeleton requires `payload`, patch requires non-empty `payload.patches` with each patch having a path matching `^\$(\.[^.[\]]+(\[\d+\])?)*$` (key grammar aligned with Rust `JsonPath::is_valid_key`: any non-empty key without `.`, `[`, `]`) and `operation` in `set|append|merge|delete`.
 Code: `frame-processor.ts`; `utils/index.ts::validateFrame` is a second, looser type guard.
 Status: done.
 
@@ -94,7 +94,7 @@ Code: `frame-processor.ts`.
 Status: implemented but unused by the client (tested in `tests/core/frame-processor.test.ts`).
 
 ### FR-009 JSON reconstruction
-`JsonReconstructor` shall: `processSkeleton` (deep clone payload; reject a second call), `applyPatch` (per patch: path must start with `$.`; operations `set`, `append` (push scalar or spread array), `merge` (shallow object merge, otherwise replace), `delete` (array index splice or own-property delete); unknown operations/paths counted as skipped), `getCurrentState()` (deep clone), `reset`, `markComplete`, `getMetadata`. Path grammar: dot-separated segments with optional `[n]` index. Missing intermediate object segments are created; a missing indexed parent throws and the patch is skipped.
+`JsonReconstructor` shall: `processSkeleton` (deep clone payload; reject a second call), `applyPatch` (per patch: path `$` addresses the root, where `set` replaces the state with a deep clone of the value and `merge` shallow-merges plain objects (otherwise replaces), while `append`/`delete` at the root are skipped; every other path must start with `$.`; operations `set`, `append` (push scalar or spread array), `merge` (shallow object merge, otherwise replace), `delete` (array index splice or own-property delete); unknown operations/paths counted as skipped), `getCurrentState()` (deep clone), `reset`, `markComplete`, `getMetadata`. Path grammar: dot-separated segments with optional `[n]` index. Missing intermediate object segments are created; a missing indexed parent throws and the patch is skipped.
 Code: `json-reconstructor.ts`.
 Status: done.
 
@@ -136,7 +136,8 @@ Status: done (#644). Tests: `tests/transport/{sse,http,shutdown-marker,client-sh
 | Condition | Result |
 |-----------|--------|
 | Patch before skeleton (`PJSClient`) | `PJSError(ProtocolError)` |
-| Patch path not `$.`-prefixed | skipped |
+| Patch path neither `$` nor `$.`-prefixed | skipped |
+| Root `$` `append`/`delete` | skipped |
 | Unsafe key in path | patch skipped (error caught) |
 | `delete` on missing key | no-op counted as applied |
 | NDJSON line unparsable | `ParseError` emitted, stream continues |

@@ -285,6 +285,7 @@ pub fn byte_bounded_channel<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     #[tokio::test]
     async fn test_rejects_send_once_item_capacity_is_full() {
@@ -293,10 +294,10 @@ mod tests {
         tx.try_send("a", 1).unwrap();
         tx.try_send("b", 1).unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             tx.try_send("c", 1),
             Err(TrySendError::Channel(mpsc::error::TrySendError::Full(_)))
-        ));
+        );
 
         rx.recv().await.unwrap();
         tx.try_send("c", 1).expect("capacity freed after a receive");
@@ -308,10 +309,10 @@ mod tests {
         // (10 bytes) is what should reject this send.
         let (tx, _rx) = byte_bounded_channel::<&str>(100, 10);
 
-        assert!(matches!(
+        assert_matches!(
             tx.try_send("this string is way over budget", 31),
             Err(TrySendError::BudgetExceeded(_))
-        ));
+        );
 
         // A payload that fits within budget still succeeds.
         tx.try_send("ok", 2).expect("small payload fits in budget");
@@ -324,10 +325,10 @@ mod tests {
         tx.try_send("12345", 5).unwrap();
         // Budget nearly exhausted (5/10 bytes used): a second 6-byte
         // payload must not fit.
-        assert!(matches!(
+        assert_matches!(
             tx.try_send("123456", 6),
             Err(TrySendError::BudgetExceeded(_))
-        ));
+        );
 
         // Draining the first item releases its 5 bytes back to the budget.
         let received = rx.recv().await.unwrap();
@@ -340,10 +341,10 @@ mod tests {
     #[tokio::test]
     async fn test_try_send_rejects_payload_larger_than_total_budget() {
         let (tx, _rx) = byte_bounded_channel::<&str>(100, 10);
-        assert!(matches!(
+        assert_matches!(
             tx.try_send("too big", 11),
             Err(TrySendError::BudgetExceeded(_))
-        ));
+        );
     }
 
     #[tokio::test]
@@ -382,10 +383,10 @@ mod tests {
 
         // The budget is still charged after `split`: a payload that only
         // fits once the first 5 bytes are released must not fit yet.
-        assert!(matches!(
+        assert_matches!(
             tx.try_send("123456", 6),
             Err(TrySendError::BudgetExceeded(_))
-        ));
+        );
 
         drop(permit);
         tx.try_send("123456", 6)

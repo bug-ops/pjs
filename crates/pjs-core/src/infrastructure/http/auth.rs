@@ -528,6 +528,7 @@ mod inner {
             body::Body,
             http::{Method, Request, StatusCode},
         };
+        use core::assert_matches;
         use tower::{Service, ServiceExt};
 
         // ── ApiKeyConfig construction ────────────────────────────────────────────
@@ -549,25 +550,25 @@ mod inner {
         #[test]
         fn empty_key_list_is_rejected() {
             let err = ApiKeyConfig::new(&[]).unwrap_err();
-            assert!(matches!(err, AuthConfigError::EmptyKeyList));
+            assert_matches!(err, AuthConfigError::EmptyKeyList);
         }
 
         #[test]
         fn key_with_whitespace_is_rejected() {
             let err = ApiKeyConfig::new(&["valid-key", "bad key"]).unwrap_err();
-            assert!(matches!(err, AuthConfigError::WhitespaceInKey));
+            assert_matches!(err, AuthConfigError::WhitespaceInKey);
         }
 
         #[test]
         fn key_with_leading_whitespace_is_rejected() {
             let err = ApiKeyConfig::new(&[" leading"]).unwrap_err();
-            assert!(matches!(err, AuthConfigError::WhitespaceInKey));
+            assert_matches!(err, AuthConfigError::WhitespaceInKey);
         }
 
         #[test]
         fn key_with_trailing_whitespace_is_rejected() {
             let err = ApiKeyConfig::new(&["trailing "]).unwrap_err();
-            assert!(matches!(err, AuthConfigError::WhitespaceInKey));
+            assert_matches!(err, AuthConfigError::WhitespaceInKey);
         }
 
         #[test]

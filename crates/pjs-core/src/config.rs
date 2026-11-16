@@ -460,6 +460,7 @@ impl PjsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     #[test]
     fn test_default_config() {
@@ -504,13 +505,13 @@ mod tests {
             ..StreamingConfig::default()
         };
         let err = cfg.validate().unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             ConfigError::MustBePositive {
                 section: "streaming",
                 field: "max_frame_size"
             }
-        ));
+        );
     }
 
     #[test]
@@ -520,13 +521,13 @@ mod tests {
             ..StreamingConfig::default()
         };
         let err = cfg.validate().unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             ConfigError::MustBePositive {
                 section: "streaming",
                 field: "operation_timeout_ms"
             }
-        ));
+        );
     }
 
     #[test]
@@ -536,13 +537,13 @@ mod tests {
             ..SimdConfig::default()
         };
         let err = cfg.validate().unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             ConfigError::InconsistentBounds {
                 section: "simd",
                 ..
             }
-        ));
+        );
     }
 
     #[test]
@@ -609,23 +610,23 @@ mod tests {
     fn test_validated_security_config_rejects_unsafe_depth() {
         let mut config = SecurityConfig::default();
         config.json.max_depth = 100_000;
-        assert!(matches!(
+        assert_matches!(
             config.validated(),
             Err(ConfigError::InconsistentBounds { .. })
-        ));
+        );
     }
 
     #[test]
     fn test_validated_security_config_rejects_zero_input_size() {
         let mut config = SecurityConfig::default();
         config.json.max_input_size = 0;
-        assert!(matches!(
+        assert_matches!(
             config.validated(),
             Err(ConfigError::MustBePositive {
                 field: "max_input_size",
                 ..
             })
-        ));
+        );
     }
 
     #[test]

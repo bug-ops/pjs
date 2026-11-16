@@ -8,6 +8,7 @@
 //! - Event generation
 //! - Statistics tracking
 
+use core::assert_matches;
 use pjson_rs::domain::{
     DomainError,
     aggregates::{
@@ -216,10 +217,7 @@ fn test_activate_from_active_fails() {
     let result = session.activate();
 
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        DomainError::InvalidStateTransition(_)
-    ));
+    assert_matches!(result.unwrap_err(), DomainError::InvalidStateTransition(_));
 }
 
 #[test]
@@ -290,10 +288,7 @@ fn test_create_stream_before_activation_fails() {
     let result = session.create_stream(data);
 
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        DomainError::InvalidSessionState(_)
-    ));
+    assert_matches!(result.unwrap_err(), DomainError::InvalidSessionState(_));
 }
 
 #[test]
@@ -310,10 +305,7 @@ fn test_create_stream_respects_max_concurrent() {
     let result = session.create_stream(json_int("stream", 3));
 
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        DomainError::TooManyStreams(_)
-    ));
+    assert_matches!(result.unwrap_err(), DomainError::TooManyStreams(_));
 }
 
 #[test]
@@ -372,10 +364,7 @@ fn test_start_nonexistent_stream_fails() {
     let result = session.start_stream(fake_stream_id);
 
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        DomainError::StreamNotFound(_)
-    ));
+    assert_matches!(result.unwrap_err(), DomainError::StreamNotFound(_));
 }
 
 #[test]
@@ -512,10 +501,7 @@ fn test_close_before_activation_fails() {
     let result = session.close();
 
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        DomainError::InvalidStateTransition(_)
-    ));
+    assert_matches!(result.unwrap_err(), DomainError::InvalidStateTransition(_));
 }
 
 #[test]
@@ -670,10 +656,7 @@ fn test_extend_timeout_on_expired_fails() {
     let result = session.extend_timeout(SessionTimeout::try_from(1800u64).unwrap());
 
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        DomainError::InvalidStateTransition(_)
-    ));
+    assert_matches!(result.unwrap_err(), DomainError::InvalidStateTransition(_));
 }
 
 // ============================================================================
@@ -889,10 +872,7 @@ fn test_create_priority_frames_inactive_session() {
     let result = session.create_priority_frames(Priority::BACKGROUND, 10);
 
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        DomainError::InvalidSessionState(_)
-    ));
+    assert_matches!(result.unwrap_err(), DomainError::InvalidSessionState(_));
 }
 
 #[test]

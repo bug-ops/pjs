@@ -1004,6 +1004,7 @@ mod tests {
         },
         websocket::StreamOptions,
     };
+    use core::assert_matches;
     use serde_json::json;
 
     #[tokio::test]
@@ -1143,8 +1144,9 @@ mod tests {
 
         assert!(result.is_err());
         let reply = serde_json::from_str::<WsMessage>(&rx.try_recv().unwrap().into_inner());
-        assert!(
-            matches!(&reply, Ok(WsMessage::Error { code: 400, error, .. }) if error == INVALID_STREAM_OPTIONS),
+        assert_matches!(
+            &reply,
+            Ok(WsMessage::Error { code: 400, error, .. }) if error == INVALID_STREAM_OPTIONS,
             "{reply:?}"
         );
         assert_eq!(transport.controller.session_count(connection), 0);
@@ -1255,10 +1257,7 @@ mod tests {
             .unwrap();
 
         let reply = serde_json::from_str::<WsMessage>(&rx.try_recv().unwrap().into_inner());
-        assert!(
-            matches!(reply, Ok(WsMessage::Pong { timestamp: 42 })),
-            "{reply:?}"
-        );
+        assert_matches!(reply, Ok(WsMessage::Pong { timestamp: 42 }), "{reply:?}");
     }
 
     #[tokio::test]
@@ -1319,10 +1318,10 @@ mod tests {
             .await
             .expect("the new session must stream")
             .unwrap();
-        assert!(matches!(
+        assert_matches!(
             serde_json::from_str::<WsMessage>(&envelope.into_inner()),
             Ok(WsMessage::StreamFrame { session_id: id, .. }) if id == session_id
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1340,13 +1339,11 @@ mod tests {
         }
 
         let result = tx.try_send("ping".to_string(), 4);
-        assert!(
-            matches!(
-                result,
-                Err(bounded_channel::TrySendError::Channel(
-                    tokio::sync::mpsc::error::TrySendError::Full(_)
-                ))
-            ),
+        assert_matches!(
+            result,
+            Err(bounded_channel::TrySendError::Channel(
+                tokio::sync::mpsc::error::TrySendError::Full(_)
+            )),
             "channel must reject sends past capacity instead of growing unbounded"
         );
 
@@ -1521,10 +1518,7 @@ mod tests {
         server.signal.trigger();
         let outcome = server.serve.await.unwrap().unwrap();
 
-        assert!(
-            matches!(outcome, ShutdownOutcome::Forced { .. }),
-            "{outcome:?}"
-        );
+        assert_matches!(outcome, ShutdownOutcome::Forced { .. }, "{outcome:?}");
         let mut rest = Vec::new();
         tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut rest))
             .await

@@ -22,6 +22,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use core::assert_matches;
 use pjson_rs::infrastructure::http::{
     HttpServerConfig, RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig,
     auth::{ApiKeyAuthLayer, ApiKeyConfig, AuthConfigError},
@@ -45,8 +46,9 @@ async fn ok_handler() -> impl IntoResponse {
 #[test]
 fn test_auth_config_error_empty_key_list() {
     let err = ApiKeyConfig::new(&[]).unwrap_err();
-    assert!(
-        matches!(err, AuthConfigError::EmptyKeyList),
+    assert_matches!(
+        err,
+        AuthConfigError::EmptyKeyList,
         "expected EmptyKeyList, got: {err:?}"
     );
 }
@@ -54,8 +56,9 @@ fn test_auth_config_error_empty_key_list() {
 #[test]
 fn test_auth_config_error_whitespace_in_key_space() {
     let err = ApiKeyConfig::new(&["bad key"]).unwrap_err();
-    assert!(
-        matches!(err, AuthConfigError::WhitespaceInKey),
+    assert_matches!(
+        err,
+        AuthConfigError::WhitespaceInKey,
         "expected WhitespaceInKey, got: {err:?}"
     );
 }
@@ -63,8 +66,9 @@ fn test_auth_config_error_whitespace_in_key_space() {
 #[test]
 fn test_auth_config_error_whitespace_in_key_tab() {
     let err = ApiKeyConfig::new(&["bad\tkey"]).unwrap_err();
-    assert!(
-        matches!(err, AuthConfigError::WhitespaceInKey),
+    assert_matches!(
+        err,
+        AuthConfigError::WhitespaceInKey,
         "expected WhitespaceInKey, got: {err:?}"
     );
 }
@@ -72,13 +76,13 @@ fn test_auth_config_error_whitespace_in_key_tab() {
 #[test]
 fn test_auth_config_error_whitespace_leading() {
     let err = ApiKeyConfig::new(&[" leadingspace"]).unwrap_err();
-    assert!(matches!(err, AuthConfigError::WhitespaceInKey));
+    assert_matches!(err, AuthConfigError::WhitespaceInKey);
 }
 
 #[test]
 fn test_auth_config_error_whitespace_trailing() {
     let err = ApiKeyConfig::new(&["trailingspace "]).unwrap_err();
-    assert!(matches!(err, AuthConfigError::WhitespaceInKey));
+    assert_matches!(err, AuthConfigError::WhitespaceInKey);
 }
 
 #[test]

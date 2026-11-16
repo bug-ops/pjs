@@ -701,6 +701,7 @@ impl<'a> Default for ZeroCopyParser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     #[test]
     fn test_security_violation_carries_the_error_chain_text() {
@@ -711,9 +712,8 @@ mod tests {
 
         let error = parser.parse_lazy(br#""hello world""#).unwrap_err();
 
-        assert!(
-            matches!(&error, DomainError::SecurityViolation(m)
-                if m == "String length 11 exceeds maximum allowed 4"),
+        assert_matches!(&error, DomainError::SecurityViolation(m)
+                if m == "String length 11 exceeds maximum allowed 4",
             "{error:?}"
         );
     }
@@ -847,12 +847,12 @@ mod tests {
 
         // First parse
         let result1 = parser.parse_lazy(b"123").unwrap();
-        assert!(matches!(result1, LazyJsonValue::NumberSlice(_)));
+        assert_matches!(result1, LazyJsonValue::NumberSlice(_));
 
         // Reset and reuse
         parser.reset();
         let result2 = parser.parse_lazy(br#""hello""#).unwrap();
-        assert!(matches!(result2, LazyJsonValue::StringBorrowed(_)));
+        assert_matches!(result2, LazyJsonValue::StringBorrowed(_));
     }
 
     #[test]
@@ -1096,7 +1096,7 @@ mod tests {
         // Parser reads valid prefix and may not error on trailing invalid chars
         let result = parser.parse_lazy(b"123");
         assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), LazyJsonValue::NumberSlice(_)));
+        assert_matches!(result.unwrap(), LazyJsonValue::NumberSlice(_));
     }
 
     #[test]
@@ -1134,7 +1134,7 @@ mod tests {
     #[test]
     fn test_lazy_json_value_matches() {
         let num = LazyJsonValue::NumberSlice(b"123");
-        assert!(matches!(num, LazyJsonValue::NumberSlice(_)));
+        assert_matches!(num, LazyJsonValue::NumberSlice(_));
         assert!(!num.is_null());
 
         let null = LazyJsonValue::Null;
@@ -1142,7 +1142,7 @@ mod tests {
         assert!(!matches!(null, LazyJsonValue::NumberSlice(_)));
 
         let bool_val = LazyJsonValue::Boolean(true);
-        assert!(matches!(bool_val, LazyJsonValue::Boolean(true)));
+        assert_matches!(bool_val, LazyJsonValue::Boolean(true));
         assert!(!bool_val.is_null());
     }
 

@@ -2,6 +2,7 @@
 //!
 //! Tests the interaction between schema-based compression and priority streaming
 
+use core::assert_matches;
 use pjson_rs::compression::CompressionStrategy;
 use pjson_rs::domain::value_objects::Priority;
 use pjson_rs::stream::StreamFrame;
@@ -616,11 +617,9 @@ fn test_end_to_end_dictionary_round_trip_preserves_numeric_fields() {
     };
 
     let compressed_frame = compressor.compress_frame(frame).unwrap();
-    assert!(
-        matches!(
-            compressed_frame.compressed_data.strategy,
-            CompressionStrategy::Dictionary { .. }
-        ),
+    assert_matches!(
+        compressed_frame.compressed_data.strategy,
+        CompressionStrategy::Dictionary { .. },
         "expected Dictionary strategy for this payload, got {:?}",
         compressed_frame.compressed_data.strategy
     );

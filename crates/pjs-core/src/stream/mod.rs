@@ -118,6 +118,7 @@ pub use reconstruction::JsonReconstructor;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
     use serde_json::json;
 
     #[test]
@@ -132,7 +133,7 @@ mod tests {
         };
 
         let result = processor.process_frame(frame).unwrap();
-        assert!(matches!(result, ProcessResult::Processed(_)));
+        assert_matches!(result, ProcessResult::Processed(_));
 
         let stats = processor.stats();
         assert_eq!(stats.processed_frames, 1);
@@ -213,7 +214,7 @@ mod tests {
         let result = processor
             .process_frame(frame_with_serialized_len(10))
             .unwrap();
-        assert!(matches!(result, ProcessResult::Processed(_)));
+        assert_matches!(result, ProcessResult::Processed(_));
         assert_eq!(processor.stats().processed_frames, 1);
     }
 
@@ -224,13 +225,13 @@ mod tests {
         let result = processor
             .process_frame(frame_with_serialized_len(11))
             .unwrap();
-        assert!(matches!(
+        assert_matches!(
             result,
             ProcessResult::FrameTooLarge {
                 size: 11,
                 limit: 10
             }
-        ));
+        );
         assert_eq!(processor.stats().processed_frames, 0);
     }
 
@@ -245,10 +246,10 @@ mod tests {
                 priority: Priority::MEDIUM,
                 metadata: HashMap::new(),
             };
-            assert!(matches!(
+            assert_matches!(
                 processor.process_frame(frame).unwrap(),
                 ProcessResult::Processed(_)
-            ));
+            );
         }
 
         assert_eq!(processor.stats().processed_frames, 3);

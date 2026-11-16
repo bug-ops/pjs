@@ -47,6 +47,7 @@ impl TryFrom<PriorityDto> for Priority {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
     use serde_json;
 
     #[test]
@@ -84,7 +85,7 @@ mod tests {
         let invalid_dto: PriorityDto = serde_json::from_str("0").unwrap();
 
         let result = Priority::try_from(invalid_dto);
-        assert!(matches!(result, Err(DomainError::InvalidPriority(_))));
+        assert_matches!(result, Err(DomainError::InvalidPriority(_)));
     }
 
     #[test]

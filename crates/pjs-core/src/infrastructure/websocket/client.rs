@@ -240,20 +240,20 @@ impl Drop for ReceiverLease {
 
 /// Client-side stream session
 #[derive(Debug)]
-struct ClientStreamSession {
+pub(super) struct ClientStreamSession {
     id: SessionId,
     created_at: Instant,
     /// Last time a frame was applied to the session; freezes on completion.
     last_activity: Instant,
     frames_received: usize,
     total_processing_time: Duration,
-    reconstructed_data: Value,
-    reconstructed_bytes: usize,
+    pub(super) reconstructed_data: Value,
+    pub(super) reconstructed_bytes: usize,
     is_complete: bool,
 }
 
 impl ClientStreamSession {
-    fn new(id: SessionId) -> Self {
+    pub(super) fn new(id: SessionId) -> Self {
         let now = Instant::now();
         Self {
             id,
@@ -324,9 +324,13 @@ impl ClientStreamSession {
     /// Applies `patches` in order, accounting each against `max_bytes` before it
     /// is applied. On error the state may be partly modified; the caller drops
     /// the session.
-    fn apply_patches(&mut self, patches: &[WirePatch], max_bytes: usize) -> PjsResult<()> {
+    pub(super) fn apply_patches(
+        &mut self,
+        patches: Vec<WirePatch>,
+        max_bytes: usize,
+    ) -> PjsResult<()> {
         for patch in patches {
-            let projected = self.project_patch_bytes(patch);
+            let projected = self.project_patch_bytes(&patch);
             if projected > max_bytes {
                 return Err(PjsError::limit_exceeded(
                     LimitKind::SessionBytes,
@@ -1049,7 +1053,7 @@ impl PjsWebSocketClient {
                     &message_tx,
                     config,
                     (session_id, frame_id, is_complete),
-                    |session| session.apply_patches(&patches, config.max_session_bytes.get()),
+                    move |session| session.apply_patches(patches, config.max_session_bytes.get()),
                 )
                 .await?;
             }
@@ -1136,6 +1140,7 @@ pub struct ClosedSession {
 mod tests {
     use super::*;
     use crate::domain::Priority;
+    use core::assert_matches;
     use serde_json::json;
 
     #[tokio::test]
@@ -1179,13 +1184,11 @@ mod tests {
         }
 
         let result = tx.try_send(pong.clone(), pong.len());
-        assert!(
-            matches!(
-                result,
-                Err(
-                    crate::infrastructure::bounded_channel::TrySendError::Channel(
-                        mpsc::error::TrySendError::Full(_)
-                    )
+        assert_matches!(
+            result,
+            Err(
+                crate::infrastructure::bounded_channel::TrySendError::Channel(
+                    mpsc::error::TrySendError::Full(_)
                 )
             ),
             "channel must reject sends past capacity instead of growing unbounded"
@@ -1203,11 +1206,9 @@ mod tests {
         let oversized = "x".repeat(MAX_QUEUED_MESSAGE_BYTES + 1);
         let len = oversized.len();
 
-        assert!(
-            matches!(
-                tx.try_send(oversized, len),
-                Err(crate::infrastructure::bounded_channel::TrySendError::BudgetExceeded(_))
-            ),
+        assert_matches!(
+            tx.try_send(oversized, len),
+            Err(crate::infrastructure::bounded_channel::TrySendError::BudgetExceeded(_)),
             "a single over-budget message must be rejected"
         );
     }
@@ -1266,10 +1267,10 @@ mod tests {
 
     #[test]
     fn test_session_idle_ttl_rejects_zero() {
-        assert!(matches!(
+        assert_matches!(
             SessionIdleTtl::new(Duration::ZERO),
             Err(ConfigError::MustBePositive { .. })
-        ));
+        );
         assert_eq!(
             SessionIdleTtl::new(Duration::from_secs(7))
                 .unwrap()
@@ -1330,10 +1331,10 @@ mod tests {
 
         let result = reserve_session_slot(&mut sessions, max(2), ttl, base);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(PjsError::SessionLimitReached { limit }) if limit == max(2)
-        ));
+        );
         assert_eq!(sessions.len(), 2);
     }
 
@@ -1500,13 +1501,13 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(PjsError::LimitExceeded {
                 kind: LimitKind::SessionBytes,
                 ..
             })
-        ));
+        );
         assert!(!sessions.read().await.contains_key(&id));
     }
 
@@ -1537,9 +1538,10 @@ mod tests {
             json!(["merge", ["n"], {"k": 7, "z": null}]),
             json!(["append_str", ["a"], "\"quoted\""]),
         ]
-        .map(patch);
+        .map(patch)
+        .to_vec();
 
-        session.apply_patches(&patches, 1 << 20).unwrap();
+        session.apply_patches(patches, 1 << 20).unwrap();
 
         assert_eq!(
             session.reconstructed_data,
@@ -1553,14 +1555,11 @@ mod tests {
         let mut session = ClientStreamSession::new(SessionId::new());
         let small = patch(json!(["merge", [], {"k": "v"}]));
         let big = patch(json!(["append_str", ["k"], "y".repeat(100)]));
-        session.apply_patches(&[small], 64).unwrap();
+        session.apply_patches(vec![small], 64).unwrap();
 
-        let result = session.apply_patches(&[big], 64);
+        let result = session.apply_patches(vec![big], 64);
 
-        assert!(
-            matches!(result, Err(PjsError::LimitExceeded { .. })),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(PjsError::LimitExceeded { .. }), "{result:?}");
         assert_eq!(session.reconstructed_data, json!({"k": "v"}));
     }
 
@@ -1596,7 +1595,7 @@ mod tests {
         }
 
         let refused = client.request_stream(json!({}), None).await;
-        assert!(matches!(refused, Err(PjsError::SessionLimitReached { .. })));
+        assert_matches!(refused, Err(PjsError::SessionLimitReached { .. }));
         assert!(client.is_stream_complete(first).await);
 
         assert!(client.close_session(first).await.is_some());
@@ -1714,11 +1713,11 @@ mod tests {
         client.close_session(id).await.expect("known session");
 
         let messages = queued_messages(&client).await;
-        assert!(matches!(messages[0], WsMessage::StreamInit { .. }));
-        assert!(matches!(
+        assert_matches!(messages[0], WsMessage::StreamInit { .. });
+        assert_matches!(
             messages.as_slice(),
             [_, WsMessage::StreamCancel { session_id }] if *session_id == id
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1730,10 +1729,10 @@ mod tests {
 
         assert!(client.close_session_at(id, later).await.is_none());
 
-        assert!(matches!(
+        assert_matches!(
             queued_messages(&client).await.as_slice(),
             [_, WsMessage::StreamCancel { session_id }] if *session_id == id
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1835,7 +1834,7 @@ mod tests {
 
         let result = send_loop(failing_sink, &mut outbox, Duration::from_secs(1)).await;
 
-        assert!(matches!(result, Err(PjsError::Transport(_))));
+        assert_matches!(result, Err(PjsError::Transport(_)));
     }
 
     #[tokio::test]
@@ -1891,10 +1890,10 @@ mod tests {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
 
         let lease = ReceiverLease::acquire(&client.message_rx).unwrap();
-        assert!(matches!(
-            ReceiverLease::acquire(&client.message_rx),
-            Err(PjsError::AlreadyConnected)
-        ));
+        assert_matches!(
+            ReceiverLease::acquire(&client.message_rx).err(),
+            Some(PjsError::AlreadyConnected)
+        );
         drop(lease);
         assert!(ReceiverLease::acquire(&client.message_rx).is_ok());
     }

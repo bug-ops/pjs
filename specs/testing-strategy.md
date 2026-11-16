@@ -35,7 +35,7 @@ This document describes the test pyramid as it exists, the CI gates that enforce
 | Property | `proptest` in `crates/pjs-domain/tests/property_tests.rs` and `src/value_objects/json_path.rs` | domain invariants (priority, ids, paths, frames) | yes (part of domain tests) |
 | Golden / wire format | `pjs-domain/tests/serde_golden.rs`, `pjs-core/tests/serde_wire_format.rs` | byte-identical re-encoding of `Priority` (bare `u8`), ids (UUID strings), `StreamSession::streams` map keys | yes |
 | Doctests | `cargo test --workspace --exclude pjs-wasm --doc` | every `# Examples` block on public API | yes: `doctest` job, 3 OS |
-| Fuzz | `fuzz/` (separate workspace, `cargo-fuzz`): `parser_zero_copy`, `parser_partial`, `secure_decompress`, `streaming_decompressor`, `ws_message_decode`; committed seeds in `fuzz/seeds/<target>/` | untrusted-input boundaries | build + seed replay (`-runs=0`) gate; exploration is non-gating |
+| Fuzz | `fuzz/` (separate workspace, `cargo-fuzz`): `parser_zero_copy`, `parser_partial`, `secure_decompress`, `streaming_decompressor`, `ws_message_decode`, `zstd_dict_codec`, `client_apply_patches`, `planner_round_trip`; committed seeds in `fuzz/seeds/<target>/` | untrusted-input boundaries | build + seed replay (`-runs=0`) gate; exploration is non-gating |
 | Benchmarks | `crates/pjs-bench` (`criterion`): `simple_throughput`, `zero_copy_bench`, `serde_overhead_bench`, `gat_query_benchmarks`, `http_streaming` | perf-critical paths | **no** (manual / continuous-improvement cycle) |
 | WASM native | `crates/pjs-wasm/tests/priority_parity.rs`, `streaming_comprehensive.rs` (plain `#[test]`) | WASM crate logic on the host | yes: `wasm-native-tests` job |
 | WASM in-runtime | 28 `#[wasm_bindgen_test]` in `pjs-wasm/src/parser.rs` (20) and `streaming.rs` (8) | browser/Node runtime behaviour | **no** (run locally: `wasm-pack test --node` / `--headless --chrome`) |
@@ -62,7 +62,7 @@ Triggers: push and pull request on `main`/`develop`, `merge_group`, weekly sched
 | 2a | `build` | per OS (ubuntu, macos, windows) x allocator (`system`, `mimalloc`): `cargo nextest archive --workspace --exclude pjs-wasm --features "default[,mimalloc]" --lib --bins` ([[decisions/adr-001-allocator-decision]]) |
 | 2b | `test` | runs the archive in 4 partitions per leg (24 jobs), `--no-fail-fast` |
 | 2 | `doctest` | `cargo test --workspace --exclude pjs-wasm --doc`, 3 OS |
-| 2 | `docs` | `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links` |
+| 2 | `docs` | `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links` |
 | 2 | `wasm-native-tests` | `cargo nextest run -p pjs-wasm --tests --no-fail-fast` |
 | 2 | `coverage` | `cargo llvm-cov nextest --all-features --all-targets --workspace --exclude pjs-demo`, uploads `lcov.info` to Codecov (`fail_ci_if_error: false`); the test run itself must pass |
 | 3 | `wasm-build` | `wasm-pack build --release` for `web`, `nodejs`, `bundler` |
@@ -84,7 +84,7 @@ cargo +nightly fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo nextest run --workspace --all-features --lib --bins
 cargo test --workspace --doc --all-features
-RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links" cargo doc --no-deps -p pjson-rs -p pjson-rs-domain
+RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links" cargo doc --no-deps -p pjson-rs -p pjson-rs-domain
 # if crates/pjs-wasm changed:
 wasm-pack build crates/pjs-wasm --target web
 wasm-pack test crates/pjs-wasm --headless --chrome

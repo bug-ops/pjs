@@ -149,6 +149,63 @@ pub(super) fn plan_stream(
     planner.frames.finish()
 }
 
+/// Whether `value` certainly serializes to more than `limit` bytes.
+///
+/// Sums a cheap lower bound: strings `len() + 2` (escapes uncounted), object
+/// keys `len() + 2` plus a colon each, containers 2 plus their separators,
+/// `null` and booleans 4, integers their digits, other numbers 3. It stops as
+/// soon as the sum, together with 1 byte per still-pending node, passes
+/// `limit`, so time and the pending stack are O(`limit`), independent of the
+/// document's size, and it is stack-safe at any depth.
+///
+/// `true` is certain. `false` means "not proven over", not "small": the bound
+/// undercounts floats (3 bytes against up to 24) and escaped strings, so a
+/// document of such values can be up to about 6x `limit` and still return
+/// `false`.
+pub(super) fn exceeds_size(value: &Value, limit: usize) -> bool {
+    let mut bound = 0_usize;
+    let mut pending = vec![value];
+    while let Some(node) = pending.pop() {
+        // Every child adds at least 1, so later ones can never be reached.
+        let room = limit.saturating_sub(bound).saturating_add(1);
+        bound = bound.saturating_add(match node {
+            Value::String(s) => s.len().saturating_add(2),
+            Value::Null | Value::Bool(_) => 4,
+            Value::Number(n) => number_size_lower_bound(n),
+            Value::Array(items) => {
+                pending.extend(items.iter().take(room));
+                2 + items.len().saturating_sub(1)
+            }
+            Value::Object(map) => {
+                let mut size = 2 + map.len().saturating_sub(1);
+                for (key, child) in map.iter().take(room) {
+                    size = size.saturating_add(key.len().saturating_add(3));
+                    pending.push(child);
+                }
+                size
+            }
+        });
+        if bound.saturating_add(pending.len()) > limit {
+            return true;
+        }
+    }
+    false
+}
+
+/// Fewest bytes `n` serializes to: its digits for an integer, `d.d` for a float.
+fn number_size_lower_bound(n: &serde_json::Number) -> usize {
+    if let Some(u) = n.as_u64() {
+        u.checked_ilog10().map_or(1, |digits| digits as usize + 1)
+    } else if let Some(i) = n.as_i64() {
+        1 + i
+            .unsigned_abs()
+            .checked_ilog10()
+            .map_or(1, |d| d as usize + 1)
+    } else {
+        3
+    }
+}
+
 /// Serialized size and shape of one value.
 #[derive(Debug, Clone, Copy)]
 struct Measure {
@@ -802,6 +859,7 @@ fn scalar_or_empty_size(value: &Value) -> usize {
 mod tests {
     use super::*;
     use crate::infrastructure::websocket::protocol::apply_patch;
+    use core::assert_matches;
     use serde_json::json;
 
     fn options(framing: Framing, max_frame_size: usize) -> PlanOptions {
@@ -836,7 +894,7 @@ mod tests {
             };
             assert_eq!(*frame_id as usize, i);
             assert_eq!(*is_complete, i + 1 == messages.len());
-            for patch in patches {
+            for patch in patches.iter().cloned() {
                 apply_patch(&mut state, patch).expect("planned patches apply");
             }
         }
@@ -1054,10 +1112,7 @@ mod tests {
     fn test_document_nested_beyond_the_measure_cap_is_rejected() {
         let data = nested(MAX_PATCH_PATH_DEPTH + 3);
         let result = plan_stream(SessionId::new(), data, &options(Framing::Patch, 64 * 1024));
-        assert!(
-            matches!(result, Err(PlanError::PathTooDeep { .. })),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(PlanError::PathTooDeep { .. }), "{result:?}");
     }
 
     #[test]
@@ -1067,10 +1122,7 @@ mod tests {
             data = json!({"k": data});
         }
         let result = plan_stream(SessionId::new(), data, &options(Framing::Patch, 1024));
-        assert!(
-            matches!(result, Err(PlanError::PathTooDeep { .. })),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(PlanError::PathTooDeep { .. }), "{result:?}");
     }
 
     #[test]
@@ -1120,8 +1172,9 @@ mod tests {
     fn test_merge_entry_above_the_budget_is_a_unit_error() {
         let data = json!({"huge": "x".repeat(MAX_QUEUED_OUTGOING_BYTES + 1), "small": 1});
         let result = plan_stream(SessionId::new(), data, &options(Framing::Merge, 64 * 1024));
-        assert!(
-            matches!(result, Err(PlanError::UnitExceedsBudget { .. })),
+        assert_matches!(
+            result,
+            Err(PlanError::UnitExceedsBudget { .. }),
             "{result:?}"
         );
     }
@@ -1134,11 +1187,9 @@ mod tests {
                 .collect(),
         );
         let result = plan_stream(SessionId::new(), data, &options(Framing::Patch, 1024));
-        assert!(
-            matches!(
-                result,
-                Err(PlanError::TooManyFrames { .. } | PlanError::PlanBytesExceeded { .. })
-            ),
+        assert_matches!(
+            result,
+            Err(PlanError::TooManyFrames { .. } | PlanError::PlanBytesExceeded { .. }),
             "{result:?}"
         );
     }
@@ -1193,8 +1244,9 @@ mod tests {
 
         let result = plan_stream(SessionId::new(), data, &options(Framing::Patch, 1024));
 
-        assert!(
-            matches!(result, Err(PlanError::PlanBytesExceeded { .. })),
+        assert_matches!(
+            result,
+            Err(PlanError::PlanBytesExceeded { .. }),
             "{result:?}"
         );
     }

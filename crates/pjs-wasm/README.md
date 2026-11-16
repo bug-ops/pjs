@@ -7,8 +7,7 @@
 
 WebAssembly bindings for the PJS (Priority JSON Streaming) protocol, enabling high-performance JSON parsing and streaming in web browsers and Node.js environments.
 
-> [!NOTE]
-> This package is part of the [PJS workspace](https://github.com/bug-ops/pjs). For Rust usage, see the main `pjson-rs` crate.
+**Note:** This package is part of the [PJS workspace](https://github.com/bug-ops/pjs). For Rust usage, see the main `pjson-rs` crate.
 
 ## Overview
 
@@ -260,8 +259,7 @@ stream.setSecurityConfig(security);
 
 ### Prerequisites
 
-> [!WARNING]
-> Building from source requires Rust **1.89** or newer (MSRV, checked in CI).
+**Warning:** Building from source requires Rust **1.89** or newer (MSRV, checked in CI).
 
 - Rust toolchain 1.89+: `rustup install stable`
 - wasm-pack: `cargo install wasm-pack`
@@ -313,8 +311,7 @@ Typical bundle sizes:
 
 ### Parser Selection
 
-> [!NOTE]
-> This WASM build uses `serde_json` instead of `sonic-rs` (used in native builds) because `sonic-rs` is not WASM-compatible. While slightly slower, `serde_json` provides excellent performance and full WASM support.
+**Note:** This WASM build uses `serde_json` instead of `sonic-rs` (used in native builds) because `sonic-rs` is not WASM-compatible. While slightly slower, `serde_json` provides excellent performance and full WASM support.
 
 ## Architecture
 

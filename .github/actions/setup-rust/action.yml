@@ -1,0 +1,30 @@
+name: Setup Rust
+description: Install the dated nightly pinned in rust-toolchain.toml (single source of truth). Requires the repository to be checked out first.
+inputs:
+  components:
+    description: Extra rustup components, comma-separated
+    required: false
+    default: ""
+  targets:
+    description: Extra rustup targets, comma-separated
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Read pinned channel
+      id: channel
+      shell: bash
+      run: |
+        channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+        if [[ ! "$channel" =~ ^nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+          echo "::error file=rust-toolchain.toml::channel must be a dated nightly (nightly-YYYY-MM-DD), got '$channel'"
+          exit 1
+        fi
+        echo "toolchain=$channel" >> "$GITHUB_OUTPUT"
+    - name: Install Rust nightly
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      with:
+        toolchain: ${{ steps.channel.outputs.toolchain }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}

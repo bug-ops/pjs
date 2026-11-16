@@ -8,7 +8,8 @@
 import {
   JsonPath,
   SkeletonFrame,
-  PatchFrame
+  PatchFrame,
+  PatchOperation
 } from '../types/index.js';
 
 import { estimateObjectSize } from '../utils/index.js';
@@ -69,6 +70,16 @@ export class JsonReconstructor {
     let skipped = 0;
 
     for (const patch of patches) {
+      if (patch.path === '$') {
+        if (this.applyRootPatch(patch.operation, patch.value)) {
+          applied++;
+          this.patchesApplied++;
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+
       if (!patch.path || !patch.path.startsWith('$.')) {
         skipped++;
         continue;
@@ -147,6 +158,26 @@ export class JsonReconstructor {
     this.initialized = false;
     this.complete = false;
     this.patchesApplied = 0;
+  }
+
+  /** Applies a patch addressed at the root path `$`; only `set` and `merge` are meaningful there. */
+  private applyRootPatch(operation: PatchOperation['operation'], value: unknown): boolean {
+    switch (operation) {
+      case 'set':
+        this.state = this.deepClone(value);
+        return true;
+      case 'merge':
+        this.state = JsonReconstructor.isPlainObject(this.state) && JsonReconstructor.isPlainObject(value)
+          ? Object.assign(Object.create(null), this.state, this.deepClone(value))
+          : this.deepClone(value);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private static isPlainObject(value: unknown): boolean {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 
   // Path resolution helpers

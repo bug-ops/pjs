@@ -64,7 +64,7 @@ Same bytes, same bandwidth — only the *order* changes. Layout appears with the
 
 ```toml
 [dependencies]
-pjson-rs = "0.6"
+pjson-rs = "0.7"
 ```
 
 ```rust
@@ -189,7 +189,7 @@ Defaults cover the common server + browser path; everything else is opt-in.
 
 ## Status
 
-`0.6.x` — the core protocol works end to end (Rust server, WASM browser client, Node.js), CI on Linux/macOS/Windows.
+`0.7.x` — the core protocol works end to end (Rust server, WASM browser client, Node.js), CI on Linux/macOS/Windows.
 
 > [!IMPORTANT]
 > `pjson-rs` currently requires **nightly Rust** (`impl_trait_in_assoc_type`, plus `once_cell_try` with the `metrics` feature); `rust-toolchain.toml` pins a dated nightly. `pjson-rs-domain` and `pjs-wasm` build on stable Rust 1.89+ (MSRV, checked in CI). Supporting stable is a priority on the road to `1.0` — if this blocks you, say so in [Discussions](https://github.com/bug-ops/pjs/discussions): it directly affects how we prioritize.

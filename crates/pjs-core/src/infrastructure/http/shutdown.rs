@@ -293,6 +293,7 @@ pub struct ShutdownConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     fn timeout(millis: u64) -> DrainTimeout {
         DrainTimeout::try_from(Duration::from_millis(millis)).expect("valid timeout")
@@ -330,10 +331,10 @@ mod tests {
     async fn held_token_counts_as_unfinished_work() {
         let signal = ShutdownSignal::new();
         let token = signal.token();
-        assert!(matches!(
+        assert_matches!(
             signal.drain(timeout(50)).await,
             ShutdownOutcome::Forced { .. }
-        ));
+        );
         drop(token);
     }
 }

@@ -866,6 +866,7 @@ pub fn initialize_global_buffer_pool(config: PoolConfig) -> DomainResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use core::assert_matches;
     fn fill_uninit(dst: &mut [MaybeUninit<u8>], src: &[u8]) {
         for (slot, byte) in dst.iter_mut().zip(src) {
             slot.write(*byte);
@@ -1090,8 +1091,9 @@ mod tests {
 
         let result = buffer.reserve(isize::MAX as usize);
 
-        assert!(
-            matches!(result, Err(DomainError::InvalidInput(_))),
+        assert_matches!(
+            result,
+            Err(DomainError::InvalidInput(_)),
             "expected InvalidInput error due to alignment rounding overflow, got {:?}",
             result
         );
@@ -1108,8 +1110,9 @@ mod tests {
 
         let result = buffer.reserve(usize::MAX);
 
-        assert!(
-            matches!(result, Err(DomainError::InvalidInput(_))),
+        assert_matches!(
+            result,
+            Err(DomainError::InvalidInput(_)),
             "expected InvalidInput error due to usize wraparound in alignment rounding, got {:?}",
             result
         );
@@ -1165,8 +1168,9 @@ mod tests {
         // silently wrapping to a small aligned capacity.
         let result = AlignedBuffer::new(usize::MAX, 64);
 
-        assert!(
-            matches!(result, Err(DomainError::InvalidInput(_))),
+        assert_matches!(
+            result,
+            Err(DomainError::InvalidInput(_)),
             "expected InvalidInput error due to usize wraparound in alignment rounding, got {:?}",
             result
         );
@@ -1335,9 +1339,8 @@ mod tests {
             panic!("an oversized buffer must be refused");
         };
 
-        assert!(
-            matches!(&error, DomainError::SecurityViolation(m)
-                if m == "Buffer size 8192 exceeds maximum allowed 4096"),
+        assert_matches!(&error, DomainError::SecurityViolation(m)
+                if m == "Buffer size 8192 exceeds maximum allowed 4096",
             "{error:?}"
         );
     }

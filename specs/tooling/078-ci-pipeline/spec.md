@@ -66,7 +66,7 @@ Job `build` shall build a nextest archive (`--workspace --exclude pjs-wasm --fea
 Status: done. See Open Questions.
 
 ### FR-005 Doctests and docs
-Job `doctest` shall run `cargo test --workspace --exclude pjs-wasm --doc` on three OSes; job `docs` shall run `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links`.
+Job `doctest` shall run `cargo test --workspace --exclude pjs-wasm --doc` on three OSes; job `docs` shall run `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links`.
 Status: done.
 
 ### FR-006 WASM jobs
@@ -99,6 +99,7 @@ Status: done.
 
 ### FR-012 Toolchain and compile flags
 `rust-toolchain.toml` shall pin a dated nightly channel (`nightly-YYYY-MM-DD`, not floating `nightly`) with `rustfmt`, `clippy` and targets `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`. `.cargo/config.toml` sets `-C target-cpu=native` for x86_64 and aarch64 hosts (CI `RUSTFLAGS` env overrides it).
+`rust-toolchain.toml` is the single source of truth for the dated nightly: every nightly job in `ci.yml` and `release.yml` installs it through the local composite action `.github/actions/setup-rust`, which reads `channel` from the file, rejects anything that is not `nightly-YYYY-MM-DD`, and wraps `dtolnay/rust-toolchain` (SHA-pinned) with per-job `components` and `targets` inputs. Only the `msrv` job keeps a direct `dtolnay/rust-toolchain` step (`1.89`). Dependabot scans the action via `directories: ["/", "/.github/actions/*"]`. Bump procedure (documented in CONTRIBUTING.md, no scheduled bump workflow): edit `channel` in `rust-toolchain.toml`, pass the full check suite, merge one PR (#651).
 Status: done.
 
 ### FR-013 Action pinning

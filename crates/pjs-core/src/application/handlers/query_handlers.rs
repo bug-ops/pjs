@@ -522,6 +522,7 @@ mod tests {
     };
     use crate::test_support::MockRepository;
     use chrono::Utc;
+    use core::assert_matches;
 
     struct MockStreamStore;
 
@@ -863,7 +864,7 @@ mod tests {
 
         let result: ApplicationResult<FramesResponse> =
             QueryHandlerGat::handle(&handler, query).await;
-        assert!(matches!(result, Err(ApplicationError::NotFound(_))));
+        assert_matches!(result, Err(ApplicationError::NotFound(_)));
     }
 
     #[tokio::test]
@@ -890,7 +891,7 @@ mod tests {
 
         let result: ApplicationResult<FramesResponse> =
             QueryHandlerGat::handle(&handler, query).await;
-        assert!(matches!(result, Err(ApplicationError::NotFound(_))));
+        assert_matches!(result, Err(ApplicationError::NotFound(_)));
     }
 
     #[tokio::test]
@@ -1103,7 +1104,7 @@ mod tests {
 
         let result: ApplicationResult<SessionStatsResponse> =
             QueryHandlerGat::handle(&handler, query).await;
-        assert!(matches!(result, Err(ApplicationError::NotFound(_))));
+        assert_matches!(result, Err(ApplicationError::NotFound(_)));
     }
 
     #[tokio::test]

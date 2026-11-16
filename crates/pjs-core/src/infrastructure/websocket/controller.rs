@@ -4,7 +4,7 @@
 //! and paces their frames from the acknowledgments clients send back.
 
 use super::{
-    planner::{self, MAX_PLAN_FRAMES, MAX_QUEUED_OUTGOING_BYTES, PlanOptions},
+    planner::{self, MAX_PLAN_FRAMES, MAX_QUEUED_OUTGOING_BYTES, Plan, PlanOptions},
     protocol::{FixedError, StreamOptions, WsMessage},
 };
 use crate::{
@@ -25,7 +25,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::task::JoinHandle;
+use tokio::{runtime::Handle, task::JoinHandle};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -149,6 +149,11 @@ impl ClientMetrics {
 
     /// Recommended delay between frames given the current processing-time average.
     ///
+    /// A recommendation, not a guarantee: for plans with thousands of frames the
+    /// controller caps every per-frame delay at `30 s / frames` to bound the total
+    /// pacing time (see `paced_delay`), so a slow client's delay is honoured in
+    /// full only for plans of at most `30 s / delay` frames.
+    ///
     /// Clamped to `MAX_ADAPTIVE_FRAME_DELAY`: `average_processing_time_ms` is derived
     /// from client-supplied `processing_time_ms` in [`Self::update_processing_time`],
     /// which is unvalidated wire input (see `handle_frame_ack`). Without a ceiling, a
@@ -194,11 +199,53 @@ fn stream_deadline(plan_bytes: usize) -> Duration {
 /// Delay after a frame: the adaptive delay raised to the `client_fps` floor,
 /// but never so long that the whole plan paces for more than
 /// [`PACING_BUDGET`].
+///
+/// The clamp is deliberate (#663): above `PACING_BUDGET / delay` frames (about
+/// 7.3 ms per frame at `MAX_PLAN_FRAMES`) the budget wins over both the
+/// adaptive delay and the `client_fps` floor. Back-pressure for such plans
+/// comes from the outgoing channel's byte budget and `STREAM_STALL_TIMEOUT`.
 fn paced_delay(adaptive: Duration, floor: Option<Duration>, frames: usize) -> Duration {
     let frames = u32::try_from(frames.max(1)).unwrap_or(u32::MAX);
     adaptive
         .max(floor.unwrap_or_default())
         .min(PACING_BUDGET / frames)
+}
+
+/// Documents that `planner::exceeds_size` proves larger than this many bytes
+/// are planned on the blocking pool instead of the async worker.
+///
+/// Measured with `cargo bench -p pjs-bench --bench websocket_controller`
+/// (below the threshold, where planning is inline): about 205 MiB/s, i.e. 73 us
+/// at 16 KiB and 153 us at 32 KiB, against 6 us for a `spawn_blocking` round
+/// trip. 32 KiB is the smallest power of two whose planning exceeds 100 us, so
+/// a task holds a worker for at most about 150 us when the probe is exact. The
+/// probe is a lower bound, so float-dense or escape-heavy documents can reach
+/// about 6x the threshold (roughly 1 ms) inline.
+pub(super) const INLINE_PLAN_MAX_BYTES: usize = 32 * 1024;
+
+/// Plans `data`, off the async worker when it is large and a Tokio runtime is
+/// present, inline otherwise.
+///
+/// A panic in the planner is propagated to the caller. Cancellation of the
+/// blocking task happens only while the runtime shuts down; the future then
+/// never completes, like any task dropped by a shutting-down runtime.
+async fn plan_stream_offloaded(
+    session_id: SessionId,
+    data: Value,
+    options: PlanOptions,
+) -> Result<Plan, PlanError> {
+    if !planner::exceeds_size(&data, INLINE_PLAN_MAX_BYTES) || Handle::try_current().is_err() {
+        return planner::plan_stream(session_id, data, &options);
+    }
+    match tokio::task::spawn_blocking(move || planner::plan_stream(session_id, data, &options))
+        .await
+    {
+        Ok(plan) => plan,
+        Err(join_error) => match join_error.try_into_panic() {
+            Ok(payload) => std::panic::resume_unwind(payload),
+            Err(_) => std::future::pending().await,
+        },
+    }
 }
 
 /// Default cap on live streaming sessions per connection.
@@ -473,7 +520,14 @@ impl AdaptiveStreamController {
     /// An existing session of `owner` is never overwritten.
     ///
     /// The document is split into messages according to `options`
-    /// (see [`StreamOptions`]); planning runs inline and costs O(payload).
+    /// (see [`StreamOptions`]); planning costs O(payload) and runs on the
+    /// blocking pool for documents proven larger than 32 KiB (`INLINE_PLAN_MAX_BYTES`)
+    /// when called inside a Tokio runtime, inline otherwise. The proof is a
+    /// lower bound on the serialized size, so a document of floats or escaped
+    /// strings somewhat above 32 KiB can still plan inline. Frames are paced per
+    /// `StreamOptions::client_fps` and the clients' acknowledgments, but the total
+    /// pacing time is capped at 30 seconds, so very large plans stream faster than
+    /// either asks for.
     ///
     /// # Errors
     ///
@@ -528,13 +582,15 @@ impl AdaptiveStreamController {
         // plan size, so it is checked after planning; everything is re-checked
         // under the write lock below.
         self.check_slot(owner, session_id)?;
-        let plan = planner::plan_stream(session_id, data, &plan_options)
+        let frame_interval = plan_options.frame_interval;
+        let plan = plan_stream_offloaded(session_id, data, plan_options)
+            .await
             .map_err(CreateSessionError::PlanRejected)?;
 
         let session = WebSocketStreamSession {
             created_at: Instant::now(),
             plan: plan.messages,
-            frame_interval: plan_options.frame_interval,
+            frame_interval,
             unsent_plan_bytes: plan.total_bytes,
             client_metrics: ClientMetrics::default(),
             rate_limit_guard: None, // Will be set when connection is established
@@ -739,6 +795,11 @@ impl AdaptiveStreamController {
 
     /// Releases `len` sent plan bytes of the session and returns the adaptive
     /// delay recommended for it.
+    ///
+    /// Takes the global write lock once per frame. Benchmarked at about
+    /// 10 M lock operations per second under 8 or more contending tasks
+    /// (`websocket_controller` bench), enough for roughly 3700 concurrently
+    /// streaming sessions at the fastest pacing, so the lock is kept.
     fn release_sent(
         connections: &Connections,
         owner: ConnectionId,
@@ -1024,6 +1085,7 @@ mod tests {
     use super::*;
     use crate::domain::Priority;
     use crate::infrastructure::bounded_channel::{Envelope, byte_bounded_channel};
+    use core::assert_matches;
     use serde_json::json;
     use tokio::sync::mpsc;
 
@@ -1146,14 +1208,14 @@ mod tests {
         for _ in 0..3 {
             let id = new_session(&controller, owner, json!({})).await;
             controller.start_streaming(owner, id).await.unwrap();
-            assert!(matches!(
+            assert_matches!(
                 next_message(&mut outbox).await,
                 WsMessage::StreamFrame { .. }
-            ));
-            assert!(matches!(
+            );
+            assert_matches!(
                 next_message(&mut outbox).await,
                 WsMessage::StreamComplete { .. }
-            ));
+            );
         }
     }
 
@@ -1236,10 +1298,10 @@ mod tests {
         let id = new_session(&controller, owner, json!({})).await;
         poison_metrics(&controller, owner, id);
         controller.start_streaming(owner, id).await.unwrap();
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
+        );
 
         assert!(controller.remove_session(owner, id).await);
         new_session_with_id(&controller, owner, id).await;
@@ -1248,10 +1310,10 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(controller.session_count(owner), 1);
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1262,10 +1324,10 @@ mod tests {
         let id = new_session(&controller, owner, json!({})).await;
         poison_metrics(&controller, owner, id);
         controller.start_streaming(owner, id).await.unwrap();
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
+        );
 
         assert!(controller.remove_session(owner, id).await);
 
@@ -1286,10 +1348,10 @@ mod tests {
 
         controller.start_streaming(a, id).await.unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut a_outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(b_outbox.try_recv().is_err());
     }
@@ -1308,14 +1370,14 @@ mod tests {
 
         controller.start_streaming(healthy, id).await.unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut healthy_outbox).await,
             WsMessage::StreamFrame { .. }
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             next_message(&mut healthy_outbox).await,
             WsMessage::StreamComplete { .. }
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1328,10 +1390,10 @@ mod tests {
 
         controller.start_streaming(owner, id).await.unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::Error { code: 413, session_id: Some(reported), .. } if reported == id
-        ));
+        );
         assert_eq!(controller.session_count(owner), 0);
     }
 
@@ -1391,7 +1453,7 @@ mod tests {
             .handle_frame_ack(ConnectionId::new(), session_id, 0, 50)
             .await;
 
-        assert!(matches!(result, Err(PjsError::UnknownSession(_))));
+        assert_matches!(result, Err(PjsError::UnknownSession(_)));
         let acked = controller
             .with_session_mut(owner, session_id, |s| s.client_metrics.frames_acknowledged)
             .unwrap();
@@ -1519,12 +1581,10 @@ mod tests {
         while let Ok(envelope) = outbox.try_recv() {
             kinds.push(serde_json::from_str::<WsMessage>(&envelope.into_inner()).unwrap());
         }
-        assert!(
-            matches!(
-                kinds.last(),
-                Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
-                    if error == FixedError::STREAM_STALLED.reason && *reported == id
-            ),
+        assert_matches!(
+            kinds.last(),
+            Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
+                if error == FixedError::STREAM_STALLED.reason && *reported == id,
             "{kinds:?}"
         );
         assert_eq!(controller.session_count(owner), 0);
@@ -1564,12 +1624,10 @@ mod tests {
         while let Ok(envelope) = outbox.try_recv() {
             messages.push(serde_json::from_str::<WsMessage>(&envelope.into_inner()).unwrap());
         }
-        assert!(
-            matches!(
-                messages.last(),
-                Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
-                    if error == FixedError::STREAM_DEADLINE_EXCEEDED.reason && *reported == id
-            ),
+        assert_matches!(
+            messages.last(),
+            Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
+                if error == FixedError::STREAM_DEADLINE_EXCEEDED.reason && *reported == id,
             "{messages:?}"
         );
         assert_eq!(controller.session_count(owner), 0);
@@ -1596,10 +1654,7 @@ mod tests {
             .await;
 
         assert_eq!(duplicate, Err(CreateSessionError::AlreadyExists(id)));
-        assert!(matches!(
-            capped,
-            Err(CreateSessionError::TooManySessions { .. })
-        ));
+        assert_matches!(capped, Err(CreateSessionError::TooManySessions { .. }));
     }
 
     #[tokio::test(start_paused = true)]
@@ -1621,14 +1676,14 @@ mod tests {
             .create_session(first, owner, data.clone(), options.clone())
             .await
             .unwrap();
-        assert!(matches!(
+        assert_matches!(
             controller
                 .create_session(SessionId::new(), owner, data.clone(), options.clone())
                 .await,
             Err(CreateSessionError::PlanRejected(
                 PlanError::ConnectionBudgetExhausted { .. }
             ))
-        ));
+        );
 
         controller.start_streaming(owner, first).await.unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;

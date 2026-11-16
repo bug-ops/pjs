@@ -404,6 +404,7 @@ impl ReconstructionStats {
 mod tests {
     use super::*;
     use crate::stream::Priority;
+    use core::assert_matches;
     use serde_json::json;
 
     #[test]
@@ -433,7 +434,7 @@ mod tests {
         reconstructor.add_frame(frame);
         let result = reconstructor.process_next_frame().unwrap();
 
-        assert!(matches!(result, ProcessResult::SkeletonApplied));
+        assert_matches!(result, ProcessResult::SkeletonApplied);
         assert_eq!(reconstructor.current_state(), &skeleton);
         assert_eq!(reconstructor.stats().skeleton_frames, 1);
     }
@@ -529,7 +530,7 @@ mod tests {
         reconstructor.add_frame(complete_frame);
 
         let result = reconstructor.process_next_frame().unwrap();
-        assert!(matches!(result, ProcessResult::ReconstructionComplete));
+        assert_matches!(result, ProcessResult::ReconstructionComplete);
         assert!(reconstructor.is_complete());
         assert!(reconstructor.stats().end_time.is_some());
     }
@@ -946,7 +947,7 @@ mod tests {
         let mut reconstructor = JsonReconstructor::new();
 
         let result = reconstructor.process_next_frame().unwrap();
-        assert!(matches!(result, ProcessResult::NoFrames));
+        assert_matches!(result, ProcessResult::NoFrames);
     }
 
     #[test]

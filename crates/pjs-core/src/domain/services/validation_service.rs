@@ -693,6 +693,7 @@ impl Default for ValidationService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
     use std::collections::HashMap;
 
     #[test]
@@ -885,7 +886,7 @@ mod tests {
         let result = validator.validate(&JsonData::Float(f64::NAN), &schema, "/value");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, SchemaValidationError::TypeMismatch { .. }));
+        assert_matches!(err, SchemaValidationError::TypeMismatch { .. });
 
         // Infinity should be rejected
         let result = validator.validate(&JsonData::Float(f64::INFINITY), &schema, "/value");
@@ -935,10 +936,7 @@ mod tests {
         let result = validator.validate(&JsonData::String("yellow".to_string()), &schema, "/color");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(
-            err,
-            SchemaValidationError::InvalidEnumValue { .. }
-        ));
+        assert_matches!(err, SchemaValidationError::InvalidEnumValue { .. });
     }
 
     #[test]
@@ -968,7 +966,7 @@ mod tests {
         let result = validator.validate(&duplicates, &schema, "/items");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, SchemaValidationError::DuplicateItems { .. }));
+        assert_matches!(err, SchemaValidationError::DuplicateItems { .. });
     }
 
     #[test]
@@ -990,10 +988,7 @@ mod tests {
         let result = validator.validate(&too_few, &schema, "/items");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(
-            err,
-            SchemaValidationError::ArraySizeConstraint { .. }
-        ));
+        assert_matches!(err, SchemaValidationError::ArraySizeConstraint { .. });
 
         // Invalid: too many items
         let too_many = JsonData::Array(vec![
@@ -1005,10 +1000,10 @@ mod tests {
         ]);
         let result = validator.validate(&too_many, &schema, "/items");
         assert!(result.is_err());
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             SchemaValidationError::ArraySizeConstraint { .. }
-        ));
+        );
     }
 
     #[test]
@@ -1038,10 +1033,10 @@ mod tests {
         let result = validator.validate(&invalid, &schema, "/obj");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             SchemaValidationError::AdditionalPropertyNotAllowed { .. }
-        ));
+        );
 
         // Schema allows additional properties
         let schema_allow = Schema::Object {
@@ -1103,10 +1098,10 @@ mod tests {
         // Invalid: matches no schemas (string too short, not an integer)
         let result = validator.validate(&JsonData::String("hi".to_string()), &schema, "/value");
         assert!(result.is_err());
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             SchemaValidationError::NoMatchingOneOf { .. }
-        ));
+        );
 
         // Invalid: matches no schemas (integer too small, not a string)
         let result = validator.validate(&JsonData::Integer(50), &schema, "/value");
@@ -1128,10 +1123,10 @@ mod tests {
         // Invalid: matches both schemas (ambiguous)
         let result = validator.validate(&JsonData::Integer(50), &schema, "/value");
         assert!(result.is_err());
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             SchemaValidationError::NoMatchingOneOf { .. }
-        ));
+        );
     }
 
     #[test]
@@ -1180,15 +1175,15 @@ mod tests {
         let result = validator.validate(&JsonData::Integer(-1), &schema, "/value");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, SchemaValidationError::AllOfFailure { .. }));
+        assert_matches!(err, SchemaValidationError::AllOfFailure { .. });
 
         // Invalid: fails second constraint
         let result = validator.validate(&JsonData::Integer(101), &schema, "/value");
         assert!(result.is_err());
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             SchemaValidationError::AllOfFailure { .. }
-        ));
+        );
     }
 
     #[test]
@@ -1227,7 +1222,7 @@ mod tests {
         let result = validator.validate(&data, &schema, "/deep");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, SchemaValidationError::TypeMismatch { .. }));
+        assert_matches!(err, SchemaValidationError::TypeMismatch { .. });
     }
 
     #[test]
@@ -1317,8 +1312,9 @@ mod tests {
             let result = validator.validate(&data, &schema, "/test");
             assert!(result.is_err(), "Expected error for {expected_type}");
             let err = result.unwrap_err();
-            assert!(
-                matches!(err, SchemaValidationError::TypeMismatch { .. }),
+            assert_matches!(
+                err,
+                SchemaValidationError::TypeMismatch { .. },
                 "Expected TypeMismatch for {expected_type}"
             );
         }
@@ -1356,10 +1352,10 @@ mod tests {
 
         let result = validator.validate(&JsonData::String("12345".to_string()), &schema, "/name");
         assert!(result.is_err());
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             SchemaValidationError::PatternMismatch { .. }
-        ));
+        );
     }
 
     #[test]
@@ -1374,8 +1370,9 @@ mod tests {
         };
 
         let result = validator.validate(&JsonData::String("hello".to_string()), &schema, "$");
-        assert!(
-            matches!(result, Err(SchemaValidationError::InvalidPattern { .. })),
+        assert_matches!(
+            result,
+            Err(SchemaValidationError::InvalidPattern { .. }),
             "expected InvalidPattern for a syntactically invalid regex, got: {:?}",
             result
         );
@@ -1398,14 +1395,14 @@ mod tests {
         };
 
         let result = validator.validate(&JsonData::String("aaa".to_string()), &schema, "/name");
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(SchemaValidationError::PatternTooLong {
                 length: 9,
                 max: 8,
                 ..
             })
-        ));
+        );
     }
 
     #[test]

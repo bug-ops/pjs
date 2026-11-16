@@ -1003,6 +1003,7 @@ mod tests {
         value_objects::JsonData,
     };
     use chrono::{Duration, Utc};
+    use core::assert_matches;
 
     // ===== Helper function tests =====
 
@@ -1453,10 +1454,7 @@ mod tests {
         let result = repo.get_session_health(missing_session_id).await;
 
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::SessionNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::SessionNotFound(_));
     }
 
     #[tokio::test]
@@ -1662,7 +1660,7 @@ mod tests {
             .unwrap();
 
         let updated = store.get_stream(stream_id).await.unwrap().unwrap();
-        assert!(matches!(updated.state(), StreamState::Streaming));
+        assert_matches!(updated.state(), StreamState::Streaming);
     }
 
     #[tokio::test]
@@ -1685,7 +1683,7 @@ mod tests {
             .unwrap();
 
         let updated = store.get_stream(stream_id).await.unwrap().unwrap();
-        assert!(matches!(updated.state(), StreamState::Completed));
+        assert_matches!(updated.state(), StreamState::Completed);
     }
 
     #[tokio::test]
@@ -1699,10 +1697,7 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::StreamNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::StreamNotFound(_));
     }
 
     // ===== StreamStoreGat Tests: get_stream_statistics =====
@@ -1736,10 +1731,7 @@ mod tests {
         let result = store.get_stream_statistics(missing_stream_id).await;
 
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::StreamNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::StreamNotFound(_));
     }
 
     // ===== Bounded iteration tests =====
@@ -1994,10 +1986,7 @@ mod tests {
             .complete_stream_atomic(missing_session_id, StreamId::new())
             .await;
 
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::SessionNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::SessionNotFound(_));
     }
 
     #[tokio::test]
@@ -2042,10 +2031,7 @@ mod tests {
             .create_stream_atomic(SessionId::new(), JsonData::String("test".to_string()), None)
             .await;
 
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::SessionNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::SessionNotFound(_));
     }
 
     #[tokio::test]
@@ -2056,10 +2042,7 @@ mod tests {
             .start_stream_atomic(SessionId::new(), StreamId::new())
             .await;
 
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::SessionNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::SessionNotFound(_));
     }
 
     #[tokio::test]
@@ -2075,10 +2058,7 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::SessionNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::SessionNotFound(_));
     }
 
     #[tokio::test]
@@ -2121,10 +2101,7 @@ mod tests {
             .batch_generate_frames_atomic(SessionId::new(), Priority::BACKGROUND, 10)
             .await;
 
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::SessionNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::SessionNotFound(_));
     }
 
     #[tokio::test]
@@ -2318,10 +2295,7 @@ mod tests {
 
         let result = repo.close_session_atomic(SessionId::new()).await;
 
-        assert!(matches!(
-            result.unwrap_err(),
-            DomainError::SessionNotFound(_)
-        ));
+        assert_matches!(result.unwrap_err(), DomainError::SessionNotFound(_));
     }
 
     #[tokio::test]

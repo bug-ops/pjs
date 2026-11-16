@@ -382,6 +382,7 @@ impl CompressionBombDetector {
 mod tests {
     use super::*;
     use crate::Error;
+    use core::assert_matches;
     use std::io::Cursor;
 
     #[test]
@@ -398,13 +399,13 @@ mod tests {
             max_ratio: f64::NAN,
             ..Default::default()
         };
-        assert!(matches!(
+        assert_matches!(
             config.validate().unwrap_err(),
             ConfigError::MustBePositive {
                 field: "max_ratio",
                 ..
             }
-        ));
+        );
     }
 
     #[test]
@@ -414,10 +415,10 @@ mod tests {
             check_interval_bytes: 1025,
             ..Default::default()
         };
-        assert!(matches!(
+        assert_matches!(
             config.validate().unwrap_err(),
             ConfigError::InconsistentBounds { .. }
-        ));
+        );
         let at_limit = CompressionBombConfig {
             check_interval_bytes: 1024,
             ..config
@@ -461,10 +462,10 @@ mod tests {
         // Should fail for size exceeding limit
         let result = detector.validate_result(100, 2048);
         assert!(result.is_err());
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             Error::CompressionBomb(CompressionBombError::SizeExceeded { .. })
-        ));
+        );
     }
 
     #[test]
@@ -477,10 +478,10 @@ mod tests {
 
         // Should fail for ratio exceeding limit (100 -> 2000 = 20x ratio)
         let result = detector.validate_result(100, 2000);
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             Error::CompressionBomb(CompressionBombError::RatioExceeded { .. })
-        ));
+        );
     }
 
     #[test]
@@ -632,13 +633,13 @@ mod tests {
         let result = detector.protect_nested_reader(cursor, data.len(), 3);
         assert!(result.is_err());
 
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             Error::CompressionBomb(CompressionBombError::DepthExceeded {
                 depth: 3,
                 max_depth: 2
             })
-        ));
+        );
     }
 
     #[test]
@@ -653,13 +654,13 @@ mod tests {
         let result = detector.validate_pre_decompression(2048);
         assert!(result.is_err());
 
-        assert!(matches!(
+        assert_matches!(
             result.unwrap_err(),
             Error::CompressionBomb(CompressionBombError::CompressedSizeExceeded {
                 size: 2048,
                 max_size: 1024
             })
-        ));
+        );
     }
 
     #[test]
@@ -762,8 +763,9 @@ mod tests {
                     let bomb = e
                         .get_ref()
                         .and_then(|inner| inner.downcast_ref::<CompressionBombError>());
-                    assert!(
-                        matches!(bomb, Some(CompressionBombError::SizeExceeded { .. })),
+                    assert_matches!(
+                        bomb,
+                        Some(CompressionBombError::SizeExceeded { .. }),
                         "Expected size limit error, got: {e}"
                     );
                     detected = true;

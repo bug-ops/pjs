@@ -361,6 +361,7 @@ impl ZstdDictCompressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     /// Generate a training corpus with `count` JSON samples.
     fn make_samples(count: usize) -> Vec<Vec<u8>> {
@@ -397,14 +398,12 @@ mod tests {
     fn test_train_insufficient_samples_error() {
         let samples = make_samples(3);
         let err = ZstdDictCompressor::train(&samples, MAX_DICT_SIZE).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                Error::InvalidDictionary(DictionaryError::InsufficientSamples {
-                    provided: 3,
-                    required: 8
-                })
-            ),
+        assert_matches!(
+            err,
+            Error::InvalidDictionary(DictionaryError::InsufficientSamples {
+                provided: 3,
+                required: 8
+            }),
             "{err:?}"
         );
     }
