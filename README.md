@@ -64,7 +64,7 @@ Same bytes, same bandwidth — only the *order* changes. Layout appears with the
 
 ```toml
 [dependencies]
-pjson-rs = "0.6"
+pjson-rs = "0.7"
 ```
 
 ```rust
