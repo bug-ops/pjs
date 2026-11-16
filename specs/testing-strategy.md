@@ -62,7 +62,7 @@ Triggers: push and pull request on `main`/`develop`, `merge_group`, weekly sched
 | 2a | `build` | per OS (ubuntu, macos, windows) x allocator (`system`, `mimalloc`): `cargo nextest archive --workspace --exclude pjs-wasm --features "default[,mimalloc]" --lib --bins` ([[decisions/adr-001-allocator-decision]]) |
 | 2b | `test` | runs the archive in 4 partitions per leg (24 jobs), `--no-fail-fast` |
 | 2 | `doctest` | `cargo test --workspace --exclude pjs-wasm --doc`, 3 OS |
-| 2 | `docs` | `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links` |
+| 2 | `docs` | `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links` |
 | 2 | `wasm-native-tests` | `cargo nextest run -p pjs-wasm --tests --no-fail-fast` |
 | 2 | `coverage` | `cargo llvm-cov nextest --all-features --all-targets --workspace --exclude pjs-demo`, uploads `lcov.info` to Codecov (`fail_ci_if_error: false`); the test run itself must pass |
 | 3 | `wasm-build` | `wasm-pack build --release` for `web`, `nodejs`, `bundler` |
@@ -84,7 +84,7 @@ cargo +nightly fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo nextest run --workspace --all-features --lib --bins
 cargo test --workspace --doc --all-features
-RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links" cargo doc --no-deps -p pjson-rs -p pjson-rs-domain
+RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links" cargo doc --no-deps -p pjson-rs -p pjson-rs-domain
 # if crates/pjs-wasm changed:
 wasm-pack build crates/pjs-wasm --target web
 wasm-pack test crates/pjs-wasm --headless --chrome

@@ -272,8 +272,8 @@ impl Default for ConnectionLimits {
 /// `ConnectionAborted`, `ConnectionReset`) are retried immediately and any
 /// other error is logged and retried after a 1s backoff.
 ///
-/// `shutdown` carries the [`ShutdownSignal`](super::ShutdownSignal) and the
-/// [`DrainTimeout`](super::DrainTimeout) that bound the server's lifetime;
+/// `shutdown` carries the [`ShutdownSignal`] and the
+/// [`DrainTimeout`] that bound the server's lifetime;
 /// the returned [`ShutdownOutcome`] reports how the drain ended. A
 /// never-triggered signal (the [`ShutdownConfig::default`]) runs until the
 /// process is torn down, the same as `axum::serve(listener, app).await`.

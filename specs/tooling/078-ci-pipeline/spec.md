@@ -66,7 +66,7 @@ Job `build` shall build a nextest archive (`--workspace --exclude pjs-wasm --fea
 Status: done. See Open Questions.
 
 ### FR-005 Doctests and docs
-Job `doctest` shall run `cargo test --workspace --exclude pjs-wasm --doc` on three OSes; job `docs` shall run `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links`.
+Job `doctest` shall run `cargo test --workspace --exclude pjs-wasm --doc` on three OSes; job `docs` shall run `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links`.
 Status: done.
 
 ### FR-006 WASM jobs

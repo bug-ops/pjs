@@ -417,7 +417,7 @@ jobs:
 
       - name: Check intra-doc links
         env:
-          RUSTDOCFLAGS: "--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links"
+          RUSTDOCFLAGS: "--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links"
         run: cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain
 
   # crates/pjs-wasm/tests/{priority_parity,streaming_comprehensive}.rs use
