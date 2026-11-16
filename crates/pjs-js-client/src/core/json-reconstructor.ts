@@ -8,7 +8,8 @@
 import {
   JsonPath,
   SkeletonFrame,
-  PatchFrame
+  PatchFrame,
+  PatchOperation
 } from '../types/index.js';
 
 import { estimateObjectSize } from '../utils/index.js';
@@ -160,7 +161,7 @@ export class JsonReconstructor {
   }
 
   /** Applies a patch addressed at the root path `$`; only `set` and `merge` are meaningful there. */
-  private applyRootPatch(operation: string, value: any): boolean {
+  private applyRootPatch(operation: PatchOperation['operation'], value: unknown): boolean {
     switch (operation) {
       case 'set':
         this.state = this.deepClone(value);
