@@ -78,7 +78,7 @@ related:
 ## VIII. Git, CI and Documentation Workflow
 
 - Branches: `feat/issue-{n}/{slug}`, `fix/{n}-{slug}`, `hotfix/{n}-{slug}`. Commits follow Conventional Commits with the project scopes (`pjson-rs`, `pjson-rs-domain`, `wasm`, `parser`, `stream`, `http`, `security`, `bench`, `ci`), no emoji.
-- Pre-commit gate: `cargo +nightly fmt --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo nextest run --workspace --all-features --lib --bins`; `cargo test --workspace --doc --all-features`; rustdoc with `--deny rustdoc::broken_intra_doc_links` when public API changed; WASM build and tests when `pjs-wasm` changed.
+- Pre-commit gate: `cargo +nightly fmt --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo nextest run --workspace --all-features --lib --bins`; `cargo test --workspace --doc --all-features`; rustdoc with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links` when public API changed; WASM build and tests when `pjs-wasm` changed.
 - `CHANGELOG.md` is updated per PR under `[Unreleased]`: one line per change ending with the PR number.
 - Issues carry exactly one `P0`-`P4` label; a PR closing several issues lists each `Closes #N` on its own line.
 - Documentation, comments, specs and plans are written in English.

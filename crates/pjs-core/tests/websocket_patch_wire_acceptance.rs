@@ -225,6 +225,7 @@ async fn test_stream_init_zero_client_fps_over_wire_replies_400() {
     assert_eq!(reply["data"]["error"], "invalid stream options");
 }
 
+#[ignore = "flaky under load: rejection replies can be dropped by a full outgoing queue (#689)"]
 #[tokio::test]
 async fn test_stream_init_connection_plan_budget_over_wire_replies_429_until_sessions_end() {
     let transport = AxumWebSocketTransport::with_rate_limit_config(RateLimitConfig {

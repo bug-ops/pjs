@@ -326,7 +326,7 @@ See [[testing-strategy]] for the verified test pyramid, CI gates and guard tests
 
 **Status:** Compliant (previously Drift). The CI `docs` job runs `cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain` with `--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links` (#236, #237, #661). `pjs-core` and `pjs-domain` set `#![warn(missing_docs)]`. Required for every `pub` item: `///` doc (what and why), `# Examples` for non-trivial APIs, module `//!` docs, trait contracts. Exception: `doc(cfg)` annotations (D21).
 
-Before a PR: `RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links" cargo doc --no-deps -p pjson-rs -p pjson-rs-domain` and `cargo test --doc --all-features`.
+Before a PR: `RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links" cargo doc --no-deps -p pjson-rs -p pjson-rs-domain` and `cargo test --doc --all-features`.
 
 ---
 

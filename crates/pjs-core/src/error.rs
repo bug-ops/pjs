@@ -265,7 +265,8 @@ pub enum PlanError {
     ConnectionBudgetExhausted {
         /// Bytes already reserved on the connection
         live: usize,
-        /// Bytes the new plan needs
+        /// A lower bound on the bytes the new plan needs: its size when it was
+        /// planned, `max - live + 1` when the request was refused before planning
         requested: usize,
         /// Budget per connection
         max: usize,

@@ -6,13 +6,13 @@
  */
 
 import {
-  JsonPath,
-  SkeletonFrame,
   PatchFrame,
-  PatchOperation
+  PatchOperation,
+  SkeletonFrame
 } from '../types/index.js';
 
 import { estimateObjectSize } from '../utils/index.js';
+import { JsonPathSegment, tokenizeJsonPath } from './json-path.js';
 
 /**
  * Reconstructs JSON objects from PJS frames using efficient patching
@@ -70,7 +70,13 @@ export class JsonReconstructor {
     let skipped = 0;
 
     for (const patch of patches) {
-      if (patch.path === '$') {
+      const parsed = typeof patch.path === 'string' ? tokenizeJsonPath(patch.path) : null;
+      if (parsed === null || !parsed.ok) {
+        skipped++;
+        continue;
+      }
+
+      if (parsed.segments.length === 0) {
         if (this.applyRootPatch(patch.operation, patch.value)) {
           applied++;
           this.patchesApplied++;
@@ -80,24 +86,19 @@ export class JsonReconstructor {
         continue;
       }
 
-      if (!patch.path || !patch.path.startsWith('$.')) {
-        skipped++;
-        continue;
-      }
-
       try {
         switch (patch.operation) {
           case 'set':
-            this.setPatchValue(this.state, patch.path, patch.value);
+            this.setPatchValue(parsed.segments, patch.value);
             break;
           case 'append':
-            this.appendPatchValue(this.state, patch.path, patch.value);
+            this.appendPatchValue(parsed.segments, patch.value);
             break;
           case 'merge':
-            this.mergePatchValue(this.state, patch.path, patch.value);
+            this.mergePatchValue(parsed.segments, patch.value);
             break;
           case 'delete':
-            this.deletePatchValue(this.state, patch.path);
+            this.deletePatchValue(parsed.segments);
             break;
           default:
             skipped++;
@@ -167,9 +168,15 @@ export class JsonReconstructor {
         this.state = this.deepClone(value);
         return true;
       case 'merge':
-        this.state = JsonReconstructor.isPlainObject(this.state) && JsonReconstructor.isPlainObject(value)
-          ? Object.assign(Object.create(null), this.state, this.deepClone(value))
-          : this.deepClone(value);
+        if (JsonReconstructor.isPlainObject(this.state) && JsonReconstructor.isPlainObject(value)) {
+          const target = this.state as Record<string, unknown>;
+          const source = value as Record<string, unknown>;
+          for (const key of Object.keys(source)) {
+            Object.defineProperty(target, key, { value: this.deepClone(source[key]), writable: true, enumerable: true, configurable: true });
+          }
+        } else {
+          this.state = this.deepClone(value);
+        }
         return true;
       default:
         return false;
@@ -190,13 +197,13 @@ export class JsonReconstructor {
     }
   }
 
-  private setPatchValue(obj: any, path: JsonPath, value: any): void {
-    const { parent, key } = this.resolvePath(obj, path);
+  private setPatchValue(segments: readonly JsonPathSegment[], value: any): void {
+    const { parent, key } = this.resolveSlot(segments);
     Object.defineProperty(parent, key, { value, writable: true, enumerable: true, configurable: true });
   }
 
-  private appendPatchValue(obj: any, path: JsonPath, value: any): void {
-    const { parent, key } = this.resolvePath(obj, path);
+  private appendPatchValue(segments: readonly JsonPathSegment[], value: any): void {
+    const { parent, key } = this.resolveSlot(segments);
     if (!Array.isArray(parent[key])) {
       Object.defineProperty(parent, key, { value: [], writable: true, enumerable: true, configurable: true });
     }
@@ -207,8 +214,8 @@ export class JsonReconstructor {
     }
   }
 
-  private mergePatchValue(obj: any, path: JsonPath, value: any): void {
-    const { parent, key } = this.resolvePath(obj, path);
+  private mergePatchValue(segments: readonly JsonPathSegment[], value: any): void {
+    const { parent, key } = this.resolveSlot(segments);
     const merged =
       typeof parent[key] === 'object' && typeof value === 'object' &&
       !Array.isArray(parent[key]) && !Array.isArray(value)
@@ -217,65 +224,61 @@ export class JsonReconstructor {
     Object.defineProperty(parent, key, { value: merged, writable: true, enumerable: true, configurable: true });
   }
 
-  private deletePatchValue(obj: any, path: JsonPath): void {
-    const { parent, key } = this.resolvePath(obj, path);
+  private deletePatchValue(segments: readonly JsonPathSegment[]): void {
+    const { parent, key } = this.resolveSlot(segments);
     if (Array.isArray(parent)) {
-      const index = parseInt(key, 10);
-      if (!isNaN(index) && index >= 0 && index < parent.length) {
-        parent.splice(index, 1);
-      }
-    } else if (
-      key !== '__proto__' && key !== 'constructor' && key !== 'prototype' &&
-      Object.prototype.hasOwnProperty.call(parent, key)
-    ) {
+      if (typeof key === 'number') parent.splice(key, 1);
+    } else if (Object.prototype.hasOwnProperty.call(parent, key)) {
       // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
       delete parent[key];
     }
   }
 
-  private resolvePath(obj: any, path: JsonPath): { parent: any; key: string } {
-    const pathSegments = path.slice(2).split('.');
-    let current = obj;
+  /**
+   * Resolves the container and key addressed by a non-empty segment list.
+   * Indices must already exist; only object keys followed by a key are created.
+   */
+  private resolveSlot(segments: readonly JsonPathSegment[]): { parent: any; key: string | number } {
+    let current: any = this.state;
+    const last = segments.length - 1;
 
-    for (let i = 0; i < pathSegments.length - 1; i++) {
-      const segment = pathSegments[i];
-      const { key, index } = this.parseSegment(segment);
-      JsonReconstructor.assertSafeKey(key);
-
-      if (index !== null) {
-        if (!Object.prototype.hasOwnProperty.call(current, key)) {
-          throw new Error(`Path segment not found: ${key}`);
-        }
-        current = current[key];
-        current = current[index];
-      } else {
-        if (!Object.prototype.hasOwnProperty.call(current, key)) {
-          // Use Object.create(null) so nested objects have no prototype chain
-          Object.defineProperty(current, key, { value: Object.create(null), writable: true, enumerable: true, configurable: true });
-        }
-        current = current[key];
+    for (let i = 0; i < last; i++) {
+      const segment = segments[i];
+      if (segment.kind === 'index') {
+        current = JsonReconstructor.elementAt(current, segment.index);
+        continue;
       }
+      JsonReconstructor.assertSafeKey(segment.key);
+      if (!JsonReconstructor.isPlainObject(current)) {
+        throw new Error(`Path segment is not an object: ${segment.key}`);
+      }
+      if (!Object.prototype.hasOwnProperty.call(current, segment.key)) {
+        if (segments[i + 1].kind === 'index') {
+          throw new Error(`Path segment not found: ${segment.key}`);
+        }
+        // Object.create(null) so nested objects have no prototype chain
+        Object.defineProperty(current, segment.key, { value: Object.create(null), writable: true, enumerable: true, configurable: true });
+      }
+      current = current[segment.key];
     }
 
-    const lastSegment = pathSegments[pathSegments.length - 1];
-    const { key, index } = this.parseSegment(lastSegment);
-    JsonReconstructor.assertSafeKey(key);
-
-    if (index !== null) {
-      if (!Object.prototype.hasOwnProperty.call(current, key) || !Array.isArray(current[key])) {
-        Object.defineProperty(current, key, { value: [], writable: true, enumerable: true, configurable: true });
-      }
-      return { parent: current[key], key: index.toString() };
+    const tail = segments[last];
+    if (tail.kind === 'index') {
+      JsonReconstructor.elementAt(current, tail.index);
+      return { parent: current, key: tail.index };
     }
-    return { parent: current, key };
+    JsonReconstructor.assertSafeKey(tail.key);
+    if (!JsonReconstructor.isPlainObject(current)) {
+      throw new Error(`Path segment is not an object: ${tail.key}`);
+    }
+    return { parent: current, key: tail.key };
   }
 
-  private parseSegment(segment: string): { key: string; index: number | null } {
-    const arrayMatch = segment.match(/^([^[\]]+)\[(\d+)\]$/);
-    if (arrayMatch) {
-      return { key: arrayMatch[1], index: parseInt(arrayMatch[2], 10) };
+  private static elementAt(container: unknown, index: number): any {
+    if (!Array.isArray(container) || index >= container.length) {
+      throw new Error(`Index out of range: ${index}`);
     }
-    return { key: segment, index: null };
+    return container[index];
   }
 
   private deepClone<T>(obj: T): T {
@@ -285,7 +288,7 @@ export class JsonReconstructor {
     // Object.create(null) produces a prototype-free object, preventing prototype
     // pollution if user-controlled keys like __proto__ appear in the data.
     const cloned: Record<string, unknown> = Object.create(null);
-    for (const key of Object.keys(obj as object)) {
+    for (const key of Object.keys(obj)) {
       cloned[key] = this.deepClone((obj as any)[key]);
     }
     return cloned as T;

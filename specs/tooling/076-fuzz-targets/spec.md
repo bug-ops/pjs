@@ -25,6 +25,7 @@ code:
   - fuzz/fuzz_targets/client_apply_patches.rs
   - fuzz/fuzz_targets/planner_round_trip.rs
   - crates/pjs-core/src/infrastructure/websocket/fuzzing.rs
+  - CONTRIBUTING.md
   - fuzz/src/lib.rs
   - fuzz/seeds
 verified: 2026-11-15
@@ -83,7 +84,7 @@ Code: `ws_message_decode.rs`.
 Status: done. The fuzz crate does not enable `float_roundtrip` / `pjson-rs/float-roundtrip`, so the target runs the production (default) float path with the 1-ULP tolerance. The opt-in feature path is covered by `crates/pjs-core/tests/float_roundtrip.rs` under `--all-features`. The comparison helper `approx_eq` lives in the fuzz crate's library target (`fuzz/src/lib.rs`, because a `no_main` fuzz binary cannot run unit tests) with unit tests (1 ULP passes, 2 ULP fails, signed zeros).
 
 ### FR-007 Seed corpora
-Committed seeds shall live in `fuzz/seeds/<target>/` (3 for `parser_partial`, 3 `parser_zero_copy`, 4 `secure_decompress` (one per codec), 3 `streaming_decompressor`, 5 `ws_message_decode`, 5 `zstd_dict_codec`, 3 `client_apply_patches`, 4 `planner_round_trip`). The first byte of `secure_decompress` seeds is the selector; the first bytes of `streaming_decompressor` seeds select the strategy. `corpus/`, `artifacts/`, `coverage/`, `target/` are git-ignored.
+Committed seeds shall live in `fuzz/seeds/<target>/` (3 for `parser_partial`, 3 `parser_zero_copy`, 4 `secure_decompress` (one per codec), 3 `streaming_decompressor`, 5 `ws_message_decode`, 5 `zstd_dict_codec`, 5 `client_apply_patches`, 8 `planner_round_trip`). The first byte of `secure_decompress` seeds is the selector; the first bytes of `streaming_decompressor` seeds select the strategy. `corpus/`, `artifacts/`, `coverage/`, `target/` are git-ignored.
 Status: done.
 
 ### FR-009 zstd_dict_codec
@@ -92,23 +93,28 @@ Code: `zstd_dict_codec.rs`.
 Status: done.
 
 ### FR-010 client_apply_patches
-The target shall take the first two bytes as a little-endian `u16` cap (the byte cap is the value times 16) and decode the rest as `Vec<WirePatch>` JSON. It applies the patches one at a time to a `fuzzing::ClientPatchHarness` (the production `ClientStreamSession::apply_patches` accounting) and checks, after every `Ok`, `tracked_bytes >= serde_json::to_vec(reconstructed).len()` and `tracked_bytes <= cap`; a `LimitExceeded` refusal must leave `reconstructed` unchanged. Any other error ends the run (the production session is dropped then). The oracle includes "no panic, no hang".
+The target shall take byte 0 as a mode (bit 0 = 0: one patch per call, bit 0 = 1: the whole `Vec<WirePatch>` in one call), the next two bytes as a little-endian `u16` cap (the byte cap is the value times 16) and decode the rest as `Vec<WirePatch>` JSON. It applies the patches to a `fuzzing::ClientPatchHarness` (the production `ClientStreamSession::apply_patches` accounting). One patch per call: after every `Ok`, `tracked_bytes >= serde_json::to_vec(reconstructed).len()` and `tracked_bytes <= cap`; a `LimitExceeded` refusal must leave `reconstructed` unchanged. Whole batch: `tracked_bytes <= cap` after every outcome, and `tracked_bytes >= serde_json::to_vec(reconstructed).len()` after `Ok` and after `LimitExceeded` (a failing patch may be partly applied, so other errors skip the undercount check). Any other error ends the run (the production session is dropped then). The oracle includes "no panic, no hang".
 Code: `client_apply_patches.rs`.
 Status: done.
 
 ### FR-011 planner_round_trip
-The target shall take byte 0 (bit 0 selects `Framing::Merge` or `Patch`) and bytes 1-2 (little-endian `u16` as `max_frame_size`), and decode the rest as a JSON document. It calls `fuzzing::plan_messages(document, &options)`; `InvalidOptions` and `PlanRejected` end the run. Every planned message shall decode as `WsMessage`, frame ids shall be sequential and only the last message shall set `is_complete`. Every message shall be at most 16 MiB and, unless it carries a single unit (a lone patch or a lone top-level entry), at most `max_frame_size`. Replaying the plan shall reproduce the document (`approx_eq`): `StreamPatch` messages through `ClientPatchHarness` with no cap (Patch framing), or `StreamFrame` object payloads merged shallowly onto `{}` (Merge framing, object roots only).
+The target shall take byte 0 (bit 0 selects `Framing::Merge` or `Patch`) and bytes 1-3 (little-endian 24-bit `max_frame_size`, which covers every size up to the planner's 16 MiB cap), and decode the rest as a JSON document. It calls `fuzzing::plan_messages(document, &options)`; `InvalidOptions` and `PlanRejected` end the run. Every planned message shall decode as `WsMessage`, frame ids shall be sequential and only the last message shall set `is_complete`. Every message shall be at most 16 MiB and, unless it carries a single unit (a lone patch or a lone top-level entry), at most `max_frame_size`. Replaying the plan shall reproduce the document (`approx_eq`): `StreamPatch` messages through `ClientPatchHarness` with no cap (Patch framing), or `StreamFrame` object payloads merged shallowly onto `{}` (Merge framing, object roots). A non-object root under Merge framing shall plan exactly one complete `StreamFrame` whose payload is the document.
 Code: `planner_round_trip.rs`.
 Status: done.
 
 ### FR-012 Fuzzing entry point
-The crate-private planner and client session shall be reached only through `#[doc(hidden)] pub mod fuzzing` in `pjson_rs::infrastructure::websocket` (`fuzzing.rs`, compiled when `websocket-client` or `websocket-server` is enabled): `ClientPatchHarness` (feature `websocket-client`; `new`, `apply_patches`, `reconstructed`, `tracked_bytes`) and `plan_messages` (feature `websocket-server`). It adds no behaviour and carries no stability guarantee.
+The crate-private planner and client session shall be reached only through `#[doc(hidden)] pub mod fuzzing` in `pjson_rs::infrastructure::websocket` (`fuzzing.rs`, compiled when `websocket-client` or `websocket-server` is enabled and `--cfg fuzzing` (set by `cargo fuzz`) or `--cfg pjs_bench` (the `client_apply_patches` bench, #670) is passed, so release builds do not carry it; both cfgs are registered in the workspace `unexpected_cfgs` check-cfg and a `compile_fail` doctest asserts the module is absent without them): `ClientPatchHarness` (feature `websocket-client`; `new`, `apply_patches`, `reconstructed`, `tracked_bytes`) and `plan_messages` (feature `websocket-server`). It adds no behaviour and carries no stability guarantee.
 Code: `crates/pjs-core/src/infrastructure/websocket/fuzzing.rs`.
 Status: done.
 
 ### FR-008 CI integration
 CI job `fuzz` (on rust changes, push, schedule, manual) shall: format-check and clippy the fuzz crate, run `cargo test --manifest-path fuzz/Cargo.toml --lib` (unit tests of the shared oracle helpers), `cargo fuzz build --target x86_64-unknown-linux-gnu`, then for every `cargo fuzz list` target replay `fuzz/seeds/$target` with `-runs=0`. Job `fuzz-explore` (schedule or manual only) shall run each target for `-max_total_time=60` against the seeds and upload `fuzz/artifacts` on failure (14 days). `fuzz/Cargo.toml` is also checked by `cargo-deny` (advisories, bans, sources) and `osv-scanner` and covered by dependabot.
 Code: `.github/workflows/ci.yml` (`fuzz`, `fuzz-explore`, `security-deny`), `.github/dependabot.yml`.
+Status: done.
+
+### FR-013 Running locally
+Local exploration shall use the git-ignored scratch corpus `fuzz/corpus/<target>` as the first (writable) corpus directory, because libFuzzer writes new inputs into the first directory it is given: `cargo fuzz run <target> fuzz/corpus/<target> fuzz/seeds/<target> -- -max_total_time=60`. Passing `fuzz/seeds/<target>` first adds generated files to the tracked seeds; only CI (ephemeral checkout) and `-runs=0` replay do that safely. New seeds are minimized with `cargo fuzz cmin` and copied into `fuzz/seeds/<target>` deliberately (#678). Building the fuzz crate outside `cargo fuzz` needs `RUSTFLAGS="--cfg fuzzing"`.
+Code: `CONTRIBUTING.md`.
 Status: done.
 
 ## Non-Functional Requirements
@@ -126,8 +132,8 @@ Inputs are raw `&[u8]`; structured targets derive values via `arbitrary::Unstruc
 |------|----------|
 | empty input to `secure_decompress` | early return (`split_first` is `None`) |
 | non-JSON bytes in `streaming_decompressor` | lossy UTF-8 string value |
-| fewer than 2 bytes (`client_apply_patches`) or 3 bytes (`planner_round_trip`) | early return |
-| non-object document under Merge framing (`planner_round_trip`) | planned, structure checked, replay skipped |
+| fewer than 3 bytes (`client_apply_patches`) or 4 bytes (`planner_round_trip`) | early return |
+| non-object document under Merge framing (`planner_round_trip`) | exactly one complete `StreamFrame` carrying the document |
 | `decompress_nested` depth | `selector >> 2` (0..=63) |
 
 ## Success Criteria
@@ -143,7 +149,6 @@ Inputs are raw `&[u8]`; structured targets derive values via `arbitrary::Unstruc
 
 ## Open Questions
 
-- `planner_round_trip` replays Merge framing only for object roots; an array root under Merge framing is checked for structure only.
 - No fuzz target for `pjs-domain` deserialisation (`MAX_DESERIALIZE_DEPTH` guard), `SecurityValidator`, schema validation, or the WASM crate.
 - The seed replay validates only that targets do not crash on seeds; no coverage threshold.
 - Fuzz crate declares no `rust-version`; CI uses nightly (required by cargo-fuzz).

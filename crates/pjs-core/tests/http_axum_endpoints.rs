@@ -2,7 +2,7 @@
 //!
 //! Tests all 8 REST endpoints end-to-end using tower::ServiceExt::oneshot
 
-#![feature(impl_trait_in_assoc_type)]
+#![cfg_attr(feature = "http-server", feature(impl_trait_in_assoc_type))]
 #![cfg(feature = "http-server")]
 
 mod common;

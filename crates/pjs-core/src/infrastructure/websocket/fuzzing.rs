@@ -1,7 +1,8 @@
 //! Entry points that let the `fuzz/` crate reach crate-private websocket
 //! machinery without widening the real API.
 //!
-//! The module is `#[doc(hidden)]` and carries no stability guarantee.
+//! The module is compiled only under `--cfg fuzzing` (set by `cargo fuzz`) or
+//! `--cfg pjs_bench`, so it is not part of the published surface.
 
 #[cfg(feature = "websocket-client")]
 pub use client_harness::ClientPatchHarness;

@@ -3,7 +3,7 @@
 //! The real `GatInMemoryStreamRepository` rejects it with `DomainError::InvalidInput`, which the
 //! HTTP adapter maps to 400. The mock repository does not validate, so it is not pinned.
 
-#![feature(impl_trait_in_assoc_type)]
+#![cfg_attr(feature = "http-server", feature(impl_trait_in_assoc_type))]
 #![cfg(feature = "http-server")]
 
 mod common;

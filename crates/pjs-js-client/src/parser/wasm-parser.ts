@@ -9,9 +9,9 @@
  * - stream(): Progressive frame delivery with callbacks
  */
 
-import { PJSError, PJSErrorType, Frame, FrameType } from '../types/index.js';
+import { Frame, FrameType, PJSError, PJSErrorType } from '../types/index.js';
 import { loadWasmModule } from '../utils/wasm-loader.js';
-import type { PriorityStream, FrameData, StreamStats } from 'pjs-wasm';
+import type { FrameData, PriorityStream, StreamStats } from 'pjs-wasm';
 
 export interface WasmParserOptions {
   debug?: boolean;
@@ -251,7 +251,7 @@ export class WasmParser {
     let payload: any;
     try {
       payload = JSON.parse(frameData.payload);
-    } catch (error) {
+    } catch {
       throw new PJSError(
         PJSErrorType.ParseError,
         'Failed to parse WASM frame payload',

@@ -27,10 +27,10 @@
  * ```
  */
 
-import { Transport, ConnectResult, StreamOptions } from './base.js';
-import { Frame, FrameType, PJSClientConfig, Priority, PJSError, PJSErrorType } from '../types/index.js';
+import { ConnectResult, StreamOptions, Transport } from './base.js';
+import { Frame, FrameType, PJSClientConfig, PJSError, PJSErrorType, Priority } from '../types/index.js';
 import { loadWasmModule } from '../utils/wasm-loader.js';
-import type { PriorityStream, FrameData, StreamStats } from 'pjs-wasm';
+import type { FrameData, PriorityStream, StreamStats } from 'pjs-wasm';
 
 /**
  * Options for WASM backend streaming

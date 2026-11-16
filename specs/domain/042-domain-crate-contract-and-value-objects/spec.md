@@ -154,7 +154,7 @@ See FR text. Type inventory: `Priority`, `Id<T>`, `IdMarker`, `SessionMarker`, `
 ## Success Criteria
 
 - `cargo nextest run -p pjson-rs-domain` and `cargo test -p pjson-rs-domain --doc` pass.
-- `RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links" cargo doc --no-deps -p pjson-rs-domain` passes (CI runs doc with `--all-features`).
+- `RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links" cargo doc --no-deps -p pjson-rs-domain` passes (CI runs doc with `--all-features`).
 - No `unsafe` compiles in the crate.
 
 ## Agent Boundaries

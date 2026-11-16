@@ -154,10 +154,16 @@ jobs:
       - name: Check formatting
         run: cargo fmt --manifest-path fuzz/Cargo.toml --check
 
+      # `--cfg fuzzing` exposes the cfg(fuzzing)-gated entry points; keep
+      # -D warnings because a step-level RUSTFLAGS replaces the global value.
       - name: Run clippy
+        env:
+          RUSTFLAGS: "-D warnings --cfg fuzzing"
         run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 
       - name: Test fuzz oracle helpers
+        env:
+          RUSTFLAGS: "-D warnings --cfg fuzzing"
         run: cargo test --manifest-path fuzz/Cargo.toml --lib
 
       - name: Build fuzz targets
@@ -801,6 +807,21 @@ jobs:
       - name: Check each feature
         run: cargo hack check -p pjson-rs -p pjson-rs-domain --each-feature --no-dev-deps --keep-going
 
+      # --no-dev-deps skips test targets, so a test that does not compile under
+      # a feature subset (#662) goes unnoticed; check them for the gated features.
+      - name: Check test targets per feature
+        run: >-
+          cargo hack check -p pjson-rs --tests --each-feature
+          --include-features websocket-server,websocket-client,compression,http-server
+          --keep-going
+
+      # The client_apply_patches bench is gated behind cfg(pjs_bench); compile it
+      # so it cannot rot. It is not run in CI.
+      - name: Check pjs_bench bench
+        env:
+          RUSTFLAGS: "-D warnings --cfg pjs_bench"
+        run: cargo check -p pjs-bench --bench client_apply_patches
+
   # Only the crates that build on stable have a meaningful MSRV; pjson-rs needs
   # nightly and carries no rust-version.
   msrv:
@@ -899,6 +920,9 @@ jobs:
 
       - name: Type check
         run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
 
       - name: Run tests
         run: npm test

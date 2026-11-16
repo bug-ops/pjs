@@ -130,6 +130,9 @@ cargo bench --bench gat_query_benchmarks
 
 # HTTP streaming serialization (sonic_rs vs serde_json, e2e route)
 cargo bench --bench http_streaming
+
+# Client patch application (needs the pjs_bench cfg)
+RUSTFLAGS="-C target-cpu=native --cfg pjs_bench" cargo bench -p pjs-bench --bench client_apply_patches
 ```
 
 ### Before/After (A/B) Comparison

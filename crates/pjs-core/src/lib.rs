@@ -17,6 +17,7 @@ pub mod global_alloc;
 pub mod infrastructure;
 pub mod parser;
 pub mod security;
+mod serialized_len;
 pub mod stream;
 #[cfg(test)]
 mod test_support;

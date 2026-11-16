@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opt-in `float-roundtrip` feature in `pjson-rs` and a `zstd_dict_codec` fuzz target (#575) (#665)
 - `pjs-js-client` emits `server_shutdown` for the SSE and NDJSON shutdown marker without reconnecting and rejects pending streams with `SERVER_SHUTDOWN`, new `PJSEvent` and `PJSErrorType` members (#644) (#665)
 - `websocket_controller` benchmark in `pjs-bench`, and `client_apply_patches` and `planner_round_trip` fuzz targets (#664, #660) (#681)
+- `client_apply_patches` bench behind the `pjs_bench` cfg, a shared allocation-free `serialized_len` helper, and CI steps for test targets in the feature matrix and `npm run lint` (#670, #680, #679) (#688)
 
 ### Changed
 
@@ -72,6 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - WebSocket client applies `StreamPatch` values by move instead of cloning, and large `StreamInit` plans run on `spawn_blocking` above 32 KiB; the pacing clamp is documented (#659, #658, #663) (#681)
 - `pjson-rs` tests use `assert_matches!`, websocket acceptance targets require `websocket-client`, rustdoc denies `redundant_explicit_links`, and CI reads the nightly pin from `rust-toolchain.toml` through a local composite action (#653, #662, #661, #651) (#681)
 - README status line and the npm `pjs-wasm` README no longer use stale versions or GitHub callouts (#652) (#681)
+- WebSocket plan offload uses a time-based cost gate with a bounded blocking-plan pool, and `create_session` rejects an over-budget document before planning; `requested` is a lower bound (#669, #671, #673, #676) (#688)
+- `fuzzing` entry points compile only under `cfg(any(fuzzing, pjs_bench))`; fuzz exploration writes to `fuzz/corpus`, not `fuzz/seeds`; specs list all three rustdoc denies (#672, #675, #678, #677) (#688)
 
 ### Fixed
 
@@ -95,6 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Demo servers honor `--host`, mount the advertised `/ws`, apply the per-stream config, keep lifetime `/metrics` counters and shut down on Ctrl-C (#609, #610, #611)
 - `JiterPartialParser` shares one peek dispatch between `walk` and `walk_with_peek` (#576)
 - `pjs-wasm` skeleton keeps values under keys `JsonPath` cannot encode, and `pjs-js-client` `JsonReconstructor` applies root `$` `set` and `merge` patches (#656, #657) (#681)
+- `pjs-js-client` accepts and applies patch paths with nested array indices and a root index, `parseJsonPath` accepts `$`, and `pjs-wasm` streams array and scalar roots through a root `set` frame (#666, #667, #668) (#688)
+- `pjs-js-client` lint works with an ESLint flat config (#679) (#688)
 
 ## [0.7.0] - 2026-08-19
 

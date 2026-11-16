@@ -7,26 +7,26 @@
 
 import { EventEmitter } from 'events';
 import {
-  PJSClientConfig,
-  TransportType,
-  PJSEvent,
-  PJSEventData,
   EventListener,
-  StreamOptions,
   Frame,
   FrameType,
-  Priority,
+  PJSClientConfig,
   PJSError,
   PJSErrorType,
+  PJSEvent,
+  PJSEventData,
+  Priority,
+  ProgressInfo,
+  StreamOptions,
   StreamStats,
-  ProgressInfo
+  TransportType
 } from '../types/index.js';
 import { FrameProcessor } from './frame-processor.js';
 import { JsonReconstructor } from './json-reconstructor.js';
 import { HttpTransport } from '../transport/http.js';
 import { WebSocketTransport } from '../transport/websocket.js';
 import { SSETransport } from '../transport/sse.js';
-import { Transport, SHUTDOWN_EVENT } from '../transport/base.js';
+import { SHUTDOWN_EVENT, Transport } from '../transport/base.js';
 
 /**
  * Main PJS client class providing high-level API for streaming JSON
@@ -79,13 +79,13 @@ export class PJSClient extends EventEmitter {
       this.sessionId = sessionData.sessionId || this.config.sessionId;
       this.isConnected = true;
 
-      this.emit(PJSEvent.Connected, { sessionId: this.sessionId! });
+      this.emit(PJSEvent.Connected, { sessionId: this.sessionId });
       
       if (this.config.debug) {
         console.log('[PJS] Connected with session:', this.sessionId);
       }
 
-      return this.sessionId!;
+      return this.sessionId;
     } catch (error) {
       const pjsError = error instanceof PJSError 
         ? error 
@@ -215,6 +215,7 @@ export class PJSClient extends EventEmitter {
     event: K, 
     listener: EventListener<PJSEventData[K]>
   ): this {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- EventListener allows async listeners; their rejections are the caller's to handle
     return super.on(event, listener);
   }
 
@@ -258,6 +259,7 @@ export class PJSClient extends EventEmitter {
         return new SSETransport(this.config);
       case TransportType.WASM: {
         // Dynamic import to avoid bundling WASM backend if not needed
+        // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy load keeps the WASM backend out of the default bundle
         const { WasmBackend } = require('../transport/wasm-backend.js');
         return new WasmBackend(this.config);
       }
@@ -337,7 +339,7 @@ export class PJSClient extends EventEmitter {
     const stats = this.streams.get(streamId)!;
     let result: T | undefined;
     let skeletonReceived = false;
-    let progressInfo: ProgressInfo = {
+    const progressInfo: ProgressInfo = {
       framesReceived: 0,
       bytesReceived: 0,
       elapsedTime: 0,
@@ -357,6 +359,7 @@ export class PJSClient extends EventEmitter {
         this.removeListener(PJSEvent.FrameReceived, frameReceivedHandler);
         this.transport.removeListener(SHUTDOWN_EVENT, shutdownHandler);
         if (error !== undefined) {
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- forwards the transport's rejection reason unchanged
           reject(error);
         } else {
           resolve(value!);
@@ -402,7 +405,7 @@ export class PJSClient extends EventEmitter {
             });
 
             if (options.onRender) {
-              options.onRender(result, {
+              void options.onRender(result, {
                 priority: frame.priority,
                 isComplete: false,
                 progress: progressInfo
@@ -429,7 +432,7 @@ export class PJSClient extends EventEmitter {
             }
 
             if (options.onRender) {
-              options.onRender(result, {
+              void options.onRender(result, {
                 priority: frame.priority,
                 isComplete: false,
                 progress: progressInfo
@@ -453,7 +456,7 @@ export class PJSClient extends EventEmitter {
             });
 
             if (options.onRender) {
-              options.onRender(result!, {
+              void options.onRender(result!, {
                 priority: frame.priority,
                 isComplete: true,
                 progress: progressInfo
@@ -462,16 +465,16 @@ export class PJSClient extends EventEmitter {
 
             this.emit(PJSEvent.ProgressUpdate, progressInfo);
             if (options.onProgress) {
-              options.onProgress(progressInfo);
+              void options.onProgress(progressInfo);
             }
 
-            finish(result!);
+            finish(result);
             return;
           }
 
           this.emit(PJSEvent.ProgressUpdate, progressInfo);
           if (options.onProgress) {
-            options.onProgress(progressInfo);
+            void options.onProgress(progressInfo);
           }
 
         } catch (err) {

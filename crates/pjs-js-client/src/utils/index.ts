@@ -5,19 +5,21 @@
  */
 
 import {
-  PJSClientConfig,
   Frame,
   FrameType,
-  Priority,
   JsonPath,
+  PJSClientConfig,
+  Priority,
   TransportType
 } from '../types/index.js';
 import type { PJSClient } from '../core/client.js';
+import { tokenizeJsonPath } from '../core/json-path.js';
 
 /**
  * Create a PJS client with smart defaults based on environment
  */
 export function createPJSClient(config: PJSClientConfig): PJSClient {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy load avoids a core/client import cycle
   const { PJSClient: Client } = require('../core/client.js');
   
   // Auto-detect best transport based on environment and URL
@@ -72,62 +74,35 @@ export function validateFrame(frame: any): frame is Frame {
 }
 
 /**
- * Parse and validate a JSON path
+ * Parse and validate a JSON path.
+ *
+ * `segments` are the dot-separated pieces after `$`, with indices kept on their piece
+ * (`$.users[0].name` gives `['users[0]', 'name']`).
  */
 export function parseJsonPath(path: JsonPath): {
   segments: string[];
   isValid: boolean;
   errors: string[];
 } {
-  const errors: string[] = [];
-  
-  if (!path.startsWith('$.')) {
-    errors.push('Path must start with "$."');
-    return { segments: [], isValid: false, errors };
+  const parsed = tokenizeJsonPath(path);
+  if (!parsed.ok) {
+    return { segments: [], isValid: false, errors: [parsed.error] };
   }
 
-  try {
-    const segments = path.slice(2).split('.');
-    
-    for (let i = 0; i < segments.length; i++) {
-      const segment = segments[i];
-      
-      if (!segment) {
-        errors.push(`Empty segment at position ${i}`);
-        continue;
-      }
-      
-      // Check for array notation (including negative indices)
-      const negativeArrayMatch = segment.match(/^([^[\]]+)\[(-\d+)\]$/);
-      const arrayMatch = segment.match(/^([^[\]]+)\[(\d+)\]$/);
-      if (negativeArrayMatch) {
-        const [, , index] = negativeArrayMatch;
-        errors.push(`Invalid array index "${index}" in segment "${segment}"`);
-      } else if (arrayMatch) {
-        const [, key, index] = arrayMatch;
-        if (!isValidKey(key)) {
-          errors.push(`Invalid key "${key}" in segment "${segment}"`);
-        }
-        if (parseInt(index, 10) < 0) {
-          errors.push(`Invalid array index "${index}" in segment "${segment}"`);
-        }
-      } else {
-        if (!isValidKey(segment)) {
-          errors.push(`Invalid key "${segment}"`);
-        }
-      }
+  const segments: string[] = [];
+  let lastIsPiece = false;
+  for (const segment of parsed.segments) {
+    if (segment.kind === 'key') {
+      segments.push(segment.key);
+      lastIsPiece = true;
+    } else if (lastIsPiece) {
+      segments[segments.length - 1] += `[${segment.index}]`;
+    } else {
+      segments.push(`[${segment.index}]`);
+      lastIsPiece = true;
     }
-    
-    return {
-      segments,
-      isValid: errors.length === 0,
-      errors
-    };
-    
-  } catch (error) {
-    errors.push(`Parse error: ${(error as Error).message}`);
-    return { segments: [], isValid: false, errors };
   }
+  return { segments, isValid: true, errors: [] };
 }
 
 /**
@@ -296,13 +271,4 @@ export function formatDuration(ms: number): string {
   const hours = Math.floor(ms / 3600000);
   const minutes = Math.floor((ms % 3600000) / 60000);
   return `${hours}h ${minutes}m`;
-}
-
-// Helper functions
-
-function isValidKey(key: string): boolean {
-  // Valid JavaScript identifier or quoted string
-  return /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key) || 
-         /^"[^"]*"$/.test(key) || 
-         /^'[^']*'$/.test(key);
 }

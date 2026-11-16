@@ -315,6 +315,8 @@ console.log(result.segments); // ['user', 'profile[0]', 'name']
 console.log(result.isValid);  // true
 ```
 
+A path is `$` followed by `.key` or `[n]` segments (`$`, `$[0].a`, `$.m[0][1]`, `$.user-id`); keys are non-empty and contain no `.`, `[` or `]`, and indices are non-negative safe integers.
+
 ### Memory Estimation
 
 ```typescript

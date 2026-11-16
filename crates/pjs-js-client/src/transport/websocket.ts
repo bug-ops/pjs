@@ -5,7 +5,7 @@
  * with automatic reconnection and frame multiplexing.
  */
 
-import { Transport, ConnectResult, StreamOptions } from './base.js';
+import { ConnectResult, StreamOptions, Transport } from './base.js';
 import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 
 /**
@@ -20,7 +20,7 @@ export class WebSocketTransport extends Transport {
   async connect(): Promise<ConnectResult> {
     return new Promise((resolve, reject) => {
       try {
-        const wsUrl = this.config.baseUrl.replace(/^http/, 'ws') + '/pjs/ws';
+        const wsUrl = `${this.config.baseUrl.replace(/^http/, 'ws')}/pjs/ws`;
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
