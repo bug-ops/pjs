@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `JsonPath::is_valid_key` in `pjs-domain`, an allocation-free check that a key is encodable in a `JsonPath` (#643) (#665)
 - Opt-in `float-roundtrip` feature in `pjson-rs` and a `zstd_dict_codec` fuzz target (#575) (#665)
 - `pjs-js-client` emits `server_shutdown` for the SSE and NDJSON shutdown marker without reconnecting and rejects pending streams with `SERVER_SHUTDOWN`, new `PJSEvent` and `PJSErrorType` members (#644) (#665)
-- `websocket_controller` benchmark in `pjs-bench`, and `client_apply_patches` and `planner_round_trip` fuzz targets (#664, #660) (#666)
+- `websocket_controller` benchmark in `pjs-bench`, and `client_apply_patches` and `planner_round_trip` fuzz targets (#664, #660) (#681)
 
 ### Changed
 
@@ -69,9 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING** `pjson_rs::Error` is a typed, `#[non_exhaustive]`, non-`Clone` enum with `source()` chains and no `Other`; corrupt compressed input is `Error::Codec`, and `CompressionBombError` is `#[non_exhaustive]` with two new variants (#599) (#665)
 - **BREAKING** The WebSocket server applies `StreamOptions` and splits object payloads above `max_frame_size` into several `StreamFrame`s; `StreamOptions.framing`, `WsMessage::StreamPatch` and `CreateSessionError` variants are new (#624) (#665)
 - **BREAKING** WebSocket replies are 400 "invalid stream options", 429 "connection plan budget exhausted", 413 "stream plan too large", 500 "stream plan could not be built" and 408 on stall or deadline (#624) (#665)
-- WebSocket client applies `StreamPatch` values by move instead of cloning, and large `StreamInit` plans run on `spawn_blocking` above 32 KiB; the pacing clamp is documented (#659, #658, #663) (#666)
-- `pjson-rs` tests use `assert_matches!`, websocket acceptance targets require `websocket-client`, rustdoc denies `redundant_explicit_links`, and CI reads the nightly pin from `rust-toolchain.toml` through a local composite action (#653, #662, #661, #651) (#666)
-- README status line and the npm `pjs-wasm` README no longer use stale versions or GitHub callouts (#652) (#666)
+- WebSocket client applies `StreamPatch` values by move instead of cloning, and large `StreamInit` plans run on `spawn_blocking` above 32 KiB; the pacing clamp is documented (#659, #658, #663) (#681)
+- `pjson-rs` tests use `assert_matches!`, websocket acceptance targets require `websocket-client`, rustdoc denies `redundant_explicit_links`, and CI reads the nightly pin from `rust-toolchain.toml` through a local composite action (#653, #662, #661, #651) (#681)
+- README status line and the npm `pjs-wasm` README no longer use stale versions or GitHub callouts (#652) (#681)
 
 ### Fixed
 
@@ -94,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Publish job installs the nightly toolchain (#617)
 - Demo servers honor `--host`, mount the advertised `/ws`, apply the per-stream config, keep lifetime `/metrics` counters and shut down on Ctrl-C (#609, #610, #611)
 - `JiterPartialParser` shares one peek dispatch between `walk` and `walk_with_peek` (#576)
-- `pjs-wasm` skeleton keeps values under keys `JsonPath` cannot encode, and `pjs-js-client` `JsonReconstructor` applies root `$` `set` and `merge` patches (#656, #657) (#666)
+- `pjs-wasm` skeleton keeps values under keys `JsonPath` cannot encode, and `pjs-js-client` `JsonReconstructor` applies root `$` `set` and `merge` patches (#656, #657) (#681)
 
 ## [0.7.0] - 2026-08-19
 
