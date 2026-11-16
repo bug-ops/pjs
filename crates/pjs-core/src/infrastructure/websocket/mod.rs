@@ -8,6 +8,8 @@
 
 #[cfg(feature = "websocket-client")]
 pub mod client;
+#[cfg(all(test, feature = "websocket-client"))]
+mod client_patch_acceptance;
 #[cfg(feature = "websocket-server")]
 pub mod controller;
 #[cfg(feature = "websocket-server")]

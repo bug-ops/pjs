@@ -836,7 +836,7 @@ mod tests {
             };
             assert_eq!(*frame_id as usize, i);
             assert_eq!(*is_complete, i + 1 == messages.len());
-            for patch in patches {
+            for patch in patches.iter().cloned() {
                 apply_patch(&mut state, patch).expect("planned patches apply");
             }
         }

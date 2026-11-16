@@ -240,20 +240,20 @@ impl Drop for ReceiverLease {
 
 /// Client-side stream session
 #[derive(Debug)]
-struct ClientStreamSession {
+pub(super) struct ClientStreamSession {
     id: SessionId,
     created_at: Instant,
     /// Last time a frame was applied to the session; freezes on completion.
     last_activity: Instant,
     frames_received: usize,
     total_processing_time: Duration,
-    reconstructed_data: Value,
-    reconstructed_bytes: usize,
+    pub(super) reconstructed_data: Value,
+    pub(super) reconstructed_bytes: usize,
     is_complete: bool,
 }
 
 impl ClientStreamSession {
-    fn new(id: SessionId) -> Self {
+    pub(super) fn new(id: SessionId) -> Self {
         let now = Instant::now();
         Self {
             id,
@@ -324,9 +324,13 @@ impl ClientStreamSession {
     /// Applies `patches` in order, accounting each against `max_bytes` before it
     /// is applied. On error the state may be partly modified; the caller drops
     /// the session.
-    fn apply_patches(&mut self, patches: &[WirePatch], max_bytes: usize) -> PjsResult<()> {
+    pub(super) fn apply_patches(
+        &mut self,
+        patches: Vec<WirePatch>,
+        max_bytes: usize,
+    ) -> PjsResult<()> {
         for patch in patches {
-            let projected = self.project_patch_bytes(patch);
+            let projected = self.project_patch_bytes(&patch);
             if projected > max_bytes {
                 return Err(PjsError::limit_exceeded(
                     LimitKind::SessionBytes,
@@ -1049,7 +1053,7 @@ impl PjsWebSocketClient {
                     &message_tx,
                     config,
                     (session_id, frame_id, is_complete),
-                    |session| session.apply_patches(&patches, config.max_session_bytes.get()),
+                    move |session| session.apply_patches(patches, config.max_session_bytes.get()),
                 )
                 .await?;
             }
@@ -1537,9 +1541,10 @@ mod tests {
             json!(["merge", ["n"], {"k": 7, "z": null}]),
             json!(["append_str", ["a"], "\"quoted\""]),
         ]
-        .map(patch);
+        .map(patch)
+        .to_vec();
 
-        session.apply_patches(&patches, 1 << 20).unwrap();
+        session.apply_patches(patches, 1 << 20).unwrap();
 
         assert_eq!(
             session.reconstructed_data,
@@ -1553,9 +1558,9 @@ mod tests {
         let mut session = ClientStreamSession::new(SessionId::new());
         let small = patch(json!(["merge", [], {"k": "v"}]));
         let big = patch(json!(["append_str", ["k"], "y".repeat(100)]));
-        session.apply_patches(&[small], 64).unwrap();
+        session.apply_patches(vec![small], 64).unwrap();
 
-        let result = session.apply_patches(&[big], 64);
+        let result = session.apply_patches(vec![big], 64);
 
         assert!(
             matches!(result, Err(PjsError::LimitExceeded { .. })),
