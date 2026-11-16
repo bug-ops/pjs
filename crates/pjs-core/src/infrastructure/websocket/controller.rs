@@ -248,6 +248,21 @@ async fn plan_stream_offloaded(
     }
 }
 
+/// Runs `plan` on the blocking pool under a permit from `permits` (stub, #673).
+#[allow(dead_code, reason = "stub until the offload seam lands")]
+async fn offload_plan<F>(
+    _permits: std::sync::Arc<tokio::sync::Semaphore>,
+    _plan: F,
+) -> Result<Plan, PlanError>
+where
+    F: FnOnce() -> Result<Plan, PlanError> + Send + 'static,
+{
+    todo!("#673: offload seam with permits")
+}
+
+#[cfg(test)]
+mod offload_acceptance;
+
 /// Default cap on live streaming sessions per connection.
 ///
 /// A session counts from creation until its stream completes, it is

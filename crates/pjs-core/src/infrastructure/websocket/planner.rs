@@ -192,6 +192,15 @@ pub(super) fn exceeds_size(value: &Value, limit: usize) -> bool {
     false
 }
 
+/// Whether `value` is too expensive to plan on an async worker (stub, #669).
+#[allow(dead_code, reason = "stub until the cost gate lands")]
+pub(super) fn exceeds_plan_cost(_value: &Value, _budget: usize) -> bool {
+    todo!("#669: offload gate in byte-equivalents of planning time")
+}
+
+#[cfg(test)]
+mod plan_cost_acceptance;
+
 /// Fewest bytes `n` serializes to: its digits for an integer, `d.d` for a float.
 fn number_size_lower_bound(n: &serde_json::Number) -> usize {
     if let Some(u) = n.as_u64() {
