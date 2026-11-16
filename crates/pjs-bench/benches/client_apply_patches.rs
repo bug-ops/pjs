@@ -117,6 +117,9 @@ criterion::criterion_main!(bench::benches);
 
 #[cfg(not(pjs_bench))]
 fn main() {
+    if std::env::args().any(|arg| arg == "--list") {
+        return;
+    }
     println!(
         "client_apply_patches skipped: run RUSTFLAGS=\"-C target-cpu=native --cfg pjs_bench\" cargo bench -p pjs-bench --bench client_apply_patches"
     );
