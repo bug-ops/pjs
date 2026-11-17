@@ -158,17 +158,39 @@ pub(super) fn plan_stream(
 const FLOAT_COST: usize = 7;
 
 /// Extra weight of one integer on top of its digits in the offload gate.
-const INT_COST: usize = 0;
+///
+/// Integers parse and print through a short per-number path that costs more
+/// than their digits alone (#683). Calibrated with the `websocket_controller`
+/// shapes: the binding shape is `[{"a":0}]` (`small_objects`), which with
+/// `ELEMENT_COST` 3 stays within 1.1x of the inline reference only from 3.
+const INT_COST: usize = 3;
+
+/// Extra weight of one array item or object entry, at any depth.
+///
+/// Every child is a unit the planner measures and frames on its own, which the
+/// serialized size does not show (#683). Together with `INT_COST` it is bound
+/// by the nested shapes `[[0]]` and `[{"a":0}]`, where a few bytes of text hide
+/// several children.
+const ELEMENT_COST: usize = 3;
+
+/// Extra weight of one entry of an object root, on top of [`ELEMENT_COST`].
+///
+/// The Merge and Patch planners frame the entries of an object root one by
+/// one. Measured with the flip-point probe of the `websocket_controller`
+/// shapes: a root entry costs about 38 + 3 byte-equivalents of 3.6 ns. Binding
+/// shapes: flat objects of floats first, then of `"v"` strings; at 21 the
+/// float shapes planned up to 1.5x slower than the reference at the flip point.
+/// 38 keeps every shape within 1.06x and the 16 KiB reference inline.
+const ROOT_ENTRY_COST: usize = 38;
 
 /// Per-value weights of one early-exit walk.
 #[derive(Clone, Copy)]
 struct Weights {
     float: usize,
     int_extra: usize,
-    // TODO(#686): read by the walk once the gate calibration lands.
-    #[allow(dead_code)]
+    /// Per array item and object entry at any depth.
     element: usize,
-    #[allow(dead_code)]
+    /// Per entry of an object root, additional to `element`.
     root_entry: usize,
 }
 
@@ -182,8 +204,8 @@ const SIZE_BOUND: Weights = Weights {
 const PLAN_COST: Weights = Weights {
     float: FLOAT_COST,
     int_extra: INT_COST,
-    element: 0,
-    root_entry: 0,
+    element: ELEMENT_COST,
+    root_entry: ROOT_ENTRY_COST,
 };
 
 /// Whether `value` certainly serializes to more than `limit` bytes.
@@ -205,17 +227,20 @@ pub(super) fn exceeds_size(value: &Value, limit: usize) -> bool {
 
 /// Whether planning `value` is too expensive for an async worker.
 ///
-/// The budget is in byte-equivalents of planning time, not a size bound:
-/// strings, keys and containers weigh their exact serialized bytes, an integer
-/// its digits plus `INT_COST`, a float the fixed `FLOAT_COST`. A string-only
-/// document therefore costs exactly its serialized size, while a float-dense
-/// document reaches the budget at a smaller size, in step with the time it
-/// takes to plan. The estimate assumes the default `serde_json::Number`.
+/// The budget is in byte-equivalents of planning time, not a size bound. A
+/// scalar string, `[]` and `{}` weigh exactly their serialized bytes. Any
+/// other container adds `ELEMENT_COST` per child and, for an object root,
+/// `ROOT_ENTRY_COST` per entry; an integer weighs its digits plus `INT_COST`
+/// and a float the fixed `FLOAT_COST`. A float-free document therefore costs at
+/// least its serialized size, and an entry-dense document reaches the budget at
+/// a smaller size, in step with the time it takes to plan. The estimate assumes
+/// the default `serde_json::Number`.
 ///
-/// This is an estimate, not a guarantee: the per-entry planning overhead of
-/// many short entries is not weighted, so entry-dense documents under the
-/// budget plan in a few hundred microseconds, about 2-3x the 160 us measured
-/// for the reference shapes.
+/// This is an estimate, not a guarantee. For the calibration shapes of the
+/// `websocket_controller` bench under default (Merge) framing, the largest
+/// document kept inline is estimated to plan no slower than the 32 KiB mixed
+/// reference did inline before #683 (about 90 us on a quiet machine). Patch
+/// framing and shapes outside the bench are not calibrated.
 ///
 /// Time and the pending stack are O(`budget`); the result is monotonic in
 /// `budget`.
@@ -226,7 +251,13 @@ pub(super) fn exceeds_plan_cost(value: &Value, budget: usize) -> bool {
 fn exceeds(value: &Value, limit: usize, weights: Weights) -> bool {
     let mut bound = 0_usize;
     let mut pending = vec![value];
+    let mut is_root = true;
     while let Some(node) = pending.pop() {
+        let root_entry = if std::mem::take(&mut is_root) {
+            weights.root_entry
+        } else {
+            0
+        };
         // Every pending child adds at least 1, so later ones can never be reached.
         let room = limit.saturating_sub(bound).saturating_add(1);
         let weight = match node {
@@ -239,10 +270,13 @@ fn exceeds(value: &Value, limit: usize, weights: Weights) -> bool {
             Value::Number(n) => number_weight(n, weights),
             Value::Array(items) => {
                 pending.extend(items.iter().take(room));
-                2 + items.len().saturating_sub(1)
+                (2 + items.len().saturating_sub(1))
+                    .saturating_add(items.len().saturating_mul(weights.element))
             }
             Value::Object(map) => {
-                let mut size = 2 + map.len().saturating_sub(1);
+                let per_entry = weights.element.saturating_add(root_entry);
+                let mut size = (2 + map.len().saturating_sub(1))
+                    .saturating_add(map.len().saturating_mul(per_entry));
                 for (key, child) in map.iter().take(room) {
                     let Some(key_size) = string_size_within(key, room.saturating_sub(size)) else {
                         return true;

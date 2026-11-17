@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use pjs_fuzz::approx_eq;
+use pjs_fuzz::reparsed;
 use pjson_rs::infrastructure::{
     StreamOptions, WsMessage,
     websocket::{
@@ -83,10 +83,11 @@ fn frame_size(head: &[u8; HEAD_BYTES]) -> usize {
     usize::try_from(size).unwrap_or(usize::MAX)
 }
 
-fn check_merge_root(messages: &[WsMessage], document: &Value) {
-    if document.is_object() {
-        assert!(
-            approx_eq(&replay_merge(messages), document),
+fn check_merge_root(messages: &[WsMessage], expected: &Value) {
+    if expected.is_object() {
+        assert_eq!(
+            &replay_merge(messages),
+            expected,
             "merge round trip drifted"
         );
         return;
@@ -101,7 +102,7 @@ fn check_merge_root(messages: &[WsMessage], document: &Value) {
     else {
         panic!("non-object merge root must be one complete frame: {messages:?}");
     };
-    assert!(approx_eq(payload, document), "whole payload drifted");
+    assert_eq!(payload, expected, "whole payload drifted");
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -131,6 +132,15 @@ fuzz_target!(|data: &[u8]| {
         .collect();
     check_bookkeeping(&messages);
 
+    let planned_bytes: usize = texts.iter().map(String::len).sum();
+    let document_bytes = serde_json::to_vec(&document)
+        .expect("a Value serializes")
+        .len();
+    assert!(
+        planned_bytes >= document_bytes,
+        "plan holds {planned_bytes} bytes, fewer than the {document_bytes}-byte document"
+    );
+
     for (text, message) in texts.iter().zip(&messages) {
         assert!(
             text.len() <= MAX_MESSAGE_BYTES,
@@ -144,11 +154,9 @@ fuzz_target!(|data: &[u8]| {
         );
     }
 
+    let expected = reparsed(&document);
     match framing {
-        Framing::Patch => assert!(
-            approx_eq(&replay_patches(&messages), &document),
-            "round trip drifted"
-        ),
-        Framing::Merge => check_merge_root(&messages, &document),
+        Framing::Patch => assert_eq!(replay_patches(&messages), expected, "round trip drifted"),
+        Framing::Merge => check_merge_root(&messages, &expected),
     }
 });

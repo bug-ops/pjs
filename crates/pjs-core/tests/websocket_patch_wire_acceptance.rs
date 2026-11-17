@@ -56,11 +56,10 @@ fn session_id(n: u64) -> String {
     format!("00000000-0000-4000-8000-{n:012}")
 }
 
-fn legacy_options() -> Value {
+fn default_wire_options() -> Value {
     json!({
         "max_frame_size": 65536,
         "client_fps": null,
-        "compression": true,
         "priority_mapping": null
     })
 }
@@ -134,7 +133,7 @@ async fn test_stream_init_patch_framing_over_wire_reconstructs_document() {
     let addr = spawn_server(AxumWebSocketTransport::new()).await;
     let mut ws = connect(addr).await;
     let data = wide_document();
-    let mut options = legacy_options();
+    let mut options = default_wire_options();
     options["framing"] = json!("patch");
 
     ws.send(stream_init(&session_id(1), data.clone(), options))
@@ -160,9 +159,13 @@ async fn test_stream_init_without_framing_over_wire_gets_merge_frames_only() {
             .collect(),
     );
 
-    ws.send(stream_init(&session_id(2), data.clone(), legacy_options()))
-        .await
-        .unwrap();
+    ws.send(stream_init(
+        &session_id(2),
+        data.clone(),
+        default_wire_options(),
+    ))
+    .await
+    .unwrap();
     let frames = collect_stream(&mut ws).await;
 
     assert!(frames.len() >= 5, "{} frames", frames.len());
@@ -187,7 +190,7 @@ async fn test_stream_init_without_framing_over_wire_gets_merge_frames_only() {
 async fn test_stream_init_invalid_options_over_wire_replies_400_and_streams_nothing() {
     let addr = spawn_server(AxumWebSocketTransport::new()).await;
     let mut ws = connect(addr).await;
-    let mut options = legacy_options();
+    let mut options = default_wire_options();
     options["max_frame_size"] = json!(512);
 
     ws.send(stream_init(&session_id(3), json!({"a": 1}), options))
@@ -211,7 +214,7 @@ async fn test_stream_init_invalid_options_over_wire_replies_400_and_streams_noth
 async fn test_stream_init_zero_client_fps_over_wire_replies_400() {
     let addr = spawn_server(AxumWebSocketTransport::new()).await;
     let mut ws = connect(addr).await;
-    let mut options = legacy_options();
+    let mut options = default_wire_options();
     options["client_fps"] = json!(0);
 
     ws.send(stream_init(&session_id(4), json!({"a": 1}), options))
@@ -225,7 +228,6 @@ async fn test_stream_init_zero_client_fps_over_wire_replies_400() {
     assert_eq!(reply["data"]["error"], "invalid stream options");
 }
 
-#[ignore = "flaky under load: rejection replies can be dropped by a full outgoing queue (#689)"]
 #[tokio::test]
 async fn test_stream_init_connection_plan_budget_over_wire_replies_429_until_sessions_end() {
     let transport = AxumWebSocketTransport::with_rate_limit_config(RateLimitConfig {
@@ -237,7 +239,7 @@ async fn test_stream_init_connection_plan_budget_over_wire_replies_429_until_ses
     let addr = spawn_server(transport).await;
     let (mut sink, mut incoming) = connect(addr).await.split();
     let payload = json!({"b": "x".repeat(900_000)});
-    let mut options = legacy_options();
+    let mut options = default_wire_options();
     options["framing"] = json!("patch");
     options["client_fps"] = json!(1);
     let total = 60_u64;
@@ -344,7 +346,7 @@ async fn test_stream_init_payload_above_16_mib_is_split_instead_of_rejected() {
     for framing in ["merge", "patch"] {
         let addr = spawn_server(large_inbound_transport()).await;
         let mut ws = connect(addr).await;
-        let mut options = legacy_options();
+        let mut options = default_wire_options();
         options["framing"] = json!(framing);
         options["max_frame_size"] = json!(2 * 1024 * 1024);
 
@@ -378,7 +380,7 @@ async fn test_stream_init_merge_entry_above_16_mib_budget_replies_413() {
     let mut ws = connect(addr).await;
     let data = json!({"huge": "x".repeat(17 * 1024 * 1024), "small": 1});
 
-    ws.send(stream_init(&session_id(7), data, legacy_options()))
+    ws.send(stream_init(&session_id(7), data, default_wire_options()))
         .await
         .unwrap();
 
@@ -535,7 +537,7 @@ async fn test_client_request_stream_none_sends_patch_framing_and_some_sends_verb
         default_options.get("framing").is_none(),
         "{default_options}"
     );
-    assert_eq!(default_options, legacy_options());
+    assert_eq!(default_options, default_wire_options());
     connect.abort();
 }
 

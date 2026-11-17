@@ -7,12 +7,11 @@
 
 import {
   FrameType,
-  JsonPath,
   PJSErrorType,
   Priority
 } from '../types/index.js';
 
-import { tokenizeJsonPath } from './json-path.js';
+import { isValidJsonPath } from './json-path.js';
 
 /**
  * Processes and validates PJS frames according to protocol specification
@@ -191,7 +190,7 @@ export class FrameProcessor {
 
     if (!candidate.path || typeof candidate.path !== 'string') {
       errors.push(`Patch operation ${index} must have a valid path`);
-    } else if (!this.isValidJsonPath(candidate.path)) {
+    } else if (!isValidJsonPath(candidate.path)) {
       errors.push(`Patch operation ${index} has invalid JSON path: ${candidate.path}`);
     }
 
@@ -199,9 +198,5 @@ export class FrameProcessor {
     if (typeof candidate.operation !== 'string' || !validOperations.includes(candidate.operation)) {
       errors.push(`Patch operation ${index} has invalid operation: ${candidate.operation}`);
     }
-  }
-
-  private isValidJsonPath(path: JsonPath): boolean {
-    return tokenizeJsonPath(path).ok;
   }
 }

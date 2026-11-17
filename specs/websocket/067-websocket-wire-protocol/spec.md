@@ -63,14 +63,14 @@ Every message shall be `{"type": "<Variant>", "data": { ...fields... }}` (`#[ser
 | `Ping` | both | `timestamp` (u64) | Both sides reply `Pong` with the same value |
 | `Pong` | both | `timestamp` (u64) | Logged and ignored |
 
-`StreamOptions`: `max_frame_size` (usize, default 65536), `client_fps` (u32 or null), `compression` (bool, default true), `priority_mapping` (object string -> u8, or null), `framing` (`"merge"` or `"patch"`, default merge). `max_frame_size` and `compression` are required on decode (no serde defaults); `client_fps`, `priority_mapping` and `framing` may be omitted. `framing` is serialised lowercase and omitted on the wire when merge, so legacy `StreamInit` bytes are unchanged; an absent field decodes as merge and an unknown value is a decode error.
+`StreamOptions`: `max_frame_size` (usize, default 65536), `client_fps` (u32 or null), `priority_mapping` (object string -> u8, or null), `framing` (`"merge"` or `"patch"`, default merge). `max_frame_size` is the only required option on decode (no serde default); unknown keys, including the legacy `compression`, are ignored; `client_fps`, `priority_mapping` and `framing` may be omitted. `framing` is serialised lowercase and omitted on the wire when merge, so a merge `StreamInit` carries no `framing` key; an absent field decodes as merge and an unknown value is a decode error. Compatibility is one-way: servers of this release still accept the legacy `compression` key, but clients of this release omit it and older servers, which require it, reject their `StreamInit` as malformed (400), so upgrade servers first.
 
-The server validates the options and applies them in the planner ([[066-websocket-server-transport/spec|066]] FR-011): `max_frame_size` is the size limit of the whole message, envelope included (minimum 1024); `client_fps` must not be 0 and sets a pacing floor; `priority_mapping` assigns priorities by top-level key; `compression` is accepted with either value and has no effect. Invalid options answer `Error` 400 (`invalid stream options`) and create no session.
+The server validates the options and applies them in the planner ([[066-websocket-server-transport/spec|066]] FR-011): `max_frame_size` is the size limit of the whole message, envelope included (minimum 1024); `client_fps` must not be 0 and sets a pacing floor; `priority_mapping` assigns priorities by top-level key. Invalid options answer `Error` 400 (`invalid stream options`) and create no session.
 
 Example:
 
 ```json
-{"type":"StreamInit","data":{"session_id":"0b9f6f0e-2f4c-4f0e-9d0c-6a3d1f6a9b11","data":{"critical":{"id":1}},"options":{"max_frame_size":65536,"client_fps":null,"compression":false,"priority_mapping":null}}}
+{"type":"StreamInit","data":{"session_id":"0b9f6f0e-2f4c-4f0e-9d0c-6a3d1f6a9b11","data":{"critical":{"id":1}},"options":{"max_frame_size":65536,"client_fps":null,"priority_mapping":null}}}
 ```
 
 ### FR-003 Session id encoding
@@ -142,7 +142,7 @@ Example: `["merge",[],{"a":1}]`, `["append",["items"],[1,2]]`, `["set",["users",
 | Case | Behaviour |
 |---|---|
 | Unknown `type` | decode failure, server `Error` 400 |
-| Missing `options`, `max_frame_size` or `compression` | decode failure |
+| Missing `options` or `max_frame_size` | decode failure |
 | Absent `framing` | merge |
 | Unknown `framing` value | decode failure |
 | Malformed patch (arity, op, argument or segment kind, bad index) | decode failure |
@@ -165,7 +165,6 @@ Example: `["merge",[],{"a":1}]`, `["append",["items"],[1,2]]`, `["set",["users",
 - Heuristic priorities for keys without a `priority_mapping` entry are not computed (`Priority::HIGH`).
 - `timestamp` semantics ("wall clock") are not specified; the server does not generate pings.
 - No protocol version or capability negotiation field.
-- `compression` is accepted but has no effect (no permessage-deflate in tungstenite 0.29/0.30).
 - Client-side `StreamPatch` handling is specified by the client change ([[068-websocket-client/spec|068]]), not here.
 
 ## See Also

@@ -26,11 +26,10 @@ fn stream_patch(patches: Value) -> String {
     .to_string()
 }
 
-fn legacy_options_json() -> Value {
+fn default_options_json() -> Value {
     json!({
         "max_frame_size": 65536,
         "client_fps": null,
-        "compression": true,
         "priority_mapping": null
     })
 }
@@ -42,10 +41,10 @@ fn test_framing_default_is_merge() {
 }
 
 #[test]
-fn test_stream_options_merge_framing_wire_is_byte_identical_to_legacy() {
+fn test_stream_options_merge_framing_wire_omits_framing_key() {
     let encoded = serde_json::to_value(StreamOptions::default()).unwrap();
 
-    assert_eq!(encoded, legacy_options_json());
+    assert_eq!(encoded, default_options_json());
     assert!(encoded.get("framing").is_none());
 }
 
@@ -67,7 +66,7 @@ fn test_stream_options_patch_framing_serializes_as_lowercase_string() {
 fn test_stream_init_without_framing_decodes_as_merge() {
     let text = json!({
         "type": "StreamInit",
-        "data": {"session_id": SESSION, "data": {"k": 1}, "options": legacy_options_json()}
+        "data": {"session_id": SESSION, "data": {"k": 1}, "options": default_options_json()}
     })
     .to_string();
 
@@ -81,7 +80,7 @@ fn test_stream_init_without_framing_decodes_as_merge() {
 
 #[test]
 fn test_stream_init_with_patch_framing_round_trips() {
-    let mut options = legacy_options_json();
+    let mut options = default_options_json();
     options["framing"] = json!("patch");
     let text = json!({
         "type": "StreamInit",
@@ -103,7 +102,7 @@ fn test_stream_init_with_patch_framing_round_trips() {
 
 #[test]
 fn test_stream_options_unknown_framing_is_rejected() {
-    let mut options = legacy_options_json();
+    let mut options = default_options_json();
     options["framing"] = json!("zip");
 
     assert!(serde_json::from_value::<StreamOptions>(options).is_err());

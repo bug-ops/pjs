@@ -80,12 +80,75 @@ fn plan_rejection_reply(error: PlanError) -> FixedError {
     }
 }
 
-/// Builds an `Error` reply with a fixed, non-echoing message.
-fn error_reply(session_id: Option<SessionId>, code: u16, error: &'static str) -> WsMessage {
-    WsMessage::Error {
-        session_id,
-        error: error.to_owned(),
-        code,
+/// A reply to an inbound message. The connection loop writes it straight to
+/// the socket, so a full frame queue cannot drop it.
+#[derive(Debug, Clone, Copy)]
+enum Reply {
+    Error {
+        session_id: Option<SessionId>,
+        error: FixedError,
+    },
+    Pong {
+        timestamp: u64,
+    },
+}
+
+impl Reply {
+    const fn error(session_id: Option<SessionId>, code: u16, reason: &'static str) -> Self {
+        Self::Error {
+            session_id,
+            error: FixedError { code, reason },
+        }
+    }
+}
+
+impl From<Reply> for WsMessage {
+    fn from(reply: Reply) -> Self {
+        match reply {
+            Reply::Error { session_id, error } => WsMessage::Error {
+                session_id,
+                error: error.reason.to_owned(),
+                code: error.code,
+            },
+            Reply::Pong { timestamp } => WsMessage::Pong { timestamp },
+        }
+    }
+}
+
+/// Result of handling one inbound message: the reply to send, if any, and
+/// whether the message was accepted.
+struct Handled {
+    reply: Option<Reply>,
+    outcome: PjsResult<()>,
+}
+
+impl Handled {
+    const fn ok() -> Self {
+        Self {
+            reply: None,
+            outcome: Ok(()),
+        }
+    }
+
+    const fn replied(reply: Reply) -> Self {
+        Self {
+            reply: Some(reply),
+            outcome: Ok(()),
+        }
+    }
+
+    fn rejected(reply: Reply, error: impl Into<PjsError>) -> Self {
+        Self {
+            reply: Some(reply),
+            outcome: Err(error.into()),
+        }
+    }
+
+    const fn failed(error: PjsError) -> Self {
+        Self {
+            reply: None,
+            outcome: Err(error),
+        }
     }
 }
 
@@ -556,31 +619,10 @@ impl AxumWebSocketTransport {
         self.controller.connection_count()
     }
 
-    /// Queues a fixed-message `Error` reply for `connection`.
-    ///
-    /// Goes through [`Self::send_frame`], which never blocks, so it is safe to
-    /// call from the connection's own message-handling path.
-    async fn reply_error(
-        &self,
-        connection: ConnectionId,
-        session_id: Option<SessionId>,
-        code: u16,
-        error: &'static str,
-    ) {
-        let reply = error_reply(session_id, code, error);
-        if let Err(e) = self.send_frame(connection, reply).await {
-            warn!(
-                "Failed to queue error reply for connection {}: {}",
-                connection,
-                ErrorChain(&e)
-            );
-        }
-    }
-
     /// Queues `message` for `connection`'s outgoing channel without blocking.
     ///
     /// The channel is drained by the same `tokio::select!` loop that also
-    /// awaits [`Self::handle_message`] inline. Calling this from within that
+    /// awaits message handling inline. Calling this from within that
     /// inline handling path (directly or transitively) must therefore never
     /// block: a blocking send would wait forever on a receiver that cannot
     /// run until the in-flight branch finishes. Using `try_send` keeps that
@@ -623,7 +665,11 @@ impl AxumWebSocketTransport {
         Ok(())
     }
 
-    /// Handles one decoded message from `connection`.
+    /// Handles one decoded message from `connection` and queues its reply.
+    ///
+    /// The reply goes through [`Self::send_frame`] and is dropped when the
+    /// connection's queue is full; the connection loop writes replies
+    /// directly instead, so a full queue never loses them on the wire.
     ///
     /// The `StreamInit` arm adopts the peer's session id and records
     /// `connection` as its owner, so the connection's teardown can abort it on
@@ -642,6 +688,17 @@ impl AxumWebSocketTransport {
         connection: ConnectionId,
         message: WsMessage,
     ) -> PjsResult<()> {
+        let Handled { reply, outcome } = self.dispatch(connection, message).await;
+        if let Some(reply) = reply {
+            self.send_frame(connection, reply.into()).await?;
+        }
+        outcome
+    }
+
+    /// Handles one decoded message from `connection` and returns the reply
+    /// for the caller to deliver; semantics are documented on
+    /// [`Self::handle_message`].
+    async fn dispatch(&self, connection: ConnectionId, message: WsMessage) -> Handled {
         match message {
             WsMessage::StreamInit {
                 session_id,
@@ -649,9 +706,10 @@ impl AxumWebSocketTransport {
                 options,
             } => {
                 if session_id.as_uuid().is_nil() {
-                    self.reply_error(connection, None, CODE_BAD_REQUEST, NIL_SESSION_ID)
-                        .await;
-                    return Err(PjsError::InvalidSessionId(SessionIdViolation::Nil));
+                    return Handled::rejected(
+                        Reply::error(None, CODE_BAD_REQUEST, NIL_SESSION_ID),
+                        PjsError::InvalidSessionId(SessionIdViolation::Nil),
+                    );
                 }
                 match self
                     .controller
@@ -660,45 +718,48 @@ impl AxumWebSocketTransport {
                 {
                     Ok(()) => {}
                     Err(e @ CreateSessionError::AlreadyExists(_)) => {
-                        self.reply_error(
-                            connection,
-                            Some(session_id),
-                            CODE_CONFLICT,
-                            DUPLICATE_SESSION_ID,
-                        )
-                        .await;
-                        return Err(e.into());
+                        return Handled::rejected(
+                            Reply::error(Some(session_id), CODE_CONFLICT, DUPLICATE_SESSION_ID),
+                            e,
+                        );
                     }
                     Err(e @ CreateSessionError::TooManySessions { .. }) => {
-                        self.reply_error(
-                            connection,
-                            Some(session_id),
-                            CODE_TOO_MANY_SESSIONS,
-                            TOO_MANY_SESSIONS,
-                        )
-                        .await;
-                        return Err(e.into());
+                        return Handled::rejected(
+                            Reply::error(
+                                Some(session_id),
+                                CODE_TOO_MANY_SESSIONS,
+                                TOO_MANY_SESSIONS,
+                            ),
+                            e,
+                        );
                     }
                     Err(e @ CreateSessionError::InvalidOptions(_)) => {
-                        self.reply_error(
-                            connection,
-                            Some(session_id),
-                            CODE_BAD_REQUEST,
-                            INVALID_STREAM_OPTIONS,
-                        )
-                        .await;
-                        return Err(e.into());
+                        return Handled::rejected(
+                            Reply::error(
+                                Some(session_id),
+                                CODE_BAD_REQUEST,
+                                INVALID_STREAM_OPTIONS,
+                            ),
+                            e,
+                        );
                     }
                     Err(e @ CreateSessionError::PlanRejected(plan_error)) => {
-                        let reply = plan_rejection_reply(plan_error);
-                        self.reply_error(connection, Some(session_id), reply.code, reply.reason)
-                            .await;
-                        return Err(e.into());
+                        return Handled::rejected(
+                            Reply::Error {
+                                session_id: Some(session_id),
+                                error: plan_rejection_reply(plan_error),
+                            },
+                            e,
+                        );
                     }
                 }
-                self.controller
+                if let Err(e) = self
+                    .controller
                     .start_streaming(connection, session_id)
-                    .await?;
+                    .await
+                {
+                    return Handled::failed(e);
+                }
                 info!("Created new streaming session for connection {connection}");
             }
             WsMessage::FrameAck {
@@ -730,8 +791,7 @@ impl AxumWebSocketTransport {
             }
             WsMessage::Ping { timestamp } => {
                 debug!("Received ping with timestamp: {}", timestamp);
-                self.send_frame(connection, WsMessage::Pong { timestamp })
-                    .await?;
+                return Handled::replied(Reply::Pong { timestamp });
             }
             WsMessage::Error {
                 session_id,
@@ -763,7 +823,7 @@ impl AxumWebSocketTransport {
                 );
             }
         }
-        Ok(())
+        Handled::ok()
     }
 }
 
@@ -874,6 +934,16 @@ impl ConnectionLoop<'_> {
         }
     }
 
+    async fn write_reply(&mut self, reply: Reply) -> ControlFlow<()> {
+        match send_reply(&mut self.sender, &reply.into(), self.write_timeout).await {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(e) => {
+                error!("Failed to send reply to client: {}", e);
+                ControlFlow::Break(())
+            }
+        }
+    }
+
     /// Applies the connection's message budget to an inbound frame of `len`
     /// bytes; over budget, closes with 1008 and returns `false`.
     async fn admit(&mut self, len: usize, kind: &str) -> bool {
@@ -904,18 +974,21 @@ impl ConnectionLoop<'_> {
                             self.connection_id,
                             text.len()
                         );
-                        if let Err(e) = self
+                        let Handled { reply, outcome } = self
                             .transport
-                            .handle_message(self.connection_id, ws_message)
-                            .await
-                        {
+                            .dispatch(self.connection_id, ws_message)
+                            .await;
+                        if let Err(e) = outcome {
                             debug!(
                                 "Rejected message from connection {}: {}",
                                 self.connection_id,
                                 ErrorChain(&e)
                             );
                         }
-                        ControlFlow::Continue(())
+                        match reply {
+                            Some(reply) => self.write_reply(reply).await,
+                            None => ControlFlow::Continue(()),
+                        }
                     }
                     Err(e) => {
                         warn!(
@@ -924,14 +997,8 @@ impl ConnectionLoop<'_> {
                             e.line(),
                             e.column()
                         );
-                        let reply = error_reply(None, CODE_BAD_REQUEST, MALFORMED_MESSAGE);
-                        match send_reply(&mut self.sender, &reply, self.write_timeout).await {
-                            Ok(()) => ControlFlow::Continue(()),
-                            Err(e) => {
-                                error!("Failed to send error reply to client: {}", e);
-                                ControlFlow::Break(())
-                            }
-                        }
+                        self.write_reply(Reply::error(None, CODE_BAD_REQUEST, MALFORMED_MESSAGE))
+                            .await
                     }
                 }
             }

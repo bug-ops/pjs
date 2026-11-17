@@ -15,48 +15,69 @@ export type JsonPathParse =
   | { readonly ok: true; readonly segments: readonly JsonPathSegment[] }
   | { readonly ok: false; readonly error: string };
 
-const KEY_END = /[.[\]]/;
-const DIGITS = /^\d+$/;
+const DOT = 46;
+const OPEN_BRACKET = 91;
+const CLOSE_BRACKET = 93;
+const ZERO = 48;
+const NINE = 57;
 
-function fail(error: string): JsonPathParse {
-  return { ok: false, error };
+function indexError(path: string, pos: number, close: number): string {
+  return `Invalid array index "${path.slice(pos + 1, close)}" at position ${pos}`;
+}
+
+/**
+ * Single scanner behind `tokenizeJsonPath` and `isValidJsonPath`. Returns the
+ * error text, or `null` for a valid path; appends segments to `out` when given.
+ */
+function scanJsonPath(path: string, out: JsonPathSegment[] | null): string | null {
+  if (!path.startsWith('$')) {
+    return 'Path must start with "$."';
+  }
+
+  const length = path.length;
+  let pos = 1;
+
+  while (pos < length) {
+    const code = path.charCodeAt(pos);
+    if (code === DOT) {
+      let end = pos + 1;
+      while (end < length) {
+        const c = path.charCodeAt(end);
+        if (c === DOT || c === OPEN_BRACKET || c === CLOSE_BRACKET) break;
+        end++;
+      }
+      if (end === pos + 1) return `Empty segment at position ${pos}`;
+      out?.push({ kind: 'key', key: path.slice(pos + 1, end) });
+      pos = end;
+    } else if (code === OPEN_BRACKET) {
+      const close = path.indexOf(']', pos);
+      if (close === -1) return `Unterminated index at position ${pos}`;
+      if (close === pos + 1) return indexError(path, pos, close);
+      let index = 0;
+      for (let i = pos + 1; i < close; i++) {
+        const digit = path.charCodeAt(i) - ZERO;
+        if (digit < 0 || digit > NINE - ZERO) return indexError(path, pos, close);
+        index = index * 10 + digit;
+        if (index > Number.MAX_SAFE_INTEGER) return indexError(path, pos, close);
+      }
+      out?.push({ kind: 'index', index });
+      pos = close + 1;
+    } else {
+      return `Unexpected character "${path[pos]}" at position ${pos}`;
+    }
+  }
+
+  return null;
 }
 
 /** Tokenizes `path` into typed segments; `$` yields an empty list. */
 export function tokenizeJsonPath(path: string): JsonPathParse {
-  if (!path.startsWith('$')) {
-    return fail('Path must start with "$."');
-  }
-
   const segments: JsonPathSegment[] = [];
-  let pos = 1;
-
-  while (pos < path.length) {
-    if (path[pos] === '.') {
-      let end = pos + 1;
-      while (end < path.length && !KEY_END.test(path[end])) end++;
-      if (end === pos + 1) return fail(`Empty segment at position ${pos}`);
-      segments.push({ kind: 'key', key: path.slice(pos + 1, end) });
-      pos = end;
-    } else if (path[pos] === '[') {
-      const close = path.indexOf(']', pos);
-      if (close === -1) return fail(`Unterminated index at position ${pos}`);
-      const digits = path.slice(pos + 1, close);
-      const index = DIGITS.test(digits) ? Number(digits) : NaN;
-      if (!Number.isSafeInteger(index)) {
-        return fail(`Invalid array index "${digits}" at position ${pos}`);
-      }
-      segments.push({ kind: 'index', index });
-      pos = close + 1;
-    } else {
-      return fail(`Unexpected character "${path[pos]}" at position ${pos}`);
-    }
-  }
-
-  return { ok: true, segments };
+  const error = scanJsonPath(path, segments);
+  return error === null ? { ok: true, segments } : { ok: false, error };
 }
 
-/** Returns `true` when `path` satisfies the shared path grammar. */
-export function isValidJsonPath(_path: string): boolean {
-  throw new Error('not implemented');
+/** Returns `true` when `path` satisfies the shared path grammar, without allocating segments. */
+export function isValidJsonPath(path: string): boolean {
+  return scanJsonPath(path, null) === null;
 }

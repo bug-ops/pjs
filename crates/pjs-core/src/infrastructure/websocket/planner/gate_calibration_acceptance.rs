@@ -121,6 +121,7 @@ fn test_plan_cost_weights_are_all_positive_and_size_bound_has_none() {
     assert_ne!(plan.element, 0);
     assert_ne!(plan.root_entry, 0);
     assert_ne!(plan.int_extra, 0);
+    assert!(plan.float >= size.float);
     assert_eq!(size.element, 0);
     assert_eq!(size.root_entry, 0);
     assert_eq!(size.int_extra, 0);
@@ -153,6 +154,27 @@ fn test_exceeds_plan_cost_float_free_cost_is_at_least_the_serialized_size() {
                 assert!(
                     exceeds_plan_cost(&document, limit),
                     "{document}: over {limit} by size but not by plan cost"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_exceeds_plan_cost_float_documents_over_the_size_bound_are_over_the_plan_cost() {
+    let documents = [
+        json!([0.1, -2.5e300, 1.0e-7]),
+        array_of(500, &json!(0.123_456_789_012_345)),
+        json!({"a": [1.5, {"b": 2.25}], "s": "\u{1}\"x"}),
+        object_of(200, &json!(0.5)),
+    ];
+    for document in documents {
+        let actual = serialized_len(&document);
+        for limit in limits_around(actual) {
+            if exceeds_size(&document, limit) {
+                assert!(
+                    exceeds_plan_cost(&document, limit),
+                    "{document}: over {limit} by size bound but not by plan cost"
                 );
             }
         }

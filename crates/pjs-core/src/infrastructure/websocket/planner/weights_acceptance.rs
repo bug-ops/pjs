@@ -58,8 +58,8 @@ fn test_number_weight_floats_weigh_the_table_float() {
 fn test_exceeds_plan_cost_flips_at_the_exact_weighted_size() {
     let floats = Value::Array(vec![json!(0.5); 100]);
     let ints = Value::Array(vec![json!(7); 100]);
-    let float_total = 2 + 99 + 100 * PLAN_COST.float;
-    let int_total = 2 + 99 + 100 * (1 + PLAN_COST.int_extra);
+    let float_total = 2 + 99 + 100 * (PLAN_COST.float + PLAN_COST.element);
+    let int_total = 2 + 99 + 100 * (1 + PLAN_COST.int_extra + PLAN_COST.element);
 
     assert!(exceeds_plan_cost(&floats, float_total - 1));
     assert!(!exceeds_plan_cost(&floats, float_total));

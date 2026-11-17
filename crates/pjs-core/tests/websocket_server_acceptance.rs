@@ -61,7 +61,7 @@ async fn connect(addr: SocketAddr) -> Socket {
 }
 
 fn default_options() -> Value {
-    json!({"max_frame_size": 65536, "client_fps": null, "compression": true, "priority_mapping": null})
+    json!({"max_frame_size": 65536, "client_fps": null, "priority_mapping": null})
 }
 
 fn init_with(session_id: &str, options: Value) -> Message {
