@@ -165,16 +165,25 @@ const INT_COST: usize = 0;
 struct Weights {
     float: usize,
     int_extra: usize,
+    // TODO(#686): read by the walk once the gate calibration lands.
+    #[allow(dead_code)]
+    element: usize,
+    #[allow(dead_code)]
+    root_entry: usize,
 }
 
 const SIZE_BOUND: Weights = Weights {
     float: 3,
     int_extra: 0,
+    element: 0,
+    root_entry: 0,
 };
 
 const PLAN_COST: Weights = Weights {
     float: FLOAT_COST,
     int_extra: INT_COST,
+    element: 0,
+    root_entry: 0,
 };
 
 /// Whether `value` certainly serializes to more than `limit` bytes.
@@ -271,6 +280,8 @@ fn number_weight(n: &serde_json::Number, weights: Weights) -> usize {
     }
 }
 
+#[cfg(test)]
+mod gate_calibration_acceptance;
 #[cfg(test)]
 mod plan_cost_acceptance;
 #[cfg(test)]

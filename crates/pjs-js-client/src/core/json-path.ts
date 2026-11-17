@@ -55,3 +55,8 @@ export function tokenizeJsonPath(path: string): JsonPathParse {
 
   return { ok: true, segments };
 }
+
+/** Returns `true` when `path` satisfies the shared path grammar. */
+export function isValidJsonPath(_path: string): boolean {
+  throw new Error('not implemented');
+}
