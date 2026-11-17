@@ -186,7 +186,7 @@ pub enum WsMessage {
         session_id: SessionId,
         /// Source JSON payload to be streamed.
         data: Value,
-        /// Per-stream options controlling framing and compression.
+        /// Per-stream options controlling framing and pacing.
         options: StreamOptions,
     },
     /// Stream frame with priority data
@@ -310,8 +310,8 @@ pub enum Framing {
 }
 
 impl Framing {
-    /// `skip_serializing_if` hook: merge framing is the wire default, so it is
-    /// omitted to keep legacy `StreamInit` bytes unchanged.
+    /// `skip_serializing_if` hook: merge framing is the wire default and is
+    /// omitted, so a merge `StreamInit` carries no `framing` key.
     fn is_merge(&self) -> bool {
         matches!(self, Self::Merge)
     }
@@ -656,10 +656,6 @@ pub struct StreamOptions {
     /// most `30 * fps` frames; longer plans shrink the delay so that pacing
     /// adds at most 30 seconds in total.
     pub client_fps: Option<u32>,
-    /// Accepted with either value and currently without effect: the wire
-    /// format carries text frames and the WebSocket stack in use implements no
-    /// per-message compression.
-    pub compression: bool,
     /// Custom priority mapping
     #[serde(default, with = "option_priority_map")]
     pub priority_mapping: Option<HashMap<String, Priority>>,
@@ -673,7 +669,6 @@ impl Default for StreamOptions {
         Self {
             max_frame_size: 64 * 1024, // 64KB
             client_fps: None,          // Auto-detect
-            compression: true,
             priority_mapping: None,
             framing: Framing::default(),
         }

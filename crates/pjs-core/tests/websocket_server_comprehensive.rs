@@ -311,7 +311,6 @@ fn test_stream_options_default() {
 
     assert_eq!(options.max_frame_size, 64 * 1024);
     assert_eq!(options.client_fps, None);
-    assert!(options.compression);
     assert!(options.priority_mapping.is_none());
 }
 
@@ -326,14 +325,12 @@ fn test_stream_options_custom() {
     let options = StreamOptions {
         max_frame_size: 1024 * 1024,
         client_fps: Some(60),
-        compression: false,
         priority_mapping: Some(priority_mapping.clone()),
         ..Default::default()
     };
 
     assert_eq!(options.max_frame_size, 1024 * 1024);
     assert_eq!(options.client_fps, Some(60));
-    assert!(!options.compression);
     assert_eq!(
         options.priority_mapping.as_ref().unwrap().get("critical"),
         Some(&Priority::CRITICAL)
@@ -348,7 +345,7 @@ fn test_stream_options_serialization() {
 
     assert!(json.is_object());
     assert!(json.get("max_frame_size").is_some());
-    assert!(json.get("compression").is_some());
+    assert!(json.get("compression").is_none());
 }
 
 #[test]
@@ -364,7 +361,6 @@ fn test_stream_options_deserialization() {
 
     assert_eq!(options.max_frame_size, 2048);
     assert_eq!(options.client_fps, Some(30));
-    assert!(!options.compression);
 }
 
 // ============================================================================

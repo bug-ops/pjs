@@ -10,6 +10,9 @@ no-default-features = false
 db-urls = ["https://github.com/rustsec/advisory-db"]
 db-path = "~/.cargo/advisory-db"
 yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono is flagged unmaintained with no fixed version; no known vulnerability, replacement (jiff or time) is tracked in #692" },
+]
 
 [licenses]
 version = 2

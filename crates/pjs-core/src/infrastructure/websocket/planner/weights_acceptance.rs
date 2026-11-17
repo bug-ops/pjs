@@ -15,6 +15,8 @@ fn test_number_weight_integers_weigh_their_digits_and_sign() {
     let zero_extra = Weights {
         float: 0,
         int_extra: 0,
+        element: 0,
+        root_entry: 0,
     };
     for (n, expected) in [
         (0, 1),
@@ -35,6 +37,8 @@ fn test_number_weight_adds_the_integer_extra_to_signed_and_unsigned() {
     let weights = Weights {
         float: 0,
         int_extra: 3,
+        element: 0,
+        root_entry: 0,
     };
 
     assert_eq!(number_weight(&int(12_345), weights), 8);
@@ -54,8 +58,8 @@ fn test_number_weight_floats_weigh_the_table_float() {
 fn test_exceeds_plan_cost_flips_at_the_exact_weighted_size() {
     let floats = Value::Array(vec![json!(0.5); 100]);
     let ints = Value::Array(vec![json!(7); 100]);
-    let float_total = 2 + 99 + 100 * PLAN_COST.float;
-    let int_total = 2 + 99 + 100 * (1 + PLAN_COST.int_extra);
+    let float_total = 2 + 99 + 100 * (PLAN_COST.float + PLAN_COST.element);
+    let int_total = 2 + 99 + 100 * (1 + PLAN_COST.int_extra + PLAN_COST.element);
 
     assert!(exceeds_plan_cost(&floats, float_total - 1));
     assert!(!exceeds_plan_cost(&floats, float_total));

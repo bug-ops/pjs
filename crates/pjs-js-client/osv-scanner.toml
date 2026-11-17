@@ -1,0 +1,5 @@
+# OSV Scanner configuration (applies to crates/pjs-js-client/package-lock.json)
+
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+reason = "picomatch is a dev-only dependency of the JS client test tooling (jest, eslint); the ReDoS needs attacker-supplied glob patterns, which never reach it; no fixed version exists"

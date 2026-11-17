@@ -49,25 +49,6 @@ fn documents_with_floats() -> Vec<Value> {
     docs
 }
 
-/// Documents made of strings only (keys, containers): plan cost equals size.
-fn string_only_documents() -> Vec<Value> {
-    vec![
-        string_document(2),
-        string_document(100),
-        string_document(GATE),
-        Value::String("\u{1}".repeat(2000)),
-        json!([]),
-        json!({}),
-        json!({"k": "v", "k2": ["a", "b\n", {"deep": "\u{1}"}]}),
-        Value::Array(vec![Value::String("\u{1}".into()); 400]),
-        Value::Object(
-            (0..200)
-                .map(|i| (format!("key-{i}"), Value::String("v\"".repeat(5))))
-                .collect(),
-        ),
-    ]
-}
-
 fn limits_around(actual: usize) -> Vec<usize> {
     let mut limits = vec![0, 1, 2, 3, 5, 17, 100, 1000, actual / 2];
     limits.extend([
@@ -137,30 +118,6 @@ fn test_exceeds_plan_cost_gates_escape_dense_strings_at_the_threshold() {
 fn test_exceeds_plan_cost_string_boundary_matches_the_inline_threshold() {
     assert!(!exceeds_plan_cost(&string_document(GATE), GATE));
     assert!(exceeds_plan_cost(&string_document(GATE + 1), GATE));
-}
-
-#[test]
-fn test_exceeds_plan_cost_is_false_for_string_only_documents_within_budget() {
-    for document in string_only_documents() {
-        let actual = serialized_len(&document);
-
-        assert!(
-            !exceeds_plan_cost(&document, actual),
-            "{document}: cost must not exceed its own size"
-        );
-    }
-}
-
-#[test]
-fn test_exceeds_plan_cost_is_true_for_string_only_documents_over_budget() {
-    for document in string_only_documents() {
-        let actual = serialized_len(&document);
-
-        assert!(
-            exceeds_plan_cost(&document, actual - 1),
-            "{document}: cost equals size for strings"
-        );
-    }
 }
 
 #[test]

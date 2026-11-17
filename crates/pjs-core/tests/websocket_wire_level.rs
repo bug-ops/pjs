@@ -84,7 +84,6 @@ fn stream_init(session_id: &str, data: serde_json::Value) -> Message {
             "options": {
                 "max_frame_size": 65536,
                 "client_fps": null,
-                "compression": true,
                 "priority_mapping": null
             }
         }
@@ -767,7 +766,6 @@ async fn test_wire_stalled_write_times_out_and_closes_connection() {
             "options": {
                 "max_frame_size": 64 * 1024,
                 "client_fps": null,
-                "compression": true,
                 "priority_mapping": null
             }
         }
@@ -835,7 +833,6 @@ async fn test_wire_stalled_write_stays_open_before_write_timeout() {
             "options": {
                 "max_frame_size": 64 * 1024,
                 "client_fps": null,
-                "compression": true,
                 "priority_mapping": null
             }
         }

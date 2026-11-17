@@ -215,16 +215,22 @@ fn paced_delay(adaptive: Duration, floor: Option<Duration>, frames: usize) -> Du
 /// byte-equivalents are planned on the blocking pool instead of the async worker.
 ///
 /// Measured with `cargo bench -p pjs-bench --bench websocket_controller`
-/// (below the threshold, where planning is inline): about 330-370 MiB/s, i.e.
-/// 45 us at 16 KiB and 92-96 us at 32 KiB (indicative, spec 075 FR-008),
-/// against 6 us for a `spawn_blocking` round trip. 32 KiB is the smallest power of two whose planning reaches about 100 us.
-/// The gate estimates worker time rather than size: for strings it equals the
-/// serialized size, and a float carries a fixed weight. Calibrated on mixed,
-/// float and small-integer documents, the largest one kept inline plans in about
-/// 160 us. Entry-dense documents (a flat object of short strings, many small
-/// numbers) are not weighted per entry and measure 2-3x that (about 440-520 us)
-/// at the same cost, so the gate bounds worker time only to a few hundred
-/// microseconds (#669).
+/// (planning inline): about 330-370 MiB/s of mixed strings, i.e. 45 us at 16 KiB
+/// and 90 us at 32 KiB (indicative, spec 075 FR-008), against 6-10 us for a
+/// `spawn_blocking` round trip. 32 KiB is the smallest power of two whose
+/// planning reaches about 100 us.
+///
+/// The gate estimates worker time rather than size: a scalar string costs its
+/// serialized size, every array item and object entry adds a per-element weight,
+/// object-root entries and integers add more, and a float carries a fixed
+/// weight (#683). Because of these weights the 32 KiB mixed reference document
+/// itself is now planned on the blocking pool; the inline limit is lower in
+/// bytes for entry-dense documents. For the calibration shapes of the
+/// `websocket_controller` bench under default (Merge) framing, the largest
+/// document kept inline is estimated to plan no slower than that reference did
+/// inline before #683 (about 90 us on a quiet machine). Patch framing and
+/// shapes outside the bench are not calibrated; the gate is an estimate, not a
+/// bound.
 pub(super) const INLINE_PLAN_MAX_BYTES: usize = 32 * 1024;
 
 /// Plans `data`, off the async worker when its cost passes the gate and a Tokio
@@ -565,8 +571,9 @@ impl AdaptiveStreamController {
     /// (see [`StreamOptions`]); planning costs O(payload) and runs on the
     /// blocking pool for documents whose planning cost passes 32 KiB
     /// (`INLINE_PLAN_MAX_BYTES`) when called inside a Tokio runtime, inline
-    /// otherwise. The cost equals the size for strings and weighs a float as a
-    /// fixed few bytes, so it tracks planning time rather than size. Blocking-pool
+    /// otherwise. The cost equals the size for a scalar string and adds weight per
+    /// container child, object-root entry, integer and float, so it tracks
+    /// planning time rather than size. Blocking-pool
     /// plans share one permit pool per controller (one permit per CPU; a server
     /// normally shares one controller across its connections), so a burst of
     /// large documents queues for a permit instead of occupying the pool. The wait

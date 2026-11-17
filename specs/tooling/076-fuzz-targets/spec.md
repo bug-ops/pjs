@@ -54,7 +54,7 @@ Code: `fuzz/Cargo.toml`.
 Status: done.
 
 ### FR-001a Shared oracle library
-The fuzz crate shall also expose a crate-private library target `pjs_fuzz` (`fuzz/src/lib.rs`, `publish = false`) holding the oracles shared by targets: `approx_eq` (1-ULP float tolerance) and `assert_decode_error` (accepts only `Error::CompressionBomb` or `Error::Codec`). It exists because a `no_main` fuzz binary cannot run unit tests; the helpers' unit tests run in CI.
+The fuzz crate shall also expose a crate-private library target `pjs_fuzz` (`fuzz/src/lib.rs`, `publish = false`) holding the oracles shared by targets: `approx_eq` (1-ULP float tolerance), `reparsed` (the document after one serialize/parse round trip, the exact oracle of `planner_round_trip`) and `assert_decode_error` (accepts only `Error::CompressionBomb` or `Error::Codec`). It exists because a `no_main` fuzz binary cannot run unit tests; the helpers' unit tests run in CI.
 Code: `fuzz/src/lib.rs`.
 Status: done.
 
@@ -84,7 +84,7 @@ Code: `ws_message_decode.rs`.
 Status: done. The fuzz crate does not enable `float_roundtrip` / `pjson-rs/float-roundtrip`, so the target runs the production (default) float path with the 1-ULP tolerance. The opt-in feature path is covered by `crates/pjs-core/tests/float_roundtrip.rs` under `--all-features`. The comparison helper `approx_eq` lives in the fuzz crate's library target (`fuzz/src/lib.rs`, because a `no_main` fuzz binary cannot run unit tests) with unit tests (1 ULP passes, 2 ULP fails, signed zeros).
 
 ### FR-007 Seed corpora
-Committed seeds shall live in `fuzz/seeds/<target>/` (3 for `parser_partial`, 3 `parser_zero_copy`, 4 `secure_decompress` (one per codec), 3 `streaming_decompressor`, 5 `ws_message_decode`, 5 `zstd_dict_codec`, 5 `client_apply_patches`, 8 `planner_round_trip`). The first byte of `secure_decompress` seeds is the selector; the first bytes of `streaming_decompressor` seeds select the strategy. `corpus/`, `artifacts/`, `coverage/`, `target/` are git-ignored.
+Committed seeds shall live in `fuzz/seeds/<target>/` (3 for `parser_partial`, 3 `parser_zero_copy`, 4 `secure_decompress` (one per codec), 3 `streaming_decompressor`, 5 `ws_message_decode`, 5 `zstd_dict_codec`, 5 `client_apply_patches`, 9 `planner_round_trip`). The first byte of `secure_decompress` seeds is the selector; the first bytes of `streaming_decompressor` seeds select the strategy. `corpus/`, `artifacts/`, `coverage/`, `target/` are git-ignored.
 Status: done.
 
 ### FR-009 zstd_dict_codec
@@ -98,7 +98,7 @@ Code: `client_apply_patches.rs`.
 Status: done.
 
 ### FR-011 planner_round_trip
-The target shall take byte 0 (bit 0 selects `Framing::Merge` or `Patch`) and bytes 1-3 (little-endian 24-bit `max_frame_size`, which covers every size up to the planner's 16 MiB cap), and decode the rest as a JSON document. It calls `fuzzing::plan_messages(document, &options)`; `InvalidOptions` and `PlanRejected` end the run. Every planned message shall decode as `WsMessage`, frame ids shall be sequential and only the last message shall set `is_complete`. Every message shall be at most 16 MiB and, unless it carries a single unit (a lone patch or a lone top-level entry), at most `max_frame_size`. Replaying the plan shall reproduce the document (`approx_eq`): `StreamPatch` messages through `ClientPatchHarness` with no cap (Patch framing), or `StreamFrame` object payloads merged shallowly onto `{}` (Merge framing, object roots). A non-object root under Merge framing shall plan exactly one complete `StreamFrame` whose payload is the document.
+The target shall take byte 0 (bit 0 selects `Framing::Merge` or `Patch`) and bytes 1-3 (little-endian 24-bit `max_frame_size`, which covers every size up to the planner's 16 MiB cap), and decode the rest as a JSON document. It calls `fuzzing::plan_messages(document, &options)`; `InvalidOptions` and `PlanRejected` end the run. Every planned message shall decode as `WsMessage`, frame ids shall be sequential and only the last message shall set `is_complete`. Every message shall be at most 16 MiB and, unless it carries a single unit (a lone patch or a lone top-level entry), at most `max_frame_size`. Replaying the plan shall reproduce the document exactly after one serialize/parse round trip (`==` against `reparsed(document)`, #684): `StreamPatch` messages through `ClientPatchHarness` with no cap (Patch framing), or `StreamFrame` object payloads merged shallowly onto `{}` (Merge framing, object roots). A non-object root under Merge framing shall plan exactly one complete `StreamFrame` whose payload is the document (compared the same way). For every successful plan in both framings, the summed message lengths shall be at least the compact serialized document length (#687).
 Code: `planner_round_trip.rs`.
 Status: done.
 

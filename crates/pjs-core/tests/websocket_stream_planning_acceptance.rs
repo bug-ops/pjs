@@ -569,24 +569,6 @@ async fn test_create_session_rejects_zero_client_fps() {
     );
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_create_session_accepts_compression_false() {
-    let mut harness = Harness::new();
-    let data = json!({"a": [1, 2, 3]});
-
-    let plan = harness
-        .stream_all(
-            data.clone(),
-            StreamOptions {
-                compression: false,
-                ..StreamOptions::default()
-            },
-        )
-        .await;
-
-    assert_eq!(plan.apply_merge_frames(), data);
-}
-
 // ---------------------------------------------------------------------------
 // Per-connection plan budget
 // ---------------------------------------------------------------------------
