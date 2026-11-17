@@ -16,7 +16,3 @@ reason = "block-buffer 0.10.4 is pinned by digest 0.10 via sha1 (axum, tungsteni
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0543"
 reason = "chrono is flagged unmaintained with no fixed version; no known vulnerability, replacement (jiff or time) is tracked in #692"
-
-[[IgnoredVulns]]
-id = "GHSA-fc5q-39xc-vjpf"
-reason = "picomatch is a dev-only dependency of the JS client test tooling (jest, eslint); the ReDoS needs attacker-supplied glob patterns, which never reach it; no fixed version exists"
