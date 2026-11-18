@@ -67,7 +67,7 @@ fn from_str_accepts_only_canonical_quoted_keys() {
         r#"$["a.b" ]"#,
         r#"$[ "a.b"]"#,
         r#"$['a.b']"#,
-        r#"$["A.b"]"#,
+        r#"$["\u0041.b"]"#,
         r#"$["a\/b.c"]"#,
         r#"$["\ud800"]"#,
         r#"$["a.b"]x"#,
