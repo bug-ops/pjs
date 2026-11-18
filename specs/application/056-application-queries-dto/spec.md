@@ -69,7 +69,7 @@ The handler shall use `limit = query.limit.unwrap_or(100).min(100)`, `offset = q
 Status: done with drift. With default criteria the in-memory adapter matches sessions of **every** state and does not exclude expired ones, although the query is named "active".
 
 ### FR-005 SearchSessions
-The handler shall clamp `limit` to `1..=100` (default 100) and `offset` to at most `MAX_PAGINATION_OFFSET`, so it never errors on out-of-range paging. With no `filters.state`, criteria shall be `states = ["Active"]`, `exclude_expired = true`; an explicit state matches only that state, expired or not. `created_after`, `created_before`, `client_info` (case-insensitive substring, `None` client info never matches) and `has_active_streams` pass through. `sort_by` is `SessionSortField` (`created_at`, `updated_at`, `stream_count`, `total_bytes`), `sort_order` is `ascending|descending` (serde aliases `asc`, `desc`); default ascending.
+The handler shall clamp `limit` to `1..=100` (default 100) and `offset` to at most `MAX_PAGINATION_OFFSET`, so it never errors on out-of-range paging. With no `filters.state`, criteria shall be `states = [SessionState::Active]`, `exclude_expired = true`; an explicit state matches only that state, expired or not. `created_after`, `created_before`, `client_info` (case-insensitive substring, `None` client info never matches) and `has_active_streams` pass through. `sort_by` is `SessionSortField` (`created_at`, `updated_at`, `stream_count`, `total_bytes`), `sort_order` is `ascending|descending` (serde aliases `asc`, `desc`); default ascending.
 Code: `query_handlers.rs`.
 
 ### FR-006 Stream queries

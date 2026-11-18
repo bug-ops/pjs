@@ -26,11 +26,10 @@ pub(crate) fn session_matches_criteria(
     session: &StreamSession,
     criteria: &SessionQueryCriteria,
 ) -> bool {
-    if let Some(states) = criteria.states() {
-        let state_str = session.state().as_str();
-        if !states.iter().any(|s| s.eq_ignore_ascii_case(state_str)) {
-            return false;
-        }
+    if let Some(states) = criteria.states()
+        && !states.contains(session.state())
+    {
+        return false;
     }
 
     if criteria.exclude_expired() && session.is_expired() {

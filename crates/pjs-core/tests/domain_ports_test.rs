@@ -140,7 +140,10 @@ fn test_session_query_criteria_with_filters() {
     let now = jiff::Timestamp::now();
 
     let criteria = SessionQueryCriteria::builder()
-        .states(vec!["active".to_string(), "pending".to_string()])
+        .states(vec![
+            pjson_rs::domain::SessionState::Active,
+            pjson_rs::domain::SessionState::Initializing,
+        ])
         .created_after(now)
         .created_before(now + jiff::SignedDuration::from_hours(1))
         .client_info_pattern("test-*".to_string())
@@ -159,7 +162,7 @@ fn test_session_query_criteria_with_filters() {
 #[test]
 fn test_session_query_criteria_clone() {
     let criteria = SessionQueryCriteria::builder()
-        .states(vec!["active".to_string()])
+        .states(vec![pjson_rs::domain::SessionState::Active])
         .client_info_pattern("pattern".to_string())
         .has_active_streams(true)
         .min_stream_count(5)

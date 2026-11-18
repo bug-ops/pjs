@@ -187,11 +187,10 @@ impl GatInMemoryStreamRepository {
     /// Helper: Check if session matches query criteria
     fn matches_criteria(session: &StreamSession, criteria: &SessionQueryCriteria) -> bool {
         // Check state filter
-        if let Some(states) = criteria.states() {
-            let state_str = session.state().as_str();
-            if !states.iter().any(|s| s.eq_ignore_ascii_case(state_str)) {
-                return false;
-            }
+        if let Some(states) = criteria.states()
+            && !states.contains(session.state())
+        {
+            return false;
         }
 
         // Check expiry filter
@@ -1087,7 +1086,7 @@ mod tests {
 
         // Filter by Active state
         let criteria = SessionQueryCriteria::builder()
-            .states(vec!["Active".to_string()])
+            .states(vec![crate::domain::events::SessionState::Active])
             .build()
             .unwrap();
         let pagination = SessionPagination::default();

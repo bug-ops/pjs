@@ -54,7 +54,7 @@ verified: 2026-11-15
 
 | Feature | Enables | Notes |
 |---|---|---|
-| `http-server` (default) | `infrastructure::http` (router, handlers, middleware, `auth`, `serve`, `streaming`, `axum_extension`), deps `axum` (with `ws`), `tokio-util`, `tower`, `tower-http`, `hyper`, `hyper-util`, `subtle`, `hmac`, `sha2`, `getrandom`, `headers-accept`, `mediatype`, `async-stream` | |
+| `http-server` (default) | `infrastructure::http` (router, handlers, middleware, `auth`, `serve`, `streaming`), deps `axum` (with `ws`), `tokio-util`, `tower`, `tower-http`, `hyper`, `hyper-util`, `subtle`, `hmac`, `sha2`, `getrandom`, `headers-accept`, `mediatype`, `async-stream` | |
 | `websocket-server` (default) | `http-server` | Gates `infrastructure::websocket` server module and `SecureWebSocketHandler` (re-exported at crate root); test target `websocket_security` (#598) |
 | `websocket-client` (default) | `tokio-tungstenite`, `url`; `websocket::client` | Builds on its own (#598); wire test target requires `websocket-server` + `websocket-client` |
 | `http-auth-jwt` | `http-server` + `jsonwebtoken`; `JwtAuthLayer`, `JwtConfig` | Not accepted by router constructors |
@@ -108,7 +108,7 @@ See [[062-http-serve-connection-limits/spec|062]]: header timeout 10 s, duration
 
 ### FR-005 Re-export surface
 
-`infrastructure` (feature `http-server`) re-exports the HTTP items listed in [[060-http-rest-api/spec|060]] plus `ConnectionLimits`, `HeaderSizeLimit`, `serve_with_limits`, `ShutdownConfig`, `ShutdownSignal`, `DrainTimeout`, `ShutdownOutcome`, `RateLimitConfig`, `RateLimitMiddleware`, `TrustedProxyConfig`, `BatchFrameStream`, `StreamFormat`, `StreamTransportError`, `HttpExtensionConfig`, `PjsExtension`, and WebSocket items `AdaptiveStreamController`, `AxumWebSocketTransport`, `ClientMetrics`, `ConnectionId`, `CreateSessionError`, `SecureWebSocketHandler`, `StreamOptions`, `WebSocketStreamSession`, `WebSocketTransport`, `WsMessage`, `create_websocket_router`; with `websocket-client`: `ClosedSession`, `PjsWebSocketClient`, `SessionIdleTtl`, `StreamStats`.
+`infrastructure` (feature `http-server`) re-exports the HTTP items listed in [[060-http-rest-api/spec|060]] plus `ConnectionLimits`, `HeaderSizeLimit`, `serve_with_limits`, `ShutdownConfig`, `ShutdownSignal`, `DrainTimeout`, `ShutdownOutcome`, `RateLimitConfig`, `RateLimitMiddleware`, `TrustedProxyConfig`, `BatchFrameStream`, `StreamFormat`, `StreamTransportError`, and WebSocket items `AdaptiveStreamController`, `AxumWebSocketTransport`, `ClientMetrics`, `ConnectionId`, `CreateSessionError`, `SecureWebSocketHandler`, `StreamOptions`, `WebSocketStreamSession`, `WebSocketTransport`, `WsMessage`, `create_websocket_router`; with `websocket-client`: `ClosedSession`, `PjsWebSocketClient`, `SessionIdleTtl`, `StreamStats`.
 
 ## Non-Functional Requirements
 

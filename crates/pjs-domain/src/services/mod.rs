@@ -5,4 +5,4 @@
 
 pub mod priority;
 
-pub use priority::{PriorityHeuristicConfig, compute_priority};
+pub use priority::{PriorityHeuristicConfig, ValueShape, compute_priority};

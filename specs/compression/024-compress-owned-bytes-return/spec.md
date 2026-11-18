@@ -48,7 +48,7 @@ Compressed gzip output is binary, not UTF-8; converting it to `String` corrupts 
 
 ## Open Questions
 
-- Response compression for the streaming route is not implemented in the stream builder; `middleware.rs` `compression_middleware` only adds hints for clients accepting gzip/deflate. [NEEDS CLARIFICATION: whether streaming-route compression is wanted; if so, file a new spec]
+- Response compression for the streaming route is not implemented in the stream builder; for response compression mount `tower_http::compression::CompressionLayer`. [NEEDS CLARIFICATION: whether streaming-route compression is wanted; if so, file a new spec]
 
 ## See Also
 

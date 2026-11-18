@@ -54,25 +54,25 @@ Part of [[MOC-specs]]. Rules in [[constitution]]. Plan: [[044-domain-entities-ev
 
 ### FR-044-001 Frame types and constructors
 
-`Frame` shall have private fields `stream_id`, `frame_type`, `priority`, `sequence: u64`, `timestamp: jiff::Timestamp` (UTC, set at construction), `payload: JsonData`, `metadata: HashMap<String, String>`. `FrameType` is `#[non_exhaustive]`: `Skeleton`, `Patch`, `Complete`, `Error`.
-Constructors: `skeleton(stream_id, seq, data)` (priority `CRITICAL`); `patch(stream_id, seq, priority, Vec<FramePatch>) -> DomainResult` (error `InvalidFrame` if the list is empty; payload `{"patches":[{"path","operation","value"}]}` with lowercase operation names); `complete(stream_id, seq, Option<checksum>)` (payload `{}` or `{"checksum": ..}`, `CRITICAL`); `error(stream_id, seq, message, Option<code>)` (payload `{"message", ["code"]}`, `CRITICAL`).
+`Frame` shall have private fields `stream_id`, `frame_type`, `priority`, `sequence: u64`, `timestamp: jiff::Timestamp` (UTC, set at construction), `body: FrameBody`, `metadata: HashMap<String, String>`. `frame_type()` is derived from the body. `FrameType` is `#[non_exhaustive]`: `Skeleton`, `Patch`, `Complete`, `Error`.
+Constructors: `skeleton(stream_id, seq, data)` (priority `CRITICAL`); `patch(stream_id, seq, priority, Vec<FramePatch>) -> DomainResult` (error `InvalidFrame` if the list is empty; body `FrameBody::Patch`, whose wire payload is `{"patches":[{"path","operation":"set","value"}]}`); `complete(stream_id, seq, Option<checksum>)` (body `Complete { checksum }`, wire payload `{}` or `{"checksum": ..}`, `CRITICAL`); `error(stream_id, seq, message, Option<code>)` (body `Error { message, code }`, wire payload `{"message", ["code"]}`, `CRITICAL`).
 Status: done.
 
-### FR-044-002 Frame validation
+### FR-044-002 Frame decoding
 
-`Frame::validate()` shall require: skeleton, complete and error frames to be critical priority; patch frames to have an object payload containing a `patches` array; error frames to have a string `message`. It shall return `DomainError::InvalidFrame` otherwise.
-Status: done. Deserialisation does not call `validate()`.
+`Frame` deserialisation (through a private `FrameWire` and `TryFrom`) shall reject, with `DomainError::InvalidFrame`: a skeleton, complete or error frame whose priority is not critical; a patch payload that is not an object holding only a non-empty `patches` array of objects, each with exactly a valid `path`, `operation: "set"` and a `value`; a complete payload that is not an object with at most a string `checksum`; an error payload without a string `message`, with a non-string `code`, or with unknown keys. `Frame::validate()` and `Frame::payload()` were removed in #752; `Frame::body()` returns the typed `FrameBody` (`#[non_exhaustive]`: `Skeleton(JsonData)`, `Patch(Vec<FramePatch>)`, `Complete { checksum }`, `Error { message, code }`), whose `Serialize` is the wire payload.
+Status: done.
 
 ### FR-044-003 Frame accessors
 
-`Frame` shall expose getters, `with_metadata(key, value)` (builder), `metadata()`, `metadata_value()`, `is_critical()`, `is_high_priority()`, and `estimated_size()` (payload `Display` length + metadata + 200).
-`FramePatch { path: JsonPath, operation: PatchOperation, value }` with constructors `set`, `append`, `merge`, `delete` (value `Null`); `PatchOperation` is `Set | Append | Merge | Delete` (`#[non_exhaustive]`, serde lowercase).
+`Frame` shall expose getters, `with_metadata(key, value)` (builder), `metadata()`, `metadata_value()`, `is_critical()`, `is_high_priority()`, and `estimated_size()` (compact JSON length of the body, counted without building the string, + metadata + 200).
+`FramePatch` is a set-patch with private `path: JsonPath` and `value: JsonData`: constructor `set`, getters `path()` and `value()`; it has no standalone serde. `PatchOperation`, `append`, `merge` and `delete` were removed in #752 (the domain only emits `set`).
 Status: done.
 
 ### FR-044-004 Stream state machine
 
 `Stream` shall hold `id` (fresh `StreamId`), `session_id`, `state`, `config`, `stats`, timestamps (`created_at`, `updated_at`, `completed_at`: `jiff::Timestamp`; `duration()` is `Option<jiff::SignedDuration>`), `next_sequence` (starts at 1), optional `source_data`, `metadata`. `StreamState` (`#[non_exhaustive]`): `Preparing`, `Streaming`, `Completed`, `Failed`, `Cancelled`.
-Transitions: `start_streaming` (Preparing -> Streaming); `complete` (Streaming -> Completed); `fail(error)` (Preparing or Streaming -> Failed, stores `error` metadata); `cancel` (Preparing or Streaming -> Cancelled). Any other source state shall return `DomainError::InvalidStateTransition`. `Completed`/`Failed`/`Cancelled` set `completed_at`. Predicates: `is_active` (Preparing or Streaming), `is_finished`.
+Transitions: `start_streaming` (Preparing -> Streaming); `complete` (Streaming -> Completed); `fail(error)` (Preparing or Streaming -> Failed; the reason is `failure_reason()`, never metadata); `cancel` (Preparing or Streaming -> Cancelled). Any other source state shall return `DomainError::InvalidStateTransition`. `Completed`/`Failed`/`Cancelled` set `completed_at`. A private `Lifecycle` enum owns `completed_at` and the failure reason, so `completed_at()` is `Some` exactly in a terminal state and `failure_reason()` exactly in `Failed` (#753). Deserialisation validates that the state, `completed_at`, `failure_reason` and `next_sequence >= 1` agree; the wire gains `failure_reason`, written only when `Failed`. Predicates: `is_active` (Preparing or Streaming), `is_finished`.
 Status: done.
 
 ### FR-044-005 Frame generation rules
@@ -81,8 +81,9 @@ While not `Streaming`, `create_skeleton_frame`, `create_patch_frames`, `extract_
 - the skeleton replaces strings with `null`, numbers with 0, booleans with `false`, arrays with `[]`, recurses into every object key like any other (no value is kept verbatim by key), and yields `null` for a scalar root and `[]` for an array root;
 - patch extraction walks objects only and addresses every key (`.`, `[`, `]` and the empty key included) through a `JsonPath` with quoted segments; every non-object value (scalars and whole arrays) becomes a `Set` patch at its `JsonPath`, kept when its priority is `>= threshold`; no subtree is skipped and no root `Set` is emitted; dropped leaves and arrays stay absent;
 - array elements are never descended into: an array travels whole in one `Set`; patch frames assume that the skeleton (or a parent-creating client) provides the parent objects;
+- one `PriorityHeuristicConfig` is built per extraction and the path is walked as one mutable buffer; a leaf is priced on the borrowed buffer and its path and value are cloned only when its patch is emitted (#755, #756);
 - extracted patches are sorted by descending priority;
-- `chunk_patches_for_commit(patches, max_frames)` splits them into `ceil(n / max_frames)`-sized chunks (empty for no patches or `max_frames == 0`), each chunk's priority being its maximum;
+- `chunk_patches_for_commit(patches, max_frames)` splits them into `ceil(n / max_frames)`-sized chunks (empty for no patches or `max_frames == 0`), each chunk's priority being its maximum; the patches are moved into the chunks, not cloned;
 - each created frame takes `next_sequence`, then `next_sequence += 1`.
 Status: done.
 
@@ -119,7 +120,7 @@ Status: done. These items have no users outside `pjs-domain` (see Open Questions
 
 ### FR-044-011 Priority heuristic
 
-`compute_priority(&PriorityHeuristicConfig, &JsonPath, &JsonData) -> Priority` shall apply, in order:
+`compute_priority(&PriorityHeuristicConfig, &JsonPath, ValueShape) -> Priority` shall apply, in order (`ValueShape` is `String { len } | Array { len } | Object { len } | Scalar`, built with `ValueShape::from(&JsonData)`; the function allocates nothing, #755):
 1. exact, case-sensitive match of the path's last key in `overrides` (only when the last segment is a key);
 2. case-insensitive match of that key against the lists, first match wins in order critical, high, medium, low, background. Defaults: critical `id uuid status state error type kind`; high `name title label email username description message`; medium `content body value data`; low `created_at updated_at version metadata`; background `analytics debug trace logs history comments reviews`;
 3. otherwise start at `MEDIUM` (50): depth 0 or 1 adds 20, depth 2 adds 10, depth > 5 subtracts 10; then a value adjustment: string longer than 1000 subtracts 20, shorter than 50 adds 5; array longer than 100 subtracts 40, longer than 10 subtracts 15; object with more than 10 keys subtracts 10. Arithmetic saturates within 1..=255.
@@ -136,7 +137,7 @@ Status: done.
 
 ## Data Model
 
-`Frame`, `FrameType`, `FramePatch`, `PatchOperation`, `Stream`, `StreamState`, `StreamConfig`, `StreamStats`, `StreamMap`, `DomainEvent`, `SessionState`, `PerformanceMetrics`, `PriorityDistribution`, `PriorityPercentages`, `EventStore`, `InMemoryEventStore`, `EventId`, `EventSubscriber`, `PriorityHeuristicConfig`, `compute_priority`.
+`Frame`, `FrameType`, `FrameBody`, `FramePatch`, `Stream`, `StreamState`, `StreamConfig`, `StreamStats`, `StreamMap`, `DomainEvent`, `SessionState`, `PerformanceMetrics`, `PriorityDistribution`, `PriorityPercentages`, `EventStore`, `InMemoryEventStore`, `EventId`, `EventSubscriber`, `PriorityHeuristicConfig`, `ValueShape`, `FrameBody`, `compute_priority`.
 
 ## Edge Cases and Errors
 
@@ -160,7 +161,7 @@ Status: done.
 ## Agent Boundaries
 
 - Always: add new frame or event kinds as new enum variants with golden-test coverage; keep `compute_priority` the single source of priority logic (WASM and HTTP).
-- Ask first: changing default field lists or thresholds (visible to every consumer); making `Frame` deserialisation validate.
+- Ask first: changing default field lists or thresholds (visible to every consumer); relaxing the `Frame` and `Stream` decode validation.
 - Never: add I/O or time-provider indirection hacks to entities without updating the `StreamSession` clock design in `pjs-core` (it uses a `TimeProvider` port; entities here call `Timestamp::now()` directly).
 
 ## Open Questions
@@ -168,8 +169,8 @@ Status: done.
 - Entities call `Timestamp::now()` directly (`Frame::*`, `Stream::*`), while `StreamSession` in `pjs-core` uses a `TimeProvider` port (CHANGELOG 0.6.3, #330); frame and stream timestamps are therefore untestable with a fake clock.
 - `Stream::collect_patches`/`generate_skeleton` recurse over `JsonData` without a depth bound; trees built programmatically (not via deserialisation, which is capped at 64) can overflow the stack.
 - Patch order within one priority level is hash-map dependent (`HashMap` iteration then a stable sort by priority).
-- Patches treat whole arrays as leaf values, so array elements are never prioritised individually; `append`/`merge`/`delete` operations exist on `FramePatch` but `Stream` only emits `set`.
-- `Frame`, `Stream` and `DomainEvent` deserialise without invariant checks (`validate()` is opt-in; a `Streaming` stream with `completed_at` set is decodable).
+- Patches treat whole arrays as leaf values, so array elements are never prioritised individually; the domain patch model is set-only (#751 narrowed to this; a domain-owned op type with a payload per op remains open).
+- `DomainEvent` deserialises without invariant checks (`Frame` and `Stream` validate since #752 and #753).
 - Events carry priorities as raw `u8` (`highest_priority`, `old_threshold`, `new_threshold`) and counts as `usize` (platform-width on the wire); `Priority` and fixed-width integers would be stricter.
 - `EventStore` returns `Result<_, String>` (stringly typed errors); `EventStore`, `InMemoryEventStore`, `EventId`, `EventSubscriber` are unused outside the domain crate.
 - `StreamConfig` limits (`max_frame_size`, `max_frames_per_batch`, `enable_compression`) are not enforced by `Stream`.

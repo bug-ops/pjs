@@ -5,15 +5,23 @@
 
 use crate::Result;
 use crate::domain::value_objects::JsonPath;
-use crate::error::PatchError;
-use crate::json_tree::{self, resolve_mut};
-use crate::stream::priority::{JsonPatch, PatchOperation, PriorityStreamFrame};
+use crate::stream::patch::apply_patch;
+use crate::stream::priority::PriorityStreamFrame;
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 
 /// Client-side JSON reconstruction engine
 ///
-/// Applies streaming patches to progressively build complete JSON structure
+/// Applies streaming patches to progressively build complete JSON structure.
+///
+/// # Untrusted peers
+///
+/// Patch application has no path depth limit (the WebSocket client enforces
+/// `MAX_PATCH_PATH_DEPTH` itself, before it applies a patch). An embedder that
+/// feeds frames from an untrusted peer must bound the patch path depth, the
+/// document size and the frame count itself: a hostile peer can otherwise
+/// grow the state's nesting without bound, and dropping a deeply nested value
+/// recurses.
 pub struct JsonReconstructor {
     /// Current state of JSON being reconstructed
     current_state: JsonValue,
@@ -102,8 +110,7 @@ impl JsonReconstructor {
                 let mut applied_paths = Vec::new();
 
                 for patch in patches {
-                    let path = patch.path.clone();
-                    self.apply_patch(patch)?;
+                    let path = apply_patch(&mut self.current_state, patch.patch)?;
                     applied_paths.push(path);
                     self.stats.patches_applied += 1;
                 }
@@ -121,61 +128,6 @@ impl JsonReconstructor {
                 Ok(ProcessResult::ReconstructionComplete)
             }
         }
-    }
-
-    /// Apply a single patch to the current JSON state
-    fn apply_patch(&mut self, patch: JsonPatch) -> Result<()> {
-        match patch.operation {
-            PatchOperation::Set { value } => {
-                self.set_at_path(&patch.path, value)?;
-            }
-            PatchOperation::Append { values } => {
-                self.append_at_path(&patch.path, values)?;
-            }
-            PatchOperation::Replace { value } => {
-                self.set_at_path(&patch.path, value)?;
-            }
-            PatchOperation::Remove => {
-                self.remove_at_path(&patch.path)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Set value at specified JSON path
-    fn set_at_path(&mut self, path: &JsonPath, value: JsonValue) -> Result<()> {
-        Ok(json_tree::set(
-            &mut self.current_state,
-            path.segments(),
-            value,
-        )?)
-    }
-
-    /// Append values to array at specified path
-    fn append_at_path(&mut self, path: &JsonPath, values: Vec<JsonValue>) -> Result<()> {
-        let target = self.get_mut_at_path(path)?;
-
-        match target {
-            JsonValue::Array(arr) => {
-                arr.extend(values);
-            }
-            _ => {
-                return Err(PatchError::ExpectedArray.into());
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Remove value at specified path
-    fn remove_at_path(&mut self, path: &JsonPath) -> Result<()> {
-        Ok(json_tree::remove(&mut self.current_state, path.segments())?)
-    }
-
-    /// Get mutable reference at specified path
-    fn get_mut_at_path(&mut self, path: &JsonPath) -> Result<&mut JsonValue> {
-        Ok(resolve_mut(&mut self.current_state, path.segments())?)
     }
 
     /// Get current JSON state (read-only)
@@ -286,6 +238,8 @@ mod tests {
     use super::*;
     use crate::domain::value_objects::PathSegment;
     use crate::stream::Priority;
+    use crate::stream::patch::WirePatch;
+    use crate::stream::priority::JsonPatch;
     use core::assert_matches;
     use serde_json::json;
 
@@ -337,8 +291,8 @@ mod tests {
         let path = JsonPath::from_segments(vec![PathSegment::Key("name".to_string())]);
 
         let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path,
                 value: json!("John Doe"),
             },
             priority: Priority::HIGH,
@@ -382,8 +336,8 @@ mod tests {
         let path = JsonPath::from_segments(vec![PathSegment::Key("items".to_string())]);
 
         let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Append {
+            patch: WirePatch::Append {
+                path,
                 values: vec![json!("item1"), json!("item2")],
             },
             priority: Priority::MEDIUM,
@@ -487,8 +441,8 @@ mod tests {
         ]);
 
         let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path,
                 value: json!("deep value"),
             },
             priority: Priority::MEDIUM,
@@ -535,8 +489,8 @@ mod tests {
         ]);
 
         let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path,
                 value: json!({"final": "value"}),
             },
             priority: Priority::HIGH,
@@ -565,24 +519,24 @@ mod tests {
 
         // Add patches in reverse order
         let patch_c = JsonPatch {
-            path: JsonPath::from_segments(vec![PathSegment::Key("c".to_string())]),
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path: JsonPath::from_segments(vec![PathSegment::Key("c".to_string())]),
                 value: json!("third"),
             },
             priority: Priority::LOW,
         };
 
         let patch_a = JsonPatch {
-            path: JsonPath::from_segments(vec![PathSegment::Key("a".to_string())]),
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path: JsonPath::from_segments(vec![PathSegment::Key("a".to_string())]),
                 value: json!("first"),
             },
             priority: Priority::LOW,
         };
 
         let patch_b = JsonPatch {
-            path: JsonPath::from_segments(vec![PathSegment::Key("b".to_string())]),
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path: JsonPath::from_segments(vec![PathSegment::Key("b".to_string())]),
                 value: json!("second"),
             },
             priority: Priority::LOW,
@@ -621,8 +575,8 @@ mod tests {
         ]);
 
         let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path,
                 value: json!("updated"),
             },
             priority: Priority::MEDIUM,
@@ -652,8 +606,8 @@ mod tests {
         let path = JsonPath::from_segments(vec![PathSegment::Key("items".to_string())]);
 
         let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Append {
+            patch: WirePatch::Append {
+                path,
                 values: vec![json!(1), json!(2), json!(3)],
             },
             priority: Priority::MEDIUM,
@@ -671,105 +625,19 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_operation() {
-        let mut reconstructor = JsonReconstructor::new();
-
-        let skeleton = json!({"keep": "this", "remove": "me"});
-        reconstructor.current_state = skeleton;
-
-        let path = JsonPath::from_segments(vec![PathSegment::Key("remove".to_string())]);
-
-        let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Remove,
-            priority: Priority::MEDIUM,
-        };
-
-        let frame = PriorityStreamFrame::Patch {
-            patches: vec![patch],
-            priority: Priority::MEDIUM,
-        };
-
-        reconstructor.add_frame(frame);
-        reconstructor.process_next_frame().unwrap();
-
-        assert_eq!(reconstructor.current_state(), &json!({"keep": "this"}));
-    }
-
-    #[test]
-    fn test_remove_nested_field() {
-        let mut reconstructor = JsonReconstructor::new();
-
-        let skeleton = json!({"outer": {"keep": "this", "remove": "me"}});
-        reconstructor.current_state = skeleton;
-
-        let path = JsonPath::from_segments(vec![
-            PathSegment::Key("outer".to_string()),
-            PathSegment::Key("remove".to_string()),
-        ]);
-
-        let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Remove,
-            priority: Priority::MEDIUM,
-        };
-
-        let frame = PriorityStreamFrame::Patch {
-            patches: vec![patch],
-            priority: Priority::MEDIUM,
-        };
-
-        reconstructor.add_frame(frame);
-        reconstructor.process_next_frame().unwrap();
-
-        assert_eq!(
-            reconstructor.current_state()["outer"],
-            json!({"keep": "this"})
-        );
-    }
-
-    #[test]
-    fn test_replace_operation() {
-        let mut reconstructor = JsonReconstructor::new();
-
-        let skeleton = json!({"field": "old"});
-        reconstructor.current_state = skeleton;
-
-        let path = JsonPath::from_segments(vec![PathSegment::Key("field".to_string())]);
-
-        let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Replace {
-                value: json!("new"),
-            },
-            priority: Priority::MEDIUM,
-        };
-
-        let frame = PriorityStreamFrame::Patch {
-            patches: vec![patch],
-            priority: Priority::MEDIUM,
-        };
-
-        reconstructor.add_frame(frame);
-        reconstructor.process_next_frame().unwrap();
-
-        assert_eq!(reconstructor.current_state()["field"], json!("new"));
-    }
-
-    #[test]
     fn test_root_path_set_replaces_document() {
         let mut reconstructor = JsonReconstructor::new();
         reconstructor.current_state = json!({"test": "data"});
 
         let patch = JsonPatch {
-            path: JsonPath::root(),
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path: JsonPath::root(),
                 value: json!("new"),
             },
             priority: Priority::MEDIUM,
         };
 
-        reconstructor.apply_patch(patch).unwrap();
+        apply_patch(&mut reconstructor.current_state, patch.patch).unwrap();
         assert_eq!(reconstructor.current_state(), &json!("new"));
     }
 
@@ -784,14 +652,14 @@ mod tests {
         ]);
 
         let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path,
                 value: json!("new"),
             },
             priority: Priority::MEDIUM,
         };
 
-        let result = reconstructor.apply_patch(patch);
+        let result = apply_patch(&mut reconstructor.current_state, patch.patch);
         // Should error because "value" is number, not object
         assert!(result.is_err());
     }
@@ -807,14 +675,14 @@ mod tests {
         ]);
 
         let patch = JsonPatch {
-            path,
-            operation: PatchOperation::Set {
+            patch: WirePatch::Set {
+                path,
                 value: json!("value"),
             },
             priority: Priority::MEDIUM,
         };
 
-        let result = reconstructor.apply_patch(patch);
+        let result = apply_patch(&mut reconstructor.current_state, patch.patch);
         assert!(result.is_err());
     }
 

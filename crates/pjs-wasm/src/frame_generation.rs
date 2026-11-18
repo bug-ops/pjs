@@ -11,6 +11,12 @@ use pjson_rs_domain::entities::frame::FramePatch;
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority, StreamId};
 use std::collections::HashMap;
 
+/// The frame's wire payload as `JsonData`, for assertions on its structure.
+#[cfg(test)]
+pub(crate) fn payload_data(frame: &Frame) -> JsonData {
+    JsonData::from(serde_json::to_value(frame.body()).expect("body serializes"))
+}
+
 /// Build a skeleton structure from `data`: same shape, but with null/empty leaf values.
 ///
 /// Recursion stops at `max_depth`, replacing anything deeper with `JsonData::Null`.
@@ -156,7 +162,7 @@ mod tests {
             assert_eq!(parser_frame.frame_type(), stream_frame.frame_type());
             assert_eq!(parser_frame.sequence(), stream_frame.sequence());
             assert_eq!(parser_frame.priority(), stream_frame.priority());
-            assert_eq!(parser_frame.payload(), stream_frame.payload());
+            assert_eq!(parser_frame.body(), stream_frame.body());
         }
     }
 }

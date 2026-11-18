@@ -113,7 +113,7 @@ On the server, the server-to-client kinds `StreamFrame`, `StreamPatch`, `StreamC
 
 ### FR-009 Patch grammar
 
-A `StreamPatch.patches` entry (`WirePatch`) shall be a 3-element array `[op, path, arg]`:
+A `StreamPatch.patches` entry (`WirePatch`, defined in `pjson_rs::stream::patch` and re-exported from the websocket module) shall be a 3-element array `[op, path, arg]`; the same type is `JsonPatch.patch` in the stream layer (#751), and the stream reconstructor and the WebSocket client apply it through one shared core:
 
 | `op` | `arg` | Effect at `path` |
 |---|---|---|

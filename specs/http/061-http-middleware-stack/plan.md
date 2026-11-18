@@ -49,7 +49,7 @@ flowchart TB
 
 ## Public API surface
 
-`RateLimitMiddleware`, `TrustedProxyConfig` (re-exported from `infrastructure::http`); `middleware::{PjsMiddleware, compression_middleware, security_middleware, health_check_middleware, websocket_upgrade_middleware, CircuitBreakerMiddleware, ContentValidationConfig, content_validation_middleware}` (module-public only); `auth::{ApiKeyConfig, ApiKeyAuthLayer, ApiKeyAuthService, AuthConfigError}` and with `http-auth-jwt` `{JwtConfig, JwtAuthLayer, JwtAuthService}`.
+`RateLimitMiddleware`, `TrustedProxyConfig` (re-exported from `infrastructure::http`); `middleware::{PjsMiddleware, security_middleware, ContentValidationConfig, content_validation_middleware}` (module-public only); `auth::{ApiKeyConfig, ApiKeyAuthLayer, ApiKeyAuthService, AuthConfigError}` and with `http-auth-jwt` `{JwtConfig, JwtAuthLayer, JwtAuthService}`.
 
 ## Contracts
 

@@ -1,7 +1,7 @@
 //! Spec 070 delta (2026-11-16): a non-object root ships whole in its root `set`
 //! patch whatever `max_depth` is; object roots stay truncated at `max_depth`.
 
-use crate::frame_generation::generate_frames;
+use crate::frame_generation::{generate_frames, payload_data};
 use crate::priority_assignment::PriorityAssigner;
 use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FrameType;
@@ -24,8 +24,8 @@ fn root_patch_value(frames: &[Frame]) -> JsonData {
         .iter()
         .find(|f| matches!(f.frame_type(), FrameType::Patch))
         .expect("a patch frame is present");
-    let patches = patch_frame
-        .payload()
+    let payload = payload_data(patch_frame);
+    let patches = payload
         .get("patches")
         .and_then(JsonData::as_array)
         .expect("patches array");
@@ -52,7 +52,7 @@ fn test_generate_frames_truncates_an_object_root_at_max_depth() {
     let frames = frames(&input, 2);
 
     assert_eq!(
-        frames[0].payload(),
-        &JsonData::from(json!({"a": {"b": null}}))
+        payload_data(&frames[0]),
+        JsonData::from(json!({"a": {"b": null}}))
     );
 }

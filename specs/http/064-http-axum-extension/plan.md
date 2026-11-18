@@ -6,16 +6,17 @@ tags:
   - plan
   - http
 created: 2026-11-15
-status: partial
+status: obsolete
 related:
   - "[[064-http-axum-extension/spec|064 spec]]"
   - "[[constitution]]"
-code:
-  - crates/pjs-core/src/infrastructure/http/axum_extension.rs
 verified: 2026-11-15
 ---
 
 # Plan (as-built): `PjsExtension`
+
+> [!info] Status
+> `obsolete`: removed in #748; kept for history.
 
 ## Architecture
 

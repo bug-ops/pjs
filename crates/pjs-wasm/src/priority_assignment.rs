@@ -9,7 +9,7 @@
 //! through [`crate::priority_config::PriorityConfigBuilder`]); the actual
 //! algorithm now lives entirely in the domain crate.
 
-use pjson_rs_domain::services::{PriorityHeuristicConfig, compute_priority};
+use pjson_rs_domain::services::{PriorityHeuristicConfig, ValueShape, compute_priority};
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority};
 use std::collections::HashMap;
 
@@ -52,12 +52,6 @@ impl Default for PriorityConfig {
 }
 
 impl PriorityConfig {
-    /// Create configuration with the default rule set.
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Add a critical-tier field name.
     pub fn add_critical_field(&mut self, field: String) {
         push_unique(&mut self.critical_fields, field);
@@ -79,14 +73,14 @@ impl PriorityConfig {
         push_unique(&mut self.background_patterns, pattern);
     }
 
-    /// Project this config onto the domain heuristic config so the parity
-    /// between transports is preserved by construction.
-    pub fn to_heuristic(&self) -> PriorityHeuristicConfig {
+    /// Consume this config and project it onto the domain heuristic config,
+    /// so the parity between transports is preserved by construction.
+    pub fn into_heuristic(self) -> PriorityHeuristicConfig {
         PriorityHeuristicConfig {
-            critical_fields: self.critical_fields.clone(),
-            high_fields: self.high_fields.clone(),
-            low_fields: self.low_patterns.clone(),
-            background_fields: self.background_patterns.clone(),
+            critical_fields: self.critical_fields,
+            high_fields: self.high_fields,
+            low_fields: self.low_patterns,
+            background_fields: self.background_patterns,
             large_array_threshold: self.large_array_threshold,
             large_string_threshold: self.large_string_threshold,
             ..PriorityHeuristicConfig::default()
@@ -102,72 +96,37 @@ fn push_unique(dest: &mut Vec<String>, value: String) {
 
 /// Priority assignment engine for JSON data.
 ///
-/// Internally it caches a [`PriorityHeuristicConfig`] derived from
-/// [`PriorityConfig`]; mutations through `config_mut` rebuild the cache lazily
-/// on the next priority call.
+/// Holds the [`PriorityHeuristicConfig`] projected once from the
+/// [`PriorityConfig`] it is built with; the configuration is immutable
+/// afterwards.
 #[derive(Debug)]
 pub struct PriorityAssigner {
-    config: PriorityConfig,
     heuristic: PriorityHeuristicConfig,
 }
 
 impl PriorityAssigner {
     /// Create a priority assigner with the default configuration.
     pub fn new() -> Self {
-        let config = PriorityConfig::default();
-        let heuristic = config.to_heuristic();
-        Self { config, heuristic }
+        Self::with_config(PriorityConfig::default())
     }
 
     /// Create a priority assigner with a custom configuration.
     pub fn with_config(config: PriorityConfig) -> Self {
-        let heuristic = config.to_heuristic();
-        Self { config, heuristic }
-    }
-
-    /// Borrow the underlying configuration.
-    #[allow(dead_code)]
-    pub fn config(&self) -> &PriorityConfig {
-        &self.config
-    }
-
-    /// Mutably borrow the configuration. The cached heuristic config is
-    /// rebuilt on the next [`Self::calculate_field_priority`] call.
-    #[allow(dead_code)]
-    pub fn config_mut(&mut self) -> &mut PriorityConfig {
-        &mut self.config
-    }
-
-    fn refreshed_heuristic(&self) -> PriorityHeuristicConfig {
-        self.config.to_heuristic()
+        Self {
+            heuristic: config.into_heuristic(),
+        }
     }
 
     /// Calculate priority for a single `(path, value)` pair.
     ///
     /// Delegates entirely to
-    /// [`pjson_rs_domain::services::compute_priority`].
+    /// [`pjson_rs_domain::services::compute_priority`] and allocates nothing.
     pub fn calculate_field_priority(&self, path: &JsonPath, value: &JsonData) -> Priority {
-        // The cached heuristic is used when the config has not been mutated
-        // since construction; otherwise we project on the fly. The cost of
-        // projection is small (vector clones), and `config_mut` is rare on
-        // the hot path.
-        let derived = self.refreshed_heuristic();
-        let cfg = if heuristic_eq(&self.heuristic, &derived) {
-            &self.heuristic
-        } else {
-            &derived
-        };
-        compute_priority(cfg, path, value)
+        compute_priority(&self.heuristic, path, ValueShape::from(value))
     }
 
     /// Extract every field with its priority, walking objects recursively up
-    /// to the security depth limit.
-    #[allow(dead_code)]
-    pub fn extract_prioritized_fields(&self, data: &JsonData) -> Vec<PrioritizedField> {
-        self.extract_prioritized_fields_with_limit(data, crate::security::DEFAULT_MAX_DEPTH)
-    }
-
-    /// Extract every field with its priority using a custom depth limit.
+    /// to `max_depth`.
     pub fn extract_prioritized_fields_with_limit(
         &self,
         data: &JsonData,
@@ -234,21 +193,8 @@ impl Default for PriorityAssigner {
     }
 }
 
-fn heuristic_eq(a: &PriorityHeuristicConfig, b: &PriorityHeuristicConfig) -> bool {
-    a.critical_fields == b.critical_fields
-        && a.high_fields == b.high_fields
-        && a.medium_fields == b.medium_fields
-        && a.low_fields == b.low_fields
-        && a.background_fields == b.background_fields
-        && a.large_array_threshold == b.large_array_threshold
-        && a.mid_array_threshold == b.mid_array_threshold
-        && a.large_string_threshold == b.large_string_threshold
-        && a.small_string_threshold == b.small_string_threshold
-        && a.large_object_threshold == b.large_object_threshold
-}
-
 /// A field paired with its assigned priority and value, returned by
-/// [`PriorityAssigner::extract_prioritized_fields`].
+/// [`PriorityAssigner::extract_prioritized_fields_with_limit`].
 #[derive(Debug, Clone)]
 pub struct PrioritizedField {
     /// JSON path to the field.
@@ -257,18 +203,6 @@ pub struct PrioritizedField {
     pub priority: Priority,
     /// Value at this path (cloned at extraction time).
     pub value: JsonData,
-}
-
-impl PrioritizedField {
-    /// Construct a prioritized field directly. Mostly useful in tests.
-    #[allow(dead_code)]
-    pub fn new(path: JsonPath, priority: Priority, value: JsonData) -> Self {
-        Self {
-            path,
-            priority,
-            value,
-        }
-    }
 }
 
 /// Group prioritized fields by their priority level.
@@ -314,7 +248,7 @@ mod tests {
 
     #[test]
     fn config_modification() {
-        let mut config = PriorityConfig::new();
+        let mut config = PriorityConfig::default();
         config.add_critical_field("custom_id".to_string());
         assert!(config.critical_fields.iter().any(|i| i == "custom_id"));
 
@@ -372,22 +306,6 @@ mod tests {
     }
 
     #[test]
-    fn config_mut_rebuilds_heuristic_cache() {
-        let mut assigner = PriorityAssigner::new();
-        assigner
-            .config_mut()
-            .add_critical_field("user_id".to_string());
-
-        let path = JsonPath::new("$.user_id").expect("valid path");
-        let value = JsonData::Integer(1);
-        assert_eq!(
-            assigner.calculate_field_priority(&path, &value),
-            Priority::CRITICAL,
-            "mutating the config should be reflected in subsequent priority calls",
-        );
-    }
-
-    #[test]
     fn extract_prioritized_fields_round_trip() {
         let assigner = PriorityAssigner::new();
 
@@ -396,7 +314,8 @@ mod tests {
         obj.insert("name".to_string(), JsonData::String("Test".to_string()));
         let data = JsonData::Object(obj);
 
-        let fields = assigner.extract_prioritized_fields(&data);
+        let fields = assigner
+            .extract_prioritized_fields_with_limit(&data, crate::security::DEFAULT_MAX_DEPTH);
         assert_eq!(fields.len(), 2);
 
         let id_field = fields
@@ -412,24 +331,20 @@ mod tests {
         assert_eq!(name_field.priority, Priority::HIGH);
     }
 
+    fn field(priority: Priority, text: &str) -> PrioritizedField {
+        PrioritizedField {
+            path: JsonPath::root(),
+            priority,
+            value: JsonData::String(text.to_string()),
+        }
+    }
+
     #[test]
     fn group_by_priority_buckets_correctly() {
         let fields = vec![
-            PrioritizedField::new(
-                JsonPath::root(),
-                Priority::HIGH,
-                JsonData::String("a".to_string()),
-            ),
-            PrioritizedField::new(
-                JsonPath::root(),
-                Priority::HIGH,
-                JsonData::String("b".to_string()),
-            ),
-            PrioritizedField::new(
-                JsonPath::root(),
-                Priority::LOW,
-                JsonData::String("c".to_string()),
-            ),
+            field(Priority::HIGH, "a"),
+            field(Priority::HIGH, "b"),
+            field(Priority::LOW, "c"),
         ];
 
         let groups = group_by_priority(fields);

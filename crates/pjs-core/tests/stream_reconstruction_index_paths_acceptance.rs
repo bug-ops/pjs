@@ -1,17 +1,14 @@
-//! Acceptance tests for #719: `Set`, `Replace` and `Remove` patches whose last
-//! path segment is an array index apply positionally, and every kind mismatch
-//! is reported with the matching `PatchError`.
-//!
-//! Remove asymmetry (deliberate): removing a missing object key is a no-op
-//! (the document is already in the target state), while removing an
-//! out-of-range array index is an error (the sender's view of the array has
-//! diverged).
+//! Acceptance tests for #719: `Set` patches whose last path segment is an
+//! array index apply positionally, and every kind mismatch is reported with
+//! the matching `PatchError`. Since #751 the op vocabulary is `WirePatch`, so
+//! the former `Replace` and `Remove` rows no longer exist.
 
 use pjson_rs::Error;
 use pjson_rs::domain::value_objects::{JsonPath, PathSegment, Priority};
 use pjson_rs::error::PatchError;
 use pjson_rs::stream::JsonReconstructor;
-use pjson_rs::stream::priority::{JsonPatch, PatchOperation, PriorityStreamFrame};
+use pjson_rs::stream::patch::WirePatch;
+use pjson_rs::stream::priority::{JsonPatch, PriorityStreamFrame};
 use serde_json::{Value, json};
 
 fn initial() -> Value {
@@ -26,22 +23,14 @@ fn key(k: &str) -> PathSegment {
     PathSegment::Key(k.to_owned())
 }
 
-#[derive(Clone, Copy)]
-enum Op {
-    Set,
-    Replace,
-    Remove,
-}
-
-fn operation(op: Op) -> PatchOperation {
-    match op {
-        Op::Set => PatchOperation::Set { value: json!(9) },
-        Op::Replace => PatchOperation::Replace { value: json!(9) },
-        Op::Remove => PatchOperation::Remove,
+fn set_nine(target: JsonPath) -> WirePatch {
+    WirePatch::Set {
+        path: target,
+        value: json!(9),
     }
 }
 
-fn apply(op: PatchOperation, target: JsonPath) -> (Result<(), Error>, Value) {
+fn apply(wire: WirePatch) -> (Result<(), Error>, Value) {
     let mut reconstructor = JsonReconstructor::new();
     reconstructor.add_frame(PriorityStreamFrame::Skeleton {
         data: initial(),
@@ -50,8 +39,7 @@ fn apply(op: PatchOperation, target: JsonPath) -> (Result<(), Error>, Value) {
     });
     reconstructor.add_frame(PriorityStreamFrame::Patch {
         patches: vec![JsonPatch {
-            path: target,
-            operation: op,
+            patch: wire,
             priority: Priority::HIGH,
         }],
         priority: Priority::HIGH,
@@ -70,53 +58,25 @@ fn patch_error(result: Result<(), Error>) -> PatchError {
 #[test]
 fn apply_patch_rejects_with_error_and_leaves_state_unchanged() {
     let idx = PathSegment::Index;
-    let rows: Vec<(&str, Op, Vec<PathSegment>, PatchError)> = vec![
+    let rows: Vec<(&str, Vec<PathSegment>, PatchError)> = vec![
         (
             "set on object with index",
-            Op::Set,
-            vec![key("a"), idx(0)],
-            PatchError::ExpectedArray,
-        ),
-        (
-            "replace on object with index",
-            Op::Replace,
-            vec![key("a"), idx(0)],
-            PatchError::ExpectedArray,
-        ),
-        (
-            "remove on object with index",
-            Op::Remove,
             vec![key("a"), idx(0)],
             PatchError::ExpectedArray,
         ),
         (
             "set index out of range",
-            Op::Set,
-            vec![key("arr"), idx(2)],
-            PatchError::IndexOutOfBounds { index: 2, len: 2 },
-        ),
-        (
-            "remove index out of range",
-            Op::Remove,
             vec![key("arr"), idx(2)],
             PatchError::IndexOutOfBounds { index: 2, len: 2 },
         ),
         (
             "set key on array",
-            Op::Set,
             vec![key("arr"), key("x")],
             PatchError::ExpectedObject,
         ),
-        (
-            "remove key on array",
-            Op::Remove,
-            vec![key("arr"), key("x")],
-            PatchError::ExpectedObject,
-        ),
-        ("remove root", Op::Remove, vec![], PatchError::NoTargetKey),
     ];
-    for (name, op, segments, expected) in rows {
-        let (result, state) = apply(operation(op), path(&segments));
+    for (name, segments, expected) in rows {
+        let (result, state) = apply(set_nine(path(&segments)));
         assert_eq!(patch_error(result), expected, "{name}");
         assert_eq!(state, initial(), "{name}: state must be unchanged");
     }
@@ -125,42 +85,21 @@ fn apply_patch_rejects_with_error_and_leaves_state_unchanged() {
 #[test]
 fn apply_patch_applies() {
     let idx = PathSegment::Index;
-    let rows: Vec<(&str, Op, Vec<PathSegment>, Value)> = vec![
+    let rows: Vec<(&str, Vec<PathSegment>, Value)> = vec![
         (
             "set index",
-            Op::Set,
             vec![key("arr"), idx(1)],
             json!({"a": {"k": 1}, "arr": [1, 9]}),
-        ),
-        (
-            "replace index",
-            Op::Replace,
-            vec![key("arr"), idx(1)],
-            json!({"a": {"k": 1}, "arr": [1, 9]}),
-        ),
-        (
-            "remove index shifts later elements",
-            Op::Remove,
-            vec![key("arr"), idx(0)],
-            json!({"a": {"k": 1}, "arr": [2]}),
         ),
         (
             "set key inserts",
-            Op::Set,
             vec![key("a"), key("n")],
             json!({"a": {"k": 1, "n": 9}, "arr": [1, 2]}),
         ),
-        ("set root replaces document", Op::Set, vec![], json!(9)),
-        // Q1 asymmetry: a missing key is already in the target state.
-        (
-            "remove missing key is a no-op",
-            Op::Remove,
-            vec![key("a"), key("missing")],
-            initial(),
-        ),
+        ("set root replaces document", vec![], json!(9)),
     ];
-    for (name, op, segments, expected) in rows {
-        let (result, state) = apply(operation(op), path(&segments));
+    for (name, segments, expected) in rows {
+        let (result, state) = apply(set_nine(path(&segments)));
         result.unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(state, expected, "{name}");
     }
@@ -168,21 +107,17 @@ fn apply_patch_applies() {
 
 #[test]
 fn apply_patch_append_extends_array_and_rejects_non_array() {
-    let (result, state) = apply(
-        PatchOperation::Append {
-            values: vec![json!(3)],
-        },
-        path(&[key("arr")]),
-    );
+    let (result, state) = apply(WirePatch::Append {
+        path: path(&[key("arr")]),
+        values: vec![json!(3)],
+    });
     result.expect("append must apply");
     assert_eq!(state, json!({"a": {"k": 1}, "arr": [1, 2, 3]}));
 
-    let (result, state) = apply(
-        PatchOperation::Append {
-            values: vec![json!(3)],
-        },
-        path(&[key("a")]),
-    );
+    let (result, state) = apply(WirePatch::Append {
+        path: path(&[key("a")]),
+        values: vec![json!(3)],
+    });
     assert_eq!(patch_error(result), PatchError::ExpectedArray);
     assert_eq!(state, initial());
 }

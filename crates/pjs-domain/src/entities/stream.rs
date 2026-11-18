@@ -3,7 +3,7 @@
 use crate::{
     DomainError, DomainResult,
     entities::{Frame, frame::FramePatch},
-    value_objects::{JsonData, JsonPath, Priority, SessionId, StreamId},
+    value_objects::{JsonData, JsonPath, PathSegment, Priority, SessionId, StreamId},
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -73,9 +73,42 @@ pub struct StreamStats {
     pub average_frame_size: f64,
 }
 
+/// Lifecycle position of a [`Stream`]; owns the data that only exists in a
+/// given state, so `completed_at` and the failure reason cannot disagree with it.
+#[derive(Debug, Clone)]
+enum Lifecycle {
+    Preparing,
+    Streaming,
+    Completed { at: Timestamp },
+    Failed { at: Timestamp, reason: String },
+    Cancelled { at: Timestamp },
+}
+
 /// Priority data stream entity
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Wire format
+///
+/// Serializes as the stream layout with `state`, `completed_at` and, only in
+/// the `Failed` state, `failure_reason`. Decoding validates that these agree
+/// with the state and that `next_sequence` is at least 1.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "StreamWire")]
 pub struct Stream {
+    id: StreamId,
+    session_id: SessionId,
+    lifecycle: Lifecycle,
+    config: StreamConfig,
+    stats: StreamStats,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+    next_sequence: u64,
+    source_data: Option<JsonData>,
+    metadata: HashMap<String, String>,
+}
+
+/// Private decoding layout of [`Stream`]; validated by `TryFrom`.
+#[derive(Deserialize)]
+struct StreamWire {
     #[serde(with = "crate::serde_support::stream_id")]
     id: StreamId,
     #[serde(with = "crate::serde_support::session_id")]
@@ -86,9 +119,88 @@ pub struct Stream {
     created_at: Timestamp,
     updated_at: Timestamp,
     completed_at: Option<Timestamp>,
+    #[serde(default)]
+    failure_reason: Option<String>,
     next_sequence: u64,
     source_data: Option<JsonData>,
     metadata: HashMap<String, String>,
+}
+
+/// Borrowed encoding view of [`Stream`], so serializing never clones it.
+#[derive(Serialize)]
+struct StreamRef<'a> {
+    #[serde(with = "crate::serde_support::stream_id")]
+    id: StreamId,
+    #[serde(with = "crate::serde_support::session_id")]
+    session_id: SessionId,
+    state: &'a StreamState,
+    config: &'a StreamConfig,
+    stats: &'a StreamStats,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+    completed_at: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<&'a str>,
+    next_sequence: u64,
+    source_data: &'a Option<JsonData>,
+    metadata: &'a HashMap<String, String>,
+}
+
+impl Serialize for Stream {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        StreamRef {
+            id: self.id,
+            session_id: self.session_id,
+            state: self.state(),
+            config: &self.config,
+            stats: &self.stats,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            completed_at: self.completed_at(),
+            failure_reason: self.failure_reason(),
+            next_sequence: self.next_sequence,
+            source_data: &self.source_data,
+            metadata: &self.metadata,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl TryFrom<StreamWire> for Stream {
+    type Error = DomainError;
+
+    fn try_from(wire: StreamWire) -> DomainResult<Self> {
+        let lifecycle = match (wire.state, wire.completed_at, wire.failure_reason) {
+            (StreamState::Preparing, None, None) => Lifecycle::Preparing,
+            (StreamState::Streaming, None, None) => Lifecycle::Streaming,
+            (StreamState::Completed, Some(at), None) => Lifecycle::Completed { at },
+            (StreamState::Cancelled, Some(at), None) => Lifecycle::Cancelled { at },
+            (StreamState::Failed, Some(at), Some(reason)) => Lifecycle::Failed { at, reason },
+            (state, completed_at, failure_reason) => {
+                return Err(DomainError::InvalidStreamState(format!(
+                    "state {state:?} disagrees with completed_at {completed_at:?} and \
+                     failure_reason {failure_reason:?}"
+                )));
+            }
+        };
+        if wire.next_sequence == 0 {
+            return Err(DomainError::InvalidStreamState(
+                "next_sequence must be at least 1".to_string(),
+            ));
+        }
+        Ok(Self {
+            id: wire.id,
+            session_id: wire.session_id,
+            lifecycle,
+            config: wire.config,
+            stats: wire.stats,
+            created_at: wire.created_at,
+            updated_at: wire.updated_at,
+            next_sequence: wire.next_sequence,
+            source_data: wire.source_data,
+            metadata: wire.metadata,
+        })
+    }
 }
 
 impl Stream {
@@ -99,12 +211,11 @@ impl Stream {
         Self {
             id: StreamId::new(),
             session_id,
-            state: StreamState::Preparing,
+            lifecycle: Lifecycle::Preparing,
             config,
             stats: StreamStats::default(),
             created_at: now,
             updated_at: now,
-            completed_at: None,
             next_sequence: 1,
             source_data: Some(source_data),
             metadata: HashMap::new(),
@@ -123,7 +234,13 @@ impl Stream {
 
     /// Get current state
     pub fn state(&self) -> &StreamState {
-        &self.state
+        match self.lifecycle {
+            Lifecycle::Preparing => &StreamState::Preparing,
+            Lifecycle::Streaming => &StreamState::Streaming,
+            Lifecycle::Completed { .. } => &StreamState::Completed,
+            Lifecycle::Failed { .. } => &StreamState::Failed,
+            Lifecycle::Cancelled { .. } => &StreamState::Cancelled,
+        }
     }
 
     /// Get configuration
@@ -148,7 +265,23 @@ impl Stream {
 
     /// Get completion timestamp
     pub fn completed_at(&self) -> Option<Timestamp> {
-        self.completed_at
+        match self.lifecycle {
+            Lifecycle::Preparing | Lifecycle::Streaming => None,
+            Lifecycle::Completed { at }
+            | Lifecycle::Failed { at, .. }
+            | Lifecycle::Cancelled { at } => Some(at),
+        }
+    }
+
+    /// Reason the stream failed, `Some` only in the `Failed` state.
+    ///
+    /// Independent of [`Self::metadata`]: writing an `error` metadata entry
+    /// neither sets nor changes it.
+    pub fn failure_reason(&self) -> Option<&str> {
+        match &self.lifecycle {
+            Lifecycle::Failed { reason, .. } => Some(reason),
+            _ => None,
+        }
     }
 
     /// Get source data
@@ -169,74 +302,80 @@ impl Stream {
 
     /// Start streaming (transition to Streaming state)
     pub fn start_streaming(&mut self) -> DomainResult<()> {
-        match self.state {
-            StreamState::Preparing => {
-                self.state = StreamState::Streaming;
+        match self.lifecycle {
+            Lifecycle::Preparing => {
+                self.lifecycle = Lifecycle::Streaming;
                 self.update_timestamp();
                 Ok(())
             }
-            _ => Err(DomainError::InvalidStateTransition(format!(
-                "Cannot start streaming from state: {:?}",
-                self.state
-            ))),
+            _ => Err(self.invalid_transition("start streaming")),
         }
     }
 
     /// Complete stream successfully
     pub fn complete(&mut self) -> DomainResult<()> {
-        match self.state {
-            StreamState::Streaming => {
-                self.state = StreamState::Completed;
-                self.completed_at = Some(Timestamp::now());
+        match self.lifecycle {
+            Lifecycle::Streaming => {
+                self.lifecycle = Lifecycle::Completed {
+                    at: Timestamp::now(),
+                };
                 self.update_timestamp();
                 Ok(())
             }
-            _ => Err(DomainError::InvalidStateTransition(format!(
-                "Cannot complete stream from state: {:?}",
-                self.state
-            ))),
+            _ => Err(self.invalid_transition("complete stream")),
         }
     }
 
-    /// Fail stream with error
+    /// Fail stream with error; the reason is readable through
+    /// [`Self::failure_reason`].
     pub fn fail(&mut self, error: String) -> DomainResult<()> {
-        match self.state {
-            StreamState::Preparing | StreamState::Streaming => {
-                self.state = StreamState::Failed;
-                self.completed_at = Some(Timestamp::now());
-                self.add_metadata("error".to_string(), error);
+        match self.lifecycle {
+            Lifecycle::Preparing | Lifecycle::Streaming => {
+                self.lifecycle = Lifecycle::Failed {
+                    at: Timestamp::now(),
+                    reason: error,
+                };
+                self.update_timestamp();
                 Ok(())
             }
-            _ => Err(DomainError::InvalidStateTransition(format!(
-                "Cannot fail stream from state: {:?}",
-                self.state
-            ))),
+            _ => Err(self.invalid_transition("fail stream")),
         }
     }
 
     /// Cancel stream
     pub fn cancel(&mut self) -> DomainResult<()> {
-        match self.state {
-            StreamState::Preparing | StreamState::Streaming => {
-                self.state = StreamState::Cancelled;
-                self.completed_at = Some(Timestamp::now());
+        match self.lifecycle {
+            Lifecycle::Preparing | Lifecycle::Streaming => {
+                self.lifecycle = Lifecycle::Cancelled {
+                    at: Timestamp::now(),
+                };
                 self.update_timestamp();
                 Ok(())
             }
-            _ => Err(DomainError::InvalidStateTransition(format!(
-                "Cannot cancel stream from state: {:?}",
-                self.state
-            ))),
+            _ => Err(self.invalid_transition("cancel stream")),
+        }
+    }
+
+    fn invalid_transition(&self, action: &str) -> DomainError {
+        DomainError::InvalidStateTransition(format!(
+            "Cannot {action} from state: {:?}",
+            self.state()
+        ))
+    }
+
+    fn ensure_streaming(&self) -> DomainResult<()> {
+        if matches!(self.lifecycle, Lifecycle::Streaming) {
+            Ok(())
+        } else {
+            Err(DomainError::InvalidStreamState(
+                "Stream must be in streaming state to create frames".to_string(),
+            ))
         }
     }
 
     /// Generate skeleton frame for the stream
     pub fn create_skeleton_frame(&mut self) -> DomainResult<Frame> {
-        if !matches!(self.state, StreamState::Streaming) {
-            return Err(DomainError::InvalidStreamState(
-                "Stream must be in streaming state to create frames".to_string(),
-            ));
-        }
+        self.ensure_streaming()?;
 
         let skeleton_data = self.source_data.as_ref().ok_or_else(|| {
             DomainError::InvalidStreamState("No source data available for skeleton".to_string())
@@ -277,17 +416,13 @@ impl Stream {
         &self,
         priority_threshold: Priority,
     ) -> DomainResult<Vec<(FramePatch, Priority)>> {
-        if !matches!(self.state, StreamState::Streaming) {
-            return Err(DomainError::InvalidStreamState(
-                "Stream must be in streaming state to create frames".to_string(),
-            ));
-        }
+        self.ensure_streaming()?;
 
         let source_data = self.source_data.as_ref().ok_or_else(|| {
             DomainError::InvalidStreamState("No source data available for patches".to_string())
         })?;
 
-        self.extract_patches(source_data, priority_threshold)
+        Ok(self.extract_patches(source_data, priority_threshold))
     }
 
     /// Turn already-extracted prioritized patches (from
@@ -296,7 +431,7 @@ impl Stream {
     /// [`Self::create_patch_frames`].
     ///
     /// `max_frames` only bounds the number of frames returned, not the work
-    /// done to produce them: every patch in `patches` is still cloned into
+    /// done to produce them: every patch in `patches` is still moved into
     /// some frame, so this call's cost is `O(patches.len())`, proportional to
     /// the total number of patches extracted, not to `max_frames`.
     ///
@@ -316,11 +451,7 @@ impl Stream {
         patches: Vec<(FramePatch, Priority)>,
         max_frames: usize,
     ) -> DomainResult<Vec<Frame>> {
-        if !matches!(self.state, StreamState::Streaming) {
-            return Err(DomainError::InvalidStreamState(
-                "Stream must be in streaming state to create frames".to_string(),
-            ));
-        }
+        self.ensure_streaming()?;
 
         Self::chunk_patches_for_commit(patches, max_frames)
             .into_iter()
@@ -366,11 +497,7 @@ impl Stream {
         priority: Priority,
         frame_patches: Vec<FramePatch>,
     ) -> DomainResult<Frame> {
-        if !matches!(self.state, StreamState::Streaming) {
-            return Err(DomainError::InvalidStreamState(
-                "Stream must be in streaming state to create frames".to_string(),
-            ));
-        }
+        self.ensure_streaming()?;
 
         let frame = Frame::patch(self.id, self.next_sequence, priority, frame_patches)?;
         self.record_frame_created(&frame);
@@ -379,11 +506,7 @@ impl Stream {
 
     /// Create completion frame
     pub fn create_completion_frame(&mut self, checksum: Option<String>) -> DomainResult<Frame> {
-        if !matches!(self.state, StreamState::Streaming) {
-            return Err(DomainError::InvalidStreamState(
-                "Stream must be in streaming state to create frames".to_string(),
-            ));
-        }
+        self.ensure_streaming()?;
 
         let frame = Frame::complete(self.id, self.next_sequence, checksum);
         self.record_frame_created(&frame);
@@ -393,25 +516,22 @@ impl Stream {
 
     /// Check if stream is active
     pub fn is_active(&self) -> bool {
-        matches!(self.state, StreamState::Preparing | StreamState::Streaming)
+        matches!(self.lifecycle, Lifecycle::Preparing | Lifecycle::Streaming)
     }
 
     /// Check if stream is finished
     pub fn is_finished(&self) -> bool {
-        matches!(
-            self.state,
-            StreamState::Completed | StreamState::Failed | StreamState::Cancelled
-        )
+        !self.is_active()
     }
 
     /// Get stream duration
     pub fn duration(&self) -> Option<jiff::SignedDuration> {
-        self.completed_at.map(|end| end - self.created_at)
+        self.completed_at().map(|end| end - self.created_at)
     }
 
     /// Calculate stream progress (0.0 to 1.0)
     pub fn progress(&self) -> f64 {
-        match self.state {
+        match self.state() {
             StreamState::Preparing => 0.0,
             StreamState::Streaming => {
                 // Estimate based on frames sent vs expected
@@ -519,56 +639,66 @@ impl Stream {
     /// frame). Each patch is paired with a computed priority so that
     /// [`Self::chunk_patches_for_commit`] can group chunks by maximum
     /// priority. Patches whose priority falls below `threshold` are dropped.
-    fn extract_patches(
-        &self,
-        data: &JsonData,
-        threshold: Priority,
-    ) -> DomainResult<Vec<(crate::entities::frame::FramePatch, Priority)>> {
+    fn extract_patches(&self, data: &JsonData, threshold: Priority) -> Vec<(FramePatch, Priority)> {
+        let heuristic = self.heuristic();
         let mut patches = Vec::new();
-        self.collect_patches(data, &JsonPath::root(), threshold, &mut patches)?;
+        Self::collect_patches(
+            data,
+            &mut JsonPath::root(),
+            threshold,
+            &heuristic,
+            &mut patches,
+        );
         // Sort by priority descending so high-priority patches land in earlier
         // frames within the chunk-based batch layout.
         patches.sort_by_key(|p| core::cmp::Reverse(p.1));
-        Ok(patches)
+        patches
     }
 
     /// Recursive walker that emits prioritized patches into `out`.
+    ///
+    /// Walks one mutable `path` buffer; a leaf is priced on the borrowed
+    /// buffer, and the path and value are cloned only when a patch is emitted.
     fn collect_patches(
-        &self,
         data: &JsonData,
-        path: &JsonPath,
+        path: &mut JsonPath,
         threshold: Priority,
-        out: &mut Vec<(crate::entities::frame::FramePatch, Priority)>,
-    ) -> DomainResult<()> {
+        heuristic: &crate::services::PriorityHeuristicConfig,
+        out: &mut Vec<(FramePatch, Priority)>,
+    ) {
         if let JsonData::Object(map) = data {
             for (key, value) in map.iter() {
-                self.collect_patches(value, &path.append_key(key), threshold, out)?;
+                path.push(PathSegment::Key(key.clone()));
+                Self::collect_patches(value, path, threshold, heuristic, out);
+                path.pop();
             }
-            return Ok(());
+            return;
         }
 
-        let priority = self.compute_priority(path, data);
+        let priority = crate::services::compute_priority(
+            heuristic,
+            path,
+            crate::services::ValueShape::from(data),
+        );
         if priority >= threshold {
-            let patch = crate::entities::frame::FramePatch::set(path.clone(), data.clone());
-            out.push((patch, priority));
+            out.push((FramePatch::set(path.clone(), data.clone()), priority));
         }
-        Ok(())
     }
 
-    /// Compute a priority for a patch by delegating to
-    /// [`crate::services::compute_priority`].
+    /// Build the priority heuristic for one extraction run.
     ///
     /// The per-stream `priority_rules` map is mapped onto
     /// [`PriorityHeuristicConfig::overrides`] so that user-provided rules keep
-    /// winning over the shared heuristic. This is the single entry point used
-    /// by both the HTTP transport (via `extract_patches`) and the WebAssembly
-    /// bindings; see #242 for the divergence this resolves.
-    fn compute_priority(&self, path: &JsonPath, value: &JsonData) -> Priority {
+    /// winning over the shared heuristic. Built once per
+    /// [`Self::extract_patches`] call and fed to
+    /// [`crate::services::compute_priority`], the same entry point the
+    /// WebAssembly bindings use; see #242 for the divergence this resolves.
+    fn heuristic(&self) -> crate::services::PriorityHeuristicConfig {
         let mut cfg = crate::services::PriorityHeuristicConfig::default();
         if !self.config.priority_rules.is_empty() {
             cfg.overrides = self.config.priority_rules.clone();
         }
-        crate::services::compute_priority(&cfg, path, value)
+        cfg
     }
 
     /// Group prioritized patches into per-frame chunks without constructing
@@ -630,22 +760,24 @@ impl Stream {
         }
 
         let chunk_size = patches.len().div_ceil(max_frames).max(1);
+        let mut chunks = Vec::with_capacity(patches.len().div_ceil(chunk_size));
+        let mut remaining = patches.into_iter();
 
-        patches
-            .chunks(chunk_size)
-            .map(|chunk| {
-                let priority = chunk
-                    .iter()
-                    .map(|(_, p)| *p)
-                    .max()
-                    .unwrap_or(Priority::MEDIUM);
-
-                let frame_patches: Vec<FramePatch> =
-                    chunk.iter().map(|(patch, _)| patch.clone()).collect();
-
-                (priority, frame_patches)
-            })
-            .collect()
+        loop {
+            let mut priority: Option<Priority> = None;
+            let frame_patches: Vec<FramePatch> = remaining
+                .by_ref()
+                .take(chunk_size)
+                .map(|(patch, patch_priority)| {
+                    priority = priority.max(Some(patch_priority));
+                    patch
+                })
+                .collect();
+            if frame_patches.is_empty() {
+                return chunks;
+            }
+            chunks.push((priority.unwrap_or(Priority::MEDIUM), frame_patches));
+        }
     }
 }
 
@@ -844,7 +976,7 @@ mod tests {
             .extract_prioritized_patches(Priority::BACKGROUND)
             .expect("patches");
 
-        let mut paths: Vec<String> = patches.iter().map(|(p, _)| p.path.to_string()).collect();
+        let mut paths: Vec<String> = patches.iter().map(|(p, _)| p.path().to_string()).collect();
         paths.sort();
         assert_eq!(paths, ["$.ok", r#"$["a.b"].c"#]);
     }
@@ -861,8 +993,8 @@ mod tests {
             .expect("skeleton generates");
         let mut state = serde_json::to_value(&skeleton).expect("JsonData serializes");
         for (patch, _) in &patches {
-            let value = serde_json::to_value(&patch.value).expect("JsonData serializes");
-            let Some((last, parents)) = patch.path.segments().split_last() else {
+            let value = serde_json::to_value(patch.value()).expect("JsonData serializes");
+            let Some((last, parents)) = patch.path().segments().split_last() else {
                 state = value;
                 continue;
             };
@@ -907,5 +1039,17 @@ mod tests {
             .expect("serializes");
 
         assert_eq!(skeleton, serde_json::json!({"a.b": 0, "": {"x": 0}}));
+    }
+
+    #[test]
+    fn test_chunk_patches_huge_max_frames_sizes_output_by_chunk_count() {
+        let patches = vec![(
+            FramePatch::set(JsonPath::root(), JsonData::Null),
+            Priority::HIGH,
+        )];
+
+        let chunks = Stream::chunk_patches_for_commit(patches, usize::MAX);
+
+        assert_eq!(chunks.len(), 1);
     }
 }

@@ -122,7 +122,7 @@ The route never returns 406. `StreamFormat::Binary` is normalised to `Json` beca
 - The route is not a live stream; `ResponseBodyTimeoutLayer` is near a no-op here because the page is materialised in memory before streaming ([[061-http-middleware-stack/spec|061]]).
 - `BatchFrameStream` is wired into production only by this one route; [[035-streaming-module-unreachable/spec|035]] described a zero-caller state that no longer holds for `BatchFrameStream`.
 - Negotiation is implemented with `headers-accept` + `mediatype` plus a pre-sanitiser, so [[036-accept-header-negotiation-crate/spec|036]] is realised; the sanitiser still hand-parses `q`.
-- Query-string `format` selector: `StreamParams.format` is exported but unused (see [[060-http-rest-api/spec|060]]); `PjsExtension` negotiates separately with substring matching ([[064-http-axum-extension/spec|064]]).
+- Query-string `format` selector: `StreamParams.format` is exported but unused (see [[060-http-rest-api/spec|060]]).
 - Batch size is fixed at 1 in the route; the `Binary` array format has no consumer.
 
 ## See Also

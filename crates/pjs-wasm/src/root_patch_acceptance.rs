@@ -4,6 +4,7 @@
 //! Frame generation is crate-private, so this file is a test-only module of the
 //! crate (see `lib.rs`), like `frame_generation_acceptance.rs`.
 
+use crate::frame_generation::payload_data;
 use crate::{PjsParser, PriorityStream};
 use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FrameType;
@@ -50,12 +51,12 @@ fn patch_frames(frames: &[Frame]) -> Vec<&Frame> {
         .collect()
 }
 
-fn patches_of(frame: &Frame) -> &[JsonData] {
-    frame
-        .payload()
+fn patches_of(frame: &Frame) -> Vec<JsonData> {
+    payload_data(frame)
         .get("patches")
         .and_then(JsonData::as_array)
         .expect("patch frame payload carries a patches array")
+        .to_vec()
 }
 
 /// Applies skeleton then every patch; only root `$` `set` patches are valid for a non-object root.
@@ -63,9 +64,8 @@ fn reconstruct_root_only(frames: &[Frame]) -> JsonData {
     let mut state = frames
         .iter()
         .find(|f| matches!(f.frame_type(), FrameType::Skeleton))
-        .expect("a skeleton frame is present")
-        .payload()
-        .clone();
+        .map(payload_data)
+        .expect("a skeleton frame is present");
     for frame in patch_frames(frames) {
         for patch in patches_of(frame) {
             let path = patch.get("path").and_then(JsonData::as_str).expect("path");
@@ -161,7 +161,7 @@ fn test_generate_frames_non_object_root_keeps_skeleton_shape() {
     for (input, expected) in cases {
         let frames = stream_frames(&JsonData::from(input), Priority::BACKGROUND);
 
-        assert_eq!(frames[0].payload(), &JsonData::from(expected));
+        assert_eq!(payload_data(&frames[0]), JsonData::from(expected));
     }
 }
 
@@ -175,7 +175,7 @@ fn test_generate_frames_parser_and_stream_agree_on_non_object_root() {
 
         assert_eq!(a.len(), b.len(), "{case}");
         for (x, y) in a.iter().zip(b.iter()) {
-            assert_eq!(x.payload(), y.payload(), "{case}");
+            assert_eq!(payload_data(x), payload_data(y), "{case}");
             assert_eq!(x.priority(), y.priority(), "{case}");
         }
     }

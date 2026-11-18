@@ -209,10 +209,22 @@ export class WebSocketTransport extends Transport {
       );
     }
 
-    this.endActive('Stream superseded');
-
     const sessionId = randomUuid.call(globalThis.crypto);
-    const completed = new Promise<void>((resolve, reject) => {
+    // Serialize before touching the active stream: a throw here must leave the previous stream untouched.
+    const message = JSON.stringify({
+      type: 'StreamInit',
+      data: {
+        session_id: sessionId,
+        data: options.data,
+        options: { max_frame_size: MAX_FRAME_SIZE, framing: 'patch' }
+      }
+    });
+
+    this.endActive('Stream superseded');
+    socket.send(message);
+
+    // Register only after a successful send, with no await in between, so a failure leaves no orphaned stream.
+    return new Promise<void>((resolve, reject) => {
       this.active = {
         sessionId,
         nextFrameId: 0,
@@ -222,15 +234,6 @@ export class WebSocketTransport extends Transport {
         reject
       };
     });
-    socket.send(JSON.stringify({
-      type: 'StreamInit',
-      data: {
-        session_id: sessionId,
-        data: options.data,
-        options: { max_frame_size: MAX_FRAME_SIZE, framing: 'patch' }
-      }
-    }));
-    return completed;
   }
 
   async stopStream(): Promise<void> {

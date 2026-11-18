@@ -59,7 +59,7 @@ Split of work inside `Stream`: `create_patch_frames` = `extract_prioritized_patc
 
 ## Public API surface
 
-`pjson_rs_domain::{Frame, Stream, DomainEvent, SessionState, PriorityHeuristicConfig, compute_priority}`; modules `entities::{frame::{Frame, FrameType, FramePatch, PatchOperation}, stream::{Stream, StreamConfig, StreamState, StreamStats}, StreamMap}`, `events::*`, `services::*`. In `pjs-core`, `pjson_rs::DomainFrame` is the re-export of `Frame`.
+`pjson_rs_domain::{Frame, Stream, DomainEvent, SessionState, PriorityHeuristicConfig, ValueShape, compute_priority}`; modules `entities::{frame::{Frame, FrameType, FrameBody, FramePatch}, stream::{Stream, StreamConfig, StreamState, StreamStats}, StreamMap}`, `events::*`, `services::*`. In `pjs-core`, `pjson_rs::DomainFrame` is the re-export of `Frame`.
 
 ## Contracts
 
@@ -72,8 +72,8 @@ Split of work inside `Stream`: `create_patch_frames` = `extract_prioritized_patc
 | `Stream::chunk_patches_for_commit(p, n)` | none | `ceil(len/n)`-sized chunks; empty if `p` empty or `n == 0` | static function |
 | `Stream::complete` | `Streaming` | `Completed`, `completed_at` set | |
 | `Stream::update_config` | active | config replaced | `InvalidStreamState` if finished |
-| `Frame::patch` | non-empty patches | `Patch` frame whose payload passes `validate()` | |
-| `Frame::validate` | none | `Ok` iff type-specific rules hold | not invoked on decode |
+| `Frame::patch` | non-empty patches | `Patch` frame whose payload survives the validating decoder | |
+| `Frame` decode | wire JSON | `Err(InvalidFrame)` unless the type-specific rules hold | validates on decode (#752) |
 | `DomainEvent::event_type` | none | equals the serde `event_type` tag | |
 | `compute_priority(cfg, path, value)` | none | result in `1..=255`; override > field list > shape fallback | pure, total, no panics |
 | `StreamMap::insert` | none | key == `stream.id()` | |

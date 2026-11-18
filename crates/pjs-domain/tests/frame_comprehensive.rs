@@ -3,9 +3,20 @@
 //! Tests cover all frame types (Skeleton, Patch, Complete, Error),
 //! frame operations, validation, metadata, and edge cases.
 
-use pjson_rs_domain::entities::frame::{Frame, FramePatch, FrameType, PatchOperation};
+use pjson_rs_domain::entities::frame::{Frame, FramePatch, FrameType};
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority, StreamId};
 use std::collections::HashMap;
+
+/// The frame's wire payload as `JsonData`.
+fn payload(frame: &Frame) -> JsonData {
+    JsonData::from(serde_json::to_value(frame.body()).expect("body serializes"))
+}
+
+/// Asserts that the frame survives the validating decoder.
+fn assert_decodes(frame: &Frame) {
+    let encoded = serde_json::to_string(frame).expect("frame serializes");
+    serde_json::from_str::<Frame>(&encoded).expect("frame decodes");
+}
 
 // ============================================================================
 // FrameType Tests
@@ -73,7 +84,7 @@ fn test_skeleton_frame_creation() {
     assert_eq!(frame.frame_type(), &FrameType::Skeleton);
     assert_eq!(frame.priority(), Priority::CRITICAL);
     assert_eq!(frame.sequence(), 1);
-    assert!(frame.validate().is_ok());
+    assert_decodes(&frame);
 }
 
 #[test]
@@ -86,9 +97,9 @@ fn test_skeleton_frame_with_data() {
 
     let frame = Frame::skeleton(stream_id, 1, skeleton_data);
 
-    assert!(frame.payload().is_object());
-    assert!(frame.payload().get("users").is_some());
-    assert!(frame.payload().get("total").is_some());
+    assert!(payload(&frame).is_object());
+    assert!(payload(&frame).get("users").is_some());
+    assert!(payload(&frame).get("total").is_some());
 }
 
 #[test]
@@ -105,7 +116,7 @@ fn test_skeleton_frame_always_critical() {
 fn test_skeleton_frame_validate_success() {
     let stream_id = StreamId::new();
     let frame = Frame::skeleton(stream_id, 1, JsonData::Object(HashMap::new()));
-    assert!(frame.validate().is_ok());
+    assert_decodes(&frame);
 }
 
 // ============================================================================
@@ -122,7 +133,7 @@ fn test_patch_frame_creation() {
     assert_eq!(frame.frame_type(), &FrameType::Patch);
     assert_eq!(frame.priority(), Priority::HIGH);
     assert_eq!(frame.sequence(), 2);
-    assert!(frame.validate().is_ok());
+    assert_decodes(&frame);
 }
 
 #[test]
@@ -139,8 +150,8 @@ fn test_patch_frame_multiple_patches() {
 
     let frame = Frame::patch(stream_id, 2, Priority::MEDIUM, patches).unwrap();
 
-    assert!(frame.payload().is_object());
-    if let JsonData::Object(obj) = frame.payload() {
+    assert!(payload(&frame).is_object());
+    if let JsonData::Object(obj) = payload(&frame) {
         if let Some(JsonData::Array(patches_array)) = obj.get("patches") {
             assert_eq!(patches_array.len(), 3);
         } else {
@@ -168,7 +179,7 @@ fn test_patch_frame_validate_success() {
     let patch = FramePatch::set(path, JsonData::Null);
     let frame = Frame::patch(stream_id, 1, Priority::LOW, vec![patch]).unwrap();
 
-    assert!(frame.validate().is_ok());
+    assert_decodes(&frame);
 }
 
 #[test]
@@ -200,7 +211,7 @@ fn test_complete_frame_with_checksum() {
     assert_eq!(frame.priority(), Priority::CRITICAL);
     assert_eq!(frame.sequence(), 10);
 
-    if let JsonData::Object(obj) = frame.payload() {
+    if let JsonData::Object(obj) = payload(&frame) {
         assert_eq!(obj.get("checksum").unwrap().as_str(), Some("abc123def456"));
     } else {
         panic!("Expected object payload");
@@ -213,9 +224,9 @@ fn test_complete_frame_without_checksum() {
     let frame = Frame::complete(stream_id, 5, None);
 
     assert_eq!(frame.frame_type(), &FrameType::Complete);
-    assert!(frame.payload().is_object());
+    assert!(payload(&frame).is_object());
 
-    if let JsonData::Object(obj) = frame.payload() {
+    if let JsonData::Object(obj) = payload(&frame) {
         assert!(obj.is_empty());
     } else {
         panic!("Expected object payload");
@@ -226,7 +237,7 @@ fn test_complete_frame_without_checksum() {
 fn test_complete_frame_validate_success() {
     let stream_id = StreamId::new();
     let frame = Frame::complete(stream_id, 10, Some("checksum".to_string()));
-    assert!(frame.validate().is_ok());
+    assert_decodes(&frame);
 }
 
 #[test]
@@ -255,7 +266,7 @@ fn test_error_frame_with_code() {
     assert_eq!(frame.priority(), Priority::CRITICAL);
     assert_eq!(frame.sequence(), 5);
 
-    if let JsonData::Object(obj) = frame.payload() {
+    if let JsonData::Object(obj) = payload(&frame) {
         assert_eq!(
             obj.get("message").unwrap().as_str(),
             Some("Something went wrong")
@@ -273,9 +284,9 @@ fn test_error_frame_without_code() {
 
     assert_eq!(frame.frame_type(), &FrameType::Error);
 
-    if let JsonData::Object(obj) = frame.payload() {
+    if let JsonData::Object(obj) = payload(&frame) {
         assert_eq!(obj.get("message").unwrap().as_str(), Some("Error occurred"));
-        assert!(obj.get("code").is_none());
+        assert!(!obj.contains_key("code"));
     } else {
         panic!("Expected object payload");
     }
@@ -285,7 +296,7 @@ fn test_error_frame_without_code() {
 fn test_error_frame_validate_success() {
     let stream_id = StreamId::new();
     let frame = Frame::error(stream_id, 1, "Test error".to_string(), None);
-    assert!(frame.validate().is_ok());
+    assert_decodes(&frame);
 }
 
 #[test]
@@ -349,7 +360,7 @@ fn test_frame_getters() {
     assert_eq!(frame.stream_id(), stream_id);
     assert_eq!(frame.sequence(), 42);
     assert_eq!(frame.priority(), Priority::CRITICAL);
-    assert_eq!(frame.payload().as_i64(), Some(100));
+    assert_eq!(payload(&frame).as_i64(), Some(100));
 }
 
 #[test]
@@ -463,39 +474,8 @@ fn test_frame_patch_set() {
     let path = JsonPath::new("$.user.name").unwrap();
     let patch = FramePatch::set(path.clone(), JsonData::String("Alice".to_string()));
 
-    assert_eq!(patch.path, path);
-    assert_eq!(patch.operation, PatchOperation::Set);
-    assert_eq!(patch.value.as_str(), Some("Alice"));
-}
-
-#[test]
-fn test_frame_patch_append() {
-    let path = JsonPath::new("$.items").unwrap();
-    let patch = FramePatch::append(path.clone(), JsonData::Integer(42));
-
-    assert_eq!(patch.path, path);
-    assert_eq!(patch.operation, PatchOperation::Append);
-    assert_eq!(patch.value.as_i64(), Some(42));
-}
-
-#[test]
-fn test_frame_patch_merge() {
-    let path = JsonPath::new("$.config").unwrap();
-    let patch = FramePatch::merge(path.clone(), JsonData::Object(HashMap::new()));
-
-    assert_eq!(patch.path, path);
-    assert_eq!(patch.operation, PatchOperation::Merge);
-    assert!(patch.value.is_object());
-}
-
-#[test]
-fn test_frame_patch_delete() {
-    let path = JsonPath::new("$.old_field").unwrap();
-    let patch = FramePatch::delete(path.clone());
-
-    assert_eq!(patch.path, path);
-    assert_eq!(patch.operation, PatchOperation::Delete);
-    assert_eq!(patch.value, JsonData::Null);
+    assert_eq!(*patch.path(), path);
+    assert_eq!(patch.value().as_str(), Some("Alice"));
 }
 
 #[test]
@@ -514,30 +494,6 @@ fn test_frame_patch_debug() {
     let debug = format!("{:?}", patch);
 
     assert!(debug.contains("FramePatch"));
-}
-
-// ============================================================================
-// PatchOperation Tests
-// ============================================================================
-
-#[test]
-fn test_patch_operation_variants() {
-    let set = PatchOperation::Set;
-    let append = PatchOperation::Append;
-    let merge = PatchOperation::Merge;
-    let delete = PatchOperation::Delete;
-
-    assert_eq!(set, PatchOperation::Set);
-    assert_eq!(append, PatchOperation::Append);
-    assert_eq!(merge, PatchOperation::Merge);
-    assert_eq!(delete, PatchOperation::Delete);
-}
-
-#[test]
-fn test_patch_operation_clone() {
-    let original = PatchOperation::Set;
-    let cloned = original.clone();
-    assert_eq!(original, cloned);
 }
 
 // ============================================================================
@@ -667,7 +623,7 @@ fn test_complete_frame_empty_checksum() {
     let stream_id = StreamId::new();
     let frame = Frame::complete(stream_id, 1, Some("".to_string()));
 
-    if let JsonData::Object(obj) = frame.payload() {
+    if let JsonData::Object(obj) = payload(&frame) {
         assert_eq!(obj.get("checksum").unwrap().as_str(), Some(""));
     } else {
         panic!("Expected object payload");
@@ -679,7 +635,7 @@ fn test_error_frame_empty_message() {
     let stream_id = StreamId::new();
     let frame = Frame::error(stream_id, 1, "".to_string(), None);
 
-    if let JsonData::Object(obj) = frame.payload() {
+    if let JsonData::Object(obj) = payload(&frame) {
         assert_eq!(obj.get("message").unwrap().as_str(), Some(""));
     } else {
         panic!("Expected object payload");
@@ -693,7 +649,7 @@ fn test_patch_with_null_value() {
     let patch = FramePatch::set(path, JsonData::Null);
     let frame = Frame::patch(stream_id, 1, Priority::LOW, vec![patch]).unwrap();
 
-    assert!(frame.validate().is_ok());
+    assert_decodes(&frame);
 }
 
 // ============================================================================
@@ -716,7 +672,7 @@ fn test_frame_roundtrip_skeleton() {
     assert_eq!(frame.frame_type(), rt.frame_type());
     assert_eq!(frame.priority(), rt.priority());
     assert_eq!(frame.sequence(), rt.sequence());
-    assert_eq!(frame.payload(), rt.payload());
+    assert_eq!(payload(&frame), payload(&rt));
     assert_eq!(frame.metadata(), rt.metadata());
 }
 
@@ -728,7 +684,7 @@ fn test_frame_roundtrip_complete_with_checksum() {
 
     assert_eq!(frame, rt);
     assert_eq!(
-        rt.payload().get("checksum").and_then(|v| v.as_str()),
+        payload(&rt).get("checksum").and_then(|v| v.as_str()),
         Some("abc123")
     );
 }
@@ -755,11 +711,11 @@ fn test_frame_roundtrip_error_frame() {
 
     assert_eq!(frame, rt);
     assert_eq!(
-        rt.payload().get("message").and_then(|v| v.as_str()),
+        payload(&rt).get("message").and_then(|v| v.as_str()),
         Some("something went wrong")
     );
     assert_eq!(
-        rt.payload().get("code").and_then(|v| v.as_str()),
+        payload(&rt).get("code").and_then(|v| v.as_str()),
         Some("E001")
     );
 }
@@ -809,22 +765,17 @@ fn test_frame_roundtrip_preserves_metadata() {
 }
 
 #[test]
-fn test_frame_roundtrip_all_patch_operations() {
+fn test_frame_roundtrip_set_patch_values() {
     let stream_id = StreamId::new();
-    let operations = vec![
-        FramePatch::set(JsonPath::new("$.a").unwrap(), JsonData::Integer(1)),
-        FramePatch::append(
-            JsonPath::new("$.b").unwrap(),
-            JsonData::String("x".to_string()),
-        ),
-        FramePatch::merge(
-            JsonPath::new("$.c").unwrap(),
-            JsonData::Object(HashMap::new()),
-        ),
-        FramePatch::delete(JsonPath::new("$.d").unwrap()),
+    let values = vec![
+        JsonData::Integer(1),
+        JsonData::String("x".to_string()),
+        JsonData::Object(HashMap::new()),
+        JsonData::Null,
     ];
 
-    for patch in operations {
+    for value in values {
+        let patch = FramePatch::set(JsonPath::new("$.a").unwrap(), value);
         let frame = Frame::patch(stream_id, 1, Priority::HIGH, vec![patch]).unwrap();
         let rt = roundtrip(&frame);
         assert_eq!(frame, rt);
@@ -837,7 +788,7 @@ fn test_frame_patch_payload_serializes_as_plain_json() {
     let patch = FramePatch::set(JsonPath::new("$.a").unwrap(), JsonData::Integer(1));
     let frame = Frame::patch(stream_id, 1, Priority::HIGH, vec![patch]).unwrap();
 
-    let payload_json = serde_json::to_value(frame.payload()).unwrap();
+    let payload_json = serde_json::to_value(frame.body()).unwrap();
 
     // Regression: JsonData must serialize as plain JSON (matching what a JS/WASM
     // client actually receives), not as a tagged Rust enum like
@@ -896,5 +847,5 @@ fn test_frame_roundtrip_large_payload() {
     let stream_id = StreamId::new();
     let frame = Frame::skeleton(stream_id, 1, JsonData::String(large_str.clone()));
     let rt = roundtrip(&frame);
-    assert_eq!(frame.payload(), rt.payload());
+    assert_eq!(payload(&frame), payload(&rt));
 }

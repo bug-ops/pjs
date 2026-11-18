@@ -121,7 +121,7 @@ Text grammar: `path = "$" *( "." plain / "[" index "]" / "[" quoted "]" )`.
 - `index`: `0` or `[1-9][0-9]*` (ASCII digits only); the closing `]` is required; a value above the native index type is an error (`usize`: 2^64-1 native, 2^32-1 on wasm32; JS client: `Number.MAX_SAFE_INTEGER`), so `append_index` always round-trips; indices above a bound are undefined in the cross-implementation contract.
 - `quoted`: a JSON string literal in `serde_json` canonical escaping, used if and only if the key is not plain.
 `Display` writes `[` + `serde_json::to_string(key)` + `]` for a non-plain key. `FromStr` scans the literal to its unescaped closing quote, decodes it, rejects it when re-encoding differs from the slice (non-canonical escapes) or when the key is plain, then requires `]`. Every accepted string re-renders identically and `Display` then `FromStr` is the identity for every path (proptest over arbitrary keys and indices); serde uses the same string, which is the wire format.
-Queries: `segments`, `depth`, `parent`, `last_segment`, `last_key` (skips trailing indices), `is_prefix_of` (strict prefix), `to_json_pointer()` (root is `""` per RFC 6901, `$[""]` is `"/"`; `~` and `/` in keys are not escaped).
+Queries: `segments`, `depth`, `parent`, `last_segment`, `last_key` (skips trailing indices), `is_prefix_of` (strict prefix), `to_json_pointer()` (root is `""` per RFC 6901, `$[""]` is `"/"`; `~` is escaped as `~0` and `/` as `~1` in keys; `Key("0")` and `Index(0)` both render `/0`, as RFC 6901 has no key/index distinction).
 Status: done.
 
 ### FR-042-012 `BackpressureSignal`
@@ -177,7 +177,6 @@ See FR text. Type inventory: `Priority`, `Id<T>`, `IdMarker`, `SessionMarker`, `
 - `From<serde_json::Value>` maps a number that is neither `i64` nor `f64` to `Float(0.0)` silently (reachable only with serde_json's `arbitrary_precision`).
 - `JsonData::set_path` uses `expect` on a key it just inserted (cannot fail, but is a panic site).
 - `Id::as_str()` returns an owned `String` (name suggests a borrow).
-- `JsonPath::to_json_pointer` does not escape `~` and `/` in keys (RFC 6901, #379).
 - `JsonData::Object` is a `HashMap`, so iteration and serialisation order of keys is unspecified; byte-stable encodings of multi-key objects are not guaranteed.
 
 ## See Also

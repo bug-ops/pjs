@@ -18,25 +18,17 @@ use tower::{Layer, Service};
 /// Middleware for performance monitoring and optimization
 #[derive(Clone)]
 pub struct PjsMiddleware {
-    enable_compression: bool,
     enable_metrics: bool,
     max_request_size: usize,
 }
 
 impl PjsMiddleware {
-    /// Construct middleware with default settings (compression and metrics enabled, 10 MiB cap).
+    /// Construct middleware with default settings (metrics enabled, 10 MiB cap).
     pub fn new() -> Self {
         Self {
-            enable_compression: true,
             enable_metrics: true,
             max_request_size: 10 * 1024 * 1024, // 10MB
         }
-    }
-
-    /// Toggle the `X-PJS-Compression` advertisement header.
-    pub fn with_compression(mut self, enabled: bool) -> Self {
-        self.enable_compression = enabled;
-        self
     }
 
     /// Toggle the `X-PJS-Duration-Ms` and `X-PJS-Version` response headers.
@@ -126,13 +118,6 @@ where
                 response
                     .headers_mut()
                     .insert("X-PJS-Version", version_value);
-            }
-
-            // Add compression hints
-            if config.enable_compression {
-                response
-                    .headers_mut()
-                    .insert("X-PJS-Compression", HeaderValue::from_static("available"));
             }
 
             Ok(response)
@@ -518,62 +503,6 @@ fn add_rate_limit_headers(
     }
 }
 
-/// Connection upgrade middleware for WebSocket support
-pub async fn websocket_upgrade_middleware(
-    headers: HeaderMap,
-    request: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    // Check if this is a WebSocket upgrade request
-    if headers
-        .get(header::UPGRADE)
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_lowercase())
-        == Some("websocket".to_string())
-    {
-        // Handle WebSocket upgrade for PJS streaming
-        // This would integrate with the WebSocket handler
-        return handle_websocket_upgrade(request).await;
-    }
-
-    // Continue with regular HTTP handling
-    Ok(next.run(request).await)
-}
-
-/// Handle WebSocket upgrade for real-time PJS streaming
-async fn handle_websocket_upgrade(_request: Request) -> Result<Response, StatusCode> {
-    // Placeholder - would implement actual WebSocket upgrade logic
-    // using axum-websocket or similar
-    Response::builder()
-        .status(StatusCode::NOT_IMPLEMENTED)
-        .body("WebSocket support coming soon".into())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-/// Compression middleware for reducing bandwidth
-pub async fn compression_middleware(headers: HeaderMap, request: Request, next: Next) -> Response {
-    let accepts_compression = headers
-        .get(header::ACCEPT_ENCODING)
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.contains("gzip") || s.contains("deflate"))
-        .unwrap_or(false);
-
-    let mut response = next.run(request).await;
-
-    // Add compression headers if client supports it
-    if accepts_compression {
-        response.headers_mut().insert(
-            "X-PJS-Compression-Available",
-            HeaderValue::from_static("gzip,deflate"),
-        );
-
-        // In production, would apply actual compression here
-        // using tower-http::compression::CompressionLayer
-    }
-
-    response
-}
-
 /// Security middleware for PJS endpoints
 pub async fn security_middleware(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
@@ -589,54 +518,6 @@ pub async fn security_middleware(request: Request, next: Next) -> Response {
         "Content-Security-Policy",
         HeaderValue::from_static("default-src 'self'"),
     );
-
-    response
-}
-
-/// Circuit breaker middleware for resilience
-#[derive(Clone)]
-pub struct CircuitBreakerMiddleware {
-    failure_threshold: usize,
-    recovery_timeout_seconds: u64,
-}
-
-impl CircuitBreakerMiddleware {
-    /// Build with default thresholds (5 failures, 30-second recovery).
-    pub fn new() -> Self {
-        Self {
-            failure_threshold: 5,
-            recovery_timeout_seconds: 30,
-        }
-    }
-
-    /// Override the consecutive-failure threshold that opens the circuit.
-    pub fn with_failure_threshold(mut self, threshold: usize) -> Self {
-        self.failure_threshold = threshold;
-        self
-    }
-
-    /// Override the recovery (cool-down) duration in seconds.
-    pub fn with_recovery_timeout(mut self, seconds: u64) -> Self {
-        self.recovery_timeout_seconds = seconds;
-        self
-    }
-}
-
-impl Default for CircuitBreakerMiddleware {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Health check middleware that monitors PJS service health
-pub async fn health_check_middleware(request: Request, next: Next) -> Response {
-    // Add health metrics to response headers
-    let mut response = next.run(request).await;
-
-    // In production, would check actual service health
-    response
-        .headers_mut()
-        .insert("X-PJS-Health", HeaderValue::from_static("healthy"));
 
     response
 }
@@ -786,11 +667,9 @@ mod tests {
     #[tokio::test]
     async fn test_pjs_middleware_creation() {
         let middleware = PjsMiddleware::new()
-            .with_compression(true)
             .with_metrics(true)
             .with_max_request_size(5 * 1024 * 1024);
 
-        assert!(middleware.enable_compression);
         assert!(middleware.enable_metrics);
         assert_eq!(middleware.max_request_size, 5 * 1024 * 1024);
     }

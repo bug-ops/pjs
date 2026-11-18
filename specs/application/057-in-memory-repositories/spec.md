@@ -70,7 +70,7 @@ Code: `atomic_session_update`, `StreamRepositoryGat` impl.
 
 ### FR-005 Active and criteria queries
 `find_active_sessions` shall return `filter_limited(is_active, MAX_RESULTS_LIMIT, MAX_SCAN_LIMIT)`. `find_sessions_by_criteria(criteria, pagination)` shall (1) take `criteria` and `pagination`, which are valid by construction, (2) `filter_limited` with `matches_criteria`, (3) set `total_count = filtered.len()` (after caps), (4) sort by `SessionSortField` if given (`CreatedAt`, `UpdatedAt`, `StreamCount`, `TotalBytes`; ascending or descending), (5) `skip(offset).take(limit)`, (6) `has_more = offset + page_len < total_count`, and return `SessionQueryResult` with `query_duration_ms` and `scan_limit_reached`.
-`matches_criteria` shall AND these: `states` (ASCII case-insensitive compare with `SessionState::as_str`), `exclude_expired`, `created_after`/`created_before` (inclusive), `has_active_streams`, `min/max_stream_count`, `client_info_pattern` (case-insensitive substring; sessions without client info never match).
+`matches_criteria` shall AND these: `states` (exact `SessionState` match via `contains`), `exclude_expired`, `created_after`/`created_before` (inclusive), `has_active_streams`, `min/max_stream_count`, `client_info_pattern` (case-insensitive substring; sessions without client info never match).
 
 ### FR-005a Ordering without sort
 Without `sort_by` the order is the DashMap iteration order, which is not stable between calls; offset pages may overlap or skip items under concurrent mutation.
@@ -130,7 +130,6 @@ Without `sort_by` the order is the DashMap iteration order, which is not stable 
 - Priority distribution in `get_stream_statistics` is derived from byte ratios, not counted per frame.
 - `find_sessions_by_criteria` clones up to 10 000 sessions per call, then sorts clones.
 - `InMemoryStore::filter` (unbounded) is `pub` and still available to callers.
-- `SessionQueryCriteria.states` is stringly typed (see [[052-domain-gat-ports/spec|052]]).
 
 ## 10. See Also
 [[057-in-memory-repositories/plan|plan]], [[008-cursor-pagination-active-sessions/spec|008]], [[056-application-queries-dto/spec|056]], [[058-event-metrics-dictionary-adapters/spec|058]].

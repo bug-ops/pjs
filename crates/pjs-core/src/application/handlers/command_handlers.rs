@@ -119,7 +119,7 @@ where
     #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     async fn train_from_frames(&self, session_id: SessionId, frames: &[Frame]) {
         for frame in frames {
-            if let Ok(bytes) = serde_json::to_vec(frame.payload()) {
+            if let Ok(bytes) = serde_json::to_vec(frame.body()) {
                 let _ = self
                     .dictionary_store
                     .train_if_ready(session_id, bytes)

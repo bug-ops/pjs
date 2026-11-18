@@ -4,14 +4,12 @@
 //! connection use, so the wire format has a single definition regardless of
 //! which WebSocket feature is enabled.
 
-use crate::domain::{JsonPath, PathSegment, Priority, SessionId};
+use crate::domain::{Priority, SessionId};
 #[cfg(any(feature = "websocket-client", test))]
 use crate::error::PatchError;
 #[cfg(feature = "websocket-server")]
 use crate::error::PlanError;
 use crate::error::{FrameKind, StreamOptionsError};
-#[cfg(any(feature = "websocket-client", test))]
-use crate::json_tree::{self, resolve_mut};
 use futures::{Sink, SinkExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -357,80 +355,12 @@ impl Framing {
     }
 }
 
-/// Longest [`JsonPath`] a patch may carry.
+/// Longest [`JsonPath`](crate::domain::JsonPath) a patch may carry.
 ///
 /// Receivers refuse longer paths so a hostile peer cannot grow their state's
 /// nesting without bound (recursive drop would overflow the stack); the server
 /// refuses to plan documents that need longer ones.
 pub const MAX_PATCH_PATH_DEPTH: usize = 128;
-
-/// Wire form of a [`JsonPath`] segment: a JSON string addresses an object
-/// member and a JSON integer an array element, so every key (including `.`,
-/// `[`, `]` and the empty string) is expressible and `"0"` stays distinct from
-/// index `0`.
-struct WireSegment<'a>(&'a PathSegment);
-
-impl Serialize for WireSegment<'_> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self.0 {
-            PathSegment::Key(key) => serializer.serialize_str(key),
-            PathSegment::Index(index) => serializer.serialize_u64(*index as u64),
-        }
-    }
-}
-
-struct OwnedWireSegment(PathSegment);
-
-impl<'de> Deserialize<'de> for OwnedWireSegment {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct SegmentVisitor;
-
-        impl serde::de::Visitor<'_> for SegmentVisitor {
-            type Value = OwnedWireSegment;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a string key or a non-negative integer index")
-            }
-
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<OwnedWireSegment, E> {
-                Ok(OwnedWireSegment(PathSegment::Key(v.to_owned())))
-            }
-
-            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<OwnedWireSegment, E> {
-                Ok(OwnedWireSegment(PathSegment::Key(v)))
-            }
-
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<OwnedWireSegment, E> {
-                usize::try_from(v)
-                    .map(|index| OwnedWireSegment(PathSegment::Index(index)))
-                    .map_err(|_| E::custom("array index does not fit in usize"))
-            }
-        }
-
-        deserializer.deserialize_any(SegmentVisitor)
-    }
-}
-
-/// Serialize adapter writing a [`JsonPath`] as the wire array of segments.
-struct ArrayPathRef<'a>(&'a JsonPath);
-
-impl Serialize for ArrayPathRef<'_> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(self.0.segments().iter().map(WireSegment))
-    }
-}
-
-/// Deserialize adapter reading the wire array of segments into a [`JsonPath`].
-struct ArrayPath(JsonPath);
-
-impl<'de> Deserialize<'de> for ArrayPath {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let segments = Vec::<OwnedWireSegment>::deserialize(deserializer)?;
-        Ok(Self(JsonPath::from_segments(
-            segments.into_iter().map(|segment| segment.0),
-        )))
-    }
-}
 
 impl From<Framing> for FrameKind {
     fn from(framing: Framing) -> Self {
@@ -441,157 +371,7 @@ impl From<Framing> for FrameKind {
     }
 }
 
-/// One patch operation of a [`WsMessage::StreamPatch`] frame.
-///
-/// The wire form is the 3-array `[op, path, argument]` with `op` one of
-/// `"set"`, `"merge"`, `"append"`, `"append_str"`:
-///
-/// | op | argument | effect |
-/// |----|----------|--------|
-/// | `set` | any value | replaces the value at `path` (the document for `[]`); a parent object gets the key inserted, a parent array needs an existing index |
-/// | `merge` | object | inserts or replaces each entry of the object at `path` (shallow) |
-/// | `append` | array | appends the elements to the array at `path` |
-/// | `append_str` | string | appends the text to the string at `path` |
-///
-/// # Examples
-///
-/// ```
-/// use pjson_rs::infrastructure::websocket::WirePatch;
-///
-/// let patch: WirePatch = serde_json::from_str(r#"["append_str", ["s"], "tail"]"#).unwrap();
-/// assert_eq!(serde_json::to_string(&patch).unwrap(), r#"["append_str",["s"],"tail"]"#);
-/// assert!(serde_json::from_str::<WirePatch>(r#"["merge", [], [1]]"#).is_err());
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum WirePatch {
-    /// Replace the value at `path`
-    Set {
-        /// Target location
-        path: JsonPath,
-        /// New value
-        value: Value,
-    },
-    /// Insert or replace object entries at `path`
-    Merge {
-        /// Target location
-        path: JsonPath,
-        /// Entries to insert
-        entries: serde_json::Map<String, Value>,
-    },
-    /// Append array elements at `path`
-    Append {
-        /// Target location
-        path: JsonPath,
-        /// Elements to append
-        values: Vec<Value>,
-    },
-    /// Append text to the string at `path`
-    AppendStr {
-        /// Target location
-        path: JsonPath,
-        /// Text to append
-        text: String,
-    },
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum PatchOp {
-    Set,
-    Merge,
-    Append,
-    AppendStr,
-}
-
-impl Serialize for WirePatch {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeSeq;
-
-        let mut seq = serializer.serialize_seq(Some(3))?;
-        match self {
-            Self::Set { path, value } => {
-                seq.serialize_element("set")?;
-                seq.serialize_element(&ArrayPathRef(path))?;
-                seq.serialize_element(value)?;
-            }
-            Self::Merge { path, entries } => {
-                seq.serialize_element("merge")?;
-                seq.serialize_element(&ArrayPathRef(path))?;
-                seq.serialize_element(entries)?;
-            }
-            Self::Append { path, values } => {
-                seq.serialize_element("append")?;
-                seq.serialize_element(&ArrayPathRef(path))?;
-                seq.serialize_element(values)?;
-            }
-            Self::AppendStr { path, text } => {
-                seq.serialize_element("append_str")?;
-                seq.serialize_element(&ArrayPathRef(path))?;
-                seq.serialize_element(text)?;
-            }
-        }
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for WirePatch {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // A sequence visitor reads the op first and then decodes the argument
-        // directly into its typed form; an internally tagged or untagged enum
-        // would buffer every `Value` through serde's `Content`.
-        struct PatchVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for PatchVisitor {
-            type Value = WirePatch;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a 3-array [op, path, argument]")
-            }
-
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> Result<WirePatch, A::Error> {
-                use serde::de::Error;
-
-                fn missing<E: Error>(index: usize) -> E {
-                    E::invalid_length(index, &"a 3-array [op, path, argument]")
-                }
-
-                let op: PatchOp = seq.next_element()?.ok_or_else(|| missing(0))?;
-                let ArrayPath(path) = seq.next_element()?.ok_or_else(|| missing(1))?;
-                let patch = match op {
-                    PatchOp::Set => WirePatch::Set {
-                        path,
-                        value: seq.next_element()?.ok_or_else(|| missing(2))?,
-                    },
-                    PatchOp::Merge => WirePatch::Merge {
-                        path,
-                        entries: seq.next_element()?.ok_or_else(|| missing(2))?,
-                    },
-                    PatchOp::Append => WirePatch::Append {
-                        path,
-                        values: seq.next_element()?.ok_or_else(|| missing(2))?,
-                    },
-                    PatchOp::AppendStr => WirePatch::AppendStr {
-                        path,
-                        text: seq.next_element()?.ok_or_else(|| missing(2))?,
-                    },
-                };
-                if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
-                    return Err(A::Error::invalid_length(
-                        4,
-                        &"a 3-array [op, path, argument]",
-                    ));
-                }
-                Ok(patch)
-            }
-        }
-
-        deserializer.deserialize_seq(PatchVisitor)
-    }
-}
+pub use crate::stream::patch::WirePatch;
 
 /// Applies `patch` to `state`, moving its payload into the state.
 ///
@@ -612,36 +392,15 @@ pub(crate) fn apply_patch(state: &mut Value, patch: WirePatch) -> Result<(), Pat
     | WirePatch::Merge { path, .. }
     | WirePatch::Append { path, .. }
     | WirePatch::AppendStr { path, .. }) = &patch;
-    let segments = path.segments();
-    if segments.len() > MAX_PATCH_PATH_DEPTH {
+    let depth = path.segments().len();
+    if depth > MAX_PATCH_PATH_DEPTH {
         return Err(PatchError::PathTooDeep {
-            depth: segments.len(),
+            depth,
             max: MAX_PATCH_PATH_DEPTH,
         });
     }
 
-    match patch {
-        WirePatch::Set { path, value } => json_tree::set(state, path.segments(), value)?,
-        WirePatch::Merge { path, entries } => {
-            let Value::Object(target) = resolve_mut(state, path.segments())? else {
-                return Err(PatchError::ExpectedObject);
-            };
-            target.extend(entries);
-        }
-        WirePatch::Append { path, values } => {
-            let Value::Array(target) = resolve_mut(state, path.segments())? else {
-                return Err(PatchError::ExpectedArray);
-            };
-            target.extend(values);
-        }
-        WirePatch::AppendStr { path, text } => {
-            let Value::String(target) = resolve_mut(state, path.segments())? else {
-                return Err(PatchError::ExpectedString);
-            };
-            target.push_str(&text);
-        }
-    }
-    Ok(())
+    crate::stream::patch::apply_patch(state, patch).map(|_| ())
 }
 
 /// Stream configuration options, carried by `StreamInit`.
@@ -793,6 +552,7 @@ mod option_priority_map {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{JsonPath, PathSegment};
     #[cfg(feature = "websocket-client")]
     use crate::security::rate_limit::DEFAULT_WRITE_TIMEOUT;
     use core::assert_matches;

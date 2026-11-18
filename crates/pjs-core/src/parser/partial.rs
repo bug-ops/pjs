@@ -232,7 +232,7 @@ pub struct StreamingHint {
     pub stable_paths: Vec<JsonPath>,
 
     /// JSON paths whose values sit at the truncation boundary. The consumer
-    /// MAY emit these eagerly and revise them via `PatchOperation::Replace` on
+    /// MAY emit these eagerly and revise them via a `WirePatch::Set` on
     /// the next feed, or defer until they become stable.
     pub tentative_paths: Vec<JsonPath>,
 }

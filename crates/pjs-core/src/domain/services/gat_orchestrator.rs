@@ -269,7 +269,7 @@ where
     /// Estimate frame size for statistics
     fn estimate_frame_size(&self, frame: &Frame) -> usize {
         // Simple estimation based on frame data
-        serde_json::to_string(frame.payload())
+        serde_json::to_string(frame.body())
             .map(|s| s.len())
             .unwrap_or(0)
     }
