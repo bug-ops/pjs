@@ -82,15 +82,11 @@ fn max_frame_size_new_accepts_exactly_the_documented_minimum_and_above() {
 #[test]
 fn stream_options_patch_differs_from_default_only_in_framing() {
     let patch = StreamOptions::patch();
+    let mut expected = StreamOptions::default();
+    expected.framing = Framing::Patch;
 
     assert_eq!(patch.framing, Framing::Patch);
-    assert_eq!(
-        patch,
-        StreamOptions {
-            framing: Framing::Patch,
-            ..StreamOptions::default()
-        }
-    );
+    assert_eq!(patch, expected);
     assert_eq!(StreamOptions::default().framing, Framing::Merge);
 }
 
