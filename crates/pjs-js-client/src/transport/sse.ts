@@ -1,164 +1,105 @@
 /**
- * Server-Sent Events Transport - SSE-based transport for PJS protocol
- * 
- * Implements streaming over Server-Sent Events with automatic reconnection
- * and event parsing for frame delivery.
+ * Server-Sent Events Transport - the HTTP transport with an `EventSource`
+ * reading `GET .../frames/stream`.
+ *
+ * Session and stream setup is the HTTP transport's. The server answers an
+ * `EventSource` (default `Accept`) with `text/event-stream`, one `data:` frame
+ * per event, and closes the body after the last frame without a final event.
+ * `EventSource` would redial, so the transport treats the first `error` after
+ * a clean open as the end of the page and closes the source itself.
  */
 
-import { ConnectResult, SHUTDOWN_EVENT, StreamOptions, Transport } from './base.js';
-import { Frame, PJSError, PJSErrorType } from '../types/index.js';
+import { FrameLedger, HttpTransport, StreamTarget } from './http.js';
+import { field } from './json-record.js';
+import { SHUTDOWN_EVENT, StreamOptions } from './base.js';
+import { PJSError, PJSErrorType } from '../types/index.js';
 
 /**
- * Server-Sent Events transport implementation
+ * Server-Sent Events transport implementation.
  *
- * @experimental Speaks a wire format that no shipped pjs-core route serves; see the README "Transport Options" section.
+ * Requires `globalThis.EventSource` (browsers or a polyfill) and `fetch`.
+ * `EventSource` cannot set request headers, so `headers` apply to the REST
+ * calls only.
  */
-export class SSETransport extends Transport {
-  private eventSource?: EventSource;
-  private currentUrl?: string;
-  private shutdownSeen = false;
+export class SSETransport extends HttpTransport {
+  protected override readFrames(
+    target: StreamTarget,
+    ledger: FrameLedger,
+    _options: StreamOptions,
+    signal: AbortSignal
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const source = new EventSource(target.url.toString());
+      let opened = false;
+      let ended = false;
 
-  async connect(): Promise<ConnectResult> {
-    // SSE connection is established when starting stream
-    this.isConnected = true;
-    
-    return {
-      sessionId: undefined,
-      supportedFeatures: ['streaming', 'auto-reconnect']
-    };
-  }
+      const end = (error?: PJSError): void => {
+        if (ended) return;
+        ended = true;
+        source.close();
+        signal.removeEventListener('abort', onAbort);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      // Closing the source prevents EventSource from redialing; the caller already rejected the stream.
+      const onAbort = (): void => end(new PJSError(PJSErrorType.StreamError, 'Stream ended'));
+      signal.addEventListener('abort', onAbort, { once: true });
 
-  async disconnect(): Promise<void> {
-    if (this.eventSource) {
-      this.eventSource.close();
-      this.eventSource = undefined;
-    }
-    
-    this.isConnected = false;
-    this.currentUrl = undefined;
-  }
+      const handleMessage = (data: string): void => {
+        if (ended) return;
+        try {
+          ledger.push(JSON.parse(data));
+        } catch (error) {
+          this.emitParseError('Failed to parse SSE frame', data, error as Error);
+          return;
+        }
+        if (ledger.completed) end();
+      };
 
-  async startStream(endpoint: string, options: StreamOptions): Promise<void> {
-    if (!this.isConnected) {
-      throw new PJSError(
-        PJSErrorType.ConnectionError,
-        'Transport not connected'
-      );
-    }
-
-    // Close existing connection
-    if (this.eventSource) {
-      this.eventSource.close();
-    }
-
-    try {
-      const url = new URL(`${this.config.baseUrl}/pjs/stream${endpoint}/sse`);
-      
-      // Add query parameters
-      url.searchParams.set('session_id', options.sessionId);
-      url.searchParams.set('stream_id', options.streamId);
-      
-      if (options.queryParams) {
-        Object.entries(options.queryParams).forEach(([key, value]) => {
-          url.searchParams.set(key, value);
-        });
-      }
-
-      this.shutdownSeen = false;
-      this.currentUrl = url.toString();
-      this.eventSource = new EventSource(this.currentUrl);
-      
-      this.setupEventHandlers();
-      
-    } catch (error) {
-      throw new PJSError(
-        PJSErrorType.ConnectionError,
-        'Failed to start SSE stream',
-        { endpoint, options },
-        error as Error
-      );
-    }
-  }
-
-  async stopStream(): Promise<void> {
-    if (this.eventSource) {
-      this.eventSource.close();
-      this.eventSource = undefined;
-    }
-    
-    this.currentUrl = undefined;
-  }
-
-  private setupEventHandlers(): void {
-    if (!this.eventSource) return;
-
-    this.eventSource.onopen = () => {
-      if (this.config.debug) {
-        console.log('[PJS SSE] Stream opened:', this.currentUrl);
-      }
-    };
-
-    this.eventSource.onmessage = (event) => {
-      this.handleMessage(event.data);
-    };
-
-    this.eventSource.onerror = (error) => {
-      if (this.config.debug) {
-        console.log('[PJS SSE] Connection error, will reconnect automatically');
-      }
-      
-      // EventSource will handle reconnection automatically
-      this.emitError(new PJSError(
-        PJSErrorType.ConnectionError,
-        'SSE connection error',
-        { error, url: this.currentUrl }
-      ));
-    };
-
-    // Handle custom frame events
-    this.eventSource.addEventListener('frame', (event) => {
-      this.handleMessage(event.data);
-    });
-
-    // Closing the source prevents EventSource from auto-reconnecting to a stopping server.
-    this.eventSource.addEventListener(SHUTDOWN_EVENT, () => {
-      if (this.shutdownSeen) return;
-      this.shutdownSeen = true;
-      this.eventSource?.close();
-      this.emitShutdown();
-    });
-
-    this.eventSource.addEventListener('error', (event) => {
-      const data = (event as MessageEvent).data;
-      try {
-        const errorData = JSON.parse(data);
+      source.onopen = () => {
+        opened = true;
+        if (this.config.debug) {
+          console.log('[PJS SSE] Stream opened:', target.url.toString());
+        }
+      };
+      source.onmessage = (event) => handleMessage(event.data as string);
+      source.addEventListener('frame', (event) => handleMessage((event as MessageEvent<string>).data));
+      source.onerror = () => {
+        if (ended) return;
+        const complete = opened && (target.expectedFrames === undefined || ledger.received >= target.expectedFrames);
+        if (complete) {
+          ledger.finish();
+          end();
+        } else {
+          end(new PJSError(PJSErrorType.ConnectionError, 'SSE connection error', { url: target.url.toString() }));
+        }
+      };
+      // A server-sent `event: error` carries data; connection errors (no data) are handled by onerror.
+      source.addEventListener('error', (event) => {
+        const data = (event as MessageEvent<unknown>).data;
+        if (typeof data !== 'string') return;
+        let details: unknown;
+        try {
+          details = JSON.parse(data);
+        } catch {
+          details = { data };
+        }
+        const message = field(details, 'message');
         this.emitError(new PJSError(
           PJSErrorType.ProtocolError,
-          errorData.message || 'Server error',
-          errorData
+          typeof message === 'string' ? message : 'Server error',
+          details
         ));
-      } catch {
-        this.emitError(new PJSError(
-          PJSErrorType.ProtocolError,
-          'Server error',
-          { data }
-        ));
-      }
+      });
+      // Closing the source prevents EventSource from auto-reconnecting to a stopping server.
+      source.addEventListener(SHUTDOWN_EVENT, () => {
+        if (ended) return;
+        end();
+        this.emitShutdown();
+      });
     });
-  }
-
-  private handleMessage(data: string): void {
-    try {
-      const frame = JSON.parse(data) as Frame;
-      this.emitFrame(frame);
-      
-    } catch (error) {
-      this.emitError(new PJSError(
-        PJSErrorType.ParseError,
-        'Failed to parse SSE frame',
-        { data },
-        error as Error
-      ));
-    }
   }
 }

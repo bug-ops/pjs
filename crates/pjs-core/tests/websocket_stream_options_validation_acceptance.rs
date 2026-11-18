@@ -1,6 +1,6 @@
 //! Acceptance tests for #700: `StreamOptions` is valid by construction and by
 //! decode. `max_frame_size < 1024` and `client_fps: 0` fail the whole
-//! `WsMessage` decode, so the server answers a fixed 400 `"malformed message"`
+//! `WsMessage` decode, so the server answers a fixed 400 naming the field
 //! without a session id, and the client sends options verbatim.
 #![cfg(all(feature = "websocket-server", feature = "websocket-client"))]
 
@@ -124,11 +124,17 @@ async fn next_text(
 }
 
 #[tokio::test]
-async fn server_answers_invalid_stream_options_with_fixed_malformed_400_and_no_session() {
+async fn server_answers_invalid_stream_options_with_the_fixed_field_400_and_no_session() {
     let addr = spawn_server().await;
-    for options in [
-        options_with("max_frame_size", json!(1023)),
-        options_with("client_fps", json!(0)),
+    for (options, expected) in [
+        (
+            options_with("max_frame_size", json!(1023)),
+            "invalid stream option: max_frame_size must be at least 1024",
+        ),
+        (
+            options_with("client_fps", json!(0)),
+            "invalid stream option: client_fps must be a positive integer",
+        ),
     ] {
         let (mut ws, _) = connect_async(format!("ws://{addr}/ws"))
             .await
@@ -143,7 +149,7 @@ async fn server_answers_invalid_stream_options_with_fixed_malformed_400_and_no_s
 
         assert_eq!(reply["type"], "Error", "{reply}");
         assert_eq!(reply["data"]["code"], 400, "{reply}");
-        assert_eq!(reply["data"]["error"], "malformed message", "{reply}");
+        assert_eq!(reply["data"]["error"], expected, "{reply}");
         assert!(reply["data"]["session_id"].is_null(), "{reply}");
         assert!(
             next_text(&mut ws, Duration::from_millis(300))

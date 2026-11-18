@@ -31,11 +31,11 @@ verified: 2026-11-15
 > Evidence: `.github/workflows/ci.yml` job `js-client-test` (runs `npm ci`, `npm run typecheck`, `npm test` in `crates/pjs-js-client`), listed in `ci-success` `needs` and in its `check` script.
 >
 > Drift from original spec:
-> - Node version is 20 (spec said 22); actions are pinned to commit SHAs.
+> - Node version was 20 (spec said 22), now a 22/24 matrix (#743); actions are pinned to commit SHAs.
 > - `needs: [changes, wasm-build]`: the job downloads the real `wasm-build-web` artifact into `crates/pjs-wasm/pkg` instead of mocking `pjs-wasm` in Jest (spec Option 1). Gate condition adds `needs.changes.outputs.wasm == 'true'` to the `js` filter, so WASM-only PRs also run it.
 > - No `continue-on-error` on the job; #178 was fixed in the same PR #192.
 > - `tsc --noEmit` runs as `npm run typecheck`, not a bare `npx` call.
-> - Node 18 remains pinned in the `wasm-node-example` and `wasm-package-validation` jobs (spec's follow-up to bump them is not done).
+> - Node policy updated by #743: `js-client-test` runs a Node 22 and 24 matrix; the WASM Node jobs run Node 24.
 
 ## Problem
 
@@ -56,7 +56,7 @@ Status: done (`npm run typecheck`).
 Status: done.
 
 ### FR-5 Single LTS Node version
-Status: done with Node 20 instead of 22. Open: bump 18-pinned jobs. [NEEDS CLARIFICATION: target Node version policy]
+Status: done. `js-client-test` runs on the maintained lines 22 and 24; the WASM Node jobs use 24 (#743).
 
 ## Non-Functional Requirements
 

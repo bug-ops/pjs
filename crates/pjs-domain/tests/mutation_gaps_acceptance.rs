@@ -47,7 +47,6 @@ fn compute_priority_thresholds_are_exclusive_at_the_boundary() {
 fn extract_prioritized_patches_applies_the_stream_priority_rules() {
     let config = StreamConfig {
         priority_rules: HashMap::from([("name".to_owned(), Priority::BACKGROUND)]),
-        ..StreamConfig::default()
     };
     let mut stream = Stream::new(
         SessionId::new(),

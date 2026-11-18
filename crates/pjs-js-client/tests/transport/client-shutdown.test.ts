@@ -47,7 +47,7 @@ describe('PJSClient server shutdown', () => {
       reasons.push(reason);
     });
 
-    const streaming = client.stream('/s1').catch(() => undefined);
+    const streaming = client.stream('/s1', { data: {} }).catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 0));
     RecordingEventSource.instances[0]!.dispatchEvent(
       new MessageEvent('shutdown', { data: '{"event":"shutdown"}' })

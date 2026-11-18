@@ -81,7 +81,7 @@ Events shall be published right after the atomic call and before any fallible I/
 
 ### FR-009 CommandValidator
 `CommandValidator` shall collect all violations into `Vec<String>` and the handler shall join them with `"; "` into `ApplicationError::Validation`:
-- `validate_create_session`: `max_concurrent_streams > 0`. The timeout range (1..=`MAX_SESSION_TIMEOUT_SECONDS`, 604800) is guaranteed by the `SessionTimeout` type in `SessionConfig`, so an out-of-range value fails at decode (#596).
+- `validate_create_session` is removed (#769). `max_concurrent_streams` (1..=`MAX_CONCURRENT_STREAMS_PER_SESSION`, 1000) is guaranteed by the `MaxConcurrentStreams` type in `SessionConfig`, and the HTTP handler maps an out-of-range value to 400. The timeout range (1..=`MAX_SESSION_TIMEOUT_SECONDS`, 604800) is guaranteed by the `SessionTimeout` type in `SessionConfig`, so an out-of-range value fails at decode (#596).
 - `validate_create_stream`: `source_data` not null.
 - `validate_generate_frames`: `max_frames > 0` and `<= MAX_FRAMES_PER_REQUEST` (1000).
 No validator exists for `BatchGenerateFramesCommand` (its `max_frames` is unbounded).

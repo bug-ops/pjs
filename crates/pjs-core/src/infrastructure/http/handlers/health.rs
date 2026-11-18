@@ -29,6 +29,18 @@ where
     P: EventPublisherGat + Send + Sync + 'static,
     S: StreamStoreGat + Send + Sync + 'static,
 {
+    query_system_stats(&state).await.map(Json)
+}
+
+/// Runs the system-stats query shared by `GET /pjs/stats` and the `/metrics` gauges.
+pub(crate) async fn query_system_stats<R, P, S>(
+    state: &PjsAppState<R, P, S>,
+) -> Result<SystemStatsResponse, PjsError>
+where
+    R: StreamRepositoryGat + Send + Sync + 'static,
+    P: EventPublisherGat + Send + Sync + 'static,
+    S: StreamStoreGat + Send + Sync + 'static,
+{
     let query = GetSystemStatsQuery {
         include_historical: false,
     };
@@ -40,5 +52,5 @@ where
     .await
     .map_err(PjsError::Application)?;
 
-    Ok(Json(response))
+    Ok(response)
 }

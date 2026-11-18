@@ -73,13 +73,13 @@ describe('JsonReconstructor root merge', () => {
     expect(reconstructor.getCurrentState()).toEqual({ nested: { n: 99 } });
   });
 
-  test('replaces the state when either side is not a plain object', () => {
+  test('skips the patch and keeps the state when either side is not a plain object', () => {
     const arrayState = start([1]);
     arrayState.applyPatch(mergeFrame({ a: 1 }));
     const objectState = start({ a: 1 });
     objectState.applyPatch(mergeFrame([2]));
 
-    expect(arrayState.getCurrentState()).toEqual({ a: 1 });
-    expect(objectState.getCurrentState()).toEqual([2]);
+    expect(arrayState.getCurrentState()).toEqual([1]);
+    expect(objectState.getCurrentState()).toEqual({ a: 1 });
   });
 });

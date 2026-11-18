@@ -627,7 +627,7 @@ impl StreamRepositoryGat for GatInMemoryStreamRepository {
                 sessions: paginated,
                 total_count,
                 has_more,
-                query_duration_ms: start.elapsed().as_millis() as u64,
+                query_duration_ms: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                 scan_limit_reached,
             })
         }
@@ -996,11 +996,13 @@ fn saturating_f64_to_u64(value: f64) -> u64 {
 mod tests {
     use super::*;
     use crate::domain::{
-        aggregates::stream_session::SessionConfig, entities::stream::StreamConfig,
-        value_objects::JsonData,
+        aggregates::stream_session::{MaxConcurrentStreams, SessionConfig},
+        entities::stream::StreamConfig,
+        value_objects::{JsonData, Priority},
     };
     use core::assert_matches;
     use jiff::{SignedDuration, Timestamp};
+    use std::collections::HashMap;
 
     // ===== Helper function tests =====
 
@@ -1840,7 +1842,7 @@ mod tests {
 
         const N: usize = 50;
         let mut session = StreamSession::new(SessionConfig {
-            max_concurrent_streams: N,
+            max_concurrent_streams: MaxConcurrentStreams::try_from(N).unwrap(),
             ..SessionConfig::default()
         });
         session.activate().unwrap();
@@ -1908,7 +1910,7 @@ mod tests {
 
         const N: usize = 30;
         let mut session = StreamSession::new(SessionConfig {
-            max_concurrent_streams: N * 2,
+            max_concurrent_streams: MaxConcurrentStreams::try_from(N * 2).unwrap(),
             ..SessionConfig::default()
         });
         session.activate().unwrap();
@@ -1995,8 +1997,7 @@ mod tests {
         repo.save_session(session).await.unwrap();
 
         let custom_config = StreamConfig {
-            max_frame_size: 4321,
-            ..StreamConfig::default()
+            priority_rules: HashMap::from([("id".to_string(), Priority::CRITICAL)]),
         };
         let (stream_id, events) = repo
             .create_stream_atomic(
@@ -2011,8 +2012,8 @@ mod tests {
         let session = repo.find_session(session_id).await.unwrap().unwrap();
         assert_eq!(session.stats().total_streams, 1);
         assert_eq!(
-            session.stream(stream_id).unwrap().config().max_frame_size,
-            custom_config.max_frame_size
+            session.stream(stream_id).unwrap().config().priority_rules,
+            custom_config.priority_rules
         );
     }
 

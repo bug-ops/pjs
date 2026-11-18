@@ -54,7 +54,7 @@ JS names: `PjsParser` {`new`, `withConfig`, `withSecurityConfig`, `parse`, `gene
 | `PjsParser.generateFrames(json, min)` | `min != 0` | frames: skeleton first, complete last, patches strictly descending priority, sequences 0..n | all patches below `min` dropped; if none remain, only skeleton + complete |
 | `PriorityStream.start(json)` | callbacks optional | `onFrame` x N then `onComplete`; or `onError` + throw | callbacks run synchronously; exceptions thrown by callbacks are ignored |
 | `PriorityStream.setMinPriority(p)` | `p != 0` | stores `p` | `p > 100` accepted |
-| `build_skeleton(data, 0, max_depth)` | - | same shape, neutral leaves, `Null` at depth cap | internal |
+| `pjson_rs_domain::services::skeleton(data, max_depth)` | - | same shape, neutral leaves, `Null` at depth cap; shared with `Stream` | domain, called internally |
 | `PriorityAssigner.extract_prioritized_fields_with_limit` | - | every object key visited up to depth; array elements traversed but not emitted themselves | depth counted per container |
 
 ## Testing strategy

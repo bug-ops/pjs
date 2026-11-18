@@ -113,12 +113,33 @@ impl JsonPath {
 
     /// Append a segment in place; with [`Self::pop`] it lets a walker reuse
     /// one buffer instead of building a path per node.
-    pub(crate) fn push(&mut self, segment: PathSegment) {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs_domain::value_objects::{JsonPath, PathSegment};
+    ///
+    /// let mut path = JsonPath::root();
+    /// path.push(PathSegment::Key("a".to_owned()));
+    /// path.push(PathSegment::Index(0));
+    /// assert_eq!(path, JsonPath::root().append_key("a").append_index(0));
+    /// ```
+    pub fn push(&mut self, segment: PathSegment) {
         self.segments.push(segment);
     }
 
     /// Remove and return the last segment, `None` for the root.
-    pub(crate) fn pop(&mut self) -> Option<PathSegment> {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pjson_rs_domain::value_objects::{JsonPath, PathSegment};
+    ///
+    /// let mut path = JsonPath::root().append_index(3);
+    /// assert_eq!(path.pop(), Some(PathSegment::Index(3)));
+    /// assert_eq!(path.pop(), None);
+    /// ```
+    pub fn pop(&mut self) -> Option<PathSegment> {
         self.segments.pop()
     }
 

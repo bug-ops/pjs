@@ -74,25 +74,25 @@ describe('JsonReconstructor own-property keys', () => {
       expectPrototypesUntouched(reconstructor.getCurrentState());
     });
 
-    test('append extends an own array and creates one when absent', () => {
+    test('append extends an own array and skips when the key is absent', () => {
       const own = apply(`{"${name}":[1]}`, 'append', `$.${name}`, '[2,3]');
       expect(own.state).toBe(`{"${name}":[1,2,3]}`);
 
       reconstructor.reset();
-      const created = apply('{}', 'append', `$.${name}`, '5');
-      expect(created.result.skippedPatches).toBe(0);
-      expect(created.state).toBe(`{"${name}":[5]}`);
+      const absent = apply('{}', 'append', `$.${name}`, '5');
+      expect(absent.result.skippedPatches).toBe(1);
+      expect(absent.state).toBe('{}');
       expectPrototypesUntouched(reconstructor.getCurrentState());
     });
 
-    test('merge combines own objects and ignores inherited values', () => {
+    test('merge combines own objects and skips when the key is absent', () => {
       const own = apply(`{"${name}":{"a":1}}`, 'merge', `$.${name}`, '{"p":2}');
       expect(own.state).toBe(`{"${name}":{"a":1,"p":2}}`);
 
       reconstructor.reset();
       const absent = apply('{}', 'merge', `$.${name}`, '{"p":2}');
-      expect(absent.result.skippedPatches).toBe(0);
-      expect(absent.state).toBe(`{"${name}":{"p":2}}`);
+      expect(absent.result.skippedPatches).toBe(1);
+      expect(absent.state).toBe('{}');
       expectPrototypesUntouched(reconstructor.getCurrentState());
     });
 

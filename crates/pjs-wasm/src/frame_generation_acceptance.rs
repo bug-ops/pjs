@@ -4,11 +4,12 @@
 //! Frame generation is crate-private, so this file is compiled as a test-only
 //! module of the crate (see `lib.rs`) instead of living under `tests/`.
 
-use crate::frame_generation::{build_skeleton, payload_data};
+use crate::frame_generation::payload_data;
 use crate::security::DEFAULT_MAX_DEPTH;
 use crate::{PjsParser, PriorityStream};
 use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FrameType;
+use pjson_rs_domain::services::skeleton;
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, PathSegment, Priority, StreamId};
 use serde_json::json;
 
@@ -100,7 +101,7 @@ fn reconstruct(frames: &[Frame]) -> JsonData {
 fn test_build_skeleton_has_no_verbatim_subtrees() {
     let input = data(json!({"a.b": {"c": [1, 2], "d.e": null}, "": "s", "k]": [1]}));
 
-    let skeleton = build_skeleton(&input, 0, DEFAULT_MAX_DEPTH);
+    let skeleton = skeleton(&input, DEFAULT_MAX_DEPTH);
 
     assert_eq!(
         skeleton,
@@ -112,7 +113,7 @@ fn test_build_skeleton_has_no_verbatim_subtrees() {
 fn test_build_skeleton_keeps_placeholders_for_every_key() {
     let input = data(json!({"a.b": 1, "ok": 2, "name": "n", "flag": true, "xs": [1]}));
 
-    let skeleton = build_skeleton(&input, 0, DEFAULT_MAX_DEPTH);
+    let skeleton = skeleton(&input, DEFAULT_MAX_DEPTH);
 
     assert_eq!(
         skeleton,
@@ -197,4 +198,23 @@ fn test_generate_frames_unchanged_for_documents_without_unencodable_keys() {
             .collect::<Vec<_>>()
     );
     assert_eq!(frames.len(), 6, "skeleton, four patch frames, completion");
+}
+
+#[test]
+fn test_generated_skeleton_frame_equals_the_domain_skeleton() {
+    let input = data(json!({"id": 1, "f": 1.5, "s": "x", "o": {"g": 2.5, "p": {"q": {"r": 1}}}}));
+
+    for frames in [
+        stream_frames(&input, Priority::BACKGROUND),
+        parser_frames(&input, Priority::BACKGROUND),
+    ] {
+        assert_eq!(
+            payload_data(&frames[0]),
+            skeleton(&input, DEFAULT_MAX_DEPTH)
+        );
+        assert_eq!(
+            payload_data(&frames[0]),
+            data(json!({"id": 0, "f": 0.0, "s": null, "o": {"g": 0.0, "p": {"q": {"r": 0}}}}))
+        );
+    }
 }

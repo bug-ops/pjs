@@ -202,7 +202,10 @@ async fn test_stream_init_invalid_options_over_wire_replies_400_and_streams_noth
         .expect("an error reply");
     assert_eq!(reply["type"], "Error");
     assert_eq!(reply["data"]["code"], 400);
-    assert_eq!(reply["data"]["error"], "malformed message");
+    assert_eq!(
+        reply["data"]["error"],
+        "invalid stream option: max_frame_size must be at least 1024"
+    );
     assert!(reply["data"]["session_id"].is_null(), "{reply}");
     assert!(
         next_json(&mut ws, Duration::from_millis(300))
@@ -226,7 +229,10 @@ async fn test_stream_init_zero_client_fps_over_wire_replies_400() {
         .await
         .expect("reply");
     assert_eq!(reply["data"]["code"], 400);
-    assert_eq!(reply["data"]["error"], "malformed message");
+    assert_eq!(
+        reply["data"]["error"],
+        "invalid stream option: client_fps must be a positive integer"
+    );
     assert!(reply["data"]["session_id"].is_null(), "{reply}");
 }
 

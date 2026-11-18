@@ -202,7 +202,7 @@ describe('WebSocketTransport stale socket messages', () => {
 
     expect(await outcome).toEqual({ ok: true });
     expect(frames.map((f) => f.frame_type)).toEqual(['Skeleton', 'Patch', 'Complete']);
-    expect(frames[2].total_frames).toBe(1);
+    expect(frames[2].total_frames).toBe(3);
   });
 });
 

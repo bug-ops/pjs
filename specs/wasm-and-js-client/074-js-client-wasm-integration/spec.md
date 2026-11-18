@@ -84,7 +84,7 @@ Status: done.
 
 ## Non-Functional Requirements
 
-- NFR-COMPAT-001: loader must work in Jest (jsdom, no `--experimental-vm-modules`) and plain Node 18+.
+- NFR-COMPAT-001: loader must work in Jest (jsdom, no `--experimental-vm-modules`) and plain Node 22+.
 - NFR-REL-001: a missing `pkg` in CI must fail, not skip (#383).
 - NFR-CI-001: `js-client-test` depends on the `wasm-build-web` artifact (see [[078-ci-pipeline/spec]]).
 

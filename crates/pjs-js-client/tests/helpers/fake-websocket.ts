@@ -73,7 +73,9 @@ export function makeConfig(baseUrl = 'http://localhost:3000'): Required<PJSClien
     debug: false,
     bufferSize: 1024,
     priorityThreshold: Priority.Background,
-    maxConcurrentStreams: 1
+    maxConcurrentStreams: 1,
+    maxStreamBytes: 16 * 1024 * 1024,
+    stateDelivery: 'live'
   };
 }
 

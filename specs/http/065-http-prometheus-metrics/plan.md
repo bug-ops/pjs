@@ -22,6 +22,8 @@ verified: 2026-11-15
 ```mermaid
 flowchart LR
   CH[SessionCommandHandler] -->|metrics::counter pjs_frames_total| REC[(global PrometheusRecorder)]
+  MW[request metrics middleware] -->|http_requests_total, http_request_duration_seconds| REC
+  BUILD[router build] --> IGR
   SCRAPE[GET /metrics] --> MH[metrics_handler] --> IGR[install_global_recorder] --> REC
   IGR --> OL[OnceLock PrometheusHandle]
 ```
@@ -29,7 +31,11 @@ flowchart LR
 ## Design decisions
 
 - Process-global recorder behind `OnceLock::get_or_try_init` (nightly `once_cell_try`): success cached, failure retried.
-- Lazy install inside the handler so a router without a pre-installed recorder still serves `/metrics`; counters emitted before the first install are lost [NEEDS CLARIFICATION: confirm no early-install call in demo or examples].
+- Eager install at router build time (`apply_common_layers`), so requests before the first scrape are counted; the handler keeps a retrying install as a fallback.
+- `MethodLabel` closed enum bounds the `method` label; `route` uses `MatchedPath`.
+- Session/stream gauges are set at scrape time (no lifecycle deltas, so no drift); the 1 s throttle is per `PjsAppState`, not global.
+- Emission sites are gated with `cfg(feature = "metrics")`; WebSocket-only items also with `websocket-server`.
+- Upkeep task spawned from the install closure when a Tokio runtime is current.
 - Error log guarded by `Once` to avoid ERROR flooding on an unauthenticated route.
 
 ## Public API surface
@@ -41,7 +47,7 @@ flowchart LR
 | Function | Precondition | Postcondition | Undefined / notes |
 |---|---|---|---|
 | `install_global_recorder()` | none | `Ok(handle)` same recorder each call | Fails if a different global `metrics` recorder is installed |
-| `metrics_handler()` | none | 200 text exposition, or 500 fixed text | Never exposes install error text |
+| `metrics_handler::<R, P, S>(State<PjsAppState>)` | none | 200 text exposition, or 500 fixed text | Never exposes install error text |
 
 ## Testing strategy
 

@@ -78,8 +78,8 @@ Status: done.
 ### FR-044-005 Frame generation rules
 
 While not `Streaming`, `create_skeleton_frame`, `create_patch_frames`, `extract_prioritized_patches`, `commit_patch_frames`, `finalize_patch_frame` and `create_completion_frame` shall return `InvalidStreamState`. In `Streaming`:
-- the skeleton replaces strings with `null`, numbers with 0, booleans with `false`, arrays with `[]`, recurses into every object key like any other (no value is kept verbatim by key), and yields `null` for a scalar root and `[]` for an array root;
-- patch extraction walks objects only and addresses every key (`.`, `[`, `]` and the empty key included) through a `JsonPath` with quoted segments; every non-object value (scalars and whole arrays) becomes a `Set` patch at its `JsonPath`, kept when its priority is `>= threshold`; no subtree is skipped and no root `Set` is emitted; dropped leaves and arrays stay absent;
+- the skeleton is `services::skeleton(data, MAX_DESERIALIZE_DEPTH)`, the one transform shared with `pjs-wasm` (#758): strings become `null`, integers 0, floats `0.0`, booleans `false`, arrays `[]`; it recurses into every object key like any other (no value is kept verbatim by key), turns an object at depth 64 or deeper into `null`, and yields `null` for a scalar root and `[]` for an array root;
+- patch extraction walks objects only and addresses every key (`.`, `[`, `]` and the empty key included) through a `JsonPath` with quoted segments; every non-object value (scalars and whole arrays) becomes a `Set` patch at its `JsonPath`, kept when its priority is `>= threshold`; an object at depth 64 (`MAX_DESERIALIZE_DEPTH`) is emitted whole as one `Set`, so the walk is bounded and the skeleton's `null` cutoff stays lossless; no other subtree is skipped and no root `Set` is emitted; dropped leaves and arrays stay absent;
 - array elements are never descended into: an array travels whole in one `Set`; patch frames assume that the skeleton (or a parent-creating client) provides the parent objects;
 - one `PriorityHeuristicConfig` is built per extraction and the path is walked as one mutable buffer; a leaf is priced on the borrowed buffer and its path and value are cloned only when its patch is emitted (#755, #756);
 - extracted patches are sorted by descending priority;
@@ -94,9 +94,10 @@ Status: done (heuristic by design).
 
 ### FR-044-007 Stream configuration
 
-`StreamConfig` shall hold `max_frame_size` (default 64 KiB), `max_frames_per_batch` (10), `enable_compression` (true), `priority_rules: HashMap<String, Priority>` (serialised as `u8` values). `update_config` shall succeed only while the stream is active.
+`StreamConfig` shall hold only `priority_rules: HashMap<String, Priority>` (serialised as `u8` values); the inert `max_frame_size`, `max_frames_per_batch` and `enable_compression` fields were removed (#760). `update_config` shall succeed only while the stream is active.
 `priority_rules`, when non-empty, become `overrides` of the heuristic in FR-044-011.
-Status: done. `max_frame_size`, `max_frames_per_batch` and `enable_compression` are not read inside the domain crate; they are carried for callers.
+`Stream::with_clock(session_id, data, config, Arc<dyn clock::TimeProvider>)` shall take `created_at`, `updated_at`, `completed_at` and the timestamps of the frames the stream builds from the injected clock; `Stream::new` and a deserialised stream use the system clock. `TimeProvider` and `SystemTimeProvider` live in `pjson_rs_domain::clock` and are re-exported by `pjs-core` ports (#759).
+Status: done.
 
 ### FR-044-008 `StreamMap`
 
@@ -162,18 +163,16 @@ Status: done.
 
 - Always: add new frame or event kinds as new enum variants with golden-test coverage; keep `compute_priority` the single source of priority logic (WASM and HTTP).
 - Ask first: changing default field lists or thresholds (visible to every consumer); relaxing the `Frame` and `Stream` decode validation.
-- Never: add I/O or time-provider indirection hacks to entities without updating the `StreamSession` clock design in `pjs-core` (it uses a `TimeProvider` port; entities here call `Timestamp::now()` directly).
+- Never: read `Timestamp::now()` inside `Stream`; its time comes from the injected `clock::TimeProvider` (`Stream::with_clock`, #759).
 
 ## Open Questions
 
-- Entities call `Timestamp::now()` directly (`Frame::*`, `Stream::*`), while `StreamSession` in `pjs-core` uses a `TimeProvider` port (CHANGELOG 0.6.3, #330); frame and stream timestamps are therefore untestable with a fake clock.
-- `Stream::collect_patches`/`generate_skeleton` recurse over `JsonData` without a depth bound; trees built programmatically (not via deserialisation, which is capped at 64) can overflow the stack.
+- The standalone constructors `Frame::skeleton`/`patch`/`complete`/`error` still read `Timestamp::now()`; only frames built by `Stream` take the stream clock.
 - Patch order within one priority level is hash-map dependent (`HashMap` iteration then a stable sort by priority).
 - Patches treat whole arrays as leaf values, so array elements are never prioritised individually; the domain patch model is set-only (#751 narrowed to this; a domain-owned op type with a payload per op remains open).
 - `DomainEvent` deserialises without invariant checks (`Frame` and `Stream` validate since #752 and #753).
 - Events carry priorities as raw `u8` (`highest_priority`, `old_threshold`, `new_threshold`) and counts as `usize` (platform-width on the wire); `Priority` and fixed-width integers would be stricter.
 - `EventStore` returns `Result<_, String>` (stringly typed errors); `EventStore`, `InMemoryEventStore`, `EventId`, `EventSubscriber` are unused outside the domain crate.
-- `StreamConfig` limits (`max_frame_size`, `max_frames_per_batch`, `enable_compression`) are not enforced by `Stream`.
 - `Stream::progress` is a frame-count heuristic, not a measure of delivered data.
 - `PriorityPercentages::default` is hand-written equivalent to a derive.
 - Lists in `PriorityHeuristicConfig` are `Vec<String>`; a field can appear in several tiers and the first tier wins silently.

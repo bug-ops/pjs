@@ -18,7 +18,7 @@ use crate::{
         },
     },
     domain::{
-        aggregates::stream_session::{SessionConfig, SessionTimeout},
+        aggregates::stream_session::{MaxConcurrentStreams, SessionConfig, SessionTimeout},
         ports::{EventPublisherGat, StreamRepositoryGat, StreamStoreGat},
         value_objects::SessionId,
     },
@@ -44,11 +44,17 @@ where
         .timeout_seconds
         .map_or_else(|| Ok(SessionTimeout::default()), SessionTimeout::try_from)
         .map_err(|e| PjsError::Application(ApplicationError::Validation(e.to_string())))?;
+    let max_concurrent_streams = request
+        .max_concurrent_streams
+        .map_or_else(
+            || Ok(MaxConcurrentStreams::default()),
+            MaxConcurrentStreams::try_from,
+        )
+        .map_err(|e| PjsError::Application(ApplicationError::Validation(e.to_string())))?;
     let config = SessionConfig {
-        max_concurrent_streams: request.max_concurrent_streams.unwrap_or(10),
+        max_concurrent_streams,
         session_timeout,
         default_stream_config: Default::default(),
-        enable_compression: true,
         metadata: Default::default(),
     };
 

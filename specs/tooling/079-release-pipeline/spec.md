@@ -52,7 +52,7 @@ Before any publish, jobs `format-check` (`cargo fmt --all -- --check`), `clippy-
 Status: done.
 
 ### FR-003 crates.io publish
-Job `publish` (environment `crates-io`, needs all gates) shall authenticate through crates.io Trusted Publishing (`rust-lang/crates-io-auth-action`, OIDC) and run `katyo/publish-crates` with `ignore-unpublished-changes: true` and `publish-delay: 10000`. Publishable crates are those with `publish = true`: `pjson-rs` (`crates/pjs-core`) and `pjson-rs-domain`; `pjs-wasm`, `pjs-bench`, `pjs-demo` inherit workspace `publish = false`. `pjs-core` carries `[package.metadata.release.publishers.crates-io]` with `trusted-publishing = true`, workflow `release.yml`.
+Job `publish` (environment `crates-io`, needs all gates) shall authenticate through crates.io Trusted Publishing (`rust-lang/crates-io-auth-action`, OIDC) and run `cargo publish --workspace --locked` with `CARGO_REGISTRY_TOKEN` from the auth step (#742; Cargo publishes in dependency order and waits for index propagation). `nextest` and `wasm-pack` are installed at the versions pinned in the workflow `env:` block (#744). Publishable crates are those with `publish = true`: `pjson-rs` (`crates/pjs-core`) and `pjson-rs-domain`; `pjs-wasm`, `pjs-bench`, `pjs-demo` inherit workspace `publish = false`. `pjs-core` carries `[package.metadata.release.publishers.crates-io]` with `trusted-publishing = true`, workflow `release.yml`.
 Status: done. The job installs the nightly toolchain, like the gates (#617).
 
 ### FR-004 WASM npm publish
@@ -116,7 +116,7 @@ Version sources: root `Cargo.toml` `[workspace.package].version` (single source 
 - Name inconsistency across in-repo files (`@pjs/client` vs `@pjson/node`; `pjs-wasm` vs `@pjson/wasm`).
 - The in-repo `@pjs/client` `VERSION` constant (`0.3.0-alpha.1`) is not updated by the pipeline, so the published `@pjson/node` reports a different version than its `package.json`.
 - Release preparation (version bump, changelog finalisation) is manual; `release:` commit convention only.
-- `crates.io` publish order for `pjson-rs` depending on `pjson-rs-domain` relies on `publish-crates` dependency ordering with a 10 s delay.
+- `crates.io` publish order for `pjson-rs` depending on `pjson-rs-domain` is handled by `cargo publish --workspace` dependency ordering. After a partial publish (domain published, core failed) a re-run on the same tag is expected to skip the already published crate; verify on the next release.
 
 ## See Also
 

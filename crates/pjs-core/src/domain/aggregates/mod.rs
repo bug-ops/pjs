@@ -2,4 +2,4 @@
 
 pub mod stream_session;
 
-pub use stream_session::{SessionTimeout, StreamSession};
+pub use stream_session::{MaxConcurrentStreams, SessionTimeout, StreamSession};

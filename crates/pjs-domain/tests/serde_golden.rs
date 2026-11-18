@@ -25,7 +25,7 @@ fn frame_literal(stream_id: &str, priority: &str) -> String {
 
 fn stream_literal(session_id: &str, stream_id: &str, rule_priority: &str) -> String {
     format!(
-        r#"{{"id":"{stream_id}","session_id":"{session_id}","state":"Preparing","config":{{"max_frame_size":65536,"max_frames_per_batch":10,"enable_compression":true,"priority_rules":{{"$.a":{rule_priority}}}}},"stats":{{"total_frames":0,"skeleton_frames":0,"patch_frames":0,"complete_frames":0,"error_frames":0,"total_bytes":0,"critical_bytes":0,"high_priority_bytes":0,"average_frame_size":0.0}},"created_at":"{TS}","updated_at":"{TS}","completed_at":null,"next_sequence":1,"source_data":null,"metadata":{{}}}}"#
+        r#"{{"id":"{stream_id}","session_id":"{session_id}","state":"Preparing","config":{{"priority_rules":{{"$.a":{rule_priority}}}}},"stats":{{"total_frames":0,"skeleton_frames":0,"patch_frames":0,"complete_frames":0,"error_frames":0,"total_bytes":0,"critical_bytes":0,"high_priority_bytes":0,"average_frame_size":0.0}},"created_at":"{TS}","updated_at":"{TS}","completed_at":null,"next_sequence":1,"source_data":null,"metadata":{{}}}}"#
     )
 }
 

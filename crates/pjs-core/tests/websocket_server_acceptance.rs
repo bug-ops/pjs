@@ -172,7 +172,10 @@ async fn test_stream_init_invalid_options_rejected_with_400_and_no_frames() {
     let reply = next_json(&mut ws).await;
     assert_eq!(kind(&reply), "Error", "{reply}");
     assert_eq!(reply["data"]["code"], json!(400));
-    assert_eq!(reply["data"]["error"], json!("malformed message"));
+    assert_eq!(
+        reply["data"]["error"],
+        json!("invalid stream option: max_frame_size must be at least 1024")
+    );
     assert!(reply["data"]["session_id"].is_null(), "{reply}");
 
     let followup = timeout(Duration::from_millis(300), ws.next()).await;

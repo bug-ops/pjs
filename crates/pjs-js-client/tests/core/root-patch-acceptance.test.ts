@@ -127,15 +127,15 @@ describe('JsonReconstructor.applyPatch root path', () => {
     });
   });
 
-  test('root merge with a non-object value replaces the state', () => {
+  test('root merge with a non-object value is skipped and keeps the state', () => {
     reconstructor.processSkeleton(skeleton({ a: 1 }));
 
     const result = reconstructor.applyPatch(
       patchFrame([{ operation: 'merge', path: '$', value: [1, 2] }])
     );
 
-    expect(result.skippedPatches).toBe(0);
-    expect(reconstructor.getCurrentState()).toEqual([1, 2]);
+    expect(result.skippedPatches).toBe(1);
+    expect(reconstructor.getCurrentState()).toEqual({ a: 1 });
   });
 
   test.each<Op>(['append', 'delete'])('root %s stays skipped and leaves the state unchanged', (operation) => {

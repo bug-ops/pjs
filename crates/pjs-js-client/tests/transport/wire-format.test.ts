@@ -1,79 +1,60 @@
 /**
- * Acceptance tests for #714: the wire format the experimental HTTP and SSE
- * transports speak toward an external server, as documented in the
- * README "Transport Options" table and spec 073 FR-011.
+ * @jest-environment node
+ *
+ * Wire details of the HTTP and SSE transports toward the shipped pjs-core
+ * REST routes (#735): request order, bodies, headers and query parameters.
+ * The end-to-end flow is covered by the shipped-routes suites.
  */
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { HttpTransport } from '../../src/transport/http.js';
 import { SSETransport } from '../../src/transport/sse.js';
-import {
-  Priority,
-  TransportType,
-  type PJSClientConfig
-} from '../../src/types/index.js';
+import { FrameType, TransportType } from '../../src/types/index.js';
+import { makeConfig as baseConfig } from '../helpers/fake-pjs-server.js';
+
+const STREAM_ID = 'stream-9';
+const STREAMS = 'http://localhost:3000/pjs/sessions/session-1/streams';
 
 const STREAM_OPTIONS = {
   sessionId: 'session-1',
-  streamId: 'stream-1',
+  streamId: 'client-side-id',
+  data: { a: 1 },
   queryParams: { limit: '5' },
   headers: { 'X-Test': 'yes' }
 };
 
 const FRAME = {
-  frame_type: 'skeleton',
+  frame_type: 'Skeleton',
   priority: 100,
-  payload: { data: { a: 1 } }
+  payload: {}
 };
 
-function makeConfig(transport: TransportType): Required<PJSClientConfig> {
-  return {
-    baseUrl: 'http://localhost:3000',
-    transport,
-    sessionId: 'session-1',
-    headers: { Authorization: 'Bearer t' },
-    timeout: 1000,
-    debug: false,
-    bufferSize: 1024,
-    priorityThreshold: Priority.Background,
-    maxConcurrentStreams: 1
-  };
+function makeConfig(transport: TransportType) {
+  return { ...baseConfig(transport), headers: { Authorization: 'Bearer t' } };
 }
 
-function emptyNdjsonResponse(): Response {
-  return {
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    headers: new Headers(),
-    json: async () => ({ session_id: 'session-1', supported_features: ['x'] }),
-    body: {
-      getReader: () => ({
-        read: async () => ({ done: true, value: undefined }),
-        cancel: async () => {},
-        releaseLock: () => {}
-      })
+let calls: Array<{ url: string; init: RequestInit }>;
+let ndjson: string;
+const originalFetch = globalThis.fetch;
+
+beforeEach(() => {
+  calls = [];
+  ndjson = '';
+  globalThis.fetch = jest.fn(async (url: unknown, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    if (init?.method === 'GET') {
+      return new Response(ndjson, { status: 200, headers: { 'content-type': 'application/x-ndjson' } });
     }
-  } as unknown as Response;
-}
+    return new Response(JSON.stringify({ session_id: 'session-1', stream_id: STREAM_ID }), { status: 200 });
+  }) as unknown as typeof fetch;
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 describe('HttpTransport wire format', () => {
-  const originalFetch = globalThis.fetch;
-  let calls: Array<{ url: string; init: RequestInit }>;
-
-  beforeEach(() => {
-    calls = [];
-    globalThis.fetch = jest.fn(async (url: unknown, init?: RequestInit) => {
-      calls.push({ url: String(url), init: init ?? {} });
-      return emptyNdjsonResponse();
-    }) as unknown as typeof fetch;
-  });
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  test('connect posts a client_info object with a string version to /pjs/sessions', async () => {
+  test('connect posts a string client_info to /pjs/sessions with the configured headers', async () => {
     const transport = new HttpTransport(makeConfig(TransportType.HTTP));
 
     const result = await transport.connect();
@@ -85,66 +66,56 @@ describe('HttpTransport wire format', () => {
       'Content-Type': 'application/json',
       Authorization: 'Bearer t'
     });
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
-      client_info: { type: 'javascript', version: expect.any(String) }
-    });
-    expect(result).toEqual({ sessionId: 'session-1', supportedFeatures: ['x'] });
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ client_info: expect.any(String) });
+    expect(result).toEqual({ sessionId: 'session-1' });
   });
 
-  test('startStream gets /pjs/stream{endpoint} with ids, query params and NDJSON Accept', async () => {
+  test('startStream creates, starts and generates the stream, then reads its frames', async () => {
     const transport = new HttpTransport(makeConfig(TransportType.HTTP));
     await transport.connect();
 
-    await transport.startStream('/s1', STREAM_OPTIONS);
+    await transport.startStream('/ignored', STREAM_OPTIONS);
 
-    const request = calls[1]!;
-    const url = new URL(request.url);
-    expect(`${url.origin}${url.pathname}`).toBe('http://localhost:3000/pjs/stream/s1');
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      session_id: 'session-1',
-      stream_id: 'stream-1',
-      limit: '5'
-    });
-    expect(request.init.method).toBe('GET');
-    expect(request.init.headers).toMatchObject({
-      Accept: 'application/x-ndjson',
-      'X-Test': 'yes'
-    });
+    const [create, start, generate, read] = calls.slice(1);
+    expect(create!.url).toBe(STREAMS);
+    expect(JSON.parse(create!.init.body as string)).toEqual({ data: { a: 1 } });
+    expect(start!.url).toBe(`${STREAMS}/${STREAM_ID}/start`);
+    expect(generate!.url).toBe(`${STREAMS}/${STREAM_ID}/generate-frames`);
+    expect(JSON.parse(generate!.init.body as string)).toEqual({ priority_threshold: 10, max_frames: 1000 });
+    for (const request of [create!, start!, generate!, read!]) {
+      expect(request.init.headers).toMatchObject({ Authorization: 'Bearer t', 'X-Test': 'yes' });
+    }
+
+    const url = new URL(read!.url);
+    expect(`${url.origin}${url.pathname}`).toBe(`${STREAMS}/${STREAM_ID}/frames/stream`);
+    expect(Object.fromEntries(url.searchParams)).toEqual({ priority: '10', limit: '5' });
+    expect(read!.init.method).toBe('GET');
+    expect(read!.init.headers).toMatchObject({ Accept: 'application/x-ndjson' });
   });
 
-  test('delivers each NDJSON line as a frame', async () => {
-    const encoder = new TextEncoder();
-    const lines = encoder.encode(`${JSON.stringify(FRAME)}\n`);
-    let sent = false;
-    globalThis.fetch = jest.fn(async (_url: unknown, init?: RequestInit) =>
-      init?.method === 'POST'
-        ? emptyNdjsonResponse()
-        : ({
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            headers: new Headers(),
-            body: {
-              getReader: () => ({
-                read: async () => {
-                  if (sent) return { done: true, value: undefined };
-                  sent = true;
-                  return { done: false, value: lines };
-                },
-                cancel: async () => {},
-                releaseLock: () => {}
-              })
-            }
-          } as unknown as Response)
-    ) as unknown as typeof fetch;
+  test('delivers each NDJSON line as a frame and completes the stream', async () => {
+    ndjson = `${JSON.stringify(FRAME)}\n`;
     const transport = new HttpTransport(makeConfig(TransportType.HTTP));
-    const frames: unknown[] = [];
-    transport.on('frame', (frame: unknown) => frames.push(frame));
+    const frames: Array<{ frame_type: unknown }> = [];
+    transport.on('frame', (frame: { frame_type: unknown }) => frames.push(frame));
     await transport.connect();
 
-    await transport.startStream('/s1', STREAM_OPTIONS);
+    await transport.startStream('/ignored', STREAM_OPTIONS);
 
-    expect(frames).toEqual([FRAME]);
+    expect(frames[0]).toEqual(FRAME);
+    expect(frames.map((frame) => frame.frame_type)).toEqual([FrameType.Skeleton, FrameType.Complete]);
+  });
+
+  test('an empty page still yields a Skeleton and a Complete frame', async () => {
+    const transport = new HttpTransport(makeConfig(TransportType.HTTP));
+    const frames: Array<{ frame_type: unknown; total_frames?: number }> = [];
+    transport.on('frame', (frame: { frame_type: unknown }) => frames.push(frame));
+    await transport.connect();
+
+    await transport.startStream('/ignored', STREAM_OPTIONS);
+
+    expect(frames.map((frame) => frame.frame_type)).toEqual([FrameType.Skeleton, FrameType.Complete]);
+    expect(frames[1]!.total_frames).toBe(2);
   });
 });
 
@@ -178,37 +149,40 @@ describe('SSETransport wire format', () => {
     (globalThis as { EventSource: unknown }).EventSource = originalEventSource;
   });
 
-  test('startStream opens GET /pjs/stream{endpoint}/sse with session and stream ids', async () => {
+  async function startedTransport(): Promise<{ transport: SSETransport; started: Promise<unknown> }> {
     const transport = new SSETransport(makeConfig(TransportType.ServerSentEvents));
     await transport.connect();
+    const started = transport.startStream('/ignored', STREAM_OPTIONS).catch(() => undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    return { transport, started };
+  }
 
-    await transport.startStream('/s1', STREAM_OPTIONS);
+  test('startStream opens an EventSource on frames/stream with the priority filter and query parameters', async () => {
+    const { transport, started } = await startedTransport();
 
     const url = new URL(FakeEventSource.instances[0]!.url);
-    expect(`${url.origin}${url.pathname}`).toBe('http://localhost:3000/pjs/stream/s1/sse');
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      session_id: 'session-1',
-      stream_id: 'stream-1',
-      limit: '5'
-    });
+    expect(`${url.origin}${url.pathname}`).toBe(`${STREAMS}/${STREAM_ID}/frames/stream`);
+    expect(Object.fromEntries(url.searchParams)).toEqual({ priority: '10', limit: '5' });
+    await transport.disconnect();
+    await started;
   });
 
   test('dispatches message and frame events as frames and error events as protocol errors', async () => {
-    const transport = new SSETransport(makeConfig(TransportType.ServerSentEvents));
+    const { transport, started } = await startedTransport();
     const frames: unknown[] = [];
     const errors: Error[] = [];
     transport.on('frame', (frame: unknown) => frames.push(frame));
     transport.on('error', (error: Error) => errors.push(error));
-    await transport.connect();
-    await transport.startStream('/s1', STREAM_OPTIONS);
     const source = FakeEventSource.instances[0]!;
 
     source.onmessage?.(new MessageEvent('message', { data: JSON.stringify(FRAME) }));
-    source.emitNamed('frame', JSON.stringify(FRAME));
+    source.emitNamed('frame', JSON.stringify({ ...FRAME, priority: 90 }));
     source.emitNamed('error', JSON.stringify({ message: 'boom' }));
 
-    expect(frames).toEqual([FRAME, FRAME]);
+    expect(frames).toEqual([FRAME, { ...FRAME, priority: 90 }]);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.message).toBe('boom');
+    await transport.disconnect();
+    await started;
   });
 });

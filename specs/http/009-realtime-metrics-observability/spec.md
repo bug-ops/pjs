@@ -35,7 +35,7 @@ verified: 2026-11-15
 > Drift from original spec:
 > - `frames_per_second`/`bytes_per_second` are lifetime averages (`total / uptime`), not rolling 1-minute rates (FR-2 open).
 > - Only one counter exists: `pjs_frames_total` (no `session_id` label), incremented in `GenerateFramesCommand` and `BatchGenerateFramesCommand` handlers under `cfg(feature = "metrics")`; WebSocket frames are not counted (#239 comment in code). `pjs_bytes_total`, `pjs_active_sessions` (in the `/metrics` registry), `pjs_uptime_seconds`, and `pjs_http_request_duration_seconds` are not emitted by the `metrics` facade. (`infrastructure/adapters/metrics_collector.rs` renders a separate `pjs_active_sessions` text format that is not wired to `/metrics`.)
-> - The global recorder is installed lazily by the first `/metrics` request (no non-test caller installs it at startup), so `metrics::counter!` calls before the first scrape are dropped (`rg install_global_recorder crates` shows only `metrics.rs` and one test).
+> - The global recorder is installed eagerly when a router builder runs (spec 065 FR-002), so request series before the first scrape are counted.
 > - No `axum-prometheus`, no `tokio-metrics`/`tokio_unstable` support.
 > - `PjsAppState` does not hold `start_time`; `SystemQueryHandler` does (`started_at`).
 > - `/metrics` is outside auth by design; its recorder-failure body is a fixed generic message (CHANGELOG security fix).
@@ -51,9 +51,9 @@ verified: 2026-11-15
 | 3a | `GET /metrics` Prometheus text endpoint | done, behind `metrics` feature; `Content-Type: text/plain; version=0.0.4; charset=utf-8` |
 | 3b | `pjs_uptime_seconds` | open |
 | 3c | `pjs_frames_total{session_id}` | partial: unlabelled aggregate |
-| 3d | `pjs_bytes_total{session_id}` | open |
-| 3e | `pjs_active_sessions` | open (on `/metrics`) |
-| 3f | `pjs_http_request_duration_seconds{method,path,status}` | open |
+| 3d | bytes sent | done as `pjs_bytes_sent_total{transport}` (no `session_id` label, spec 065 FR-008) |
+| 3e | `pjs_active_sessions` | done on `/metrics` (spec 065 FR-008), plus `pjs_active_streams` |
+| 3f | request latency | done as `http_request_duration_seconds{method,route}` histogram plus `http_requests_total{method,route,status}` (spec 065 FR-006) |
 | 4 | Tokio runtime metrics with `--cfg tokio_unstable` | open |
 
 ## Non-functional requirements

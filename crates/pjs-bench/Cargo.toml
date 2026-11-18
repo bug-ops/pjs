@@ -23,6 +23,9 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util
 uuid = { workspace = true }
 dhat = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true }
+
 [lints]
 workspace = true
 
@@ -63,4 +66,16 @@ harness = false
 
 [[bench]]
 name = "patch_extraction"
+harness = false
+
+[[bench]]
+name = "buffer_pool"
+harness = false
+
+[[bench]]
+name = "priority_streamer"
+harness = false
+
+[[bench]]
+name = "gungraun_parser"
 harness = false

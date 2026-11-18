@@ -127,7 +127,6 @@ fn test_create_patch_frames_round_trips_with_priority_rules() {
     ]);
     let config = StreamConfig {
         priority_rules: rules,
-        ..StreamConfig::default()
     };
 
     assert_eq!(reconstruct(&data, config, 3), data);

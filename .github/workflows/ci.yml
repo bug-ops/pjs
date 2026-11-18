@@ -22,6 +22,12 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
+  # install-action tool pins; refresh together with the Actions bump
+  CARGO_FUZZ_VERSION: 0.13.2
+  CARGO_HACK_VERSION: 0.6.46
+  CARGO_LLVM_COV_VERSION: 0.9.1
+  CARGO_NEXTEST_VERSION: 0.9.152
+  WASM_PACK_VERSION: 0.15.1
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -42,6 +48,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       wasm: ${{ steps.filter.outputs.wasm }}
       js:   ${{ steps.filter.outputs.js }}
+      bench: ${{ steps.filter.outputs.bench }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -71,6 +78,14 @@ jobs:
               - '.github/actions/setup-rust/**'
             js:
               - 'crates/pjs-js-client/**'
+              - '.github/workflows/ci.yml'
+            bench:
+              - 'crates/pjs-core/**'
+              - 'crates/pjs-domain/**'
+              - 'crates/pjs-bench/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
 
   # ── Tier 1: entry gate ───────────────────────────────────────────────────
@@ -149,7 +164,7 @@ jobs:
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: cargo-fuzz
+          tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
 
       - name: Check formatting
         run: cargo fmt --manifest-path fuzz/Cargo.toml --check
@@ -200,7 +215,7 @@ jobs:
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: cargo-fuzz
+          tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
 
       - name: Explore each target for 60 seconds
         run: |
@@ -262,7 +277,7 @@ jobs:
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: nextest
+          tool: cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
 
       # Compile tests and produce a self-contained archive.  The archive
       # bundles test binaries + metadata so the test job can run without
@@ -318,7 +333,7 @@ jobs:
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: nextest
+          tool: cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -445,7 +460,7 @@ jobs:
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: nextest
+          tool: cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -490,7 +505,7 @@ jobs:
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: cargo-llvm-cov,nextest
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }},cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -510,7 +525,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
         run: |
           cargo llvm-cov nextest --all-features --all-targets --workspace \
-            --exclude pjs-demo \
+            --exclude pjs-demo --exclude pjs-bench \
             --lcov --output-path lcov.info \
             --status-level fail --final-status-level skip
 
@@ -575,7 +590,7 @@ jobs:
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: wasm-pack@latest
+          tool: wasm-pack@${{ env.WASM_PACK_VERSION }}
 
       - name: Build WASM for ${{ matrix.target }}
         working-directory: crates/pjs-wasm
@@ -680,7 +695,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '18'
+          node-version: '24'
 
       - name: Run and verify Node.js example
         working-directory: crates/pjs-js-client/examples/browser-wasm
@@ -717,7 +732,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: crates/pjs-js-client/package-lock.json
 
@@ -749,7 +764,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '18'
+          node-version: '24'
 
       - name: Validate package.json fields
         run: |
@@ -797,7 +812,7 @@ jobs:
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: cargo-hack
+          tool: cargo-hack@${{ env.CARGO_HACK_VERSION }}
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -888,6 +903,74 @@ jobs:
           MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-ignore-leaks"
         run: cargo miri test -p pjson-rs --lib -- parser::buffer_pool parser::aligned_alloc
 
+  # Report-only (#736, ADR-002): deliberately outside `ci-success` until the
+  # run-to-run variance is measured and the limit is final.
+  bench-instructions:
+    name: Instruction counts (gungraun, report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    needs: [changes]
+    if: github.event_name == 'pull_request' && needs.changes.outputs.bench == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "bench-instructions"
+          cache-on-failure: true
+
+      - name: Read gungraun-runner version from Cargo.lock
+        id: runner
+        run: |
+          version="$(grep -A1 '^name = "gungraun-runner"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
+          [[ -n "$version" ]] || { echo "::error::gungraun-runner not found in Cargo.lock"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: gungraun-runner@${{ steps.runner.outputs.version }}
+
+      - name: Install Valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-src
+          persist-credentials: false
+
+      # Clean base tree; only the head bench harness is added when the base
+      # does not have it yet. The baseline lands in the shared target dir.
+      - name: Record base baseline
+        working-directory: base-src
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          if [[ ! -f crates/pjs-bench/benches/gungraun_parser.rs ]]; then
+            cp "$GITHUB_WORKSPACE/crates/pjs-bench/benches/gungraun_parser.rs" crates/pjs-bench/benches/
+            printf '\n[[bench]]\nname = "gungraun_parser"\nharness = false\n' >> crates/pjs-bench/Cargo.toml
+            cargo add --dev -p pjs-bench 'gungraun@=0.20.0' --target 'cfg(target_os = "linux")'
+          fi
+          cargo bench -p pjs-bench --bench gungraun_parser -- --save-baseline=base
+
+      - name: Compare head against base
+        run: cargo bench -p pjs-bench --bench gungraun_parser -- --baseline=base | tee "$RUNNER_TEMP/gungraun.txt"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/gungraun.txt" 2>/dev/null || echo "no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ── Security (independent, no Rust build required) ────────────────────────
   security-osv:
     name: OSV Security Scan
@@ -923,10 +1006,14 @@ jobs:
   # ── Single gate for branch protection ────────────────────────────────────
   # ── JS Client Tests ──────────────────────────────────────────────────────
   js-client-test:
-    name: JS Client Tests
+    name: JS Client Tests (Node ${{ matrix.node }})
     needs: [changes, wasm-build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
     if: |
       needs.changes.outputs.wasm == 'true' ||
       needs.changes.outputs.js == 'true' ||
@@ -946,7 +1033,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node }}
           cache: 'npm'
           cache-dependency-path: crates/pjs-js-client/package-lock.json
 

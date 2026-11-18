@@ -37,6 +37,8 @@ pub(crate) fn bounded_log_text(text: &str) -> String {
 pub(crate) enum ServerReply {
     /// Undecodable text frame.
     Malformed,
+    /// `StreamInit` whose `options` carry an invalid value for one field.
+    InvalidStreamOption(StreamOptionField),
     /// `StreamInit` carrying the nil UUID.
     NilSessionId,
     /// `StreamInit` whose id is already live on the connection.
@@ -62,8 +64,12 @@ pub(crate) enum ServerReply {
 impl ServerReply {
     /// Every variant, for exact `(code, text)` matching.
     #[cfg(any(feature = "websocket-client", test))]
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 14] = [
         Self::Malformed,
+        Self::InvalidStreamOption(StreamOptionField::MaxFrameSize),
+        Self::InvalidStreamOption(StreamOptionField::ClientFps),
+        Self::InvalidStreamOption(StreamOptionField::PriorityMapping),
+        Self::InvalidStreamOption(StreamOptionField::Framing),
         Self::NilSessionId,
         Self::DuplicateSessionId,
         Self::TooManySessions,
@@ -78,7 +84,7 @@ impl ServerReply {
     /// The wire `code`.
     pub(crate) const fn code(self) -> u16 {
         match self {
-            Self::Malformed | Self::NilSessionId => 400,
+            Self::Malformed | Self::InvalidStreamOption(_) | Self::NilSessionId => 400,
             Self::StreamStalled | Self::StreamDeadlineExceeded => 408,
             Self::DuplicateSessionId => 409,
             Self::FrameExceedsBudget | Self::PlanTooLarge => 413,
@@ -91,6 +97,7 @@ impl ServerReply {
     pub(crate) const fn reason(self) -> &'static str {
         match self {
             Self::Malformed => "malformed message",
+            Self::InvalidStreamOption(field) => field.reason(),
             Self::NilSessionId => "nil session id is not allowed",
             Self::DuplicateSessionId => "session id already in use",
             Self::TooManySessions => "too many live sessions on this connection",
@@ -111,6 +118,111 @@ impl ServerReply {
             .into_iter()
             .find(|reply| reply.code() == code && reply.reason() == reason)
     }
+}
+
+/// A `StreamOptions` field a `StreamInit` carried an invalid value for.
+///
+/// Each field has one fixed reply text naming the violated constraint; the
+/// rejected value itself is never echoed.
+#[cfg(any(feature = "websocket-server", feature = "websocket-client"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamOptionField {
+    /// `max_frame_size` below the minimum.
+    MaxFrameSize,
+    /// `client_fps` that is not a positive integer.
+    ClientFps,
+    /// `priority_mapping` with a value that is not a valid priority.
+    PriorityMapping,
+    /// `framing` that is neither `"merge"` nor `"patch"`.
+    Framing,
+}
+
+#[cfg(any(feature = "websocket-server", feature = "websocket-client"))]
+impl StreamOptionField {
+    /// The fixed wire `error` text for an invalid value of this field.
+    const fn reason(self) -> &'static str {
+        match self {
+            Self::MaxFrameSize => "invalid stream option: max_frame_size must be at least 1024",
+            Self::ClientFps => "invalid stream option: client_fps must be a positive integer",
+            Self::PriorityMapping => {
+                "invalid stream option: priority_mapping values must be valid priorities"
+            }
+            Self::Framing => r#"invalid stream option: framing must be "merge" or "patch""#,
+        }
+    }
+}
+
+/// The first `StreamOptions` field, in declaration order, whose value in a
+/// `StreamInit` text frame fails to decode.
+///
+/// Meant for a frame that already failed to decode as a [`WsMessage`], to tell
+/// an invalid option from any other malformed message. `None` means the frame
+/// is not a `StreamInit` with a readable `options` object, or no present field
+/// is invalid. The document under `data.data` is decoded too, so a document
+/// nested beyond the decoder's recursion limit fails here as well and stays
+/// malformed.
+#[cfg(feature = "websocket-server")]
+pub(crate) fn invalid_stream_option(text: &str) -> Option<StreamOptionField> {
+    #[derive(Deserialize)]
+    enum Kind {
+        StreamInit,
+    }
+    #[derive(Deserialize)]
+    struct Envelope {
+        #[serde(rename = "type")]
+        _kind: Kind,
+        data: Body,
+    }
+    #[derive(Deserialize)]
+    struct Body {
+        // `Value`, not `IgnoredAny`: only decoding enforces the depth limit.
+        #[serde(rename = "data")]
+        _data: Value,
+        options: RawOptions,
+    }
+    #[derive(Deserialize)]
+    struct RawOptions {
+        max_frame_size: Option<Value>,
+        client_fps: Option<Value>,
+        priority_mapping: Option<Value>,
+        framing: Option<Value>,
+    }
+
+    let Envelope {
+        data: Body { options, .. },
+        ..
+    } = serde_json::from_str(text).ok()?;
+    let invalid = |value: Option<Value>, decodes: fn(Value) -> bool| {
+        value.is_some_and(|value| !decodes(value))
+    };
+    [
+        (
+            StreamOptionField::MaxFrameSize,
+            invalid(options.max_frame_size, |v| {
+                serde_json::from_value::<MaxFrameSize>(v).is_ok()
+            }),
+        ),
+        (
+            StreamOptionField::ClientFps,
+            invalid(options.client_fps, |v| {
+                serde_json::from_value::<Option<NonZeroU32>>(v).is_ok()
+            }),
+        ),
+        (
+            StreamOptionField::PriorityMapping,
+            invalid(options.priority_mapping, |v| {
+                option_priority_map::deserialize(v).is_ok()
+            }),
+        ),
+        (
+            StreamOptionField::Framing,
+            invalid(options.framing, |v| {
+                serde_json::from_value::<Framing>(v).is_ok()
+            }),
+        ),
+    ]
+    .into_iter()
+    .find_map(|(field, is_invalid)| is_invalid.then_some(field))
 }
 
 /// Reply for a rejected plan: the connection budget is transient (429), a
@@ -407,7 +519,8 @@ pub(crate) fn apply_patch(state: &mut Value, patch: WirePatch) -> Result<(), Pat
 ///
 /// `max_frame_size` must be at least 1024 and `client_fps` must not be zero;
 /// the types enforce it at decode time, so a `StreamInit` carrying other values
-/// is an undecodable message (answered `400 "malformed message"`, no stream).
+/// is an undecodable message (no stream): the server answers `400` with a text
+/// naming the first invalid field, or `"malformed message"` when none is.
 ///
 /// `priority_mapping` values are validated [`Priority`] values on the wire:
 /// decoding rejects an entry that [`Priority::new`] refuses. Top-level keys
@@ -573,11 +686,15 @@ mod tests {
             ServerReply::PlanUnserializable => 7,
             ServerReply::StreamStalled => 8,
             ServerReply::StreamDeadlineExceeded => 9,
+            ServerReply::InvalidStreamOption(StreamOptionField::MaxFrameSize) => 10,
+            ServerReply::InvalidStreamOption(StreamOptionField::ClientFps) => 11,
+            ServerReply::InvalidStreamOption(StreamOptionField::PriorityMapping) => 12,
+            ServerReply::InvalidStreamOption(StreamOptionField::Framing) => 13,
         };
         let mut seen: Vec<usize> = ServerReply::ALL.into_iter().map(index).collect();
         seen.sort_unstable();
         assert_eq!(seen, (0..ServerReply::ALL.len()).collect::<Vec<_>>());
-        assert_eq!(ServerReply::ALL.len(), 10);
+        assert_eq!(ServerReply::ALL.len(), 14);
 
         let mut pairs: Vec<(u16, &str)> = ServerReply::ALL
             .into_iter()

@@ -65,7 +65,7 @@ Every message shall be `{"type": "<Variant>", "data": { ...fields... }}` (`#[ser
 
 `StreamOptions` (`#[non_exhaustive]`, as are `WsMessage`, `WirePatch` and `Framing`; out-of-crate code builds options through `StreamOptions::default()` (Merge, the wire default) or `StreamOptions::patch()` (Patch) and public-field assignment): `max_frame_size` (validated `MaxFrameSize`, at least 1024, default 65536, serde through `usize`), `client_fps` (`Option<NonZeroU32>`: positive integer or null), `priority_mapping` (object string -> u8, or null), `framing` (`"merge"` or `"patch"`, default merge). `max_frame_size` is the only required option on decode (no serde default); unknown keys, including the legacy `compression`, are ignored; `client_fps`, `priority_mapping` and `framing` may be omitted. `framing` is serialised lowercase and omitted on the wire when merge, so a merge `StreamInit` carries no `framing` key; an absent field decodes as merge and an unknown value is a decode error. Compatibility is one-way: servers of this release still accept the legacy `compression` key, but clients of this release omit it and older servers, which require it, reject their `StreamInit` as malformed (400), so upgrade servers first.
 
-The server validates the options and applies them in the planner ([[066-websocket-server-transport/spec|066]] FR-011): `max_frame_size` is the size limit of the whole message, envelope included (minimum 1024); `client_fps` must not be 0 and sets a pacing floor; `priority_mapping` assigns priorities by top-level key. Invalid values (`max_frame_size` below 1024, `client_fps` 0) fail `WsMessage` decoding, so they are answered like any undecodable text: `Error` 400 `malformed message` with `session_id` null and no session (breaking for peers that relied on the former `invalid stream options` reply and its session id, #700).
+The server validates the options and applies them in the planner ([[066-websocket-server-transport/spec|066]] FR-011): `max_frame_size` is the size limit of the whole message, envelope included (minimum 1024); `client_fps` must not be 0 and sets a pacing floor; `priority_mapping` assigns priorities by top-level key. Invalid values (`max_frame_size` below 1024, `client_fps` 0, a `priority_mapping` value that is not a valid priority, a `framing` other than `merge`/`patch`) fail `WsMessage` decoding and are answered `Error` 400 with a fixed text naming the first invalid field in declaration order, `session_id` null and no session (#768; #700 had made them `malformed message`). Only that first field is named, and the rejected value is never echoed.
 
 Example:
 
@@ -91,7 +91,11 @@ For a `StreamInit` the server shall emit the planned frames in priority order (h
 
 | Condition | `code` | `error` text | `session_id` |
 |---|---|---|---|
-| Undecodable text frame, including invalid `StreamOptions` (`max_frame_size` < 1024, `client_fps` 0) | 400 | `malformed message` | `null` |
+| Undecodable text frame (including a document nested beyond the decoder limit) | 400 | `malformed message` | `null` |
+| `StreamInit` with an invalid `max_frame_size` (< 1024) | 400 | `invalid stream option: max_frame_size must be at least 1024` | `null` |
+| `StreamInit` with an invalid `client_fps` (not a positive integer) | 400 | `invalid stream option: client_fps must be a positive integer` | `null` |
+| `StreamInit` with an invalid `priority_mapping` value | 400 | `invalid stream option: priority_mapping values must be valid priorities` | `null` |
+| `StreamInit` with an invalid `framing` | 400 | `invalid stream option: framing must be "merge" or "patch"` | `null` |
 | Nil session id | 400 | `nil session id is not allowed` | `null` |
 | Session id already in use on this connection | 409 | `session id already in use` | the requested id |
 | Plan over the connection plan budget | 429 | `connection plan budget exhausted` | the requested id |

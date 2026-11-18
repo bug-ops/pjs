@@ -3,7 +3,7 @@
 //! This module provides a JavaScript-friendly API for configuring
 //! priority assignment rules.
 
-use crate::priority_assignment::PriorityConfig;
+use pjson_rs_domain::services::PriorityHeuristicConfig;
 use wasm_bindgen::prelude::*;
 
 /// Priority configuration builder for JavaScript.
@@ -26,7 +26,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Clone)]
 pub struct PriorityConfigBuilder {
-    config: PriorityConfig,
+    config: PriorityHeuristicConfig,
 }
 
 #[wasm_bindgen]
@@ -41,7 +41,7 @@ impl PriorityConfigBuilder {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            config: PriorityConfig::default(),
+            config: PriorityHeuristicConfig::default(),
         }
     }
 
@@ -110,7 +110,7 @@ impl PriorityConfigBuilder {
     /// ```
     #[wasm_bindgen(js_name = addLowPattern)]
     pub fn add_low_pattern(mut self, pattern: String) -> Self {
-        self.config.add_low_pattern(pattern);
+        self.config.add_low_field(pattern);
         self
     }
 
@@ -133,7 +133,7 @@ impl PriorityConfigBuilder {
     /// ```
     #[wasm_bindgen(js_name = addBackgroundPattern)]
     pub fn add_background_pattern(mut self, pattern: String) -> Self {
-        self.config.add_background_pattern(pattern);
+        self.config.add_background_field(pattern);
         self
     }
 
@@ -187,7 +187,7 @@ impl PriorityConfigBuilder {
     ///
     /// Clones the builder's configuration. It's used internally by the
     /// parser and streaming API and not exposed to JavaScript.
-    pub(crate) fn build_internal(&self) -> PriorityConfig {
+    pub(crate) fn build_internal(&self) -> PriorityHeuristicConfig {
         self.config.clone()
     }
 }
@@ -224,8 +224,8 @@ mod tests {
 
         assert!(config.critical_fields.iter().any(|i| i == "custom_id"));
         assert!(config.high_fields.iter().any(|i| i == "display_name"));
-        assert!(config.low_patterns.iter().any(|i| i == "debug"));
-        assert!(config.background_patterns.iter().any(|i| i == "trace"));
+        assert!(config.low_fields.iter().any(|i| i == "debug"));
+        assert!(config.background_fields.iter().any(|i| i == "trace"));
         assert_eq!(config.large_array_threshold, 200);
         assert_eq!(config.large_string_threshold, 5000);
     }

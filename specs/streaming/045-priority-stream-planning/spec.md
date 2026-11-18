@@ -51,21 +51,21 @@ Status: done.
 Code: `PriorityStreamer::analyze`.
 
 ### FR-002 Skeleton content
-The Skeleton frame shall carry priority `Priority::CRITICAL` and `complete: false`. For an object root, `generate_skeleton` maps strings to `null`, numbers to `0`, booleans to `false`, nulls to `null`, arrays to `[]`, and recurses into objects. An array root yields `[]`; any other root yields `null`. When the root is a scalar, `analyze` shall additionally emit a root `Set` patch (`JsonPath::root()`, value is `skeletonize_arrays` of the input) at `Priority::CRITICAL`, ordered before every other CRITICAL patch, so the root round-trips (#626). An object root needs no root `Set`: every key is addressable (FR-003).
+The Skeleton frame shall carry priority `Priority::CRITICAL` and `complete: false`. For an object root, `generate_skeleton` maps strings to `null`, integers to `0`, floats to `0.0`, booleans to `false`, nulls to `null`, arrays to `[]`, and recurses into objects. An array root yields `[]`; any other root yields `null`. When the root is a scalar, `analyze` shall additionally emit a root `Set` patch (`JsonPath::root()`, value is `skeletonize_arrays` of the input) at `Priority::CRITICAL`, ordered before every other CRITICAL patch, so the root round-trips (#626). An object root needs no root `Set`: every key is addressable (FR-003).
 Status: done. `complete` is never set to `true`.
 Code: `PriorityStreamer::generate_skeleton`.
 
 ### FR-003 Patch extraction
-For every object field (every key is addressable: a key that is not plain gets a quoted `JsonPath` segment), the system shall emit a `Set` patch at the field path whose value is the field value with every array replaced by `[]` (`skeletonize_arrays`), then recurse into the value. For an array it shall emit `Append` patches carrying the elements; arrays longer than 10 elements are split into chunks of `max_patch_size`, shorter non-empty arrays produce one `Append`. Empty arrays produce no `Append`.
+For every object field (every key is addressable: a key that is not plain gets a quoted `JsonPath` segment), the system shall emit a `Set` patch at the field path whose value is the field value with every array replaced by `[]` (`skeletonize_arrays`), then recurse into the value. A `Set` is omitted when an ancestor field's effective priority (FR-007) is at least its own: the ancestor `Set` is applied first and already carries the same content, so along any root-to-leaf chain a leaf is cloned once per strictly increasing effective-priority step, not once per depth (#770). The walk is two passes over one `JsonPath` buffer (`push`/`pop`); a path is cloned only when a patch is emitted. For an array it shall emit `Append` patches carrying the elements; arrays longer than 10 elements are split into chunks of `max_patch_size`, shorter non-empty arrays produce one `Append`. Empty arrays produce no `Append`.
 Status: done.
-Code: `PriorityStreamer::extract_patches`.
+Code: `PriorityStreamer::{collect_effective_priorities, extract_patches}`.
 
 ### FR-004 Unencodable keys (removed)
 Removed in #698: `JsonPath::append_key` is infallible, so `PriorityStreamer` neither skips fields nor keeps subtrees whole for special keys; there is no object case in `needs_root_set` and no key check in `skeletonize_arrays`. `test_round_trip_unencodable_key_parent_wipe` is a round-trip over the same documents.
 Status: obsolete.
 
 ### FR-005 Priority heuristics
-Every `Set` and `Append` priority shall be `compute_priority(&PriorityHeuristicConfig::default(), path, shape)` from `pjs-domain` ([[044-domain-entities-events-priority-heuristic/spec|spec 044]] FR-044-011), with `shape` the `ValueShape` of the value (a string's byte length, an array's or object's element count) and `path` the full path, so a document is ordered the same way on every transport (#750). The streamer owns one heuristic, built when it is constructed. A `Set` is still raised to the highest `Append` priority in its subtree (FR-008).
+Every `Set` and `Append` priority shall be `compute_priority(&PriorityHeuristicConfig::default(), path, shape)` from `pjs-domain` ([[044-domain-entities-events-priority-heuristic/spec|spec 044]] FR-044-011), with `shape` the `ValueShape` of the value (a string's byte length, an array's or object's element count) and `path` the full path, so a document is ordered the same way on every transport (#750). The streamer owns one heuristic, built when it is constructed. A `Set` is still raised to the highest `Append` priority in its subtree (FR-007).
 Status: done. The streamer uses the default field lists; there is no user-supplied extractor.
 Code: `PriorityStreamer::{priority_of, priority_of_array}`, `ValueShape::from(&serde_json::Value)`.
 
@@ -75,7 +75,7 @@ Status: done.
 Code: `analyze`.
 
 ### FR-007 Reconstruction-safe ordering
-The priority of a `Set` patch shall be raised to at least the highest `Append` priority anywhere in its subtree, and all chunks of one array shall share one priority computed from the full array, so a `Set` never applies after an `Append` it must precede and chunk order is preserved.
+The effective priority of a `Set` patch is its own priority raised to at least the highest `Append` priority anywhere in its subtree (first pass), and all chunks of one array shall share one priority computed from the full array, so a `Set` never applies after an `Append` it must precede and chunk order is preserved.
 Status: done (#394, closed). Tests: `test_round_trip_*` in `priority.rs`.
 Code: `extract_patches`.
 
@@ -107,7 +107,7 @@ Code: `stream/mod.rs`.
 | `PriorityStreamFrame` | `Skeleton{data, priority, complete}`, `Patch{patches, priority}`, `Complete{checksum: Option<u64>}` |
 | `JsonPatch` | `patch: WirePatch`, `priority: Priority` |
 | `WirePatch` | `Set`, `Merge`, `Append`, `AppendStr` (`pjson_rs::stream::patch`); the streamer emits `Set` and `Append` only |
-| `StreamerConfig` | `detect_semantics: bool`, `max_patch_size: usize`, `priority_threshold: Priority` |
+| `StreamerConfig` | `max_patch_size: NonZeroUsize` (default 100) |
 | `StreamingPlan` | `frames: VecDeque<PriorityStreamFrame>` |
 | `StreamFrame` / `StreamProcessorConfig` / `ProcessResult` / `StreamStats` | in `stream/mod.rs` |
 
@@ -118,7 +118,7 @@ Code: `stream/mod.rs`.
 | Key with `.`/`[`/`]`/empty | `Set` at a quoted path segment (FR-003) |
 | Empty array field | skeleton `[]`, no `Append` |
 | Array of 11..n elements | chunked by `max_patch_size`, one priority for all chunks |
-| `max_patch_size = 0` | `[NEEDS CLARIFICATION]` no validation in `StreamerConfig`; `chunks(0)` panics in std for arrays longer than 10 |
+| `max_patch_size = 0` | unrepresentable: the field is a `NonZeroUsize` (#760) |
 | Frame larger than limit | `ProcessResult::FrameTooLarge`, not an `Err` |
 | `analyze` error | `Result` return exists but no code path in `analyze` currently returns `Err` |
 
@@ -135,8 +135,8 @@ Code: `stream/mod.rs`.
 
 ## Open Questions
 
-1. `StreamerConfig::detect_semantics` and `priority_threshold` are never read (grep: only the definition and `Default`). The shared heuristic always runs and no patch is dropped. Dead configuration.
-2. Nested objects are transmitted redundantly (by code reading): an object field's `Set` value contains its whole subtree except arrays, and child fields then get their own `Set`. Bytes grow with nesting depth. `[NEEDS CLARIFICATION: confirm with a payload-size measurement]`.
+1. Resolved (#760): the never-read `StreamerConfig::detect_semantics` and `priority_threshold` are removed.
+2. Resolved (#770): a child `Set` that an ancestor `Set` of at least the same priority already covers is no longer emitted (FR-003).
 3. Resolved (#626): a scalar root, or an object root with a key `JsonPath` cannot encode, is transmitted through a root `Set` patch at CRITICAL priority; the skeleton stays `null` for a scalar root.
 4. Resolved (#751): `PatchOperation` and its `Replace` and `Remove` are removed; patches use the `WirePatch` vocabulary.
 5. `Complete.checksum` is always `None`.

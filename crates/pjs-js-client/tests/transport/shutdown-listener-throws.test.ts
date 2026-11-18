@@ -26,7 +26,9 @@ function makeConfig(): Required<PJSClientConfig> {
     debug: false,
     bufferSize: 1024,
     priorityThreshold: Priority.Background,
-    maxConcurrentStreams: 1
+    maxConcurrentStreams: 1,
+    maxStreamBytes: 16 * 1024 * 1024,
+    stateDelivery: 'live'
   };
 }
 
@@ -48,7 +50,7 @@ function ndjsonResponse(line: string, cancelled: { value: boolean }): Response {
     status: 200,
     statusText: 'OK',
     headers: new Headers(),
-    json: async () => ({ session_id: 'session-1' }),
+    json: async () => ({ session_id: 'session-1', stream_id: 'stream-1' }),
     body: { getReader: () => reader }
   } as unknown as Response;
 }
@@ -94,7 +96,7 @@ describe('shutdown with a throwing listener', () => {
     transport.on('shutdown', () => { secondListenerCalls += 1; });
 
     await transport.connect();
-    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1' });
+    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1', data: {} });
 
     expect(cancelled.value).toBe(true);
     expect(secondListenerCalls).toBe(1);
@@ -113,7 +115,7 @@ describe('shutdown with a throwing listener', () => {
     client.on(PJSEvent.ServerShutdown, () => { throw new Error('listener bug'); });
     client.on(PJSEvent.Disconnected, ({ reason }) => { reasons.push(reason); });
 
-    const streaming = client.stream('/s1').catch((e: unknown) => e);
+    const streaming = client.stream('/s1', { data: {} }).catch((e: unknown) => e);
     await new Promise((resolve) => setTimeout(resolve, 0));
     RecordingEventSource.instances[0]!.dispatchEvent(
       new MessageEvent('shutdown', { data: '{"event":"shutdown"}' })
@@ -144,7 +146,7 @@ describe('emitShutdown listener semantics', () => {
     transport.once('shutdown', function (this: unknown) { receivers.push(this); });
 
     await transport.connect();
-    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1' });
+    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1', data: {} });
 
     expect(receivers).toEqual([transport]);
     expect(transport.listenerCount('shutdown')).toBe(0);
@@ -162,7 +164,7 @@ describe('emitShutdown listener semantics', () => {
     transport.on('shutdown', () => { throw thrown; });
 
     await transport.connect();
-    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1' });
+    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1', data: {} });
 
     expect(logged).toHaveBeenCalledWith('[PJS] Shutdown listener threw:', thrown);
     logged.mockRestore();

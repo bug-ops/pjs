@@ -13,7 +13,7 @@ use pjson_rs::domain::{
     DomainError,
     aggregates::{
         StreamSession,
-        stream_session::{SessionConfig, SessionTimeout},
+        stream_session::{MaxConcurrentStreams, SessionConfig, SessionTimeout},
     },
     entities::stream::StreamConfig as EntityStreamConfig,
     events::{DomainEvent, SessionState},
@@ -62,10 +62,9 @@ impl TimeProvider for ManualTimeProvider {
 
 fn custom_config(max_streams: usize, timeout: u32) -> SessionConfig {
     SessionConfig {
-        max_concurrent_streams: max_streams,
+        max_concurrent_streams: MaxConcurrentStreams::try_from(max_streams).unwrap(),
         session_timeout: SessionTimeout::try_from(u64::from(timeout)).unwrap(),
         default_stream_config: EntityStreamConfig::default(),
-        enable_compression: true,
         metadata: HashMap::new(),
     }
 }
@@ -96,7 +95,6 @@ fn json_int(key: &str, value: i64) -> JsonData {
 fn config_with_priority_rules(rules: HashMap<String, Priority>) -> SessionConfig {
     let default_stream_config = EntityStreamConfig {
         priority_rules: rules,
-        ..EntityStreamConfig::default()
     };
     SessionConfig {
         default_stream_config,
@@ -1271,15 +1269,13 @@ fn test_session_config_metadata() {
     metadata.insert("key2".to_string(), "value2".to_string());
 
     let config = SessionConfig {
-        max_concurrent_streams: 10,
+        max_concurrent_streams: MaxConcurrentStreams::default(),
         session_timeout: SessionTimeout::try_from(3600u64).unwrap(),
         default_stream_config: EntityStreamConfig::default(),
-        enable_compression: false,
         metadata: metadata.clone(),
     };
 
     let session = StreamSession::new(config);
 
     assert_eq!(session.config().metadata, metadata);
-    assert!(!session.config().enable_compression);
 }

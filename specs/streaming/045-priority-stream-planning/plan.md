@@ -47,10 +47,10 @@ flowchart LR
 
 | Function | Precondition | Postcondition | Undefined / notes |
 |---|---|---|---|
-| `PriorityStreamer::analyze(&json)` | none enforced; input depth must be bounded by caller | plan = Skeleton, Patch*, Complete; patch priorities non-increasing; applying frames in order to `JsonReconstructor` reproduces `json` for object/array roots | `max_patch_size == 0` panics when an array longer than 10 is present; scalar root not transmitted (see spec Open Questions) |
+| `PriorityStreamer::analyze(&json)` | none enforced; input depth must be bounded by caller | plan = Skeleton, Patch*, Complete; patch priorities non-increasing; applying frames in order to `JsonReconstructor` reproduces `json` for object/array roots | `max_patch_size` is a `NonZeroUsize`, so zero is unrepresentable; scalar root not transmitted (see spec Open Questions) |
 | `StreamingPlan::next_frame` | none | pops front frame, `None` when empty | |
 | `StreamProcessor::process_frame(frame)` | none | `Processed` iff serialised data length <= `max_frame_size`; counter incremented only then | `Err(DomainError::Logic)` if serialisation fails |
-| `StreamerConfig::default` | | `detect_semantics=true`, `max_patch_size=100`, `priority_threshold=LOW` | two fields unused |
+| `StreamerConfig::default` | | `max_patch_size=100` (`NonZeroUsize`; the only field) | none |
 
 ## Testing strategy
 

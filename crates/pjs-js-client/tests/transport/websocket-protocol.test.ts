@@ -220,7 +220,7 @@ describe('WebSocketTransport frame mapping', () => {
         stream_id: UUID,
         payload: { patches: [{ operation: 'append_str', path: '$.k', value: 'tail' }] }
       },
-      { frame_type: 'Complete', priority: 100, stream_id: UUID, total_frames: 2 }
+      { frame_type: 'Complete', priority: 100, stream_id: UUID, total_frames: 4 }
     ]);
   });
 
@@ -235,7 +235,7 @@ describe('WebSocketTransport frame mapping', () => {
     expect(await outcome).toEqual({ ok: true });
     expect(frames).toEqual([
       { frame_type: 'Skeleton', priority: 100, payload: {}, complete: false, stream_id: UUID },
-      { frame_type: 'Complete', priority: 100, stream_id: UUID, total_frames: 0 }
+      { frame_type: 'Complete', priority: 100, stream_id: UUID, total_frames: 2 }
     ]);
   });
 
@@ -252,7 +252,7 @@ describe('WebSocketTransport frame mapping', () => {
 
     const types = frames.map((frame) => (frame as { frame_type: string }).frame_type);
     expect(types).toEqual(['Skeleton', 'Patch', 'Complete']);
-    expect((frames[2] as { total_frames: number }).total_frames).toBe(1);
+    expect((frames[2] as { total_frames: number }).total_frames).toBe(3);
   });
 
   test('ignores unknown message types, other sessions and keeps going after unparseable text', async () => {

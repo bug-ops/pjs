@@ -6,6 +6,8 @@
  */
 
 import {
+  DeepReadonly,
+  JsonValue,
   PatchFrame,
   PatchOperationKind,
   SkeletonFrame
@@ -128,6 +130,11 @@ export class JsonReconstructor {
     return this.deepClone(this.state);
   }
 
+  /** The reconstructor's own state, without a copy; the caller must not modify it or keep it across patches. */
+  getLiveState(): DeepReadonly<JsonValue> {
+    return this.state;
+  }
+
   /** Whether the stream has been marked complete. */
   isComplete(): boolean {
     return this.complete;
@@ -179,14 +186,9 @@ export class JsonReconstructor {
         this.state = this.deepClone(value);
         return true;
       case 'merge':
-        if (JsonReconstructor.isPlainObject(this.state) && JsonReconstructor.isPlainObject(value)) {
-          const target = this.state as Record<string, unknown>;
-          const source = value as Record<string, unknown>;
-          for (const key of Object.keys(source)) {
-            Object.defineProperty(target, key, { value: this.deepClone(source[key]), writable: true, enumerable: true, configurable: true });
-          }
-        } else {
-          this.state = this.deepClone(value);
+        if (!JsonReconstructor.isPlainObject(this.state) || !JsonReconstructor.isPlainObject(value)) return false;
+        for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+          JsonReconstructor.defineOwn(this.state, key, this.deepClone(entry));
         }
         return true;
       default:
@@ -215,10 +217,9 @@ export class JsonReconstructor {
 
   private appendPatchValue(segments: readonly JsonPathSegment[], value: any): void {
     const { parent, key } = this.resolveSlot(segments);
-    let target = JsonReconstructor.ownValue(parent, key);
+    const target = JsonReconstructor.ownValue(parent, key);
     if (!Array.isArray(target)) {
-      target = [];
-      JsonReconstructor.defineOwn(parent, key, target);
+      throw new Error('append target is not an array');
     }
     JsonReconstructor.pushValue(target, value);
   }
@@ -245,14 +246,10 @@ export class JsonReconstructor {
   private mergePatchValue(segments: readonly JsonPathSegment[], value: any): void {
     const { parent, key } = this.resolveSlot(segments);
     const existing = JsonReconstructor.ownValue(parent, key);
-    let merged = value;
-    if (
-      typeof existing === 'object' && typeof value === 'object' &&
-      !Array.isArray(existing) && !Array.isArray(value)
-    ) {
-      merged = { ...existing, ...value };
+    if (!JsonReconstructor.isPlainObject(existing) || !JsonReconstructor.isPlainObject(value)) {
+      throw new Error('merge target is not an object');
     }
-    JsonReconstructor.defineOwn(parent, key, merged);
+    JsonReconstructor.defineOwn(parent, key, { ...existing, ...value });
   }
 
   private deletePatchValue(segments: readonly JsonPathSegment[]): void {

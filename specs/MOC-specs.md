@@ -23,7 +23,7 @@ Counts across 79 spec folders: 54 implemented, 20 partial, 0 draft, 5 obsolete.
 - [[architecture-baseline]] - verified inventory of design patterns and known drift
 - [[testing-strategy]] - test layers, CI gates, regression guards
 - [[decisions/adr-001-allocator-decision|ADR-001 allocator]] - mimalloc opt-in decision
-- [[decisions/adr-002-instruction-count-bench-gate|ADR-002 bench gate]] - proposed gungraun instruction-count regression gate
+- [[decisions/adr-002-instruction-count-bench-gate|ADR-002 bench gate]] - accepted gungraun instruction-count regression gate (report-only CI job)
 - [[requirements/BRD-pjs-2026-11-15|BRD]] / [[requirements/SRS-pjs-2026-11-15|SRS]] / [[requirements/NFR-pjs-2026-11-15|NFR]] - reverse-engineered requirements
 - [[023-implementation-roadmap/spec|023 Implementation roadmap (retrospective)]]
 - [`docs/architecture/SPECIFICATION.md`](../docs/architecture/SPECIFICATION.md) - wire protocol draft (differs from implemented wire form, see [[045-priority-stream-planning/spec|045]])

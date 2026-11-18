@@ -13,7 +13,7 @@ The official JavaScript/TypeScript client library for the Priority JSON Streamin
 - 🚀 **Progressive Loading**: Render critical data first, details later
 - ⚡ **Priority-Based Streaming**: Critical fields arrive in milliseconds
 - 🎯 **Smart Reconstruction**: Automatic JSON patching and assembly
-- 🌐 **Multiple Transports**: WebSocket, plus HTTP and Server-Sent Events (**experimental**, see [Transport Options](#-transport-options))
+- 🌐 **Multiple Transports**: WebSocket, plus HTTP and Server-Sent Events (see [Transport Options](#-transport-options))
 - 🛡️ **Type Safety**: Full TypeScript support with comprehensive types
 - 📊 **Performance Metrics**: Built-in monitoring and statistics
 - 🎨 **React Integration**: (Coming soon) Hooks and components
@@ -103,6 +103,8 @@ interface PJSClientConfig {
   bufferSize?: number                // Buffer size (default: 1MB)
   priorityThreshold?: Priority       // Minimum priority to process
   maxConcurrentStreams?: number      // Max concurrent streams
+  maxStreamBytes?: number            // WebSocket: max StreamPatch bytes per stream (default: 16 MiB)
+  stateDelivery?: 'live' | 'snapshot' // Per-frame state: 'live' (default, read-only, no copy) or a clone
 }
 ```
 
@@ -171,24 +173,25 @@ pending `stream()` that has not completed with a `PJSError` of type
 The WebSocket transport works against a stock `pjs-core` WebSocket server (see
 [WebSocket Transport](#websocket-transport)).
 
-**Experimental:** the HTTP and SSE transports speak the wire format described
-below, which an external server must implement. The routes and payloads shipped
-with `pjs-core` do not match it, so these transports do not work against a
-stock `pjs-core` server. Known near-misses:
+The HTTP and SSE transports work against any stock `create_pjs_router*` server.
+Per `client.stream(endpoint, { data })` (`data` is required, `endpoint` is
+ignored) they call the shipped REST routes:
 
-- `HttpTransport.connect` calls the real `POST /pjs/sessions`, but sends
-  `client_info` as an object while the server expects a string; the server
-  answers 422.
+1. `POST /pjs/sessions` with `{"client_info": "<string>"}` on `connect()`.
+2. `POST /pjs/sessions/{sid}/streams` with `{data}`, then `POST .../start`, then
+   `POST .../generate-frames` with `{priority_threshold, max_frames: 1000}`.
+3. `GET .../frames/stream?priority=<priorityThreshold>`: NDJSON for HTTP
+   (`Accept: application/x-ndjson`), `text/event-stream` through an
+   `EventSource` for SSE.
 
-### Wire format
+The server page holds Patch frames only. The client synthesizes the Skeleton
+(empty `{}`) and Complete frames and sets `total_frames` to skeleton + patches +
+Complete, so `framesReceived === totalFrames` at completion.
 
-| Transport | Requests | Responses |
-|-----------|----------|-----------|
-| HTTP | `POST /pjs/sessions` with `{"client_info":{"type":"javascript","version":"<client version>"}}`, then `GET /pjs/stream{endpoint}?session_id&stream_id&<queryParams>` with `Accept: application/x-ndjson` | `{"session_id","supported_features"?}`; one Frame per NDJSON line, optional terminal `{"event":"shutdown"}` |
-| SSE | `GET /pjs/stream{endpoint}/sse?session_id&stream_id&<queryParams>` | `message`/`frame` events carry Frame data; `shutdown` event; `error` event with `{"message"}` |
-
-A Frame is the `pjs-core` Frame JSON (`frame_type`, `priority`, `payload`, ...)
-that the client validates.
+Limits: one stream at a time (a second `stream()` rejects the first with
+`STREAM_ERROR`); the page is generated once, not a live tail; at most 1000
+frames per stream; SSE headers apply to the REST calls only (`EventSource`
+cannot set headers); no automatic reconnection.
 
 ### HTTP Transport (Default)
 
@@ -270,6 +273,24 @@ Server requirements (Rust side):
 - `PatchOperation.operation` gains `append_str`, so exhaustive switches over the
   operation need a new case; `PATCH_OPERATIONS` lists all operations.
 - A root-path `append` now pushes onto an array root instead of being skipped.
+- A patch path longer than `MAX_PATCH_PATH_DEPTH` (128 segments), or more than
+  `maxStreamBytes` of `StreamPatch` messages in one stream, drops the stream
+  with a `ProtocolError`.
+- A throwing `frame` listener now fails the stream with a `StreamError`
+  instead of leaving it pending until the timeout.
+- `Complete.total_frames` counts the skeleton, the patch frames and the Complete
+  frame, so `framesReceived === totalFrames` at completion.
+
+**Breaking changes (client):**
+
+- `ProgressInfo.bytesReceived` is removed (it was always `0`).
+- `append` and `merge` patches need an existing array or object at the target;
+  otherwise they are skipped and the state is unchanged (previously the target
+  was created or replaced, including a root `merge`).
+- `onRender` and the `skeleton_ready`/`patch_applied` events receive the
+  reconstructor's live state (typed `DeepReadonly`) by default; set
+  `stateDelivery: 'snapshot'` for an independent copy per frame.
+- `engines.node` is `>=22`.
 
 ### Server-Sent Events
 
@@ -486,7 +507,7 @@ npm run dev
 
 ## 📋 Requirements
 
-- **Node.js**: 18.0.0 or higher
+- **Node.js**: 22.0.0 or higher
 - **TypeScript**: 5.0+ (for TypeScript projects)
 - **Modern Browser**: ES2020 support required
 

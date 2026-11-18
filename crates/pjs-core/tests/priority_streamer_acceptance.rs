@@ -88,22 +88,25 @@ fn analyze_prices_field_names_like_compute_priority() {
 
 #[test]
 fn analyze_applies_the_depth_adjustment() {
-    let plan = plan_of(&json!({"a": {"b": {"c": {"d": {"e": {"f": {"g": true}}}}}}}));
+    // An Append at each depth is always emitted, so it exposes the depth
+    // pricing that no-op `Set` elimination would otherwise hide.
+    let plan = plan_of(&json!({"a": {"x": [1], "b": {"x": [1], "c": {"x": [1],
+        "d": {"x": [1], "e": {"x": [1], "f": {"x": [1], "g": {"x": [1]}}}}}}}}));
 
     let rows = [
-        ("$.a", 70),
-        ("$.a.b", 60),
-        ("$.a.b.c", 50),
-        ("$.a.b.c.d", 50),
-        ("$.a.b.c.d.e", 50),
-        ("$.a.b.c.d.e.f", 40),
-        ("$.a.b.c.d.e.f.g", 40),
+        ("$.a.x", 60),
+        ("$.a.b.x", 50),
+        ("$.a.b.c.x", 50),
+        ("$.a.b.c.d.x", 50),
+        ("$.a.b.c.d.e.x", 40),
+        ("$.a.b.c.d.e.f.x", 40),
+        ("$.a.b.c.d.e.f.g.x", 40),
     ];
     for (target, expected) in rows {
         assert_eq!(
-            priority_of(&plan, Kind::Set, target),
+            priority_of(&plan, Kind::Append, target),
             vec![Priority::new(expected).unwrap()],
-            "Set at {target}"
+            "Append at {target}"
         );
     }
 }

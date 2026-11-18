@@ -62,6 +62,8 @@ describeWasmPkg('WasmBackend Integration Tests', () => {
       bufferSize: 1024 * 64,
       priorityThreshold: Priority.Background,
       maxConcurrentStreams: 10,
+      maxStreamBytes: 16 * 1024 * 1024,
+      stateDelivery: 'live',
       debug: false
     };
 

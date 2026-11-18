@@ -2,7 +2,7 @@
 
 use crate::domain::{
     DomainError, DomainResult,
-    config::limits::MAX_SESSION_TIMEOUT_SECONDS,
+    config::limits::{MAX_CONCURRENT_STREAMS_PER_SESSION, MAX_SESSION_TIMEOUT_SECONDS},
     entities::{
         Frame, Stream, StreamMap,
         frame::FramePatch,
@@ -15,7 +15,7 @@ use crate::domain::{
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,32 +89,75 @@ impl From<SessionTimeout> for u64 {
     }
 }
 
+/// Per-session stream cap, guaranteed to be in
+/// `1..=`[`MAX_CONCURRENT_STREAMS_PER_SESSION`].
+///
+/// A zero cap would make a session unusable and an unbounded one lets a
+/// single request reserve unbounded memory, so both are unrepresentable. It
+/// is carried on the wire as a plain number and validated on decode.
+///
+/// # Examples
+///
+/// ```
+/// use pjson_rs::domain::aggregates::stream_session::MaxConcurrentStreams;
+///
+/// let cap = MaxConcurrentStreams::try_from(25usize).unwrap();
+/// assert_eq!(cap.get(), 25);
+/// assert!(MaxConcurrentStreams::try_from(0usize).is_err());
+/// assert!(MaxConcurrentStreams::try_from(1_001usize).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "usize", into = "usize")]
+pub struct MaxConcurrentStreams(NonZeroUsize);
+
+impl MaxConcurrentStreams {
+    /// The cap as a plain count.
+    #[must_use]
+    pub fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl Default for MaxConcurrentStreams {
+    /// Ten streams.
+    fn default() -> Self {
+        Self(const { NonZeroUsize::new(10).unwrap() })
+    }
+}
+
+impl TryFrom<usize> for MaxConcurrentStreams {
+    type Error = DomainError;
+
+    fn try_from(count: usize) -> Result<Self, Self::Error> {
+        NonZeroUsize::new(count)
+            .filter(|n| n.get() <= MAX_CONCURRENT_STREAMS_PER_SESSION)
+            .map(Self)
+            .ok_or_else(|| {
+                DomainError::InvalidInput(format!(
+                    "max_concurrent_streams must be 1..={MAX_CONCURRENT_STREAMS_PER_SESSION}, got {count}"
+                ))
+            })
+    }
+}
+
+impl From<MaxConcurrentStreams> for usize {
+    fn from(cap: MaxConcurrentStreams) -> Self {
+        cap.get()
+    }
+}
+
 /// Session configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionConfig {
     /// Maximum concurrent streams
-    pub max_concurrent_streams: usize,
+    pub max_concurrent_streams: MaxConcurrentStreams,
     /// Session lifetime; encoded as `session_timeout_seconds`
     #[serde(rename = "session_timeout_seconds")]
     pub session_timeout: SessionTimeout,
     /// Default stream configuration
     pub default_stream_config: StreamConfig,
-    /// Enable session-level compression
-    pub enable_compression: bool,
     /// Custom metadata
     pub metadata: HashMap<String, String>,
-}
-
-impl Default for SessionConfig {
-    fn default() -> Self {
-        Self {
-            max_concurrent_streams: 10,
-            session_timeout: SessionTimeout::default(),
-            default_stream_config: StreamConfig::default(),
-            enable_compression: true,
-            metadata: HashMap::new(),
-        }
-    }
 }
 
 /// Session statistics and monitoring
@@ -274,15 +317,12 @@ impl StreamSession {
 
     /// Create new session with an explicit [`TimeProvider`].
     ///
-    /// Lets callers inject a fake clock so that *session-level* expiry,
-    /// timeout, and timestamp-ordering logic (`created_at`, `updated_at`,
-    /// `expires_at`, and event timestamps on `StreamSession` itself) can be
-    /// tested deterministically instead of relying on real wall-clock
-    /// delays. Child [`Stream`] entities are not clock-injected — they still
-    /// timestamp themselves via the real system clock, so a session with an
-    /// injected fake clock runs two independent time domains at once (e.g.
-    /// `Stream::duration()` reflects real elapsed time even when the owning
-    /// session's `updated_at` does not advance).
+    /// Lets callers inject a fake clock so that expiry, timeout, and
+    /// timestamp-ordering logic (`created_at`, `updated_at`, `expires_at`,
+    /// and event timestamps) can be tested deterministically instead of
+    /// relying on real wall-clock delays. Streams created through
+    /// [`Self::create_stream`] share the same clock, so the session and its
+    /// streams always agree on the time.
     ///
     /// # Examples
     ///
@@ -539,20 +579,21 @@ impl StreamSession {
             ));
         }
 
-        if self.streams.len() >= self.config.max_concurrent_streams {
+        let max_streams = self.config.max_concurrent_streams.get();
+        if self.streams.len() >= max_streams {
             return Err(DomainError::TooManyStreams(format!(
-                "Maximum {} concurrent streams exceeded",
-                self.config.max_concurrent_streams
+                "Maximum {max_streams} concurrent streams exceeded"
             )));
         }
 
         // source_data is now already JsonData (domain type)
         let domain_data = source_data;
 
-        let stream = Stream::new(
+        let stream = Stream::with_clock(
             self.id,
             domain_data,
             self.config.default_stream_config.clone(),
+            Arc::clone(&self.time_provider),
         );
         let stream_id = stream.id();
 
@@ -1151,8 +1192,7 @@ mod tests {
         assert!(session.activate().is_ok());
 
         let custom_config = StreamConfig {
-            max_frame_size: 1234,
-            ..StreamConfig::default()
+            priority_rules: HashMap::from([("id".to_string(), Priority::CRITICAL)]),
         };
 
         let stream_id = session
@@ -1163,8 +1203,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            session.stream(stream_id).unwrap().config().max_frame_size,
-            custom_config.max_frame_size
+            session.stream(stream_id).unwrap().config().priority_rules,
+            custom_config.priority_rules
         );
     }
 
@@ -1409,7 +1449,7 @@ mod tests {
     #[test]
     fn test_concurrent_stream_limit() {
         let config = SessionConfig {
-            max_concurrent_streams: 2,
+            max_concurrent_streams: MaxConcurrentStreams::try_from(2usize).unwrap(),
             ..Default::default()
         };
         let mut session = StreamSession::new(config);

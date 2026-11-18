@@ -295,6 +295,12 @@ impl Frame {
         }
     }
 
+    /// Replace the creation timestamp; `Stream` uses it to apply its own clock.
+    pub(crate) fn with_timestamp(mut self, timestamp: Timestamp) -> Self {
+        self.timestamp = timestamp;
+        self
+    }
+
     /// Create new skeleton frame
     pub fn skeleton(stream_id: StreamId, sequence: u64, skeleton_data: JsonData) -> Self {
         Self::with_body(

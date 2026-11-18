@@ -75,7 +75,7 @@ Code: `ci.yml` job `wasm-types-drift`; `crates/pjs-js-client/tsconfig.wasm-drift
 Status: done.
 
 ### FR-007 Node example smoke test
-CI shall run `crates/pjs-js-client/examples/browser-wasm/example.js` under Node 18 against the `web` artifact and require output lines `Example 1: Basic Usage` and `Generated`.
+CI shall run `crates/pjs-js-client/examples/browser-wasm/example.js` under Node 24 against the `web` artifact and require output lines `Example 1: Basic Usage` and `Generated`.
 Code: `ci.yml` job `wasm-node-example`.
 Status: done.
 
@@ -122,7 +122,7 @@ Artifacts: `crates/pjs-wasm/pkg*/{pjs_wasm.js, pjs_wasm_bg.wasm, pjs_wasm.d.ts, 
 - Package name is inconsistent across docs: `CLAUDE.md` and the brief say `pjs-wasm`; npm publishes `@pjson/wasm`; `SECURITY.md` and README use `@pjson/wasm`; `docs/architecture/WASM_ROADMAP.md` uses `@pjs/wasm`; the client's dependency key is `pjs-wasm`.
 - README says `opt-level = "s"`; actual is `wasm-opt -Os` over an `opt-level = 3` build.
 - `wasm-pack test --headless --chrome` is a documented pre-PR step (`.claude/rules/branching.md`) but no CI job runs it.
-- `wasm-pack@latest` is installed unpinned in CI.
+- `wasm-pack` is pinned through `WASM_PACK_VERSION` in `ci.yml` and `release.yml` (#744); refresh it with the Actions bump.
 - `pjs-wasm` has no `engines`/`exports` map control (wasm-pack generated).
 
 ## See Also

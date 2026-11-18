@@ -73,17 +73,17 @@ Status: done.
 
 ### FR-005 Frame generation algorithm
 The system shall implement frame generation once, in `frame_generation::generate_frames`, shared by `PjsParser` and `PriorityStream`:
-1. Skeleton frame (sequence 0): same shape as the input, leaves replaced by `null` (strings), `0`, `0.0`, `false`; arrays replaced by `[]`; no value is kept verbatim by key: every key recurses and nulls leaves like any other; recursion truncated to `null` at `max_depth` (from `SecurityConfig.maxDepth`).
+1. Skeleton frame (sequence 0): same shape as the input, leaves replaced by `null` (strings), `0`, `0.0`, `false`; arrays replaced by `[]`; no value is kept verbatim by key: every key recurses and nulls leaves like any other; recursion truncated to `null` at `max_depth` (from `SecurityConfig.maxDepth`). Built by the shared domain function `pjson_rs_domain::services::skeleton`, the same one `Stream` uses (#758).
 2. Fields extracted recursively through objects and arrays up to `max_depth` for every key (`JsonPath` quoted segments address keys with `.`, `[`, `]` or the empty key), each assigned a `Priority` by `PriorityAssigner`; no field is skipped.
 3. Fields grouped by priority, priorities sorted descending; groups below `min_priority` skipped; each remaining group becomes one patch frame of `set` patches.
 3a. A non-object root (array or scalar) skips steps 2-3: after the skeleton (`[]` / `null`) it emits one patch frame at `Priority::CRITICAL` holding a single root `set` (`$`) with the whole value, exempt from `min_priority`, because indexed patches cannot create the array and the skeleton alone loses the value. The value is shipped whole, deeper than `max_depth` included: truncating a root `set` would corrupt the data, and nesting is already bounded by the `serde_json` parse recursion cap (about 128 levels) and `maxJsonSize`. `max_depth` truncation (steps 1-2) applies to object roots only.
 4. Completion frame last. Sequence numbers are contiguous from 0.
-Code: `frame_generation.rs` (`build_skeleton`, `generate_frames`), `priority_assignment.rs` (`group_by_priority`, `sort_priorities`).
+Code: `frame_generation.rs` (`generate_frames`; the skeleton is `pjson_rs_domain::services::skeleton`, #758), `priority_assignment.rs` (`group_by_priority`, `sort_priorities`).
 Status: done.
 
 ### FR-006 Priority assignment parity with HTTP
-The system shall compute every field priority by delegating to `pjson_rs_domain::services::compute_priority` with a `PriorityHeuristicConfig` projected once from `PriorityConfig` (`PriorityConfig::into_heuristic`) when the assigner is built and a `ValueShape` of the value (#755), so WASM and HTTP transports produce identical priorities for identical `(path, value)` input. Matching is case-insensitive on the last path segment. The assigner's configuration is fixed at construction; a call allocates nothing.
-Code: `priority_assignment.rs` (`PriorityConfig::into_heuristic`, `PriorityAssigner::calculate_field_priority`); regression test `crates/pjs-wasm/tests/priority_parity.rs` (issue #242).
+The system shall compute every field priority by delegating to `pjson_rs_domain::services::compute_priority` with the `PriorityHeuristicConfig` the assigner is built with (`PriorityAssigner::with_config`; the Rust-only `PriorityConfig` copy was removed in #771) and a `ValueShape` of the value (#755), so WASM and HTTP transports produce identical priorities for identical `(path, value)` input. Matching is case-insensitive on the last path segment. The assigner's configuration is fixed at construction; a call allocates nothing.
+Code: `priority_assignment.rs` (`PriorityAssigner::calculate_field_priority`); regression test `crates/pjs-wasm/tests/priority_parity.rs` (issue #242).
 Status: done.
 
 ### FR-007 PriorityConfigBuilder
@@ -123,8 +123,7 @@ Status: done.
 |------|------|-------|
 | `PjsParser` | `#[wasm_bindgen]` struct | `PriorityAssigner` + `SecurityConfig` |
 | `PriorityStream` | `#[wasm_bindgen]` struct | assigner, `min_priority: u8`, `SecurityConfig`, 3 optional callbacks |
-| `PriorityConfigBuilder` | `#[wasm_bindgen]`, `Clone` | wraps `PriorityConfig` |
-| `PriorityConfig` | Rust-only | tier lists + two thresholds; `pub` in `pub mod priority_assignment` |
+| `PriorityConfigBuilder` | `#[wasm_bindgen]`, `Clone` | wraps the domain `PriorityHeuristicConfig`; JS exposes tier lists and two thresholds, the other knobs stay defaults |
 | `PriorityAssigner`, `PrioritizedField` | Rust-only | `pub` for tests; `PriorityAssigner` has `new`, `with_config`, `calculate_field_priority` and `extract_prioritized_fields_with_limit` |
 | `FrameData`, `StreamStats` | serde + `Tsify` | callback payloads |
 | `PriorityConstants` | unit struct | static getters |
