@@ -20,7 +20,7 @@ code:
   - crates/pjs-core/src/infrastructure/websocket/client.rs
   - crates/pjs-core/src/infrastructure/websocket/mod.rs
   - crates/pjs-core/tests/websocket_wire_level.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # `PjsWebSocketClient`: client sessions, caps and TTL
@@ -56,7 +56,7 @@ Feature gate: `websocket-client` (deps `tokio-tungstenite`, `url`); builds witho
 | `max_sessions` (`NonZeroUsize`) | 1024 |
 | `session_idle_ttl` (`SessionIdleTtl`, always positive) | 300 s |
 | `max_session_bytes` (`NonZeroUsize`, serialized JSON size) | 16 MiB |
-| write timeout | 10 s (`WRITE_TIMEOUT`), unvalidated |
+| write timeout | 10 s (`DEFAULT_WRITE_TIMEOUT` from `security::rate_limit`), unvalidated |
 
 The message/frame caps equal the server's inbound cap so the client does not sever a connection to the in-tree server, which splits a payload into frames of at most the requested `max_frame_size` (default 64 KiB; one top-level entry above it travels alone) and never sends a message above the 16 MiB outgoing budget. `SessionIdleTtl::new(Duration::ZERO)` returns `ConfigError::MustBePositive`.
 
@@ -66,7 +66,7 @@ The message/frame caps equal the server's inbound cap so the client does not sev
 
 ### FR-003 Request stream
 
-`request_stream(data, options)` shall generate a fresh `SessionId`, build `StreamInit` (default `StreamOptions` when `None`), reserve a session slot, queue the serialised message, and return the id. A guard (`SessionSlotGuard`) removes the slot if the call is cancelled before queueing. Errors: `Serialization` (serialise failure), `ChannelClosed`, `SessionLimitReached { limit }`.
+`request_stream(data, options: StreamOptions)` shall generate a fresh `SessionId`, build `StreamInit` with `options` sent verbatim (no `None` default; `StreamOptions::patch()` requests Patch framing, which this client reconstructs), reserve a session slot, queue the serialised message, and return the id. A guard (`SessionSlotGuard`) removes the slot if the call is cancelled before queueing. Errors: `Serialization` (serialise failure), `ChannelClosed`, `SessionLimitReached { limit }`.
 
 ### FR-004 Session limit
 
@@ -74,11 +74,11 @@ When `max_sessions` is reached a new request shall first drop expired sessions, 
 
 ### FR-005 Frame application
 
-On `StreamFrame` the client shall drop the session if expired; if the session exists and is incomplete, merge the payload (object payloads merge key by key; any other payload replaces the data) provided the projected size stays within `max_session_bytes` (otherwise the session is removed and an error returned); mark complete on `is_complete`; refresh `last_activity`; record per-frame processing time; and queue a best-effort `FrameAck` (`try_send`, dropped with a warning if the channel is full). Frames for unknown, expired, closed or completed sessions are ignored without an ack.
+On `StreamFrame` the client shall drop the session if expired; if the session exists and is incomplete, merge the payload without cloning it (it moves or extends the session data, #701; object payloads merge key by key; any other payload replaces the data) provided the projected size stays within `max_session_bytes` (otherwise the session is removed and an error returned); mark complete on `is_complete`; refresh `last_activity`; record per-frame processing time; and queue a best-effort `FrameAck` (`try_send`, dropped with a warning if the channel is full). Frames for unknown, expired, closed or completed sessions are ignored without an ack. A live session applies a frame if and only if its kind matches the requested framing and `frame_id` equals the number of frames applied so far (from 0); otherwise the session is removed, nothing is applied, no ack is sent and `PjsError::FrameSequence(..)` (`UnexpectedFrameId` or `FramingMismatch`) is returned (#718).
 
 ### FR-006 Completion and error messages
 
-`StreamComplete` marks the session complete. A server `Error` with a `session_id` removes that session. `Ping` is answered with `Pong` (same timestamp). Completed sessions are frozen: later frames do not refresh them, so they expire after the idle TTL.
+`StreamComplete` marks the session complete. A server `Error` with a `session_id` removes that session, except that the session survives a `409` reply only for the exact pair `(409, "session id already in use")`; any other `409` text removes it (#702). `Ping` is answered with `Pong` (same timestamp). Completed sessions are frozen: later frames do not refresh them, so they expire after the idle TTL.
 
 ### FR-007 Reading and closing
 
@@ -93,7 +93,7 @@ On `StreamFrame` the client shall drop the session if expired; if the session ex
 
 ## Data Model
 
-`PjsWebSocketClient { url, config, sessions, message_tx, message_rx, write_timeout }`, `WebSocketClientConfig` (`Copy`), `SessionIdleTtl`, `StreamStats`, `ClosedSession`, private `ClientStreamSession`.
+`PjsWebSocketClient { url, config, sessions, message_tx, message_rx, write_timeout }`, `WebSocketClientConfig` (`Copy`, `#[non_exhaustive]`: construct from `Default` and assign fields), `SessionIdleTtl`, `StreamStats`, `ClosedSession`, private `ClientStreamSession`.
 
 ## Edge Cases and Errors
 
@@ -124,7 +124,7 @@ On `StreamFrame` the client shall drop the session if expired; if the session ex
 
 - No reconnect: a caller re-invokes `connect` itself.
 - The README describes `http-client` (reqwest) alongside; no such code exists.
-- Frame ordering is not enforced (`frame_id` unused when merging); the "reconstruction" is a shallow key merge, not the JSON Pointer reconstruction in the core `stream` module.
+- Frame ordering is enforced per session since #718 (see FR-005); the "reconstruction" is a shallow key merge, not the JSON Pointer reconstruction in the core `stream` module.
 - `ClientStreamSession.created_at` and `last_activity` use wall-clock `Instant` (not injectable for tests; tests use `close_session_at`).
 
 ## See Also

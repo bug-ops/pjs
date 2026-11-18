@@ -17,6 +17,7 @@ fn test_number_weight_integers_weigh_their_digits_and_sign() {
         int_extra: 0,
         element: 0,
         root_entry: 0,
+        nested: 0,
     };
     for (n, expected) in [
         (0, 1),
@@ -39,6 +40,7 @@ fn test_number_weight_adds_the_integer_extra_to_signed_and_unsigned() {
         int_extra: 3,
         element: 0,
         root_entry: 0,
+        nested: 0,
     };
 
     assert_eq!(number_weight(&int(12_345), weights), 8);

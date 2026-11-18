@@ -25,11 +25,12 @@ code:
   - .github/codecov.yml
   - .github/labeler.yml
   - deny.toml
+  - .gitleaks.toml
   - osv-scanner.toml
   - fuzz/osv-scanner.toml
   - rust-toolchain.toml
   - .cargo/config.toml
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 078: CI pipeline and supply-chain gates
@@ -86,7 +87,7 @@ Job `coverage` shall run `cargo llvm-cov nextest --all-features --all-targets --
 Status: done as reporting; there is no enforced gate.
 
 ### FR-010 Supply-chain scans
-Job `security-osv` (pull_request, merge_group, schedule) shall run `google/osv-scanner-action` honouring `osv-scanner.toml` (three ignored advisories, each with a stated reason) and `fuzz/osv-scanner.toml`. Job `security-deny` shall run `cargo deny check` on the root and `check advisories bans sources` on `fuzz/Cargo.toml`. `deny.toml`: `yanked = "deny"`, allowed licenses MIT, Apache-2.0 (+LLVM-exception), BSD-2/3-Clause, ISC, Unicode-3.0, 0BSD, Zlib; `ring` license clarified; `multiple-versions = "warn"`; `unknown-registry`/`unknown-git = "warn"`; registry limited to crates.io.
+Job `security-osv` (pull_request, merge_group, schedule) shall run `google/osv-scanner-action` honouring `osv-scanner.toml` (three ignored advisories, each with a stated reason) and `fuzz/osv-scanner.toml`. Job `security-deny` shall run `cargo deny check` on the root (`deny.toml` has no advisory ignores since #692 removed chrono; RUSTSEC-2026-0543 is no longer ignored anywhere) and `check advisories bans sources` on `fuzz/Cargo.toml`. `deny.toml`: `yanked = "deny"`, allowed licenses MIT, Apache-2.0 (+LLVM-exception), BSD-2/3-Clause, ISC, Unicode-3.0, 0BSD, Zlib; `ring` license clarified; `multiple-versions = "warn"`; `unknown-registry`/`unknown-git = "warn"`; registry limited to crates.io.
 Status: done.
 
 ### FR-015 Feature matrix and MSRV
@@ -94,7 +95,7 @@ Job `feature-matrix` (nightly, `cargo-hack`) shall run `cargo hack check -p pjso
 Status: done.
 
 ### FR-011 Required-status aggregator
-Job `ci-success` (`if: always()`) shall fail when any of quality, feature-matrix, msrv, fuzz, build, test, doctest, docs, wasm-native-tests, coverage, wasm-build, wasm-bundle-size, wasm-node-example, wasm-types-drift, wasm-package-validation, security-osv, security-deny, js-client-test finished `failure` or `cancelled`; skipped counts as pass. `fuzz-explore` is not part of it.
+Job `ci-success` (`if: always()`) shall fail when any of quality, feature-matrix, msrv, miri, fuzz, build, test, doctest, docs, wasm-native-tests, coverage, wasm-build, wasm-bundle-size, wasm-node-example, wasm-types-drift, wasm-package-validation, security-osv, security-deny, js-client-test finished `failure` or `cancelled`; skipped counts as pass. `fuzz-explore` is not part of it.
 Status: done.
 
 ### FR-012 Toolchain and compile flags
@@ -107,7 +108,15 @@ All actions shall be pinned to full commit SHAs with a trailing version comment 
 Status: done.
 
 ### FR-014 Dependency automation
-`dependabot.yml` shall schedule weekly (Monday 09:00 GMT) updates for cargo (`/`), cargo (`/fuzz`) and github-actions, grouping minor and patch updates, also proposing semver-major updates (#616), commit prefix `chore` (cargo) / `ci` (actions), labels `dependencies` + ecosystem. `dependabot-automerge.yml` (pull_request_target, only when the PR author is `dependabot[bot]`) shall wait for all other checks (`wait-on-check-action`, allowed `success,skipped,neutral`) then `gh pr merge --auto --squash` only when every updated dependency is a patch update or a minor update from a version already >= 1.0.0 (a 0.x minor is breaking), and label other updates `major-update`. `labeler.yml` applies path labels from `.github/labeler.yml` (core, domain, benchmarks, application, infrastructure, rust, documentation, ci/cd, dependencies, security, performance, testing, wasm, pjs-demo, pjs-js-client).
+`dependabot.yml` shall schedule weekly (Monday 09:00 GMT) updates for cargo (`/`), cargo (`/fuzz`), npm (`/crates/pjs-js-client`, minor and patch grouped, commit prefix `chore` with scope, labels `dependencies` + `pjs-js-client`, #693) and github-actions, grouping minor and patch updates, also proposing semver-major updates (#616), commit prefix `chore` (cargo) / `ci` (actions), labels `dependencies` + ecosystem. `dependabot-automerge.yml` (pull_request_target, only when the PR author is `dependabot[bot]`) shall wait for all other checks (`wait-on-check-action`, allowed `success,skipped,neutral`) then `gh pr merge --auto --squash` only when every updated dependency is a patch update or a minor update from a version already >= 1.0.0 (a 0.x minor is breaking), and label other updates `major-update`. `labeler.yml` applies path labels from `.github/labeler.yml` (core, domain, benchmarks, application, infrastructure, rust, documentation, ci/cd, dependencies, security, performance, testing, wasm, pjs-demo, pjs-js-client).
+Status: done.
+
+### FR-016 Miri job
+Job `miri` (ubuntu, `timeout-minutes: 20`; on rust changes, push, schedule, manual) shall install the pinned nightly with `miri` and `rust-src` through the `setup-rust` composite action and run `cargo miri test -p pjson-rs --lib -- parser::buffer_pool parser::aligned_alloc` with `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks"` (#716). Tree Borrows is required because crossbeam-epoch (via rayon in `BufferPool`) is rejected by Stacked Borrows; `-Zmiri-ignore-leaks` because rayon's global pool threads outlive `main`. Measured locally: 36 tests, about 14 s run time, about 100 s cold. It is part of `ci-success`.
+Status: done.
+
+### FR-017 Secret hygiene
+`.gitignore` shall exclude `.env`, `.env.*` (with `!.env.example`), `*.pem`, `*.key`, `*.p12`, `*.pfx` and `secrets/`; `.gitleaks.toml` shall extend the default gitleaks rules and allowlist the RFC 6455 sample nonce `dGhlIHNhbXBsZSBub25jZQ==` used by the handshake tests (#697). No gitleaks CI job exists.
 Status: done.
 
 ## Non-Functional Requirements
@@ -119,7 +128,7 @@ Status: done.
 
 ## Data Model
 
-Job graph: `changes` -> {`quality`, `feature-matrix`, `fuzz`, `build`, `doctest`, `docs`, `wasm-native-tests`, `coverage`, `wasm-build`}; `build`+`quality` -> `test`; `wasm-build` -> {`wasm-bundle-size`, `wasm-node-example`, `wasm-types-drift`, `wasm-package-validation`, `js-client-test`}; independent: `msrv`, `security-osv`, `security-deny`, `fuzz-explore`; all required -> `ci-success`.
+Job graph: `changes` -> {`quality`, `feature-matrix`, `fuzz`, `build`, `doctest`, `docs`, `wasm-native-tests`, `coverage`, `wasm-build`}; `build`+`quality` -> `test`; `wasm-build` -> {`wasm-bundle-size`, `wasm-node-example`, `wasm-types-drift`, `wasm-package-validation`, `js-client-test`}; `changes` -> `miri`; independent: `msrv`, `security-osv`, `security-deny`, `fuzz-explore`; all required -> `ci-success`.
 
 ## Edge Cases and Errors
 

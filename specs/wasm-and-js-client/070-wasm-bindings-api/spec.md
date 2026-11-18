@@ -25,7 +25,7 @@ code:
   - crates/pjs-wasm/src/priority_config.rs
   - crates/pjs-wasm/src/priority_assignment.rs
   - crates/pjs-wasm/src/frame_generation.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 070: pjs-wasm public binding API
@@ -73,8 +73,8 @@ Status: done.
 
 ### FR-005 Frame generation algorithm
 The system shall implement frame generation once, in `frame_generation::generate_frames`, shared by `PjsParser` and `PriorityStream`:
-1. Skeleton frame (sequence 0): same shape as the input, leaves replaced by `null` (strings), `0`, `0.0`, `false`; arrays replaced by `[]`; values under keys that `JsonPath::is_valid_key` rejects (`.`, `[`, `]`, empty) kept verbatim at any depth below `max_depth`, since no patch can address them, so they travel in frame 0 regardless of `min_priority`; recursion truncated to `null` at `max_depth` (from `SecurityConfig.maxDepth`).
-2. Fields extracted recursively through objects and arrays up to `max_depth`, each assigned a `Priority` by `PriorityAssigner`.
+1. Skeleton frame (sequence 0): same shape as the input, leaves replaced by `null` (strings), `0`, `0.0`, `false`; arrays replaced by `[]`; no value is kept verbatim by key: every key recurses and nulls leaves like any other; recursion truncated to `null` at `max_depth` (from `SecurityConfig.maxDepth`).
+2. Fields extracted recursively through objects and arrays up to `max_depth` for every key (`JsonPath` quoted segments address keys with `.`, `[`, `]` or the empty key), each assigned a `Priority` by `PriorityAssigner`; no field is skipped.
 3. Fields grouped by priority, priorities sorted descending; groups below `min_priority` skipped; each remaining group becomes one patch frame of `set` patches.
 3a. A non-object root (array or scalar) skips steps 2-3: after the skeleton (`[]` / `null`) it emits one patch frame at `Priority::CRITICAL` holding a single root `set` (`$`) with the whole value, exempt from `min_priority`, because indexed patches cannot create the array and the skeleton alone loses the value. The value is shipped whole, deeper than `max_depth` included: truncating a root `set` would corrupt the data, and nesting is already bounded by the `serde_json` parse recursion cap (about 128 levels) and `maxJsonSize`. `max_depth` truncation (steps 1-2) applies to object roots only.
 4. Completion frame last. Sequence numbers are contiguous from 0.

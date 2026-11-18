@@ -1,5 +1,5 @@
-use chrono::Utc;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use jiff::Timestamp;
 use pjson_rs_domain::events::DomainEvent;
 use pjson_rs_domain::value_objects::{Priority, SessionId, StreamId};
 use std::hint::black_box;
@@ -16,7 +16,7 @@ fn benchmark_custom_serde_serialization(c: &mut Criterion) {
     // Benchmark SessionActivated event serialization
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
     };
 
     group.throughput(Throughput::Elements(1));
@@ -31,7 +31,7 @@ fn benchmark_custom_serde_serialization(c: &mut Criterion) {
     let event = DomainEvent::StreamCreated {
         stream_id,
         session_id,
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
     };
 
     group.bench_function("StreamCreated", |b| {
@@ -47,19 +47,19 @@ fn benchmark_custom_serde_serialization(c: &mut Criterion) {
             if i % 3 == 0 {
                 DomainEvent::SessionActivated {
                     session_id: SessionId::new(),
-                    timestamp: Utc::now(),
+                    timestamp: Timestamp::now(),
                 }
             } else if i % 3 == 1 {
                 DomainEvent::StreamCreated {
                     stream_id: StreamId::new(),
                     session_id: SessionId::new(),
-                    timestamp: Utc::now(),
+                    timestamp: Timestamp::now(),
                 }
             } else {
                 DomainEvent::StreamStarted {
                     stream_id: StreamId::new(),
                     session_id: SessionId::new(),
-                    timestamp: Utc::now(),
+                    timestamp: Timestamp::now(),
                 }
             }
         })
@@ -88,14 +88,14 @@ fn benchmark_custom_serde_deserialization(c: &mut Criterion) {
 
     let session_activated_json = serde_json::to_string(&DomainEvent::SessionActivated {
         session_id,
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
     })
     .unwrap();
 
     let stream_created_json = serde_json::to_string(&DomainEvent::StreamCreated {
         stream_id,
         session_id,
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
     })
     .unwrap();
 
@@ -121,13 +121,13 @@ fn benchmark_custom_serde_deserialization(c: &mut Criterion) {
             let event = if i % 2 == 0 {
                 DomainEvent::SessionActivated {
                     session_id: SessionId::new(),
-                    timestamp: Utc::now(),
+                    timestamp: Timestamp::now(),
                 }
             } else {
                 DomainEvent::StreamCreated {
                     stream_id: StreamId::new(),
                     session_id: SessionId::new(),
-                    timestamp: Utc::now(),
+                    timestamp: Timestamp::now(),
                 }
             };
             serde_json::to_string(&event).unwrap()

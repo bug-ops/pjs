@@ -13,7 +13,7 @@ related:
   - "[[constitution]]"
 code:
   - crates/pjs-core/src/infrastructure/websocket/client.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan (as-built): WebSocket client

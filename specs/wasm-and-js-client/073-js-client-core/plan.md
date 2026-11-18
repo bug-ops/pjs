@@ -9,7 +9,7 @@ created: 2026-11-15
 status: partial
 related:
   - "[[073-js-client-core/spec]]"
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan 073: as-built

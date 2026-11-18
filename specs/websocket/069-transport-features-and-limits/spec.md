@@ -78,7 +78,7 @@ verified: 2026-11-15
 | `Accept` entries parsed | 16 | `MAX_ACCEPT_ENTRIES` |
 | Pagination limit / offset | 1000 / 1 000 000 | `MAX_PAGINATION_LIMIT`, `MAX_PAGINATION_OFFSET` (`domain::config::limits`) |
 | Adapter scan/results | 10 000 / 10 000 | `infrastructure/adapters/limits.rs` |
-| HTTP rate limit | 100 requests / 60 s per IP | `RateLimitConfig` (HTTP) |
+| HTTP rate limit | 100 requests / 60 s per IP | `security::RateLimitConfig` via `RateLimitMiddleware::new` |
 | Tracked clients | 100 000 | `MAX_TRACKED_CLIENTS` |
 | Limiter cleanup | 300 s (middleware), 60 s (accept-level) | `DEFAULT_CLEANUP_INTERVAL`, `serve.rs` |
 
@@ -94,7 +94,7 @@ See [[062-http-serve-connection-limits/spec|062]]: header timeout 10 s, duration
 | Connections per IP | 10 default; 50 `high_traffic`; 2 `low_resource` | `RateLimitConfig` |
 | Upgrade requests per window (60 s) | 100 default; 1000 `high_traffic`; 20 `low_resource` | `RateLimitConfig` |
 | Messages per second (+burst) | 30 (+5) default; 100 (+20) `high_traffic`; 5 (+2) `low_resource` | `RateLimitConfig` |
-| Write timeout | 10 s default; 3 s `low_resource` | `RateLimitConfig::write_timeout`, `WRITE_TIMEOUT` |
+| Write timeout | 10 s default; 3 s `low_resource` | `RateLimitConfig::write_timeout`, `DEFAULT_WRITE_TIMEOUT` |
 | Outgoing queue (server and client) | 1000 messages, 16 MiB | `OUTGOING_QUEUE_CAPACITY`, `MAX_QUEUED_OUTGOING_BYTES`, `MESSAGE_QUEUE_CAPACITY`, `MAX_QUEUED_MESSAGE_BYTES` |
 | Live sessions per connection (server) | 64 default; `429` above | `DEFAULT_MAX_SESSIONS_PER_CONNECTION`, `with_max_sessions_per_connection` |
 | Client sessions | 1024 default (`NonZeroUsize`); 16 MiB per session | `WebSocketClientConfig` |
@@ -140,8 +140,8 @@ Not applicable; constants and config structs are listed in their owning specs.
 ## Open Questions
 
 - `http-client` documented but nonexistent: either remove from README/CLAUDE.md or implement; no spec covers a Rust HTTP client.
-- Duplicate write-timeout constants (`WRITE_TIMEOUT` and `RateLimitConfig::write_timeout`) must be kept in sync by hand.
-- Two near-duplicate `RateLimitConfig` types: `security::rate_limit::RateLimitConfig` (limiter) and `infrastructure::http::RateLimitConfig` (HTTP wrapper), and `config::security::NetworkLimits.max_websocket_frame_size` (16 MiB default, used by `security.rs` validation) which is separate from the 1 MiB transport cap [NEEDS CLARIFICATION: confirm which cap governs what].
+- Resolved by #703: the write timeout default is the single `DEFAULT_WRITE_TIMEOUT` in `security::rate_limit`.
+- Resolved by #704: the HTTP `RateLimitConfig` wrapper was removed; `security::rate_limit::RateLimitConfig` is the only one. Still open: `config::security::NetworkLimits.max_websocket_frame_size` (16 MiB default, used by `security.rs` validation) which is separate from the 1 MiB transport cap [NEEDS CLARIFICATION: confirm which cap governs what].
 - No consolidated runtime config object binds these limits (`PjsConfig` validation does not cover them).
 
 ## See Also

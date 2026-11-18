@@ -8,7 +8,7 @@ created: 2026-11-15
 status: implemented
 related:
   - "[[046-json-reconstruction/spec]]"
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan 046: JSON Reconstruction (as built)
@@ -26,8 +26,8 @@ flowchart LR
   AP --> SET[set_at_path]
   AP --> APP[append_at_path]
   AP --> REM[remove_at_path]
-  SET --> GP[get_parent_mut]
-  APP --> GM[get_mut_at_path]
+  SET --> GP[json_tree::resolve_mut]
+  APP --> GM[json_tree::resolve_mut]
   PF -->|Complete| DONE[is_complete = true]
 ```
 

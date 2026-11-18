@@ -9,7 +9,7 @@ use crate::domain::{
     },
     entities::{Frame, Stream},
 };
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Get session information by ID
@@ -106,9 +106,9 @@ pub struct SessionFilters {
     /// `Initializing`, `Active`, `Closing`, `Completed`, `Failed`.
     pub state: Option<SessionState>,
     /// Match sessions created at or after this timestamp.
-    pub created_after: Option<DateTime<Utc>>,
+    pub created_after: Option<Timestamp>,
     /// Match sessions created at or before this timestamp.
-    pub created_before: Option<DateTime<Utc>>,
+    pub created_before: Option<Timestamp>,
     /// Match sessions whose client info contains this string.
     pub client_info: Option<String>,
     /// Match sessions that currently have (or do not have) active streams.
@@ -199,9 +199,9 @@ pub struct SessionStatsResponse {
     /// Number of streams currently in an active state.
     pub active_stream_count: usize,
     /// Timestamp when the session was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     /// Timestamp when the session was last updated.
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: Timestamp,
     /// Duration in milliseconds since session creation, or `None` if not yet completed.
     pub duration_ms: Option<i64>,
 }

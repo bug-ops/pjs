@@ -12,7 +12,7 @@ use crate::domain::{
     ports::{SystemTimeProvider, TimeProvider},
     value_objects::{JsonData, Priority, SessionId, StreamId},
 };
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU32;
@@ -29,7 +29,7 @@ fn default_time_provider() -> Arc<dyn TimeProvider> {
 /// Session lifetime in whole seconds, guaranteed to be in
 /// `1..=`[`MAX_SESSION_TIMEOUT_SECONDS`].
 ///
-/// The bound makes every conversion to a `chrono` duration total, so building
+/// The bound makes every conversion to a signed duration total, so building
 /// or extending a session can neither panic nor move its expiry backward.
 /// It is carried on the wire as a plain `u64` and validated on decode.
 ///
@@ -54,8 +54,8 @@ impl SessionTimeout {
         Duration::from_secs(u64::from(self.0.get()))
     }
 
-    fn as_chrono(self) -> chrono::Duration {
-        chrono::Duration::seconds(i64::from(self.0.get()))
+    fn as_signed_duration(self) -> jiff::SignedDuration {
+        jiff::SignedDuration::from_secs(i64::from(self.0.get()))
     }
 }
 
@@ -169,10 +169,10 @@ struct StreamSessionWire {
     state: SessionState,
     config: SessionConfig,
     stats: SessionStats,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-    completed_at: Option<DateTime<Utc>>,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+    expires_at: Timestamp,
+    completed_at: Option<Timestamp>,
     streams: StreamMap,
     pending_events: VecDeque<DomainEvent>,
     client_info: Option<String>,
@@ -222,10 +222,10 @@ pub struct StreamSession {
     state: SessionState,
     config: SessionConfig,
     stats: SessionStats,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-    completed_at: Option<DateTime<Utc>>,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+    expires_at: Timestamp,
+    completed_at: Option<Timestamp>,
 
     // Aggregate state
     streams: StreamMap,
@@ -299,7 +299,9 @@ impl StreamSession {
     /// ```
     pub fn with_time_provider(config: SessionConfig, time_provider: Arc<dyn TimeProvider>) -> Self {
         let now = time_provider.now();
-        let expires_at = now + config.session_timeout.as_chrono();
+        let expires_at = now
+            .checked_add(config.session_timeout.as_signed_duration())
+            .unwrap_or(Timestamp::MAX);
 
         Self {
             id: SessionId::new(),
@@ -340,22 +342,22 @@ impl StreamSession {
     }
 
     /// Get creation timestamp
-    pub fn created_at(&self) -> DateTime<Utc> {
+    pub fn created_at(&self) -> Timestamp {
         self.created_at
     }
 
     /// Get last update timestamp
-    pub fn updated_at(&self) -> DateTime<Utc> {
+    pub fn updated_at(&self) -> Timestamp {
         self.updated_at
     }
 
     /// Get expiration timestamp
-    pub fn expires_at(&self) -> DateTime<Utc> {
+    pub fn expires_at(&self) -> Timestamp {
         self.expires_at
     }
 
     /// Get completion timestamp
-    pub fn completed_at(&self) -> Option<DateTime<Utc>> {
+    pub fn completed_at(&self) -> Option<Timestamp> {
         self.completed_at
     }
 
@@ -365,8 +367,9 @@ impl StreamSession {
     }
 
     /// Get session duration if completed
-    pub fn duration(&self) -> Option<chrono::Duration> {
-        self.completed_at.map(|end| end - self.created_at)
+    pub fn duration(&self) -> Option<jiff::SignedDuration> {
+        self.completed_at
+            .map(|end| end.duration_since(self.created_at))
     }
 
     /// Check if session is expired
@@ -639,7 +642,7 @@ impl StreamSession {
         // `completed_streams` was already incremented above, so it is the
         // sample count including this stream.
         if let Some(duration) = stream.duration() {
-            let duration_ms = duration.num_milliseconds() as f64;
+            let duration_ms = duration.as_millis() as f64;
             self.stats.average_stream_duration_ms += (duration_ms
                 - self.stats.average_stream_duration_ms)
                 / self.stats.completed_streams as f64;
@@ -996,8 +999,8 @@ impl StreamSession {
 
         self.expires_at = self
             .expires_at
-            .checked_add_signed(additional.as_chrono())
-            .ok_or_else(|| DomainError::InvalidInput("session expiry overflow".to_string()))?;
+            .checked_add(additional.as_signed_duration())
+            .map_err(|_| DomainError::InvalidInput("session expiry overflow".to_string()))?;
         self.update_timestamp();
 
         self.add_event(DomainEvent::SessionTimeoutExtended {
@@ -1052,7 +1055,11 @@ impl StreamSession {
             active_streams: active_count,
             failed_streams: failed_count,
             is_expired: self.is_expired(),
-            uptime_seconds: (self.time_provider.now() - self.created_at).num_seconds(),
+            uptime_seconds: self
+                .time_provider
+                .now()
+                .duration_since(self.created_at)
+                .as_secs(),
         }
     }
 
@@ -1176,7 +1183,7 @@ mod tests {
         assert!(session.complete_stream(stream_id).is_ok());
 
         let d1 = session.stream(stream_id).unwrap().duration().unwrap();
-        let d1_ms = d1.num_milliseconds() as f64;
+        let d1_ms = d1.as_millis() as f64;
 
         // A single sample's running mean must equal the sample itself, not
         // the old EMA result of `duration_ms / 2.0`. Exact `f64` equality is
@@ -1204,7 +1211,7 @@ mod tests {
             .unwrap()
             .duration()
             .unwrap()
-            .num_milliseconds() as f64;
+            .as_millis() as f64;
 
         let stream_id_2 = session.create_stream(source_data).unwrap();
         assert!(session.start_stream(stream_id_2).is_ok());
@@ -1215,7 +1222,7 @@ mod tests {
             .unwrap()
             .duration()
             .unwrap()
-            .num_milliseconds() as f64;
+            .as_millis() as f64;
 
         // The true arithmetic mean of two samples, not the old EMA result
         // (which would weigh the second sample by 0.5 regardless of history).
@@ -1245,7 +1252,7 @@ mod tests {
             .unwrap()
             .duration()
             .unwrap()
-            .num_milliseconds() as f64;
+            .as_millis() as f64;
 
         // The first sample seeds the EMA directly, mirroring the lifetime
         // mean's own first-sample behavior — the two fields agree until a
@@ -1279,7 +1286,7 @@ mod tests {
                     .unwrap()
                     .duration()
                     .unwrap()
-                    .num_milliseconds() as f64,
+                    .as_millis() as f64,
             );
         }
 

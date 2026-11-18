@@ -29,7 +29,7 @@ related:
   - "[[043-domain-schema-depth-guard-wire-encoding/spec]]"
   - "[[044-domain-entities-events-priority-heuristic/spec]]"
   - "[[070-wasm-bindings-api/spec]]"
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 042: Domain Crate Contract and Core Value Objects
@@ -62,7 +62,7 @@ Status: done. (`pjs-core` is different: it denies only `unsafe_op_in_unsafe_fn` 
 
 ### FR-042-002 Dependencies and features
 
-The crate shall depend only on `chrono` (serde), `serde` (derive), `serde_json`, `smallvec` (serde), `thiserror`, `uuid` (`v4`, `serde`; plus `js` on `target_arch = "wasm32"`). The crate declares no features: the former `std` and `wasm` features were removed (#606).
+The crate shall depend only on `jiff` 1.0 (`std`, `serde`; default features off; plus `js` on `all(target_arch = "wasm32", target_os = "unknown")`, without which `Timestamp::now()` panics in the browser), `serde` (derive), `serde_json`, `smallvec` (serde), `thiserror`, `uuid` (`v4`, `serde`; plus `js` on `target_arch = "wasm32"`). The crate declares no features: the former `std` and `wasm` features were removed (#606).
 Status: done.
 
 ### FR-042-003 std only
@@ -114,10 +114,14 @@ Status: done as built; see Open Questions for `Eq` with NaN and `Display` escapi
 
 ### FR-042-011 `JsonPath`
 
-`JsonPath` shall hold `Vec<PathSegment>` with `PathSegment::{Key(String), Index(usize)}` (`#[non_exhaustive]`); the root path is the empty vector. Keys shall be non-empty and shall not contain `.`, `[` or `]`.
-Construction: `root()`, `new("$...")`/`FromStr` (must start with `$`; segments `.key` and `[n]`; errors are `InvalidPath`), `from_segments(iter)` (validates keys), `append_key(&str) -> DomainResult`, `append_index(usize)`.
-Queries: `segments`, `depth`, `parent`, `last_segment`, `last_key` (skips trailing indices), `is_prefix_of` (strict prefix), `to_json_pointer()` (root is `"/"`; keys are not escaped).
-`Display` is `$` plus `.key` / `[n]`; serde uses the same string, and the textual form is the wire format. `Display` then `FromStr` round-trips (proptest).
+`JsonPath` shall hold `Vec<PathSegment>` with the closed enum `PathSegment::{Key(String), Index(usize)}` (not `#[non_exhaustive]`, so consumers match exhaustively); the root path is the empty vector. A key is any `String`, including the empty key and keys containing `.`, `[` or `]`.
+Construction: `root()`, `new("$...")`/`FromStr` (errors are `InvalidPath`), infallible `from_segments(iter) -> JsonPath` and `append_key(&str) -> JsonPath`, `append_index(usize)`.
+Text grammar: `path = "$" *( "." plain / "[" index "]" / "[" quoted "]" )`.
+- `plain`: non-empty, none of `.`, `[`, `]`; written as `.plain` (bytes identical to the former form).
+- `index`: `0` or `[1-9][0-9]*` (ASCII digits only); the closing `]` is required; a value above the native index type is an error (`usize`: 2^64-1 native, 2^32-1 on wasm32; JS client: `Number.MAX_SAFE_INTEGER`), so `append_index` always round-trips; indices above a bound are undefined in the cross-implementation contract.
+- `quoted`: a JSON string literal in `serde_json` canonical escaping, used if and only if the key is not plain.
+`Display` writes `[` + `serde_json::to_string(key)` + `]` for a non-plain key. `FromStr` scans the literal to its unescaped closing quote, decodes it, rejects it when re-encoding differs from the slice (non-canonical escapes) or when the key is plain, then requires `]`. Every accepted string re-renders identically and `Display` then `FromStr` is the identity for every path (proptest over arbitrary keys and indices); serde uses the same string, which is the wire format.
+Queries: `segments`, `depth`, `parent`, `last_segment`, `last_key` (skips trailing indices), `is_prefix_of` (strict prefix), `to_json_pointer()` (root is `""` per RFC 6901, `$[""]` is `"/"`; `~` and `/` in keys are not escaped).
 Status: done.
 
 ### FR-042-012 `BackpressureSignal`
@@ -144,9 +148,11 @@ See FR text. Type inventory: `Priority`, `Id<T>`, `IdMarker`, `SessionMarker`, `
 | `Priority::from_percentage(101.0)` / NaN | `InvalidPriority` |
 | `Priority::from_percentage(0.0)` | `Priority(1)` |
 | `Id::from_string("invalid")` | `uuid::Error` |
-| `JsonPath::new("")`, `"key"`, `"$."`, `"$.a."`, `"$.a[]"`, `"$.a[x]"` | `InvalidPath` |
+| `JsonPath::new("")`, `"key"`, `"$."`, `"$.a."`, `"$.a[]"`, `"$.a[x]"`, `"$[0"`, `"$[+5]"`, `"$[007]"`, `"$[-1]"` | `InvalidPath` |
+| `"$[\"a\"]"` (plain key quoted), `"$[\"\\u0041.b\"]"` (non-canonical escape) | `InvalidPath` |
+| `"$[\"a.b\"]"`, `"$[\"\"]"`, `"$.x[\"k]\"]"` | ok; re-render identically |
 | `JsonPath::new("$.a b")` | ok (spaces allowed) |
-| `append_key("a.b")` | `InvalidPath` |
+| `append_key("a.b").to_string()` | `$["a.b"]` |
 | `JsonData::float(NAN)` | `InvalidInput` |
 | JSON nested deeper than 64 | deserialisation error |
 | `set_path` through a non-object | returns `false` |
@@ -160,7 +166,7 @@ See FR text. Type inventory: `Priority`, `Id<T>`, `IdMarker`, `SessionMarker`, `
 ## Agent Boundaries
 
 - Always: add a validating constructor (`new() -> Result`) for any new value object with an invariant; keep `unsafe` out.
-- Ask first: adding a `no_std` mode or a Cargo feature (needs replacing `HashMap`, `chrono` features, `serde_json` use); changing `Priority` constant values (they are wire-visible through frames and heuristics).
+- Ask first: adding a `no_std` mode or a Cargo feature (needs replacing `HashMap`, `jiff` features, `serde_json` use); changing `Priority` constant values (they are wire-visible through frames and heuristics).
 - Never: add an infallible `From<u8> for Priority` or public fields to value objects; add dependencies on `tokio`, `axum` or `jiter` (see `parser/partial.rs` note).
 
 ## Open Questions
@@ -171,7 +177,7 @@ See FR text. Type inventory: `Priority`, `Id<T>`, `IdMarker`, `SessionMarker`, `
 - `From<serde_json::Value>` maps a number that is neither `i64` nor `f64` to `Float(0.0)` silently (reachable only with serde_json's `arbitrary_precision`).
 - `JsonData::set_path` uses `expect` on a key it just inserted (cannot fail, but is a panic site).
 - `Id::as_str()` returns an owned `String` (name suggests a borrow).
-- `JsonPath::to_json_pointer` does not escape `~` and `/` in keys (RFC 6901).
+- `JsonPath::to_json_pointer` does not escape `~` and `/` in keys (RFC 6901, #379).
 - `JsonData::Object` is a `HashMap`, so iteration and serialisation order of keys is unspecified; byte-stable encodings of multi-key objects are not guaranteed.
 
 ## See Also

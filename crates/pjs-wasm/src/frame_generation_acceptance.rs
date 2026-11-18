@@ -1,5 +1,5 @@
-//! Acceptance tests for #656: values under keys `JsonPath` cannot encode must
-//! survive WASM frame generation.
+//! Acceptance tests for #656 and #698: values under keys with `.`, `[`, `]` or
+//! the empty key survive WASM frame generation through quoted path segments.
 //!
 //! Frame generation is crate-private, so this file is compiled as a test-only
 //! module of the crate (see `lib.rs`) instead of living under `tests/`.
@@ -9,7 +9,7 @@ use crate::security::DEFAULT_MAX_DEPTH;
 use crate::{PjsParser, PriorityStream};
 use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FrameType;
-use pjson_rs_domain::value_objects::{JsonData, Priority, StreamId};
+use pjson_rs_domain::value_objects::{JsonData, JsonPath, PathSegment, Priority, StreamId};
 use serde_json::json;
 
 /// Object-root documents with at least one key that `JsonPath` cannot encode.
@@ -32,10 +32,6 @@ fn unencodable_documents() -> Vec<(&'static str, serde_json::Value)> {
 
 fn data(value: serde_json::Value) -> JsonData {
     JsonData::from(value)
-}
-
-fn is_unencodable(key: &str) -> bool {
-    key.is_empty() || key.contains(['.', '[', ']'])
 }
 
 fn stream_frames(input: &JsonData, min: Priority) -> Vec<Frame> {
@@ -66,74 +62,62 @@ fn patches_of(frame: &Frame) -> &[JsonData] {
 
 /// Applies the skeleton and then every patch frame in order, as a client does.
 fn reconstruct(frames: &[Frame]) -> JsonData {
-    let mut state = frames
+    let skeleton = frames
         .iter()
         .find(|f| matches!(f.frame_type(), FrameType::Skeleton))
         .expect("a skeleton frame is present")
-        .payload()
-        .clone();
+        .payload();
+    let mut state = serde_json::to_value(skeleton).expect("JsonData serializes");
     for frame in patch_frames(frames) {
         for patch in patches_of(frame) {
-            let path = patch.get("path").and_then(JsonData::as_str).expect("path");
+            let path: JsonPath = patch
+                .get("path")
+                .and_then(JsonData::as_str)
+                .expect("path")
+                .parse()
+                .expect("emitted path parses");
             assert_eq!(
                 patch.get("operation").and_then(JsonData::as_str),
                 Some("set"),
                 "only set patches are expected"
             );
-            let value = patch.get("value").expect("value").clone();
-            let key_path = path.strip_prefix("$.").expect("non-root patch path");
-            assert!(
-                state.set_path(key_path, value),
-                "patch path {path} must be applicable to the reconstructed state"
-            );
+            let value = serde_json::to_value(patch.get("value").expect("value"))
+                .expect("JsonData serializes");
+            let mut node = &mut state;
+            for segment in path.segments() {
+                node = match segment {
+                    PathSegment::Key(key) => node.get_mut(key.as_str()),
+                    PathSegment::Index(index) => node.get_mut(*index),
+                }
+                .unwrap_or_else(|| panic!("patch path {path} must be applicable"));
+            }
+            *node = value;
         }
     }
-    state
-}
-
-fn assert_values_under_unencodable_keys_verbatim(
-    input: &JsonData,
-    skeleton: &JsonData,
-    case: &str,
-) {
-    let (JsonData::Object(input), JsonData::Object(skeleton)) = (input, skeleton) else {
-        return;
-    };
-    for (key, value) in input {
-        let skeleton_value = skeleton
-            .get(key)
-            .unwrap_or_else(|| panic!("{case}: skeleton keeps key {key:?}"));
-        if is_unencodable(key) {
-            assert_eq!(
-                skeleton_value, value,
-                "{case}: value under {key:?} must be verbatim"
-            );
-        } else {
-            assert_values_under_unencodable_keys_verbatim(value, skeleton_value, case);
-        }
-    }
+    JsonData::from(state)
 }
 
 #[test]
-fn test_build_skeleton_keeps_values_under_unencodable_keys_verbatim() {
-    for (case, input) in unencodable_documents() {
-        let input = data(input);
+fn test_build_skeleton_has_no_verbatim_subtrees() {
+    let input = data(json!({"a.b": {"c": [1, 2], "d.e": null}, "": "s", "k]": [1]}));
 
-        let skeleton = build_skeleton(&input, 0, DEFAULT_MAX_DEPTH);
+    let skeleton = build_skeleton(&input, 0, DEFAULT_MAX_DEPTH);
 
-        assert_values_under_unencodable_keys_verbatim(&input, &skeleton, case);
-    }
+    assert_eq!(
+        skeleton,
+        data(json!({"a.b": {"c": [], "d.e": null}, "": null, "k]": []}))
+    );
 }
 
 #[test]
-fn test_build_skeleton_keeps_placeholders_for_encodable_keys() {
+fn test_build_skeleton_keeps_placeholders_for_every_key() {
     let input = data(json!({"a.b": 1, "ok": 2, "name": "n", "flag": true, "xs": [1]}));
 
     let skeleton = build_skeleton(&input, 0, DEFAULT_MAX_DEPTH);
 
     assert_eq!(
         skeleton,
-        data(json!({"a.b": 1, "ok": 0, "name": null, "flag": false, "xs": []}))
+        data(json!({"a.b": 0, "ok": 0, "name": null, "flag": false, "xs": []}))
     );
 }
 
@@ -156,21 +140,22 @@ fn test_generate_frames_reconstructs_object_root_with_unencodable_keys() {
 }
 
 #[test]
-fn test_generate_frames_patch_paths_stay_encodable() {
+fn test_generate_frames_addresses_unencodable_keys_with_quoted_segments() {
     let input = data(json!({"a.b": 1, "x": {"a[0]": "v"}, "ok": 2}));
 
     let frames = stream_frames(&input, Priority::BACKGROUND);
 
-    for frame in patch_frames(&frames) {
-        for patch in patches_of(frame) {
-            let path = patch.get("path").and_then(JsonData::as_str).expect("path");
-            let keys = path.strip_prefix("$.").expect("non-root patch path");
-            assert!(
-                keys.split('.').all(|k| !k.is_empty() && !is_unencodable(k)),
-                "unexpected patch path {path}"
-            );
-        }
-    }
+    let paths: Vec<String> = patch_frames(&frames)
+        .flat_map(|f| patches_of(f).iter())
+        .map(|p| {
+            p.get("path")
+                .and_then(JsonData::as_str)
+                .expect("path")
+                .to_owned()
+        })
+        .collect();
+    assert!(paths.contains(&r#"$["a.b"]"#.to_owned()), "{paths:?}");
+    assert!(paths.contains(&r#"$.x["a[0]"]"#.to_owned()), "{paths:?}");
 }
 
 /// Characterization of today's output for a document without unencodable keys:

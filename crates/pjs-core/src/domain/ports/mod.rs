@@ -40,11 +40,11 @@ pub use writer::{
 /// Time provider port (for testability)
 pub trait TimeProvider: Send + Sync {
     /// Get current timestamp
-    fn now(&self) -> chrono::DateTime<chrono::Utc>;
+    fn now(&self) -> jiff::Timestamp;
 
     /// Get current unix timestamp in milliseconds
     fn now_millis(&self) -> u64 {
-        self.now().timestamp_millis() as u64
+        self.now().as_millisecond() as u64
     }
 }
 
@@ -53,7 +53,7 @@ pub trait TimeProvider: Send + Sync {
 pub struct SystemTimeProvider;
 
 impl TimeProvider for SystemTimeProvider {
-    fn now(&self) -> chrono::DateTime<chrono::Utc> {
-        chrono::Utc::now()
+    fn now(&self) -> jiff::Timestamp {
+        jiff::Timestamp::now()
     }
 }

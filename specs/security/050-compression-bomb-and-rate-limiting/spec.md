@@ -22,7 +22,7 @@ code:
   - crates/pjs-core/src/infrastructure/http/middleware.rs
   - crates/pjs-core/src/infrastructure/http/serve.rs
   - crates/pjs-core/src/infrastructure/websocket/security.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 050: Compression-Bomb Protection and Per-IP Rate Limiting
@@ -75,7 +75,7 @@ Status: done.
 ## Functional Requirements: rate limiting
 
 ### FR-007 Configuration
-`RateLimitConfig { max_requests_per_window: u32, window_duration: Duration, max_connections_per_ip: usize, max_frame_size: usize, max_messages_per_second: u32, burst_allowance: u32, write_timeout: Duration }`. Defaults: 100 per 60 s, 10 connections, 1 MiB frame, 30 msg/s, burst 5, write timeout 10 s. `high_traffic`: 1000 / 50 / 100 / 20. `low_resource`: 20 / 2 / 256 KiB / 5 / 2 / 3 s.
+`RateLimitConfig { max_requests_per_window: u32, window_duration: Duration, max_connections_per_ip: usize, max_frame_size: usize, max_messages_per_second: u32, burst_allowance: u32, write_timeout: Duration }`. Defaults: 100 per 60 s, 10 connections, 1 MiB frame, 30 msg/s, burst 5, write timeout 10 s (`DEFAULT_WRITE_TIMEOUT`, defined once in `security::rate_limit`, compiled without the websocket features, and reused by the websocket protocol). `high_traffic`: 1000 / 50 / 100 / 20. `low_resource`: 20 / 2 / 256 KiB / 5 / 2 / 3 s.
 Status: done.
 
 ### FR-008 Request window
@@ -144,7 +144,7 @@ Status: done.
 2. `CompressionBombConfig` has `validate()` (#627), also run by `SecurityConfig::validate`: it rejects non-finite or non-positive `max_ratio`, zero `max_decompressed_size`/`max_compressed_size` (`ConfigError::MustBePositive`) and `check_interval_bytes > max_decompressed_size` (`ConfigError::InconsistentBounds`). `RateLimitConfig` remains `Deserialize`-able with no validation.
 3. Resolved by #599: `CompressionBombError` is carried typed inside `Error::CompressionBomb`.
 4. `CompressionBombDetector` has one production caller: `InMemoryDictionaryStore` uses `validate_pre_decompression` as a dictionary size gate. `SecureCompressor` decode paths have none ([[049-secure-byte-compression/spec|spec 049]]).
-5. `RateLimitConfig.write_timeout` lives in the rate-limit config but is a WebSocket sink concern; the WebSocket module has an independent `WRITE_TIMEOUT` constant (documented as needing manual mirroring).
+5. `RateLimitConfig.write_timeout` lives in the rate-limit config but is a WebSocket sink concern; since #703 the WebSocket module reuses `DEFAULT_WRITE_TIMEOUT` instead of an independent constant. The HTTP middleware uses this `RateLimitConfig` directly (the duplicate HTTP type was removed in #704).
 6. A `ClientRateLimit.requests` is a `Vec` with `retain` on each request: O(window count) per call.
 
 ## See Also

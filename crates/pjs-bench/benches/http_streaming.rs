@@ -154,7 +154,7 @@ fn frame_to_value(frame: &Frame) -> serde_json::Value {
         "type": format!("{:?}", frame.frame_type()),
         "priority": frame.priority().value(),
         "sequence": frame.sequence(),
-        "timestamp": frame.timestamp().to_rfc3339(),
+        "timestamp": frame.timestamp().to_string(),
         "payload": frame.payload(),
         "metadata": frame.metadata()
     })

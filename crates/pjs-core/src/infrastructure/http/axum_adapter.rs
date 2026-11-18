@@ -342,7 +342,7 @@ pub struct CreateSessionResponse {
     /// Newly assigned session identifier.
     pub session_id: String,
     /// Wall-clock instant after which the session expires.
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: jiff::Timestamp,
 }
 
 /// Request to start streaming data
@@ -496,7 +496,7 @@ where
 /// the WebSocket upgrade handler) so that peer address is populated; otherwise
 /// every request falls back to the same key (`127.0.0.1`). To trust
 /// `X-Forwarded-For`/`X-Real-IP` behind a reverse proxy, opt in via
-/// [`RateLimitConfig::with_trusted_proxies`](crate::infrastructure::http::middleware::RateLimitConfig::with_trusted_proxies).
+/// [`RateLimitMiddleware::with_trusted_proxies`](crate::infrastructure::http::middleware::RateLimitMiddleware::with_trusted_proxies).
 /// Returns 429 Too Many Requests with Retry-After header when limit exceeded.
 /// Adds X-RateLimit-* headers per RFC 6585.
 pub fn create_pjs_router_with_rate_limit<R, P, S>(
@@ -771,7 +771,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// any future or other route whose data source can genuinely stall while producing
 /// (e.g. a backpressured or slow upstream), and is retained as a defensible general
 /// mitigation rather than removed.
-const RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Apply the cross-cutting middleware stack shared by all router variants.
 ///
@@ -964,7 +964,7 @@ pub struct FrameQueryParams {
 // `create_pjs_router_with_rate_limit[_and_config]` and
 // `create_pjs_router_with_rate_limit_and_auth` above. It keys on the real
 // ConnectInfo<SocketAddr> peer address by default; see
-// `RateLimitConfig::with_trusted_proxies` to opt in to trusting
+// `RateLimitMiddleware::with_trusted_proxies` to opt in to trusting
 // X-Forwarded-For/X-Real-IP behind a known reverse proxy.
 
 /// PJS-specific errors for HTTP endpoints
@@ -1215,7 +1215,7 @@ mod tests {
         value_objects::{SessionId, StreamId},
     };
     use crate::test_support::MockRepository;
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     struct MockEventPublisher;
 
@@ -1328,7 +1328,7 @@ mod tests {
                     total_bytes: 0,
                     priority_distribution: PriorityDistribution::default(),
                     avg_frame_size: 0.0,
-                    creation_time: Utc::now(),
+                    creation_time: Timestamp::now(),
                     completion_time: None,
                     processing_duration: None,
                 })

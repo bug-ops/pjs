@@ -24,7 +24,7 @@ code:
   - crates/pjs-core/src/infrastructure/http/middleware.rs
   - crates/pjs-core/src/infrastructure/http/auth.rs
   - crates/pjs-core/src/security/rate_limit.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # HTTP middleware stack: layers, rate limiting, auth, security headers
@@ -75,11 +75,11 @@ When a `RateLimitMiddleware` is supplied, the stack shall key requests by client
 - on `LimitExceeded` return `429` with JSON `{"error":"Too Many Requests","message":..,"retry_after":N}`, `Retry-After: N` (seconds, rounded up, minimum 1) and the `X-RateLimit-*` headers;
 - on `CapacityExceeded` (tracked-client table full, `MAX_TRACKED_CLIENTS` = 100 000) return `503 Service Unavailable` with `Retry-After` equal to the cleanup interval (300 s) and without `X-RateLimit-*` headers.
 
-`RateLimitConfig` (HTTP): `max_requests_per_window` 100, `window_duration` 60 s, `trusted_proxies: None`. Builders: `new(requests_per_minute)`, `with_window`, `with_trusted_proxies`. `RateLimitMiddleware::new` spawns a periodic cleanup task (default 300 s) when inside a Tokio runtime; `from_limiter` shares an existing `Arc<ClientRateLimiter>`.
+`RateLimitMiddleware::new` takes `security::RateLimitConfig` (only `max_requests_per_window` 100 and `window_duration` 60 s apply to HTTP); there is no separate HTTP `RateLimitConfig` (removed in #704) and the 60 s default window lives only in `security`. `RateLimitMiddleware::new` spawns a periodic cleanup task (default 300 s) when inside a Tokio runtime; `from_limiter` shares an existing `Arc<ClientRateLimiter>`.
 
 ### FR-005 Trusted proxies
 
-By default `X-Forwarded-For` and `X-Real-IP` shall be ignored. When `TrustedProxyConfig { trusted_proxies }` is set and the TCP peer is in the allow-list, the limiter shall walk `X-Forwarded-For` right to left (all header lines joined), return the first entry not in the allow-list, stop at the first unparseable entry, then fall back to `X-Real-IP`, then to the peer address. Without `ConnectInfo` every client maps to `127.0.0.1` and a warning is logged once.
+By default `X-Forwarded-For` and `X-Real-IP` shall be ignored. When `TrustedProxyConfig { trusted_proxies }` is set through `RateLimitMiddleware::with_trusted_proxies` (the only way to configure proxies) and the TCP peer is in the allow-list, the limiter shall walk `X-Forwarded-For` right to left (all header lines joined), return the first entry not in the allow-list, stop at the first unparseable entry, then fall back to `X-Real-IP`, then to the peer address. Without `ConnectInfo` every client maps to `127.0.0.1` and a warning is logged once.
 
 ### FR-006 API-key authentication
 
@@ -98,7 +98,7 @@ By default `X-Forwarded-For` and `X-Real-IP` shall be ignored. When `TrustedProx
 
 ## Data Model
 
-`RateLimitConfig`, `TrustedProxyConfig`, `RateLimitMiddleware`/`RateLimitService`, `ApiKeyConfig`, `ApiKeyAuthLayer`/`ApiKeyAuthService`, `AuthConfigError`, `JwtConfig { decoding_key, validation }`, `JwtAuthLayer<C>`; core limiter types `ClientRateLimiter`, `RateLimitGuard`, `RateLimitError { LimitExceeded, ConnectionLimitExceeded, FrameTooLarge, CapacityExceeded }` in `security::rate_limit`.
+`TrustedProxyConfig`, `RateLimitMiddleware`/`RateLimitService`, `ApiKeyConfig`, `ApiKeyAuthLayer`/`ApiKeyAuthService`, `AuthConfigError`, `JwtConfig { decoding_key, validation }`, `JwtAuthLayer<C>`; core limiter types `ClientRateLimiter`, `RateLimitGuard`, `RateLimitError { LimitExceeded, ConnectionLimitExceeded, FrameTooLarge, CapacityExceeded }` in `security::rate_limit`.
 
 ## Edge Cases and Errors
 

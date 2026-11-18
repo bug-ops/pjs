@@ -484,7 +484,7 @@ mod duration_tests {
 
         let duration = stream.duration();
         assert!(duration.is_some());
-        assert!(duration.unwrap().num_milliseconds() >= 0);
+        assert!(duration.unwrap().as_millis() >= 0);
     }
 
     #[test]
@@ -613,7 +613,7 @@ mod timestamps_tests {
         let stream = Stream::new(session_id, source_data, StreamConfig::default());
 
         let created_at = stream.created_at();
-        assert!(created_at <= chrono::Utc::now());
+        assert!(created_at <= jiff::Timestamp::now());
     }
 
     #[test]

@@ -25,3 +25,13 @@ tasks
 .local
 .claude/settings.local.json
 CLAUDE.local.md
+
+# Credentials
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+!.env.example

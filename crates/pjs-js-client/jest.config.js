@@ -24,6 +24,7 @@ export default {
         useESM: true,
         tsconfig: {
           module: 'ESNext',
+          rootDir: '.',
           target: 'ES2020'
         }
       }

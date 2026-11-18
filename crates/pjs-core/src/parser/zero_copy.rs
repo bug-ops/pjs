@@ -515,13 +515,13 @@ impl<'a> LazyJsonValue<'a> {
     /// Convert to string (allocating if needed)
     pub fn to_string_lossy(&self) -> String {
         match self {
-            LazyJsonValue::StringBorrowed(bytes) => String::from_utf8_lossy(bytes).to_string(),
+            LazyJsonValue::StringBorrowed(bytes) => String::from_utf8_lossy(bytes).into_owned(),
             LazyJsonValue::StringOwned(s) => s.clone(),
-            LazyJsonValue::NumberSlice(bytes) => String::from_utf8_lossy(bytes).to_string(),
+            LazyJsonValue::NumberSlice(bytes) => String::from_utf8_lossy(bytes).into_owned(),
             LazyJsonValue::Boolean(b) => b.to_string(),
             LazyJsonValue::Null => "null".to_string(),
-            LazyJsonValue::ObjectSlice(bytes) => String::from_utf8_lossy(bytes).to_string(),
-            LazyJsonValue::ArraySlice(bytes) => String::from_utf8_lossy(bytes).to_string(),
+            LazyJsonValue::ObjectSlice(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            LazyJsonValue::ArraySlice(bytes) => String::from_utf8_lossy(bytes).into_owned(),
         }
     }
 

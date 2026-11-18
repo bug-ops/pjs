@@ -64,4 +64,4 @@ sequenceDiagram
 - No fuzz target; no benchmark for handlers (`gat_query_benchmarks` covers the query side).
 
 ## Security notes
-Input caps (FR-009), bounded frame batch (`MAX_FRAMES_PER_REQUEST`), timeouts bounded to avoid chrono panic, dictionary training skips errors rather than failing the request.
+Input caps (FR-009), bounded frame batch (`MAX_FRAMES_PER_REQUEST`), timeouts bounded to avoid timestamp overflow, dictionary training skips errors rather than failing the request.

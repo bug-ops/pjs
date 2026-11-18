@@ -5,7 +5,8 @@
 //!   blocking pool (the 32 KiB document since #683, and 64 KiB and up) include
 //!   the blocking-pool hop (6-10 us); their inline cost is the pre-#658 figure
 //!   in spec 066 and spec 075 FR-008.
-//! - `create_session_shapes`: the seven entry-dense shapes that calibrate the
+//! - `create_session_shapes`: the ten entry-dense shapes (the last three nest
+//!   objects two to four levels deep, #715) that calibrate the
 //!   offload gate (#683, #686), each sized just under the pre-#683 gate cost of
 //!   32768 byte-equivalents so that all of them plan inline in the baseline.
 //! - `spawn_blocking_round_trip`: fixed cost of the blocking-pool hop.
@@ -99,7 +100,7 @@ fn bench_plan_case(
                 ));
                 total += started.elapsed();
                 assert!(result.is_ok(), "{result:?}");
-                rt.block_on(controller.remove_session(owner, id));
+                controller.remove_session(owner, id);
             }
             total
         });
@@ -169,6 +170,21 @@ fn calibration_shapes() -> Vec<(&'static str, Value, bool)> {
         ("escape_strings", array_of(3640, &json!("\u{1}")), true),
         ("nested_arrays", array_of(8191, &json!([0])), true),
         ("small_objects", array_of(4095, &json!({"a": 0})), true),
+        (
+            "nested_objects_2",
+            array_of(2340, &json!({"a": {"b": 0}})),
+            true,
+        ),
+        (
+            "nested_objects_3",
+            array_of(1638, &json!({"a": {"b": {"c": 0}}})),
+            true,
+        ),
+        (
+            "nested_objects_4",
+            array_of(1260, &json!({"a": {"b": {"c": {"d": 0}}}})),
+            true,
+        ),
     ]
 }
 
@@ -237,7 +253,7 @@ fn bench_handle_frame_ack(c: &mut Criterion) {
                         tokio::spawn(async move {
                             for i in 0..ACKS_PER_TASK {
                                 let (owner, id) = sessions[(task * 31 + i) % CONNECTIONS];
-                                let result = controller.handle_frame_ack(owner, id, 0, 1).await;
+                                let result = controller.handle_frame_ack(owner, id, 0, 1);
                                 assert!(result.is_ok(), "{result:?}");
                             }
                         })

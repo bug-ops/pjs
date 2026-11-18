@@ -131,7 +131,7 @@ pub fn generate_metadata(
 
     metadata.insert(
         "generated_at".to_string(),
-        serde_json::json!(chrono::Utc::now().to_rfc3339()),
+        serde_json::json!(jiff::Timestamp::now().to_string()),
     );
 
     let item_count = size.item_count(dataset_type);

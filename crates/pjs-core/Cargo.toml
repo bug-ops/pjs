@@ -22,7 +22,6 @@ metrics-exporter-prometheus = { workspace = true, optional = true }
 brotli = { workspace = true, optional = true }
 
 bytes = { workspace = true }
-chrono = { workspace = true, features = ["serde"] }
 dashmap = { workspace = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
@@ -31,6 +30,7 @@ headers-accept = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true, features = ["http1", "http2", "server"] }
 hyper-util = { workspace = true, optional = true, features = ["server-auto", "tokio", "service"] }
+jiff = { workspace = true, features = ["std", "serde"] }
 jiter = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 mediatype = { workspace = true, optional = true }
@@ -53,7 +53,6 @@ tokio = { workspace = true, features = [
     "time",
     "macros",
     "net",
-    "parking_lot",
 ] }
 tokio-tungstenite = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
@@ -157,6 +156,11 @@ required-features = ["websocket-server"]
 name = "websocket_wire_level"
 path = "tests/websocket_wire_level.rs"
 required-features = ["websocket-server", "websocket-client"]
+
+[[test]]
+name = "websocket_server_reply_table_acceptance"
+path = "tests/websocket_server_reply_table_acceptance.rs"
+required-features = ["http-server", "websocket-server", "websocket-client"]
 
 [[example]]
 name = "simple_priority_demo"

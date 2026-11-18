@@ -14,7 +14,7 @@ related:
 code:
   - crates/pjs-core/src/infrastructure/websocket/protocol.rs
   - crates/pjs-core/src/infrastructure/websocket/planner.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan (as-built): WebSocket wire protocol
@@ -52,7 +52,7 @@ sequenceDiagram
 
 ## Public API surface
 
-`WsMessage` (incl. `StreamPatch`), `StreamOptions` (incl. `framing: Framing`), `Framing`, `WirePatch`, `WirePath`, `WireSegment`, `MAX_PATCH_PATH_DEPTH`, re-exported from `infrastructure::websocket`.
+`WsMessage` (incl. `StreamPatch`), `StreamOptions` (incl. `framing: Framing`), `Framing`, `WirePatch` (path is the domain `JsonPath`), `MaxFrameSize`, `MAX_PATCH_PATH_DEPTH`, re-exported from `infrastructure::websocket`.
 
 ## Contracts
 

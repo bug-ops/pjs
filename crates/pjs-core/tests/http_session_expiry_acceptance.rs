@@ -9,7 +9,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use pjson_rs::infrastructure::http::axum_adapter::create_pjs_router;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -42,7 +42,7 @@ async fn test_create_session_expires_at_equals_stored_expires_at() {
         .as_str()
         .expect("session_id")
         .to_owned();
-    let created_expiry: DateTime<Utc> = created["expires_at"]
+    let created_expiry: Timestamp = created["expires_at"]
         .as_str()
         .expect("expires_at")
         .parse()
@@ -60,7 +60,7 @@ async fn test_create_session_expires_at_equals_stored_expires_at() {
         .expect("get responds");
     assert_eq!(response.status(), StatusCode::OK);
     let stored = body_json(response).await;
-    let stored_expiry: DateTime<Utc> = stored["session"]["expires_at"]
+    let stored_expiry: Timestamp = stored["session"]["expires_at"]
         .as_str()
         .expect("stored expires_at")
         .parse()

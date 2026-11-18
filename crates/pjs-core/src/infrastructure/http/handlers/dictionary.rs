@@ -79,7 +79,7 @@ where
 mod tests {
     use super::*;
     use axum::{Router, body::to_bytes, http::Request, routing::get};
-    use chrono::Utc;
+    use jiff::Timestamp;
     use std::{collections::HashMap, sync::Arc};
     use tower::ServiceExt;
 
@@ -324,7 +324,7 @@ mod tests {
                     is_healthy: true,
                     active_streams: 0,
                     total_frames: 0,
-                    last_activity: Utc::now(),
+                    last_activity: Timestamp::now(),
                     error_rate: 0.0,
                     metrics: HashMap::new(),
                 })
@@ -424,7 +424,7 @@ mod tests {
                     total_bytes: 0,
                     priority_distribution: PriorityDistribution::default(),
                     avg_frame_size: 0.0,
-                    creation_time: Utc::now(),
+                    creation_time: Timestamp::now(),
                     completion_time: None,
                     processing_duration: None,
                 })

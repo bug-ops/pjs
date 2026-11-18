@@ -17,7 +17,7 @@ use crate::domain::{
     entities::Frame,
     value_objects::{Priority, SessionId},
 };
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -89,8 +89,8 @@ impl<T: super::gat::CacheGat> CacheExtensions for T {}
 #[derive(Debug, Clone, Default)]
 pub struct SessionQueryCriteria {
     states: Option<Vec<String>>,
-    created_after: Option<DateTime<Utc>>,
-    created_before: Option<DateTime<Utc>>,
+    created_after: Option<Timestamp>,
+    created_before: Option<Timestamp>,
     client_info_pattern: Option<String>,
     has_active_streams: Option<bool>,
     min_stream_count: Option<usize>,
@@ -113,13 +113,13 @@ impl SessionQueryCriteria {
 
     /// Match sessions created at or after this timestamp.
     #[must_use]
-    pub fn created_after(&self) -> Option<DateTime<Utc>> {
+    pub fn created_after(&self) -> Option<Timestamp> {
         self.created_after
     }
 
     /// Match sessions created at or before this timestamp.
     #[must_use]
-    pub fn created_before(&self) -> Option<DateTime<Utc>> {
+    pub fn created_before(&self) -> Option<Timestamp> {
         self.created_before
     }
 
@@ -170,14 +170,14 @@ impl SessionQueryCriteriaBuilder {
 
     /// Sets the lower bound on session creation time.
     #[must_use]
-    pub fn created_after(mut self, at: DateTime<Utc>) -> Self {
+    pub fn created_after(mut self, at: Timestamp) -> Self {
         self.criteria.created_after = Some(at);
         self
     }
 
     /// Sets the upper bound on session creation time.
     #[must_use]
-    pub fn created_before(mut self, at: DateTime<Utc>) -> Self {
+    pub fn created_before(mut self, at: Timestamp) -> Self {
         self.criteria.created_before = Some(at);
         self
     }
@@ -452,7 +452,7 @@ pub struct SessionHealthSnapshot {
     /// Total number of frames emitted by the session.
     pub total_frames: u64,
     /// Timestamp of the most recent activity within the session.
-    pub last_activity: DateTime<Utc>,
+    pub last_activity: Timestamp,
     /// Fraction of recent operations that returned errors, in `[0.0, 1.0]`.
     pub error_rate: f64,
     /// Free-form named metrics captured at snapshot time.
@@ -541,7 +541,7 @@ pub enum FramePresence {
 #[derive(Debug, Clone, Default)]
 pub struct StreamFilter {
     statuses: Option<NonEmptyStatuses>,
-    created_after: Option<DateTime<Utc>>,
+    created_after: Option<Timestamp>,
     has_frames: Option<FramePresence>,
 }
 
@@ -560,7 +560,7 @@ impl StreamFilter {
 
     /// Lower bound on stream creation time, if filtered.
     #[must_use]
-    pub fn created_after(&self) -> Option<DateTime<Utc>> {
+    pub fn created_after(&self) -> Option<Timestamp> {
         self.created_after
     }
 
@@ -575,7 +575,7 @@ impl StreamFilter {
 #[derive(Debug, Default)]
 pub struct StreamFilterBuilder {
     statuses: Option<Vec<StreamStatus>>,
-    created_after: Option<DateTime<Utc>>,
+    created_after: Option<Timestamp>,
     has_frames: Option<FramePresence>,
 }
 
@@ -589,7 +589,7 @@ impl StreamFilterBuilder {
 
     /// Sets the lower bound on stream creation time.
     #[must_use]
-    pub fn created_after(mut self, at: DateTime<Utc>) -> Self {
+    pub fn created_after(mut self, at: Timestamp) -> Self {
         self.created_after = Some(at);
         self
     }
@@ -657,9 +657,9 @@ pub struct StreamStatistics {
     /// Average payload size per frame, in bytes.
     pub avg_frame_size: f64,
     /// Timestamp when the stream was created.
-    pub creation_time: DateTime<Utc>,
+    pub creation_time: Timestamp,
     /// Timestamp when the stream completed, if it has.
-    pub completion_time: Option<DateTime<Utc>>,
+    pub completion_time: Option<Timestamp>,
     /// Total processing duration from start to completion, if completed.
     pub processing_duration: Option<std::time::Duration>,
 }
@@ -1021,9 +1021,9 @@ mod tests {
 
     #[test]
     fn test_session_query_criteria_with_time_range() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let criteria = SessionQueryCriteria {
-            created_after: Some(now - chrono::Duration::hours(1)),
+            created_after: Some(now - jiff::SignedDuration::from_hours(1)),
             created_before: Some(now),
             ..Default::default()
         };
@@ -1077,10 +1077,10 @@ mod tests {
 
     #[test]
     fn test_criteria_build_after_greater_than_before_rejected() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let err = SessionQueryCriteria::builder()
             .created_after(now)
-            .created_before(now - chrono::Duration::hours(1))
+            .created_before(now - jiff::SignedDuration::from_hours(1))
             .build()
             .unwrap_err();
         assert!(format!("{}", err).contains("created_after"));
@@ -1097,10 +1097,10 @@ mod tests {
 
     #[test]
     fn test_criteria_build_valid_criteria_accepted() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let criteria = SessionQueryCriteria::builder()
             .states(vec!["active".to_string()])
-            .created_after(now - chrono::Duration::hours(1))
+            .created_after(now - jiff::SignedDuration::from_hours(1))
             .created_before(now)
             .min_stream_count(1)
             .max_stream_count(10)
@@ -1145,7 +1145,7 @@ mod tests {
     fn test_stream_filter_clone() {
         let filter = StreamFilter::builder()
             .has_frames(FramePresence::WithFrames)
-            .created_after(Utc::now())
+            .created_after(Timestamp::now())
             .build()
             .unwrap();
         let cloned = filter.clone();
@@ -1351,7 +1351,7 @@ mod tests {
             is_healthy: true,
             active_streams: 5,
             total_frames: 1000,
-            last_activity: Utc::now(),
+            last_activity: Timestamp::now(),
             error_rate: 0.01,
             metrics,
         };
@@ -1371,7 +1371,7 @@ mod tests {
             is_healthy: false,
             active_streams: 0,
             total_frames: 0,
-            last_activity: Utc::now(),
+            last_activity: Timestamp::now(),
             error_rate: 0.5,
             metrics: HashMap::new(),
         };
@@ -1388,7 +1388,7 @@ mod tests {
             is_healthy: true,
             active_streams: 3,
             total_frames: 500,
-            last_activity: Utc::now(),
+            last_activity: Timestamp::now(),
             error_rate: 0.0,
             metrics,
         };
@@ -1452,8 +1452,8 @@ mod tests {
             total_bytes: 1024 * 1024,
             priority_distribution: PriorityDistribution::default(),
             avg_frame_size: 10240.0,
-            creation_time: Utc::now(),
-            completion_time: Some(Utc::now()),
+            creation_time: Timestamp::now(),
+            completion_time: Some(Timestamp::now()),
             processing_duration: Some(Duration::from_secs(60)),
         };
         assert_eq!(stats.total_frames, 100);
@@ -1470,7 +1470,7 @@ mod tests {
             total_bytes: 512 * 1024,
             priority_distribution: PriorityDistribution::default(),
             avg_frame_size: 10485.76,
-            creation_time: Utc::now(),
+            creation_time: Timestamp::now(),
             completion_time: None,
             processing_duration: None,
         };
@@ -1485,7 +1485,7 @@ mod tests {
             total_bytes: 256 * 1024,
             priority_distribution: PriorityDistribution::default(),
             avg_frame_size: 10485.76,
-            creation_time: Utc::now(),
+            creation_time: Timestamp::now(),
             completion_time: None,
             processing_duration: None,
         };

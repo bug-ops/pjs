@@ -7,6 +7,7 @@
 
 use super::{Framing, PlanOptions, StreamOptions, exceeds_plan_cost, exceeds_size, plan_stream};
 use crate::domain::SessionId;
+use crate::infrastructure::websocket::protocol::MaxFrameSize;
 use serde_json::{Value, json};
 
 const GATE: usize = 32 * 1024;
@@ -176,12 +177,11 @@ fn test_plan_stream_total_bytes_is_at_least_the_serialized_document() {
         let actual = serialized_len(&document);
         for framing in [Framing::Merge, Framing::Patch] {
             for max_frame_size in [1024, 2048, 4096, 64 * 1024] {
-                let options = PlanOptions::try_from(&StreamOptions {
-                    max_frame_size,
+                let options = PlanOptions::from(&StreamOptions {
+                    max_frame_size: MaxFrameSize::try_from(max_frame_size).expect("valid size"),
                     framing,
                     ..StreamOptions::default()
-                })
-                .expect("valid options");
+                });
 
                 if let Ok(plan) = plan_stream(SessionId::new(), document.clone(), &options) {
                     assert!(

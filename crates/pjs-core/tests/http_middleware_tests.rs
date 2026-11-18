@@ -24,11 +24,12 @@ use axum::{
 };
 use core::assert_matches;
 use pjson_rs::infrastructure::http::{
-    HttpServerConfig, RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig,
+    HttpServerConfig, RateLimitMiddleware, TrustedProxyConfig,
     auth::{ApiKeyAuthLayer, ApiKeyConfig, AuthConfigError},
     axum_adapter::{PjsAppState, create_pjs_router, create_pjs_router_with_auth},
     create_pjs_router_with_rate_limit_and_auth,
 };
+use pjson_rs::security::RateLimitConfig;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tower::ServiceExt;
@@ -255,15 +256,29 @@ async fn test_api_key_auth_unauthorized_response_is_json() {
 // RateLimitMiddleware — enforcement
 // ============================================================================
 
+fn limit(requests: u32, window: Duration) -> RateLimitConfig {
+    RateLimitConfig {
+        max_requests_per_window: requests,
+        window_duration: window,
+        ..RateLimitConfig::default()
+    }
+}
+
 fn make_rate_limit_router(config: RateLimitConfig) -> Router {
     Router::new()
         .route("/test", get(ok_handler))
         .layer(RateLimitMiddleware::new(config))
 }
 
+fn make_trusted_rate_limit_router(config: RateLimitConfig, trusted: TrustedProxyConfig) -> Router {
+    Router::new()
+        .route("/test", get(ok_handler))
+        .layer(RateLimitMiddleware::new(config).with_trusted_proxies(trusted))
+}
+
 #[tokio::test]
 async fn test_rate_limit_requests_within_budget_return_200() {
-    let config = RateLimitConfig::new(10).with_window(Duration::from_secs(60));
+    let config = limit(10, Duration::from_secs(60));
     let app = make_rate_limit_router(config);
 
     let req = Request::builder().uri("/test").body(Body::empty()).unwrap();
@@ -274,7 +289,7 @@ async fn test_rate_limit_requests_within_budget_return_200() {
 
 #[tokio::test]
 async fn test_rate_limit_response_includes_headers() {
-    let config = RateLimitConfig::new(10).with_window(Duration::from_secs(60));
+    let config = limit(10, Duration::from_secs(60));
     let app = make_rate_limit_router(config);
 
     let req = Request::builder().uri("/test").body(Body::empty()).unwrap();
@@ -298,7 +313,7 @@ async fn test_rate_limit_response_includes_headers() {
 #[tokio::test]
 async fn test_rate_limit_over_limit_returns_429() {
     // Limit of 1 request — the second request must be rejected.
-    let config = RateLimitConfig::new(1).with_window(Duration::from_millis(500));
+    let config = limit(1, Duration::from_millis(500));
     let app = make_rate_limit_router(config);
 
     // First request — should succeed.
@@ -322,7 +337,7 @@ async fn test_rate_limit_over_limit_returns_429() {
 
 #[tokio::test]
 async fn test_rate_limit_429_includes_retry_after() {
-    let config = RateLimitConfig::new(1).with_window(Duration::from_millis(500));
+    let config = limit(1, Duration::from_millis(500));
     let app = make_rate_limit_router(config);
 
     // Exhaust the budget.
@@ -367,7 +382,7 @@ fn request_from_peer(peer_addr: ConnectInfo<SocketAddr>, forwarded_for: &str) ->
 /// the header is ignored by default and cannot be used to dodge the limiter.
 #[tokio::test]
 async fn test_rate_limit_ignores_spoofed_forwarded_for_by_default() {
-    let config = RateLimitConfig::new(1).with_window(Duration::from_secs(60));
+    let config = limit(1, Duration::from_secs(60));
     let app = make_rate_limit_router(config);
 
     let same_peer = peer([203, 0, 113, 9], 51000);
@@ -395,7 +410,7 @@ async fn test_rate_limit_ignores_spoofed_forwarded_for_by_default() {
 /// when they send the same `X-Forwarded-For` value.
 #[tokio::test]
 async fn test_rate_limit_keys_on_real_peer_not_header() {
-    let config = RateLimitConfig::new(1).with_window(Duration::from_secs(60));
+    let config = limit(1, Duration::from_secs(60));
     let app = make_rate_limit_router(config);
 
     let resp1 = app
@@ -423,10 +438,8 @@ async fn test_rate_limit_keys_on_real_peer_not_header() {
 #[tokio::test]
 async fn test_rate_limit_trusted_proxy_honors_forwarded_for() {
     let proxy_addr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
-    let config = RateLimitConfig::new(1)
-        .with_window(Duration::from_secs(60))
-        .with_trusted_proxies(TrustedProxyConfig::new(vec![proxy_addr]));
-    let app = make_rate_limit_router(config);
+    let config = limit(1, Duration::from_secs(60));
+    let app = make_trusted_rate_limit_router(config, TrustedProxyConfig::new(vec![proxy_addr]));
 
     let via_proxy = peer([10, 0, 0, 1], 8080);
 
@@ -455,10 +468,8 @@ async fn test_rate_limit_trusted_proxy_honors_forwarded_for() {
 #[tokio::test]
 async fn test_rate_limit_untrusted_peer_ignores_forwarded_for_even_when_feature_enabled() {
     let trusted_proxy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
-    let config = RateLimitConfig::new(1)
-        .with_window(Duration::from_secs(60))
-        .with_trusted_proxies(TrustedProxyConfig::new(vec![trusted_proxy]));
-    let app = make_rate_limit_router(config);
+    let config = limit(1, Duration::from_secs(60));
+    let app = make_trusted_rate_limit_router(config, TrustedProxyConfig::new(vec![trusted_proxy]));
 
     let untrusted_peer = peer([203, 0, 113, 50], 9000);
 
@@ -487,10 +498,8 @@ async fn test_rate_limit_untrusted_peer_ignores_forwarded_for_even_when_feature_
 #[tokio::test]
 async fn test_rate_limit_trusted_proxy_matches_ipv4_mapped_ipv6_peer() {
     let trusted_proxy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
-    let config = RateLimitConfig::new(1)
-        .with_window(Duration::from_secs(60))
-        .with_trusted_proxies(TrustedProxyConfig::new(vec![trusted_proxy]));
-    let app = make_rate_limit_router(config);
+    let config = limit(1, Duration::from_secs(60));
+    let app = make_trusted_rate_limit_router(config, TrustedProxyConfig::new(vec![trusted_proxy]));
 
     let mapped_peer = ConnectInfo(SocketAddr::new(
         IpAddr::V6(Ipv4Addr::new(10, 0, 0, 1).to_ipv6_mapped()),
@@ -521,10 +530,8 @@ async fn test_rate_limit_trusted_proxy_matches_ipv4_mapped_ipv6_peer() {
 #[tokio::test]
 async fn test_rate_limit_leftmost_forwarded_for_entry_is_ignored() {
     let trusted_proxy = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
-    let config = RateLimitConfig::new(1)
-        .with_window(Duration::from_secs(60))
-        .with_trusted_proxies(TrustedProxyConfig::new(vec![trusted_proxy]));
-    let app = make_rate_limit_router(config);
+    let config = limit(1, Duration::from_secs(60));
+    let app = make_trusted_rate_limit_router(config, TrustedProxyConfig::new(vec![trusted_proxy]));
 
     let via_proxy = peer([198, 51, 100, 1], 443);
 
@@ -555,10 +562,8 @@ async fn test_rate_limit_leftmost_forwarded_for_entry_is_ignored() {
 #[tokio::test]
 async fn test_rate_limit_malformed_rightmost_entry_fails_closed() {
     let trusted_proxy = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
-    let config = RateLimitConfig::new(1)
-        .with_window(Duration::from_secs(60))
-        .with_trusted_proxies(TrustedProxyConfig::new(vec![trusted_proxy]));
-    let app = make_rate_limit_router(config);
+    let config = limit(1, Duration::from_secs(60));
+    let app = make_trusted_rate_limit_router(config, TrustedProxyConfig::new(vec![trusted_proxy]));
 
     let via_proxy = peer([198, 51, 100, 1], 443);
 
@@ -591,10 +596,8 @@ async fn test_rate_limit_malformed_rightmost_entry_fails_closed() {
 #[tokio::test]
 async fn test_rate_limit_reads_all_forwarded_for_header_lines() {
     let trusted_proxy = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
-    let config = RateLimitConfig::new(1)
-        .with_window(Duration::from_secs(60))
-        .with_trusted_proxies(TrustedProxyConfig::new(vec![trusted_proxy]));
-    let app = make_rate_limit_router(config);
+    let config = limit(1, Duration::from_secs(60));
+    let app = make_trusted_rate_limit_router(config, TrustedProxyConfig::new(vec![trusted_proxy]));
 
     let via_proxy = peer([198, 51, 100, 1], 443);
 
@@ -795,7 +798,7 @@ async fn test_router_with_auth_sessions_bearer_returns_200() {
 /// GET /pjs/health with a generous rate limit and no auth header must return 200.
 #[tokio::test]
 async fn test_router_rl_auth_health_no_auth_returns_200() {
-    let rate_limit = RateLimitConfig::new(1000).with_window(Duration::from_secs(60));
+    let rate_limit = limit(1000, Duration::from_secs(60));
     let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
 
     let req = Request::builder()
@@ -811,7 +814,7 @@ async fn test_router_rl_auth_health_no_auth_returns_200() {
 /// POST /pjs/sessions with a generous rate limit and no auth must return 401.
 #[tokio::test]
 async fn test_router_rl_auth_sessions_no_auth_returns_401() {
-    let rate_limit = RateLimitConfig::new(1000).with_window(Duration::from_secs(60));
+    let rate_limit = limit(1000, Duration::from_secs(60));
     let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
 
     let req = Request::builder()
@@ -828,7 +831,7 @@ async fn test_router_rl_auth_sessions_no_auth_returns_401() {
 /// POST /pjs/sessions with a generous rate limit and valid auth must succeed.
 #[tokio::test]
 async fn test_router_rl_auth_sessions_valid_auth_succeeds() {
-    let rate_limit = RateLimitConfig::new(1000).with_window(Duration::from_secs(60));
+    let rate_limit = limit(1000, Duration::from_secs(60));
     let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
 
     let req = Request::builder()
@@ -850,7 +853,7 @@ async fn test_router_rl_auth_sessions_valid_auth_succeeds() {
 /// With a tight rate limit (1 request), the second request to /pjs/health must return 429.
 #[tokio::test]
 async fn test_router_rl_auth_health_rate_limited() {
-    let rate_limit = RateLimitConfig::new(1).with_window(Duration::from_millis(500));
+    let rate_limit = limit(1, Duration::from_millis(500));
     let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
 
     let req1 = Request::builder()
@@ -884,7 +887,7 @@ async fn test_router_rl_auth_health_rate_limited() {
 /// evaluated first — it is the outermost layer.
 #[tokio::test]
 async fn test_router_rl_auth_sessions_rate_limit_before_auth() {
-    let rate_limit = RateLimitConfig::new(1).with_window(Duration::from_millis(500));
+    let rate_limit = limit(1, Duration::from_millis(500));
     let app = build_rate_limit_and_auth_router("test-api-key", rate_limit);
 
     // First request: within rate limit budget, no auth → auth layer rejects with 401.

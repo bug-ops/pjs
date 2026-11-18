@@ -360,6 +360,14 @@ npm install
 npm run build
 ```
 
+### Verify (matches CI)
+
+```bash
+npm ci && npm run typecheck && npm run lint && npm test
+```
+
+Run `npm ci` first: a stale `node_modules` fails lint (for example `Cannot find package '@eslint/js'`) while CI, which installs from the lockfile, passes.
+
 ### Testing
 
 ```bash

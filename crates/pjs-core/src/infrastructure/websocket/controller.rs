@@ -5,14 +5,13 @@
 
 use super::{
     planner::{self, MAX_PLAN_FRAMES, MAX_QUEUED_OUTGOING_BYTES, Plan, PlanOptions},
-    protocol::{FixedError, StreamOptions, WsMessage},
+    protocol::{ServerReply, StreamOptions, WsMessage},
 };
 use crate::{
     Error as PjsError, Result as PjsResult,
     domain::SessionId,
-    error::{PlanError, StreamOptionsError},
+    error::PlanError,
     infrastructure::{bounded_channel::ByteBoundedSender, http::ShutdownSignal},
-    security::RateLimitGuard,
 };
 use parking_lot::RwLock;
 use serde_json::Value;
@@ -26,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{runtime::Handle, sync::Semaphore, task::JoinHandle};
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, warn};
 use uuid::Uuid;
 
 /// Identity of one accepted WebSocket connection.
@@ -93,8 +92,6 @@ pub(crate) struct WebSocketStreamSession {
     pub unsent_plan_bytes: usize,
     /// Adaptive streaming metrics derived from client acks.
     pub client_metrics: ClientMetrics,
-    /// Rate-limit guard scoped to this session, if installed.
-    pub rate_limit_guard: Option<RateLimitGuard>,
     /// Distinguishes this session from an earlier one that used the same id
     /// on the same connection, so a finished task never removes its
     /// successor.
@@ -158,20 +155,23 @@ impl ClientMetrics {
     /// from client-supplied `processing_time_ms` in [`Self::update_processing_time`],
     /// which is unvalidated wire input (see `handle_frame_ack`). Without a ceiling, a
     /// single malicious `FrameAck` could drive the `tokio::time::sleep` in
-    /// `AdaptiveStreamController::stream_frames` to an arbitrarily long duration and
+    /// `SessionTask::stream_frames` to an arbitrarily long duration and
     /// stall that session's stream.
     pub fn recommended_frame_delay(&self) -> Duration {
         if self.is_client_slow() {
             Duration::from_millis((self.average_processing_time_ms * 0.5) as u64)
                 .min(MAX_ADAPTIVE_FRAME_DELAY)
         } else {
-            Duration::from_millis(10) // Fast clients get minimal delay
+            MIN_ADAPTIVE_FRAME_DELAY
         }
     }
 }
 
 /// Upper bound on the per-frame delay returned by [`ClientMetrics::recommended_frame_delay`].
 const MAX_ADAPTIVE_FRAME_DELAY: Duration = Duration::from_secs(1);
+
+/// Per-frame delay for a client that keeps up, and for a session that is gone.
+const MIN_ADAPTIVE_FRAME_DELAY: Duration = Duration::from_millis(10);
 
 /// Longest a single frame may wait for room in the connection's channel
 /// before the session is dropped with a `408`.
@@ -183,7 +183,7 @@ const MAX_ADAPTIVE_FRAME_DELAY: Duration = Duration::from_secs(1);
 const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Fixed part of a stream's absolute deadline.
-const STREAM_GRACE: Duration = Duration::from_secs(120);
+const STREAM_GRACE: Duration = Duration::from_mins(2);
 
 /// Slowest average delivery rate (bytes per second) a stream may sustain
 /// beyond [`STREAM_GRACE`]; larger plans get proportionally longer.
@@ -222,8 +222,10 @@ fn paced_delay(adaptive: Duration, floor: Option<Duration>, frames: usize) -> Du
 ///
 /// The gate estimates worker time rather than size: a scalar string costs its
 /// serialized size, every array item and object entry adds a per-element weight,
-/// object-root entries and integers add more, and a float carries a fixed
-/// weight (#683). Because of these weights the 32 KiB mixed reference document
+/// object-root entries, nested containers and integers add more, and a float
+/// carries a fixed weight (#683, #715; the nested-object shapes planned
+/// 1.17x-1.41x the reference without the nested weight, within 0.97x with it).
+/// Because of these weights the 32 KiB mixed reference document
 /// itself is now planned on the blocking pool; the inline limit is lower in
 /// bytes for entry-dense documents. For the calibration shapes of the
 /// `websocket_controller` bench under default (Merge) framing, the largest
@@ -272,9 +274,10 @@ where
         .acquire_owned()
         .await
         .expect("plan permits are never closed");
+    let span = tracing::Span::current();
     let joined = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        plan()
+        span.in_scope(plan)
     })
     .await;
     match joined {
@@ -333,7 +336,6 @@ pub(super) fn connection_plan_budget_for(inbound_frame_size: usize) -> NonZeroUs
 ///     match error {
 ///         CreateSessionError::AlreadyExists(_) => "exists",
 ///         CreateSessionError::TooManySessions { .. } => "cap",
-///         CreateSessionError::InvalidOptions(_) => "options",
 ///         CreateSessionError::PlanRejected(_) => "plan",
 ///     }
 /// }
@@ -346,7 +348,6 @@ pub(super) fn connection_plan_budget_for(inbound_frame_size: usize) -> NonZeroUs
 ///     match error {
 ///         CreateSessionError::AlreadyExists(_) => "exists",
 ///         CreateSessionError::TooManySessions { .. } => "cap",
-///         CreateSessionError::InvalidOptions(_) => "options",
 ///         CreateSessionError::PlanRejected(_) => "plan",
 ///         _ => "other",
 ///     }
@@ -365,9 +366,6 @@ pub enum CreateSessionError {
         /// The per-connection cap that was reached.
         limit: NonZeroUsize,
     },
-    /// The stream options failed validation.
-    #[error("invalid stream options")]
-    InvalidOptions(#[source] StreamOptionsError),
     /// The planned frames were rejected.
     #[error("stream plan rejected")]
     PlanRejected(#[source] PlanError),
@@ -378,7 +376,6 @@ impl From<CreateSessionError> for PjsError {
         match error {
             CreateSessionError::AlreadyExists(id) => PjsError::SessionAlreadyExists(id),
             CreateSessionError::TooManySessions { limit } => PjsError::TooManySessions { limit },
-            CreateSessionError::InvalidOptions(e) => PjsError::InvalidStreamOptions(e),
             CreateSessionError::PlanRejected(e) => PjsError::PlanRejected(e),
         }
     }
@@ -405,6 +402,18 @@ impl ConnectionEntry {
             .live_plan_bytes
             .saturating_sub(session.unsent_plan_bytes);
         Some(session)
+    }
+
+    /// Whether this connection may take one more session with `session_id`:
+    /// the id must be free and the live-session cap not reached.
+    fn admit(&self, session_id: SessionId, max: NonZeroUsize) -> Result<(), CreateSessionError> {
+        if self.sessions.contains_key(&session_id) {
+            Err(CreateSessionError::AlreadyExists(session_id))
+        } else if self.sessions.len() >= max.get() {
+            Err(CreateSessionError::TooManySessions { limit: max })
+        } else {
+            Ok(())
+        }
     }
 
     fn abort_all(&mut self) -> usize {
@@ -443,11 +452,147 @@ enum StreamAbort {
 }
 
 impl StreamAbort {
-    fn reply(&self) -> FixedError {
+    fn reply(&self) -> ServerReply {
         match self {
-            Self::Undeliverable => FixedError::FRAME_EXCEEDS_BUDGET,
-            Self::Stalled => FixedError::STREAM_STALLED,
+            Self::Undeliverable => ServerReply::FrameExceedsBudget,
+            Self::Stalled => ServerReply::StreamStalled,
         }
+    }
+}
+
+/// One running session's identity and its handle on the shared connection map.
+///
+/// `generation` tells this session from an earlier one that used the same id on
+/// the same connection, so a finished task never removes its successor.
+struct SessionTask {
+    owner: ConnectionId,
+    session_id: SessionId,
+    generation: u64,
+    connections: Connections,
+}
+
+impl SessionTask {
+    /// Streams `plan` to `outgoing` under the stall and absolute deadlines,
+    /// then removes the session and announces completion.
+    async fn stream_frames(
+        self,
+        plan: Vec<String>,
+        frame_interval: Option<Duration>,
+        outgoing: Option<ByteBoundedSender<String>>,
+    ) {
+        let deadline = stream_deadline(plan.iter().map(String::len).sum());
+        let sent = tokio::time::timeout(
+            deadline,
+            self.send_plan(plan, frame_interval, outgoing.as_ref()),
+        )
+        .await;
+        match sent {
+            Ok(Ok(())) => {
+                // The session stops being live before its completion is
+                // visible, so a peer that has seen StreamComplete can
+                // immediately reuse the id or open another session without a
+                // spurious 409 or 429.
+                self.remove_if_generation();
+                if let Ok(complete) = serde_json::to_string(&WsMessage::StreamComplete {
+                    session_id: self.session_id,
+                }) {
+                    enqueue(outgoing.as_ref(), complete).await;
+                }
+            }
+            Ok(Err(abort)) => {
+                self.remove_if_generation();
+                self.report_dropped(outgoing.as_ref(), abort.reply());
+            }
+            Err(_elapsed) => {
+                self.remove_if_generation();
+                self.report_dropped(outgoing.as_ref(), ServerReply::StreamDeadlineExceeded);
+            }
+        }
+    }
+
+    async fn send_plan(
+        &self,
+        plan: Vec<String>,
+        frame_interval: Option<Duration>,
+        outgoing: Option<&ByteBoundedSender<String>>,
+    ) -> Result<(), StreamAbort> {
+        let frame_count = plan.len();
+        for text in plan {
+            let len = text.len();
+            match enqueue(outgoing, text).await {
+                Enqueued::Sent => {}
+                Enqueued::Closed => return Err(StreamAbort::Undeliverable),
+                Enqueued::Stalled => return Err(StreamAbort::Stalled),
+            }
+            let adaptive = self.release_sent(len);
+            tokio::time::sleep(paced_delay(adaptive, frame_interval, frame_count)).await;
+        }
+        Ok(())
+    }
+
+    /// Releases `len` sent plan bytes of the session and returns the adaptive
+    /// delay recommended for it.
+    ///
+    /// Takes the global write lock once per frame. Benchmarked at about
+    /// 10 M lock operations per second under 8 or more contending tasks
+    /// (`websocket_controller` bench), enough for roughly 3700 concurrently
+    /// streaming sessions at the fastest pacing, so the lock is kept.
+    fn release_sent(&self, len: usize) -> Duration {
+        let mut connections = self.connections.write();
+        let Some(entry) = connections.get_mut(&self.owner) else {
+            return MIN_ADAPTIVE_FRAME_DELAY;
+        };
+        let Some(session) = entry
+            .sessions
+            .get_mut(&self.session_id)
+            .filter(|session| session.generation == self.generation)
+        else {
+            return MIN_ADAPTIVE_FRAME_DELAY;
+        };
+        let released = len.min(session.unsent_plan_bytes);
+        session.unsent_plan_bytes -= released;
+        let delay = session.client_metrics.recommended_frame_delay();
+        entry.live_plan_bytes = entry.live_plan_bytes.saturating_sub(released);
+        delay
+    }
+
+    /// Tells the peer its stream was dropped, if its channel has room.
+    ///
+    /// Best effort: on a full channel nothing is sent, which is the usual case
+    /// for a stall or a deadline.
+    fn report_dropped(&self, outgoing: Option<&ByteBoundedSender<String>>, dropped: ServerReply) {
+        let session_id = self.session_id;
+        let Some(outgoing) = outgoing else {
+            return;
+        };
+        let reply = WsMessage::Error {
+            session_id: Some(session_id),
+            error: dropped.reason().to_owned(),
+            code: dropped.code(),
+        };
+        let Ok(json) = serde_json::to_string(&reply) else {
+            return;
+        };
+        let len = json.len();
+        if outgoing.try_send(json, len).is_err() {
+            debug!(%session_id, "Outgoing channel full or closed; stopped session");
+        } else {
+            warn!(%session_id, reason = dropped.reason(), "Dropped session");
+        }
+    }
+
+    /// Removes the session only if it is still the one this task started.
+    fn remove_if_generation(&self) {
+        let mut connections = self.connections.write();
+        if let Some(entry) = connections.get_mut(&self.owner)
+            && entry
+                .sessions
+                .get(&self.session_id)
+                .is_some_and(|session| session.generation == self.generation)
+        {
+            entry.remove_session(self.session_id);
+        }
+        prune_if_idle(&mut connections, self.owner);
     }
 }
 
@@ -593,8 +738,7 @@ impl AdaptiveStreamController {
     ///
     /// # Errors
     ///
-    /// Returns [`CreateSessionError::InvalidOptions`] if `options` fail
-    /// validation, [`CreateSessionError::PlanRejected`] if the document cannot
+    /// Returns [`CreateSessionError::PlanRejected`] if the document cannot
     /// be planned within the limits or `owner`'s plan budget,
     /// [`CreateSessionError::AlreadyExists`] if `owner` already has a
     /// live session with `session_id`, and
@@ -637,8 +781,7 @@ impl AdaptiveStreamController {
         data: Value,
         options: StreamOptions,
     ) -> Result<(), CreateSessionError> {
-        let plan_options =
-            PlanOptions::try_from(&options).map_err(CreateSessionError::InvalidOptions)?;
+        let plan_options = PlanOptions::from(&options);
         // Cheap rejections first: planning is O(payload) and would be wasted on
         // a duplicate id or a full connection. The exact budget check needs the
         // plan size and runs after planning; everything is re-checked under the
@@ -672,38 +815,35 @@ impl AdaptiveStreamController {
             frame_interval,
             unsent_plan_bytes: plan.total_bytes,
             client_metrics: ClientMetrics::default(),
-            rate_limit_guard: None, // Will be set when connection is established
             generation: self.next_generation.fetch_add(1, Ordering::Relaxed),
             stream_task: None, // Set when streaming starts
         };
 
         let mut connections = self.connections.write();
         let entry = connections.entry(owner).or_default();
-        let outcome = if entry.sessions.contains_key(&session_id) {
-            Err(CreateSessionError::AlreadyExists(session_id))
-        } else if entry.sessions.len() >= self.max_sessions_per_connection.get() {
-            Err(CreateSessionError::TooManySessions {
-                limit: self.max_sessions_per_connection,
-            })
-        } else if entry.live_plan_bytes.saturating_add(plan.total_bytes)
-            > self.connection_plan_budget.get()
-        {
-            Err(CreateSessionError::PlanRejected(
-                PlanError::ConnectionBudgetExhausted {
-                    live: entry.live_plan_bytes,
-                    requested: plan.total_bytes,
-                    max: self.connection_plan_budget.get(),
-                },
-            ))
-        } else {
-            entry.live_plan_bytes += plan.total_bytes;
-            entry.sessions.insert(session_id, session);
-            Ok(())
-        };
+        let outcome = entry
+            .admit(session_id, self.max_sessions_per_connection)
+            .and_then(|()| {
+                if entry.live_plan_bytes.saturating_add(plan.total_bytes)
+                    > self.connection_plan_budget.get()
+                {
+                    Err(CreateSessionError::PlanRejected(
+                        PlanError::ConnectionBudgetExhausted {
+                            live: entry.live_plan_bytes,
+                            requested: plan.total_bytes,
+                            max: self.connection_plan_budget.get(),
+                        },
+                    ))
+                } else {
+                    entry.live_plan_bytes += plan.total_bytes;
+                    entry.sessions.insert(session_id, session);
+                    Ok(())
+                }
+            });
         if outcome.is_err() {
             prune_if_idle(&mut connections, owner);
         } else {
-            info!("Created streaming session: {}", session_id);
+            info!(%session_id, "Created streaming session");
         }
         outcome
     }
@@ -719,15 +859,8 @@ impl AdaptiveStreamController {
         let Some(entry) = connections.get(&owner) else {
             return Ok(0);
         };
-        if entry.sessions.contains_key(&session_id) {
-            Err(CreateSessionError::AlreadyExists(session_id))
-        } else if entry.sessions.len() >= self.max_sessions_per_connection.get() {
-            Err(CreateSessionError::TooManySessions {
-                limit: self.max_sessions_per_connection,
-            })
-        } else {
-            Ok(entry.live_plan_bytes)
-        }
+        entry.admit(session_id, self.max_sessions_per_connection)?;
+        Ok(entry.live_plan_bytes)
     }
 
     /// Start streaming frames for `owner`'s session.
@@ -739,11 +872,7 @@ impl AdaptiveStreamController {
     /// # Errors
     ///
     /// Returns [`PjsError::UnknownSession`] if `owner` has no such session.
-    pub async fn start_streaming(
-        &self,
-        owner: ConnectionId,
-        session_id: SessionId,
-    ) -> PjsResult<()> {
+    pub fn start_streaming(&self, owner: ConnectionId, session_id: SessionId) -> PjsResult<()> {
         let mut connections = self.connections.write();
         let entry = connections
             .get_mut(&owner)
@@ -755,26 +884,27 @@ impl AdaptiveStreamController {
             .ok_or(PjsError::UnknownSession(session_id))?;
 
         if session.stream_task.is_some() {
-            debug!("Session {} is already streaming", session_id);
+            debug!(%session_id, "Session is already streaming");
             return Ok(());
         }
 
         let generation = session.generation;
         let plan = std::mem::take(&mut session.plan);
         let frame_interval = session.frame_interval;
-        let connections_for_task = self.connections.clone();
-        let handle = spawn_task(self.shutdown.as_ref(), async move {
-            Self::stream_frames(
-                owner,
-                session_id,
-                generation,
-                plan,
-                frame_interval,
-                outgoing,
-                connections_for_task,
-            )
-            .await;
-        });
+        let task = SessionTask {
+            owner,
+            session_id,
+            generation,
+            connections: self.connections.clone(),
+        };
+        let span = tracing::info_span!("ws_session", %session_id, generation, frames = plan.len());
+        let handle = spawn_task(
+            self.shutdown.as_ref(),
+            async move {
+                task.stream_frames(plan, frame_interval, outgoing).await;
+            }
+            .instrument(span),
+        );
 
         // Keep an abort handle so the task can be cancelled on session teardown,
         // and supervise the join handle to surface panics that would otherwise
@@ -784,171 +914,13 @@ impl AdaptiveStreamController {
             match handle.await {
                 Ok(()) => {}
                 Err(join_err) if join_err.is_panic() => {
-                    error!(
-                        "Streaming task panicked for session {}: {}",
-                        session_id, join_err
-                    );
+                    error!(%session_id, error = %join_err, "Streaming task panicked");
                 }
                 Err(_) => {} // task was aborted — expected on session teardown
             }
         });
 
         Ok(())
-    }
-
-    /// Streams `plan` to `outgoing` under the stall and absolute deadlines,
-    /// then removes the session and announces completion.
-    async fn stream_frames(
-        owner: ConnectionId,
-        session_id: SessionId,
-        generation: u64,
-        plan: Vec<String>,
-        frame_interval: Option<Duration>,
-        outgoing: Option<ByteBoundedSender<String>>,
-        connections: Connections,
-    ) {
-        let deadline = stream_deadline(plan.iter().map(String::len).sum());
-        let sent = tokio::time::timeout(
-            deadline,
-            Self::send_plan(
-                owner,
-                session_id,
-                generation,
-                plan,
-                frame_interval,
-                outgoing.as_ref(),
-                &connections,
-            ),
-        )
-        .await;
-        match sent {
-            Ok(Ok(())) => {
-                // The session stops being live before its completion is
-                // visible, so a peer that has seen StreamComplete can
-                // immediately reuse the id or open another session without a
-                // spurious 409 or 429.
-                Self::remove_if_generation(&connections, owner, session_id, generation);
-                if let Ok(complete) =
-                    serde_json::to_string(&WsMessage::StreamComplete { session_id })
-                {
-                    enqueue(outgoing.as_ref(), complete).await;
-                }
-            }
-            Ok(Err(abort)) => {
-                Self::remove_if_generation(&connections, owner, session_id, generation);
-                Self::report_dropped(outgoing.as_ref(), session_id, abort.reply());
-            }
-            Err(_elapsed) => {
-                Self::remove_if_generation(&connections, owner, session_id, generation);
-                Self::report_dropped(
-                    outgoing.as_ref(),
-                    session_id,
-                    FixedError::STREAM_DEADLINE_EXCEEDED,
-                );
-            }
-        }
-    }
-
-    async fn send_plan(
-        owner: ConnectionId,
-        session_id: SessionId,
-        generation: u64,
-        plan: Vec<String>,
-        frame_interval: Option<Duration>,
-        outgoing: Option<&ByteBoundedSender<String>>,
-        connections: &Connections,
-    ) -> Result<(), StreamAbort> {
-        let frame_count = plan.len();
-        for text in plan {
-            let len = text.len();
-            match enqueue(outgoing, text).await {
-                Enqueued::Sent => {}
-                Enqueued::Closed => return Err(StreamAbort::Undeliverable),
-                Enqueued::Stalled => return Err(StreamAbort::Stalled),
-            }
-            let adaptive = Self::release_sent(connections, owner, session_id, generation, len);
-            tokio::time::sleep(paced_delay(adaptive, frame_interval, frame_count)).await;
-        }
-        Ok(())
-    }
-
-    /// Releases `len` sent plan bytes of the session and returns the adaptive
-    /// delay recommended for it.
-    ///
-    /// Takes the global write lock once per frame. Benchmarked at about
-    /// 10 M lock operations per second under 8 or more contending tasks
-    /// (`websocket_controller` bench), enough for roughly 3700 concurrently
-    /// streaming sessions at the fastest pacing, so the lock is kept.
-    fn release_sent(
-        connections: &Connections,
-        owner: ConnectionId,
-        session_id: SessionId,
-        generation: u64,
-        len: usize,
-    ) -> Duration {
-        let mut connections = connections.write();
-        let Some(entry) = connections.get_mut(&owner) else {
-            return Duration::from_millis(10);
-        };
-        let Some(session) = entry
-            .sessions
-            .get_mut(&session_id)
-            .filter(|session| session.generation == generation)
-        else {
-            return Duration::from_millis(10);
-        };
-        let released = len.min(session.unsent_plan_bytes);
-        session.unsent_plan_bytes -= released;
-        let delay = session.client_metrics.recommended_frame_delay();
-        entry.live_plan_bytes = entry.live_plan_bytes.saturating_sub(released);
-        delay
-    }
-
-    /// Tells the peer its stream was dropped, if its channel has room.
-    ///
-    /// Best effort: on a full channel nothing is sent, which is the usual case
-    /// for a stall or a deadline.
-    fn report_dropped(
-        outgoing: Option<&ByteBoundedSender<String>>,
-        session_id: SessionId,
-        dropped: FixedError,
-    ) {
-        let Some(outgoing) = outgoing else {
-            return;
-        };
-        let reply = WsMessage::Error {
-            session_id: Some(session_id),
-            error: dropped.reason.to_owned(),
-            code: dropped.code,
-        };
-        let Ok(json) = serde_json::to_string(&reply) else {
-            return;
-        };
-        let len = json.len();
-        if outgoing.try_send(json, len).is_err() {
-            debug!("Outgoing channel full or closed; stopped session {session_id}");
-        } else {
-            warn!("Dropped session {session_id}: {}", dropped.reason);
-        }
-    }
-
-    /// Removes the session only if it is still the one started by the caller.
-    fn remove_if_generation(
-        connections: &Connections,
-        owner: ConnectionId,
-        session_id: SessionId,
-        generation: u64,
-    ) {
-        let mut connections = connections.write();
-        if let Some(entry) = connections.get_mut(&owner)
-            && entry
-                .sessions
-                .get(&session_id)
-                .is_some_and(|session| session.generation == generation)
-        {
-            entry.remove_session(session_id);
-        }
-        prune_if_idle(&mut connections, owner);
     }
 
     fn with_session<R>(
@@ -971,7 +943,7 @@ impl AdaptiveStreamController {
     ///
     /// Returns [`PjsError::UnknownSession`] if `owner` has no such live
     /// session; nothing is changed.
-    pub async fn handle_frame_ack(
+    pub fn handle_frame_ack(
         &self,
         owner: ConnectionId,
         session_id: SessionId,
@@ -984,52 +956,21 @@ impl AdaptiveStreamController {
                 .update_processing_time(processing_time_ms);
 
             debug!(
-                "Frame {} acknowledged for session {} (processing: {}ms, avg: {:.1}ms)",
+                %session_id,
                 frame_id,
-                session_id,
                 processing_time_ms,
-                session.client_metrics.average_processing_time_ms
+                average_ms = session.client_metrics.average_processing_time_ms,
+                "Frame acknowledged"
             );
 
             if session.client_metrics.is_client_slow() {
                 warn!(
-                    "Client {} is processing slowly (avg: {:.1}ms)",
-                    session_id, session.client_metrics.average_processing_time_ms
+                    %session_id,
+                    average_ms = session.client_metrics.average_processing_time_ms,
+                    "Client is processing slowly"
                 );
             }
         })
-    }
-
-    /// Set rate limit guard for a session
-    pub async fn set_rate_limit_guard(
-        &self,
-        owner: ConnectionId,
-        session_id: SessionId,
-        guard: RateLimitGuard,
-    ) -> PjsResult<()> {
-        self.with_session(owner, session_id, |session| {
-            session.rate_limit_guard = Some(guard);
-        })
-    }
-
-    /// Validate message against rate limits
-    pub async fn validate_message(
-        &self,
-        owner: ConnectionId,
-        session_id: SessionId,
-        frame_size: usize,
-    ) -> PjsResult<()> {
-        let connections = self.connections.read();
-        let session = connections
-            .get(&owner)
-            .and_then(|entry| entry.sessions.get(&session_id))
-            .ok_or(PjsError::UnknownSession(session_id))?;
-
-        if let Some(guard) = &session.rate_limit_guard {
-            guard.check_message(frame_size)?;
-        }
-
-        Ok(())
     }
 
     /// Remove `owner`'s session by id, aborting its streaming task.
@@ -1055,12 +996,12 @@ impl AdaptiveStreamController {
     ///     .create_session(id, owner, json!({}), StreamOptions::default())
     ///     .await
     ///     .unwrap();
-    /// assert!(controller.remove_session(owner, id).await);
+    /// assert!(controller.remove_session(owner, id));
     /// // Idempotent — second call is a no-op:
-    /// assert!(!controller.remove_session(owner, id).await);
+    /// assert!(!controller.remove_session(owner, id));
     /// # }
     /// ```
-    pub async fn remove_session(&self, owner: ConnectionId, session_id: SessionId) -> bool {
+    pub fn remove_session(&self, owner: ConnectionId, session_id: SessionId) -> bool {
         let mut connections = self.connections.write();
         let removed = connections
             .get_mut(&owner)
@@ -1069,9 +1010,9 @@ impl AdaptiveStreamController {
         match &removed {
             Some(session) => {
                 session.abort_task();
-                info!("Removed streaming session: {}", session_id);
+                info!(%session_id, "Removed streaming session");
             }
-            None => debug!("remove_session called on unknown id: {}", session_id),
+            None => debug!(%session_id, "remove_session called on unknown id"),
         }
         removed.is_some()
     }
@@ -1113,7 +1054,7 @@ impl AdaptiveStreamController {
     }
 
     /// Clean up expired sessions
-    pub async fn cleanup_expired_sessions(&self, max_age: Duration) {
+    pub fn cleanup_expired_sessions(&self, max_age: Duration) {
         let mut connections = self.connections.write();
         let now = Instant::now();
 
@@ -1127,7 +1068,7 @@ impl AdaptiveStreamController {
             for id in expired {
                 if let Some(session) = entry.remove_session(id) {
                     session.abort_task();
-                    info!("Cleaning up expired session: {}", id);
+                    info!(session_id = %id, "Cleaning up expired session");
                 }
             }
         }
@@ -1164,6 +1105,7 @@ mod tests {
     use super::*;
     use crate::domain::Priority;
     use crate::infrastructure::bounded_channel::{Envelope, byte_bounded_channel};
+    use crate::infrastructure::websocket::protocol::MaxFrameSize;
     use core::assert_matches;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -1286,7 +1228,7 @@ mod tests {
 
         for _ in 0..3 {
             let id = new_session(&controller, owner, json!({})).await;
-            controller.start_streaming(owner, id).await.unwrap();
+            controller.start_streaming(owner, id).unwrap();
             assert_matches!(
                 next_message(&mut outbox).await,
                 WsMessage::StreamFrame { .. }
@@ -1304,7 +1246,7 @@ mod tests {
         let owner = ConnectionId::new();
         let mut outbox = attach(&controller, owner);
         let id = new_session(&controller, owner, json!({})).await;
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         loop {
             if matches!(
@@ -1330,31 +1272,33 @@ mod tests {
         let old_generation = controller
             .with_session_mut(owner, id, |s| s.generation)
             .unwrap();
-        assert!(controller.remove_session(owner, id).await);
+        assert!(controller.remove_session(owner, id));
         new_session_with_id(&controller, owner, id).await;
         let new_generation = controller
             .with_session_mut(owner, id, |s| s.generation)
             .unwrap();
         assert_ne!(old_generation, new_generation);
 
-        AdaptiveStreamController::remove_if_generation(
-            &controller.connections,
+        SessionTask {
             owner,
-            id,
-            old_generation,
-        );
+            session_id: id,
+            generation: old_generation,
+            connections: controller.connections.clone(),
+        }
+        .remove_if_generation();
         assert_eq!(
             controller.session_count(owner),
             1,
             "stale removal must be a no-op"
         );
 
-        AdaptiveStreamController::remove_if_generation(
-            &controller.connections,
+        SessionTask {
             owner,
-            id,
-            new_generation,
-        );
+            session_id: id,
+            generation: new_generation,
+            connections: controller.connections.clone(),
+        }
+        .remove_if_generation();
         assert_eq!(controller.session_count(owner), 0);
     }
 
@@ -1376,16 +1320,16 @@ mod tests {
         let mut outbox = attach(&controller, owner);
         let id = new_session(&controller, owner, json!({})).await;
         poison_metrics(&controller, owner, id);
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
         assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
         );
 
-        assert!(controller.remove_session(owner, id).await);
+        assert!(controller.remove_session(owner, id));
         new_session_with_id(&controller, owner, id).await;
         poison_metrics(&controller, owner, id);
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(controller.session_count(owner), 1);
@@ -1402,13 +1346,13 @@ mod tests {
         let mut outbox = attach(&controller, owner);
         let id = new_session(&controller, owner, json!({})).await;
         poison_metrics(&controller, owner, id);
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
         assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
         );
 
-        assert!(controller.remove_session(owner, id).await);
+        assert!(controller.remove_session(owner, id));
 
         let late = tokio::time::timeout(Duration::from_millis(1500), outbox.recv()).await;
         assert!(
@@ -1425,7 +1369,7 @@ mod tests {
         let mut b_outbox = attach(&controller, b);
         let id = new_session(&controller, a, json!({"k": "v"})).await;
 
-        controller.start_streaming(a, id).await.unwrap();
+        controller.start_streaming(a, id).unwrap();
 
         assert_matches!(
             next_message(&mut a_outbox).await,
@@ -1443,11 +1387,11 @@ mod tests {
         let mut healthy_outbox = attach(&controller, healthy);
         for _ in 0..5 {
             let id = new_session(&controller, stalled, json!({})).await;
-            controller.start_streaming(stalled, id).await.unwrap();
+            controller.start_streaming(stalled, id).unwrap();
         }
         let id = new_session(&controller, healthy, json!({})).await;
 
-        controller.start_streaming(healthy, id).await.unwrap();
+        controller.start_streaming(healthy, id).unwrap();
 
         assert_matches!(
             next_message(&mut healthy_outbox).await,
@@ -1467,7 +1411,7 @@ mod tests {
         controller.attach_connection(owner, tx);
         let id = new_session(&controller, owner, json!({"blob": "x".repeat(8192)})).await;
 
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         assert_matches!(
             next_message(&mut outbox).await,
@@ -1483,8 +1427,8 @@ mod tests {
         let mut outbox = attach(&controller, owner);
         let id = new_session(&controller, owner, json!({})).await;
 
-        controller.start_streaming(owner, id).await.unwrap();
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         let (mut frames, mut completes) = (0, 0);
         while let Ok(Some(envelope)) =
@@ -1508,7 +1452,6 @@ mod tests {
 
         controller
             .handle_frame_ack(owner, session_id, 0, 50)
-            .await
             .unwrap();
 
         let (acked, average) = controller
@@ -1528,9 +1471,7 @@ mod tests {
         let owner = ConnectionId::new();
         let session_id = new_session(&controller, owner, json!({})).await;
 
-        let result = controller
-            .handle_frame_ack(ConnectionId::new(), session_id, 0, 50)
-            .await;
+        let result = controller.handle_frame_ack(ConnectionId::new(), session_id, 0, 50);
 
         assert_matches!(result, Err(PjsError::UnknownSession(_)));
         let acked = controller
@@ -1597,8 +1538,8 @@ mod tests {
             })
             .unwrap();
 
-        controller.start_streaming(owner, session_id).await.unwrap();
-        assert!(controller.remove_session(owner, session_id).await);
+        controller.start_streaming(owner, session_id).unwrap();
+        assert!(controller.remove_session(owner, session_id));
 
         // Drain whatever the task managed to emit before the abort took
         // effect, for a window far shorter than the full 200-frame plan
@@ -1645,7 +1586,7 @@ mod tests {
         );
         let id = SessionId::new();
         let options = StreamOptions {
-            max_frame_size: 1024,
+            max_frame_size: MaxFrameSize::new(1024).unwrap(),
             ..StreamOptions::default()
         };
         controller
@@ -1653,7 +1594,7 @@ mod tests {
             .await
             .unwrap();
 
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
         tokio::time::sleep(STREAM_STALL_TIMEOUT + Duration::from_secs(1)).await;
 
         let mut kinds = Vec::new();
@@ -1663,7 +1604,7 @@ mod tests {
         assert_matches!(
             kinds.last(),
             Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
-                if error == FixedError::STREAM_STALLED.reason && *reported == id,
+                if error == ServerReply::StreamStalled.reason() && *reported == id,
             "{kinds:?}"
         );
         assert_eq!(controller.session_count(owner), 0);
@@ -1682,14 +1623,14 @@ mod tests {
         );
         let id = SessionId::new();
         let options = StreamOptions {
-            max_frame_size: 1024,
+            max_frame_size: MaxFrameSize::new(1024).unwrap(),
             ..StreamOptions::default()
         };
         controller
             .create_session(id, owner, data, options)
             .await
             .unwrap();
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         // A reader that frees one frame every 25 s keeps every enqueue under
         // the 30 s stall timeout, so only the absolute deadline can end it.
@@ -1706,7 +1647,7 @@ mod tests {
         assert_matches!(
             messages.last(),
             Some(WsMessage::Error { code: 408, error, session_id: Some(reported) })
-                if error == FixedError::STREAM_DEADLINE_EXCEEDED.reason && *reported == id,
+                if error == ServerReply::StreamDeadlineExceeded.reason() && *reported == id,
             "{messages:?}"
         );
         assert_eq!(controller.session_count(owner), 0);
@@ -1777,7 +1718,7 @@ mod tests {
         let data = json!({"blob": "x".repeat(30_000)});
         let options = StreamOptions {
             framing: Framing::Patch,
-            max_frame_size: 2048,
+            max_frame_size: MaxFrameSize::new(2048).unwrap(),
             ..StreamOptions::default()
         };
         let first = SessionId::new();
@@ -1794,9 +1735,9 @@ mod tests {
             ))
         );
 
-        controller.start_streaming(owner, first).await.unwrap();
+        controller.start_streaming(owner, first).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(controller.remove_session(owner, first).await);
+        assert!(controller.remove_session(owner, first));
 
         controller
             .create_session(SessionId::new(), owner, data, options)
@@ -1846,7 +1787,7 @@ mod tests {
         let session_id = new_session(&controller, owner, json!({"test": "data"})).await;
         poison_metrics(&controller, owner, session_id);
 
-        controller.start_streaming(owner, session_id).await.unwrap();
+        controller.start_streaming(owner, session_id).unwrap();
 
         let result = tokio::time::timeout(MAX_ADAPTIVE_FRAME_DELAY * 2, async {
             loop {

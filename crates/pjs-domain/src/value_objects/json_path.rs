@@ -4,8 +4,14 @@
 //! and infrastructure layers (issue #379 consolidated two divergent copies).
 //! A path is a segmented sequence (`Vec<PathSegment>`); the root path is the
 //! empty sequence. `Display`/`FromStr` render/parse the JSONPath-like textual
-//! form (`$.key[0]`) and are also used for serde, so the textual form is the
-//! wire format.
+//! form (`$.key[0]`, `$["a.b"]`) and are also used for serde, so the textual
+//! form is the wire format.
+//!
+//! Grammar: `path = "$" *( "." plain / "[" index "]" / "[" quoted "]" )`,
+//! where `plain` is a non-empty key without `.`, `[`, `]`, `index` is `0` or
+//! `[1-9][0-9]*`, and `quoted` is the canonical `serde_json` string literal of
+//! a key that is not plain. Every key is therefore addressable and every
+//! accepted text re-renders identically.
 
 use crate::{DomainError, DomainResult};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -15,42 +21,29 @@ use std::str::FromStr;
 /// Type-safe JSON path for addressing nodes in JSON structures.
 ///
 /// Represented as a sequence of [`PathSegment`]s; the root path (`$`) is the
-/// empty sequence. Every constructor funnels object keys through the same
-/// validation rule (see `validate_key`), so a `JsonPath` can never contain
-/// a key that would make `Display`/`FromStr` ambiguous — see the invariant
-/// documented on [`JsonPath`]'s `Display` impl (JP-1).
+/// empty sequence. Any key, including the empty key and keys containing `.`,
+/// `[` or `]`, is addressable; see the module docs for the text grammar.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JsonPath {
     segments: Vec<PathSegment>,
 }
 
-/// Single segment of a [`JsonPath`].
+/// Single segment of a [`JsonPath`]: an object key or an array index.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum PathSegment {
-    /// Object property key.
+    /// Object property key (any string).
     Key(String),
     /// Array index.
     Index(usize),
 }
 
-/// A key is valid iff it is non-empty and contains none of `.`, `[`, `]`.
-///
-/// This single predicate backs `append_key`, `new`/`FromStr`, and
-/// `from_segments`, so the three constructors can never disagree about what
-/// a valid key looks like. It is intentionally Unicode-aware (any non-empty,
-/// delimiter-free `String` is accepted) rather than restricted to ASCII
-/// alphanumerics.
-fn validate_key(key: &str) -> DomainResult<()> {
-    if key.is_empty() {
-        return Err(DomainError::InvalidPath("Key cannot be empty".to_string()));
-    }
-    if !JsonPath::is_valid_key(key) {
-        return Err(DomainError::InvalidPath(format!(
-            "Key '{key}' contains invalid characters"
-        )));
-    }
-    Ok(())
+/// A plain key renders as `.key`; any other key renders as a quoted segment.
+fn is_plain_key(key: &str) -> bool {
+    !key.is_empty() && !key.contains(['.', '[', ']'])
+}
+
+fn invalid(message: impl Into<String>) -> DomainError {
+    DomainError::InvalidPath(message.into())
 }
 
 impl JsonPath {
@@ -77,67 +70,38 @@ impl JsonPath {
         path.into().parse()
     }
 
-    /// Build a path directly from segments, validating every [`PathSegment::Key`]
-    /// with the same rule as [`JsonPath::append_key`].
+    /// Build a path directly from segments; every key is representable.
     ///
     /// # Examples
     /// ```
     /// use pjson_rs_domain::value_objects::{JsonPath, PathSegment};
     ///
     /// let path = JsonPath::from_segments(vec![
-    ///     PathSegment::Key("users".to_string()),
+    ///     PathSegment::Key("a.b".to_string()),
     ///     PathSegment::Index(0),
-    /// ])
-    /// .unwrap();
-    /// assert_eq!(path.to_string(), "$.users[0]");
-    ///
-    /// // A key containing a delimiter is rejected, just like `append_key`.
-    /// let invalid = JsonPath::from_segments(vec![PathSegment::Key("a.b".to_string())]);
-    /// assert!(invalid.is_err());
+    /// ]);
+    /// assert_eq!(path.to_string(), r#"$["a.b"][0]"#);
     /// ```
-    pub fn from_segments(segments: impl IntoIterator<Item = PathSegment>) -> DomainResult<Self> {
-        let segments: Vec<PathSegment> = segments.into_iter().collect();
-        for segment in &segments {
-            if let PathSegment::Key(key) = segment {
-                validate_key(key)?;
-            }
+    pub fn from_segments(segments: impl IntoIterator<Item = PathSegment>) -> Self {
+        Self {
+            segments: segments.into_iter().collect(),
         }
-        Ok(Self { segments })
     }
 
-    /// Whether `key` can be a key segment, i.e. whether [`Self::append_key`]
-    /// accepts it. Allocation-free, for hot paths that only need the verdict.
+    /// Append a key segment, producing a new path. Any key is addressable.
     ///
     /// # Examples
     /// ```
     /// use pjson_rs_domain::value_objects::JsonPath;
     ///
-    /// assert!(JsonPath::is_valid_key("users"));
-    /// assert!(!JsonPath::is_valid_key("a.b"));
-    /// assert!(!JsonPath::is_valid_key(""));
+    /// assert_eq!(JsonPath::root().append_key("users").to_string(), "$.users");
+    /// assert_eq!(JsonPath::root().append_key("a.b").to_string(), r#"$["a.b"]"#);
+    /// assert_eq!(JsonPath::root().append_key("").to_string(), r#"$[""]"#);
     /// ```
-    pub fn is_valid_key(key: &str) -> bool {
-        !key.is_empty() && !key.contains(['.', '[', ']'])
-    }
-
-    /// Append a key segment, producing a new path.
-    ///
-    /// # Examples
-    /// ```
-    /// use pjson_rs_domain::value_objects::JsonPath;
-    ///
-    /// let path = JsonPath::root().append_key("users").unwrap();
-    /// assert_eq!(path.to_string(), "$.users");
-    ///
-    /// // Keys containing '.', '[', ']', or the empty key are rejected.
-    /// assert!(JsonPath::root().append_key("").is_err());
-    /// assert!(JsonPath::root().append_key("a.b").is_err());
-    /// ```
-    pub fn append_key(&self, key: &str) -> DomainResult<Self> {
-        validate_key(key)?;
+    pub fn append_key(&self, key: &str) -> Self {
         let mut segments = self.segments.clone();
         segments.push(PathSegment::Key(key.to_string()));
-        Ok(Self { segments })
+        Self { segments }
     }
 
     /// Append an array index segment, producing a new path.
@@ -202,7 +166,8 @@ impl JsonPath {
 
     /// Convert to a JSON Pointer (RFC 6901) string.
     ///
-    /// Does not escape `~` or `/` within keys; see follow-up issue for #379.
+    /// The root is the empty string and the empty key is `"/"`. Does not
+    /// escape `~` or `/` within keys; see follow-up issue for #379.
     ///
     /// # Examples
     /// ```
@@ -210,12 +175,10 @@ impl JsonPath {
     ///
     /// let path = JsonPath::new("$.users[0].name").unwrap();
     /// assert_eq!(path.to_json_pointer(), "/users/0/name");
-    /// assert_eq!(JsonPath::root().to_json_pointer(), "/");
+    /// assert_eq!(JsonPath::root().to_json_pointer(), "");
+    /// assert_eq!(JsonPath::root().append_key("").to_json_pointer(), "/");
     /// ```
     pub fn to_json_pointer(&self) -> String {
-        if self.segments.is_empty() {
-            return "/".to_string();
-        }
         let mut pointer = String::new();
         for segment in &self.segments {
             pointer.push('/');
@@ -228,22 +191,20 @@ impl JsonPath {
     }
 }
 
-/// **INVARIANT (JP-1):** `Display` is injective and total over representable
-/// `JsonPath` values. It holds *only because* key validation (`validate_key`)
-/// excludes `.`, `[`, `]`, and the empty key: those delimiters cannot occur
-/// inside a valid key, so the boundary between a key and the next segment
-/// marker is always unambiguous, and every rendered path re-parses via
-/// [`FromStr`] to the same segments. Any future change that widens the key
-/// alphabet to admit `.`, `[`, `]`, or the empty string **must** add an
-/// escaping grammar (e.g. bracket-quote form with backslash-escaping) and a
-/// round-trip proptest in the same change, or `Display`/`FromStr` become a
-/// path-forgery primitive (see issue #333).
+/// `Display` and [`FromStr`] are an exact pair: every path renders to text that
+/// parses back to the same segments, and every accepted text re-renders
+/// byte-for-byte. Non-plain keys render as a canonical quoted segment, which
+/// keeps the format unambiguous without restricting keys.
 impl fmt::Display for JsonPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "$")?;
         for segment in &self.segments {
             match segment {
-                PathSegment::Key(key) => write!(f, ".{key}")?,
+                PathSegment::Key(key) if is_plain_key(key) => write!(f, ".{key}")?,
+                PathSegment::Key(key) => {
+                    let literal = serde_json::to_string(key).map_err(|_| fmt::Error)?;
+                    write!(f, "[{literal}]")?;
+                }
                 PathSegment::Index(index) => write!(f, "[{index}]")?,
             }
         }
@@ -251,65 +212,89 @@ impl fmt::Display for JsonPath {
     }
 }
 
-/// Parses the textual form produced by [`JsonPath`]'s `Display` impl.
-/// See the injectivity/totality invariant documented there (JP-1).
+/// Byte length of the JSON string literal at the start of `text` (which must
+/// begin with `"`), up to and including the unescaped closing quote.
+fn quoted_literal_len(text: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (offset, ch) in text.char_indices().skip(1) {
+        match (escaped, ch) {
+            (true, _) => escaped = false,
+            (false, '\\') => escaped = true,
+            (false, '"') => return Some(offset + 1),
+            (false, _) => {}
+        }
+    }
+    None
+}
+
+fn parse_quoted_key(text: &str) -> DomainResult<(String, usize)> {
+    let len = quoted_literal_len(text).ok_or_else(|| invalid("Unterminated quoted key"))?;
+    let literal = &text[..len];
+    let key: String =
+        serde_json::from_str(literal).map_err(|_| invalid("Invalid quoted key literal"))?;
+    let canonical = serde_json::to_string(&key).map_err(|_| invalid("Invalid quoted key"))?;
+    if canonical != literal {
+        return Err(invalid("Quoted key is not in canonical form"));
+    }
+    if is_plain_key(&key) {
+        return Err(invalid("Plain key must not be quoted"));
+    }
+    Ok((key, len))
+}
+
+fn parse_index(text: &str) -> DomainResult<usize> {
+    let canonical = !text.is_empty()
+        && text.bytes().all(|b| b.is_ascii_digit())
+        && (text == "0" || !text.starts_with('0'));
+    if !canonical {
+        return Err(invalid(format!("Invalid array index '{text}'")));
+    }
+    text.parse::<usize>()
+        .map_err(|_| invalid(format!("Invalid array index '{text}'")))
+}
+
+/// Parses the textual form produced by [`JsonPath`]'s `Display` impl; see the
+/// module docs for the grammar.
 impl FromStr for JsonPath {
     type Err = DomainError;
 
     fn from_str(path: &str) -> Result<Self, Self::Err> {
         if path.is_empty() {
-            return Err(DomainError::InvalidPath("Path cannot be empty".to_string()));
+            return Err(invalid("Path cannot be empty"));
         }
-
-        if !path.starts_with('$') {
-            return Err(DomainError::InvalidPath(
-                "Path must start with '$'".to_string(),
-            ));
-        }
-
-        if path.len() == 1 {
-            return Ok(Self::root());
-        }
+        let mut rest = path
+            .strip_prefix('$')
+            .ok_or_else(|| invalid("Path must start with '$'"))?;
 
         let mut segments = Vec::new();
-        let mut chars = path.chars().skip(1).peekable();
-
-        while let Some(ch) = chars.next() {
-            match ch {
+        while let Some(marker) = rest.chars().next() {
+            let body = &rest[marker.len_utf8()..];
+            match marker {
                 '.' => {
-                    let mut key = String::new();
-                    while let Some(&next_ch) = chars.peek() {
-                        if next_ch == '.' || next_ch == '[' {
-                            break;
-                        }
-                        key.push(next_ch);
-                        chars.next();
+                    let end = body.find(['.', '[']).unwrap_or(body.len());
+                    let key = &body[..end];
+                    if !is_plain_key(key) {
+                        return Err(invalid(format!("Invalid key '{key}'")));
                     }
-                    validate_key(&key)?;
+                    segments.push(PathSegment::Key(key.to_string()));
+                    rest = &body[end..];
+                }
+                '[' if body.starts_with('"') => {
+                    let (key, len) = parse_quoted_key(body)?;
+                    rest = body[len..]
+                        .strip_prefix(']')
+                        .ok_or_else(|| invalid("Quoted key must be followed by ']'"))?;
                     segments.push(PathSegment::Key(key));
                 }
                 '[' => {
-                    let mut index_str = String::new();
-                    for ch in chars.by_ref() {
-                        if ch == ']' {
-                            break;
-                        }
-                        index_str.push(ch);
-                    }
-
-                    if index_str.is_empty() {
-                        return Err(DomainError::InvalidPath("Empty array index".to_string()));
-                    }
-
-                    let index = index_str.parse::<usize>().map_err(|_| {
-                        DomainError::InvalidPath(format!("Invalid array index '{index_str}'"))
-                    })?;
-                    segments.push(PathSegment::Index(index));
+                    let end = body
+                        .find(']')
+                        .ok_or_else(|| invalid("Unterminated array index"))?;
+                    segments.push(PathSegment::Index(parse_index(&body[..end])?));
+                    rest = &body[end + 1..];
                 }
-                _ => {
-                    return Err(DomainError::InvalidPath(format!(
-                        "Unexpected character '{ch}' in path"
-                    )));
+                other => {
+                    return Err(invalid(format!("Unexpected character '{other}' in path")));
                 }
             }
         }
@@ -342,34 +327,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_valid_key_agrees_with_append_key() {
-        for key in [
-            "",
-            ".",
-            "a.b",
-            "[",
-            "]",
-            "a[0]",
-            "x]",
-            "k",
-            "key with space",
-            "ключ",
-            "日本語",
-            "emoji😀",
-            "$",
-            "a-b_c",
-            "..",
-            "\u{0}",
-        ] {
-            assert_eq!(
-                JsonPath::is_valid_key(key),
-                JsonPath::root().append_key(key).is_ok(),
-                "key {key:?}"
-            );
-        }
-    }
-
-    #[test]
     fn test_valid_paths() {
         assert!(JsonPath::new("$").is_ok());
         assert!(JsonPath::new("$.key").is_ok());
@@ -394,12 +351,7 @@ mod tests {
     #[test]
     fn test_path_operations() {
         let root = JsonPath::root();
-        let path = root
-            .append_key("users")
-            .unwrap()
-            .append_index(0)
-            .append_key("name")
-            .unwrap();
+        let path = root.append_key("users").append_index(0).append_key("name");
 
         assert_eq!(path.to_string(), "$.users[0].name");
         assert_eq!(path.depth(), 3);
@@ -473,10 +425,8 @@ mod tests {
     fn test_display_from_str_round_trip() {
         let path = JsonPath::root()
             .append_key("users")
-            .unwrap()
             .append_index(0)
-            .append_key("name")
-            .unwrap();
+            .append_key("name");
         let rendered = path.to_string();
         let parsed: JsonPath = rendered.parse().unwrap();
         assert_eq!(path, parsed);
@@ -489,20 +439,5 @@ mod tests {
         assert_eq!(json, "\"$.users[0].name\"");
         let restored: JsonPath = serde_json::from_str(&json).unwrap();
         assert_eq!(path, restored);
-    }
-
-    proptest::proptest! {
-        /// JP-1: `append_key` either rejects an arbitrary key outright, or
-        /// the resulting path round-trips exactly through `Display` ->
-        /// `FromStr`. This is the guard that fails loudly if validation is
-        /// ever widened without adding an escaping grammar.
-        #[test]
-        fn json_path_round_trips_over_arbitrary_keys(key in ".*") {
-            if let Ok(path) = JsonPath::root().append_key(&key) {
-                let rendered = path.to_string();
-                let parsed: JsonPath = rendered.parse().expect("rendered path must re-parse");
-                proptest::prop_assert_eq!(path, parsed);
-            }
-        }
     }
 }

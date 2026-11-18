@@ -202,7 +202,8 @@ async fn test_stream_init_invalid_options_over_wire_replies_400_and_streams_noth
         .expect("an error reply");
     assert_eq!(reply["type"], "Error");
     assert_eq!(reply["data"]["code"], 400);
-    assert_eq!(reply["data"]["error"], "invalid stream options");
+    assert_eq!(reply["data"]["error"], "malformed message");
+    assert!(reply["data"]["session_id"].is_null(), "{reply}");
     assert!(
         next_json(&mut ws, Duration::from_millis(300))
             .await
@@ -225,7 +226,8 @@ async fn test_stream_init_zero_client_fps_over_wire_replies_400() {
         .await
         .expect("reply");
     assert_eq!(reply["data"]["code"], 400);
-    assert_eq!(reply["data"]["error"], "invalid stream options");
+    assert_eq!(reply["data"]["error"], "malformed message");
+    assert!(reply["data"]["session_id"].is_null(), "{reply}");
 }
 
 #[tokio::test]
@@ -457,7 +459,10 @@ async fn test_client_request_stream_default_options_reconstructs_multi_frame_pat
     });
     let data = wide_document();
 
-    let id = client.request_stream(data.clone(), None).await.unwrap();
+    let id = client
+        .request_stream(data.clone(), StreamOptions::patch())
+        .await
+        .unwrap();
     wait_until_complete(&client, id).await;
 
     assert_eq!(client.get_current_data(id).await.unwrap(), Some(data));
@@ -476,7 +481,7 @@ async fn test_client_request_stream_explicit_default_options_uses_merge_framing(
     let data = wide_document();
 
     let id = client
-        .request_stream(data.clone(), Some(StreamOptions::default()))
+        .request_stream(data.clone(), StreamOptions::default())
         .await
         .unwrap();
     wait_until_complete(&client, id).await;
@@ -517,9 +522,12 @@ async fn test_client_request_stream_none_sends_patch_framing_and_some_sends_verb
         async move { client.connect().await }
     });
 
-    client.request_stream(json!({"a": 1}), None).await.unwrap();
     client
-        .request_stream(json!({"a": 2}), Some(StreamOptions::default()))
+        .request_stream(json!({"a": 1}), StreamOptions::patch())
+        .await
+        .unwrap();
+    client
+        .request_stream(json!({"a": 2}), StreamOptions::default())
         .await
         .unwrap();
 
@@ -592,17 +600,21 @@ struct ScriptedClient {
 
 async fn run_scripted(frames: Vec<(Value, bool)>, max_session_bytes: usize) -> ScriptedClient {
     let addr = spawn_scripted_server(frames).await;
-    let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
-        WebSocketClientConfig {
-            max_session_bytes: NonZeroUsize::new(max_session_bytes).unwrap(),
-            ..WebSocketClientConfig::default()
-        },
-    ));
+    let mut config = WebSocketClientConfig::default();
+    config.max_session_bytes = NonZeroUsize::new(max_session_bytes).unwrap();
+    let client = Arc::new(
+        PjsWebSocketClient::new(ws_url(addr))
+            .unwrap()
+            .with_config(config),
+    );
     let connect = tokio::spawn({
         let client = Arc::clone(&client);
         async move { client.connect().await }
     });
-    let id = client.request_stream(json!({}), None).await.unwrap();
+    let id = client
+        .request_stream(json!({}), StreamOptions::patch())
+        .await
+        .unwrap();
     ScriptedClient {
         client,
         id,

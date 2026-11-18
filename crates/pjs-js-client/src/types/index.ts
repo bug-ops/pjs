@@ -225,6 +225,8 @@ export interface PJSEventData {
     path: JsonPath; 
     priority: Priority;
     resultingData?: any;
+    appliedPatches: number;
+    skippedPatches: number;
   };
   [PJSEvent.StreamComplete]: { 
     data: any; 

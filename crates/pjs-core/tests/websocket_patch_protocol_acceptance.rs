@@ -10,6 +10,12 @@ use pjson_rs::domain::Priority;
 use pjson_rs::infrastructure::websocket::{Framing, StreamOptions, WsMessage};
 use serde_json::{Value, json};
 
+fn stream_options(update: impl FnOnce(&mut StreamOptions)) -> StreamOptions {
+    let mut options = StreamOptions::default();
+    update(&mut options);
+    options
+}
+
 const SESSION: &str = "00000000-0000-4000-8000-000000000001";
 
 fn stream_patch(patches: Value) -> String {
@@ -50,10 +56,9 @@ fn test_stream_options_merge_framing_wire_omits_framing_key() {
 
 #[test]
 fn test_stream_options_patch_framing_serializes_as_lowercase_string() {
-    let options = StreamOptions {
-        framing: Framing::Patch,
-        ..StreamOptions::default()
-    };
+    let options = stream_options(|o| {
+        o.framing = Framing::Patch;
+    });
 
     let encoded = serde_json::to_value(&options).unwrap();
 

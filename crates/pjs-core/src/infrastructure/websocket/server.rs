@@ -4,13 +4,13 @@ use super::{
     AdaptiveStreamController, ConnectionId, CreateSessionError, WriteFailure, WsMessage,
     controller::{connection_plan_budget_for, spawn_task},
     planner::MAX_QUEUED_OUTGOING_BYTES,
-    protocol::{CODE_CONFLICT, FixedError},
+    protocol::{ServerReply, bounded_log_text},
     send_with_write_timeout,
 };
 use crate::{
     Error as PjsError, Result as PjsResult,
     domain::SessionId,
-    error::{ErrorChain, PlanError, SessionIdViolation},
+    error::{ErrorChain, SessionIdViolation},
     infrastructure::{
         bounded_channel::{self, byte_bounded_channel},
         http::ShutdownSignal,
@@ -26,7 +26,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::{
-    FutureExt, StreamExt,
+    StreamExt,
     stream::{SplitSink, SplitStream},
 };
 use std::net::{IpAddr, SocketAddr};
@@ -36,10 +36,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
-
-/// `Error` reply code for a request the server cannot parse or accept.
-const CODE_BAD_REQUEST: u16 = 400;
+use tracing::{Instrument, debug, error, info, warn};
 
 /// Close code (RFC 6455) for a connection that violated the server's policy.
 const CLOSE_POLICY_VIOLATION: u16 = 1008;
@@ -47,46 +44,13 @@ const CLOSE_POLICY_VIOLATION: u16 = 1008;
 /// Close code (RFC 6455) sent to every open connection on server shutdown.
 const CLOSE_GOING_AWAY: u16 = 1001;
 
-/// Fixed reply text for undecodable input. Never built from the decode error:
-/// that text echoes attacker-chosen content back to the peer.
-const MALFORMED_MESSAGE: &str = "malformed message";
-
-/// Fixed reply text for a `StreamInit` carrying the nil UUID.
-const NIL_SESSION_ID: &str = "nil session id is not allowed";
-
-/// `Error` reply code for a `StreamInit` over the per-connection session cap.
-const CODE_TOO_MANY_SESSIONS: u16 = 429;
-
-/// Fixed reply text for a `StreamInit` over the per-connection session cap.
-const TOO_MANY_SESSIONS: &str = "too many live sessions on this connection";
-
-/// Fixed reply text for a `StreamInit` whose stream options fail validation.
-const INVALID_STREAM_OPTIONS: &str = "invalid stream options";
-
-/// Fixed reply text for a `StreamInit` whose id belongs to an existing session.
-const DUPLICATE_SESSION_ID: &str = "session id already in use";
-
-/// Reply for a rejected plan: the connection budget is transient (429), a
-/// document over the limits is permanent for that document (413), and a plan
-/// that cannot be serialized is a server fault (500).
-fn plan_rejection_reply(error: PlanError) -> FixedError {
-    match error {
-        PlanError::ConnectionBudgetExhausted { .. } => FixedError::PLAN_BUDGET_EXHAUSTED,
-        PlanError::UnitExceedsBudget { .. } => FixedError::FRAME_EXCEEDS_BUDGET,
-        PlanError::TooManyFrames { .. }
-        | PlanError::PlanBytesExceeded { .. }
-        | PlanError::PathTooDeep { .. } => FixedError::PLAN_TOO_LARGE,
-        PlanError::Unserializable => FixedError::PLAN_UNSERIALIZABLE,
-    }
-}
-
 /// A reply to an inbound message. The connection loop writes it straight to
 /// the socket, so a full frame queue cannot drop it.
 #[derive(Debug, Clone, Copy)]
 enum Reply {
     Error {
         session_id: Option<SessionId>,
-        error: FixedError,
+        reply: ServerReply,
     },
     Pong {
         timestamp: u64,
@@ -94,21 +58,18 @@ enum Reply {
 }
 
 impl Reply {
-    const fn error(session_id: Option<SessionId>, code: u16, reason: &'static str) -> Self {
-        Self::Error {
-            session_id,
-            error: FixedError { code, reason },
-        }
+    const fn error(session_id: Option<SessionId>, reply: ServerReply) -> Self {
+        Self::Error { session_id, reply }
     }
 }
 
 impl From<Reply> for WsMessage {
     fn from(reply: Reply) -> Self {
         match reply {
-            Reply::Error { session_id, error } => WsMessage::Error {
+            Reply::Error { session_id, reply } => WsMessage::Error {
                 session_id,
-                error: error.reason.to_owned(),
-                code: error.code,
+                error: reply.reason().to_owned(),
+                code: reply.code(),
             },
             Reply::Pong { timestamp } => WsMessage::Pong { timestamp },
         }
@@ -152,6 +113,31 @@ impl Handled {
     }
 }
 
+/// What [`AxumWebSocketTransport::send_frame`] did with a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+#[non_exhaustive]
+pub enum SendOutcome {
+    /// The frame is queued on the connection's outgoing channel.
+    Queued,
+    /// The frame was discarded for the given reason.
+    Dropped(DropReason),
+}
+
+/// Why [`AxumWebSocketTransport::send_frame`] discarded a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DropReason {
+    /// The connection has no outgoing channel.
+    NoConnection,
+    /// The message could not be serialized.
+    Unserializable,
+    /// Queuing the frame would exceed the connection's byte budget.
+    OverBudget,
+    /// The outgoing channel is full or closed.
+    ChannelUnavailable,
+}
+
 /// Capacity of each per-connection outgoing message channel.
 ///
 /// Bounds how many frames can queue for a slow client before `send_frame`
@@ -165,7 +151,7 @@ const OUTGOING_QUEUE_CAPACITY: usize = 1000;
 
 /// How often the background sweep started by the first WebSocket upgrade checks for streaming
 /// sessions older than [`SESSION_MAX_AGE`].
-const SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+const SESSION_CLEANUP_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Maximum age of a controller-tracked streaming session before the
 /// background sweep removes it (aborting its streaming task) even if the
@@ -362,8 +348,10 @@ impl AxumWebSocketTransport {
                     let Some(controller) = weak_controller.upgrade() else {
                         break;
                     };
-                    let pass = controller.cleanup_expired_sessions(SESSION_MAX_AGE);
-                    if AssertUnwindSafe(pass).catch_unwind().await.is_err() {
+                    let pass = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        controller.cleanup_expired_sessions(SESSION_MAX_AGE);
+                    }));
+                    if pass.is_err() {
                         error!("session cleanup sweep panicked; continuing");
                     }
                 }
@@ -513,7 +501,7 @@ impl AxumWebSocketTransport {
         transport.start_cleanup_sweep_once();
 
         if let Err(e) = transport.rate_limiter.check_request(client_ip) {
-            warn!("WebSocket upgrade denied for IP {}: {}", client_ip, e);
+            warn!(%client_ip, error = %e, "WebSocket upgrade denied");
             return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
         }
 
@@ -531,8 +519,9 @@ impl AxumWebSocketTransport {
             && !transport.allowed_origins.allows(origin)
         {
             warn!(
-                "WebSocket upgrade rejected for IP {}: disallowed Origin {:?}",
-                client_ip, origin
+                %client_ip,
+                origin = %bounded_log_text(&String::from_utf8_lossy(origin.as_bytes())),
+                "WebSocket upgrade rejected: disallowed Origin"
             );
             return StatusCode::FORBIDDEN.into_response();
         }
@@ -565,24 +554,33 @@ impl AxumWebSocketTransport {
 
     /// Handle WebSocket connection lifecycle
     pub async fn handle_socket(self: Arc<Self>, socket: WebSocket, client_ip: IpAddr) {
-        info!("New WebSocket connection established from {}", client_ip);
+        let connection_id = ConnectionId::new();
+        let span = tracing::info_span!("ws_connection", %connection_id, %client_ip);
+        self.run_connection(socket, client_ip, connection_id)
+            .instrument(span)
+            .await;
+    }
+
+    async fn run_connection(
+        self: Arc<Self>,
+        socket: WebSocket,
+        client_ip: IpAddr,
+        connection_id: ConnectionId,
+    ) {
+        info!("WebSocket connection established");
 
         let write_timeout = self.rate_limiter.config().write_timeout;
 
         let guard = match RateLimitGuard::new(self.rate_limiter.clone(), client_ip) {
             Ok(guard) => guard,
             Err(e) => {
-                warn!(
-                    "WebSocket connection rejected for IP {} (rate limit): {}",
-                    client_ip, e
-                );
+                warn!(error = %e, "WebSocket connection rejected (rate limit)");
                 let (mut sender, _) = socket.split();
                 close_policy_violation(&mut sender, e.to_string(), write_timeout).await;
                 return;
             }
         };
 
-        let connection_id = ConnectionId::new();
         let (outgoing_tx, outgoing_rx) =
             byte_bounded_channel::<String>(OUTGOING_QUEUE_CAPACITY, MAX_QUEUED_OUTGOING_BYTES);
         self.controller
@@ -596,7 +594,6 @@ impl AxumWebSocketTransport {
         ConnectionLoop {
             transport: &self,
             connection_id,
-            client_ip,
             write_timeout,
             guard: &guard,
             sender,
@@ -604,7 +601,7 @@ impl AxumWebSocketTransport {
         .run(outgoing_rx, receiver)
         .await;
 
-        info!("WebSocket connection closed for {}", client_ip);
+        info!("WebSocket connection closed");
     }
 
     /// Returns a shared handle to the underlying [`AdaptiveStreamController`].
@@ -615,7 +612,7 @@ impl AxumWebSocketTransport {
     /// Returns the number of currently active WebSocket connections.
     ///
     /// Useful for observability, health endpoints, and integration tests.
-    pub async fn active_connection_count(&self) -> usize {
+    pub fn active_connection_count(&self) -> usize {
         self.controller.connection_count()
     }
 
@@ -628,41 +625,44 @@ impl AxumWebSocketTransport {
     /// run until the in-flight branch finishes. Using `try_send` keeps that
     /// hazard from becoming a real deadlock.
     ///
-    /// Always returns `Ok(())` even when the frame is dropped (channel
-    /// full, or larger than `MAX_QUEUED_OUTGOING_BYTES`) — this mirrors
-    /// the underlying channel's own fire-and-forget delivery guarantee. Both
-    /// drop reasons are logged via `warn!`.
-    pub async fn send_frame(&self, connection: ConnectionId, message: WsMessage) -> PjsResult<()> {
-        let tx = self.controller.outgoing_for(connection);
-        let Some(tx) = tx else {
-            warn!("send_frame: no outgoing channel for connection {connection}");
-            return Ok(());
+    /// Returns [`SendOutcome::Dropped`] with the reason when the frame is not
+    /// queued (no connection, serialization failure, byte budget exceeded, or
+    /// channel full or closed); every drop is logged via `warn!`.
+    pub fn send_frame(&self, connection: ConnectionId, message: WsMessage) -> SendOutcome {
+        let Some(tx) = self.controller.outgoing_for(connection) else {
+            warn!(%connection, "send_frame: no outgoing channel");
+            return SendOutcome::Dropped(DropReason::NoConnection);
         };
         // Serialized once here, rather than in the consuming loop: this is
         // also what the byte-budget check in `try_send` measures, so the
         // queued-bytes accounting matches the actual bytes held in memory.
-        match serde_json::to_string(&message) {
-            Ok(json_str) => {
-                let len = json_str.len();
-                match tx.try_send(json_str, len) {
-                    Ok(()) => {}
-                    Err(bounded_channel::TrySendError::BudgetExceeded(_)) => {
-                        warn!(
-                            "send_frame: dropping frame for connection {connection} (byte budget exceeded, {len} bytes)"
-                        );
-                    }
-                    Err(bounded_channel::TrySendError::Channel(_)) => {
-                        warn!(
-                            "send_frame: dropping frame for connection {connection} (channel full or closed)"
-                        );
-                    }
-                }
-            }
+        Self::queue_serialized(&tx, connection, serde_json::to_string(&message))
+    }
+
+    fn queue_serialized(
+        tx: &bounded_channel::ByteBoundedSender<String>,
+        connection: ConnectionId,
+        serialized: serde_json::Result<String>,
+    ) -> SendOutcome {
+        let json_str = match serialized {
+            Ok(json_str) => json_str,
             Err(e) => {
-                warn!("send_frame: failed to serialize frame for connection {connection}: {e}");
+                warn!(%connection, error = %e, "send_frame: failed to serialize frame");
+                return SendOutcome::Dropped(DropReason::Unserializable);
+            }
+        };
+        let len = json_str.len();
+        match tx.try_send(json_str, len) {
+            Ok(()) => SendOutcome::Queued,
+            Err(bounded_channel::TrySendError::BudgetExceeded(_)) => {
+                warn!(%connection, len, "send_frame: dropping frame (byte budget exceeded)");
+                SendOutcome::Dropped(DropReason::OverBudget)
+            }
+            Err(bounded_channel::TrySendError::Channel(_)) => {
+                warn!(%connection, "send_frame: dropping frame (channel full or closed)");
+                SendOutcome::Dropped(DropReason::ChannelUnavailable)
             }
         }
-        Ok(())
     }
 
     /// Handles one decoded message from `connection` and queues its reply.
@@ -690,7 +690,8 @@ impl AxumWebSocketTransport {
     ) -> PjsResult<()> {
         let Handled { reply, outcome } = self.dispatch(connection, message).await;
         if let Some(reply) = reply {
-            self.send_frame(connection, reply.into()).await?;
+            // A reply the full queue drops is already logged by `send_frame`.
+            let _ = self.send_frame(connection, reply.into());
         }
         outcome
     }
@@ -707,7 +708,7 @@ impl AxumWebSocketTransport {
             } => {
                 if session_id.as_uuid().is_nil() {
                     return Handled::rejected(
-                        Reply::error(None, CODE_BAD_REQUEST, NIL_SESSION_ID),
+                        Reply::error(None, ServerReply::NilSessionId),
                         PjsError::InvalidSessionId(SessionIdViolation::Nil),
                     );
                 }
@@ -719,78 +720,50 @@ impl AxumWebSocketTransport {
                     Ok(()) => {}
                     Err(e @ CreateSessionError::AlreadyExists(_)) => {
                         return Handled::rejected(
-                            Reply::error(Some(session_id), CODE_CONFLICT, DUPLICATE_SESSION_ID),
+                            Reply::error(Some(session_id), ServerReply::DuplicateSessionId),
                             e,
                         );
                     }
                     Err(e @ CreateSessionError::TooManySessions { .. }) => {
                         return Handled::rejected(
-                            Reply::error(
-                                Some(session_id),
-                                CODE_TOO_MANY_SESSIONS,
-                                TOO_MANY_SESSIONS,
-                            ),
-                            e,
-                        );
-                    }
-                    Err(e @ CreateSessionError::InvalidOptions(_)) => {
-                        return Handled::rejected(
-                            Reply::error(
-                                Some(session_id),
-                                CODE_BAD_REQUEST,
-                                INVALID_STREAM_OPTIONS,
-                            ),
+                            Reply::error(Some(session_id), ServerReply::TooManySessions),
                             e,
                         );
                     }
                     Err(e @ CreateSessionError::PlanRejected(plan_error)) => {
                         return Handled::rejected(
-                            Reply::Error {
-                                session_id: Some(session_id),
-                                error: plan_rejection_reply(plan_error),
-                            },
+                            Reply::error(Some(session_id), plan_error.into()),
                             e,
                         );
                     }
                 }
-                if let Err(e) = self
-                    .controller
-                    .start_streaming(connection, session_id)
-                    .await
-                {
+                if let Err(e) = self.controller.start_streaming(connection, session_id) {
                     return Handled::failed(e);
                 }
-                info!("Created new streaming session for connection {connection}");
+                info!(%connection, %session_id, "Created new streaming session");
             }
             WsMessage::FrameAck {
                 session_id,
                 frame_id,
                 processing_time_ms,
             } => {
-                debug!(
-                    "Received frame ack: session={:?}, frame={}, time={}ms",
-                    session_id, frame_id, processing_time_ms
-                );
-                if let Err(e) = self
-                    .controller
-                    .handle_frame_ack(connection, session_id, frame_id, processing_time_ms)
-                    .await
-                {
-                    debug!(
-                        "Ignored frame ack for connection {connection}: {}",
-                        ErrorChain(&e)
-                    );
+                debug!(%session_id, frame_id, processing_time_ms, "Received frame ack");
+                if let Err(e) = self.controller.handle_frame_ack(
+                    connection,
+                    session_id,
+                    frame_id,
+                    processing_time_ms,
+                ) {
+                    debug!(%connection, error = %ErrorChain(&e), "Ignored frame ack");
                 }
             }
             WsMessage::StreamCancel { session_id } => {
-                if !self.controller.remove_session(connection, session_id).await {
-                    debug!(
-                        "Ignored cancel of unknown session {session_id} on connection {connection}"
-                    );
+                if !self.controller.remove_session(connection, session_id) {
+                    debug!(%connection, %session_id, "Ignored cancel of unknown session");
                 }
             }
             WsMessage::Ping { timestamp } => {
-                debug!("Received ping with timestamp: {}", timestamp);
+                debug!(timestamp, "Received ping");
                 return Handled::replied(Reply::Pong { timestamp });
             }
             WsMessage::Error {
@@ -804,11 +777,11 @@ impl AxumWebSocketTransport {
                 // value itself, at WARN (see #415 S1: unbounded WARN
                 // amplification from a single rate-limited connection).
                 warn!(
-                    "Received error from client on connection {}: session_id={:?}, code={}, error_len={}",
-                    connection,
-                    session_id,
+                    %connection,
+                    ?session_id,
                     code,
-                    error.len()
+                    error_len = error.len(),
+                    "Received error from client"
                 );
             }
             // Server-to-client messages: a client sending them gets no reply
@@ -817,10 +790,7 @@ impl AxumWebSocketTransport {
             | WsMessage::StreamPatch { .. }
             | WsMessage::StreamComplete { .. }
             | WsMessage::Pong { .. } => {
-                debug!(
-                    "Ignored server-bound message {} from connection {connection}",
-                    message.kind()
-                );
+                debug!(%connection, kind = message.kind(), "Ignored server-bound message");
             }
         }
         Handled::ok()
@@ -869,7 +839,7 @@ async fn send_close(
         reason: reason.into(),
     }));
     if let Err(e) = send_with_write_timeout(sender, close, write_timeout).await {
-        debug!("Failed to send Close frame {code}: {e}");
+        debug!(code, error = %e, "Failed to send Close frame");
     }
 }
 
@@ -888,7 +858,6 @@ async fn close_policy_violation(
 struct ConnectionLoop<'a> {
     transport: &'a AxumWebSocketTransport,
     connection_id: ConnectionId,
-    client_ip: IpAddr,
     write_timeout: Duration,
     guard: &'a RateLimitGuard,
     sender: SplitSink<WebSocket, Message>,
@@ -928,7 +897,7 @@ impl ConnectionLoop<'_> {
         match send_with_write_timeout(&mut self.sender, message, self.write_timeout).await {
             Ok(()) => ControlFlow::Continue(()),
             Err(e) => {
-                error!("Failed to send {what} to client: {e}");
+                error!(what, error = %e, "Failed to send to client");
                 ControlFlow::Break(())
             }
         }
@@ -938,7 +907,7 @@ impl ConnectionLoop<'_> {
         match send_reply(&mut self.sender, &reply.into(), self.write_timeout).await {
             Ok(()) => ControlFlow::Continue(()),
             Err(e) => {
-                error!("Failed to send reply to client: {}", e);
+                error!(error = %e, "Failed to send reply to client");
                 ControlFlow::Break(())
             }
         }
@@ -950,10 +919,7 @@ impl ConnectionLoop<'_> {
         match self.guard.check_message(len) {
             Ok(()) => true,
             Err(e) => {
-                warn!(
-                    "Inbound {kind} frame rejected for IP {} (rate limit): {}",
-                    self.client_ip, e
-                );
+                warn!(kind, error = %e, "Inbound frame rejected (rate limit)");
                 close_policy_violation(&mut self.sender, e.to_string(), self.write_timeout).await;
                 false
             }
@@ -969,21 +935,16 @@ impl ConnectionLoop<'_> {
                 match serde_json::from_str::<WsMessage>(&text) {
                     Ok(ws_message) => {
                         debug!(
-                            "Inbound {} message from connection {}, {} bytes",
-                            ws_message.kind(),
-                            self.connection_id,
-                            text.len()
+                            kind = ws_message.kind(),
+                            bytes = text.len(),
+                            "Inbound message"
                         );
                         let Handled { reply, outcome } = self
                             .transport
                             .dispatch(self.connection_id, ws_message)
                             .await;
                         if let Err(e) = outcome {
-                            debug!(
-                                "Rejected message from connection {}: {}",
-                                self.connection_id,
-                                ErrorChain(&e)
-                            );
+                            debug!(error = %ErrorChain(&e), "Rejected message");
                         }
                         match reply {
                             Some(reply) => self.write_reply(reply).await,
@@ -992,12 +953,12 @@ impl ConnectionLoop<'_> {
                     }
                     Err(e) => {
                         warn!(
-                            "Failed to parse WebSocket message: {:?} at line {} column {}",
-                            e.classify(),
-                            e.line(),
-                            e.column()
+                            class = ?e.classify(),
+                            line = e.line(),
+                            column = e.column(),
+                            "Failed to parse WebSocket message"
                         );
-                        self.write_reply(Reply::error(None, CODE_BAD_REQUEST, MALFORMED_MESSAGE))
+                        self.write_reply(Reply::error(None, ServerReply::Malformed))
                             .await
                     }
                 }
@@ -1006,7 +967,7 @@ impl ConnectionLoop<'_> {
                 if !self.admit(data.len(), "binary").await {
                     return ControlFlow::Break(());
                 }
-                debug!("Received binary data: {} bytes", data.len());
+                debug!(bytes = data.len(), "Received binary data");
                 ControlFlow::Continue(())
             }
             Ok(Message::Ping(data)) => {
@@ -1014,7 +975,7 @@ impl ConnectionLoop<'_> {
                 match send_with_write_timeout(&mut self.sender, pong, self.write_timeout).await {
                     Ok(()) => ControlFlow::Continue(()),
                     Err(e) => {
-                        error!("Failed to send pong: {}", e);
+                        error!(error = %e, "Failed to send pong");
                         ControlFlow::Break(())
                     }
                 }
@@ -1028,7 +989,7 @@ impl ConnectionLoop<'_> {
                 ControlFlow::Break(())
             }
             Err(e) => {
-                error!("WebSocket error: {}", e);
+                error!(error = %e, "WebSocket error");
                 ControlFlow::Break(())
             }
         }
@@ -1099,7 +1060,6 @@ mod tests {
         transport
             .controller
             .start_streaming(owner, session_id)
-            .await
             .unwrap();
     }
 
@@ -1109,6 +1069,18 @@ mod tests {
             data: json!({"test": "value"}),
             options: StreamOptions::default(),
         }
+    }
+
+    #[test]
+    fn test_queue_serialized_reports_unserializable_without_queueing() {
+        let (tx, mut rx) = byte_bounded_channel::<String>(4, 1024);
+        let failure = serde_json::from_str::<()>("x").unwrap_err();
+
+        let outcome =
+            AxumWebSocketTransport::queue_serialized(&tx, ConnectionId::new(), Err(failure));
+
+        assert_eq!(outcome, SendOutcome::Dropped(DropReason::Unserializable));
+        assert!(rx.try_recv().is_err());
     }
 
     fn register_outgoing(
@@ -1158,7 +1130,10 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert_eq!(reply_code(rx.try_recv().unwrap()), CODE_CONFLICT);
+        assert_eq!(
+            reply_code(rx.try_recv().unwrap()),
+            ServerReply::DuplicateSessionId.code()
+        );
         assert_eq!(transport.controller.session_count(connection), 1);
     }
 
@@ -1189,32 +1164,9 @@ mod tests {
         let result = transport.handle_message(connection, stream_init(nil)).await;
 
         assert!(result.is_err());
-        assert_eq!(reply_code(rx.try_recv().unwrap()), CODE_BAD_REQUEST);
-        assert_eq!(transport.controller.session_count(connection), 0);
-    }
-
-    #[tokio::test]
-    async fn test_handle_message_invalid_options_are_rejected_with_400_and_no_session() {
-        let transport = AxumWebSocketTransport::new();
-        let connection = ConnectionId::new();
-        let mut rx = register_outgoing(&transport, connection);
-        let init = WsMessage::StreamInit {
-            session_id: SessionId::new(),
-            data: json!({}),
-            options: StreamOptions {
-                max_frame_size: 100,
-                ..StreamOptions::default()
-            },
-        };
-
-        let result = transport.handle_message(connection, init).await;
-
-        assert!(result.is_err());
-        let reply = serde_json::from_str::<WsMessage>(&rx.try_recv().unwrap().into_inner());
-        assert_matches!(
-            &reply,
-            Ok(WsMessage::Error { code: 400, error, .. }) if error == INVALID_STREAM_OPTIONS,
-            "{reply:?}"
+        assert_eq!(
+            reply_code(rx.try_recv().unwrap()),
+            ServerReply::NilSessionId.code()
         );
         assert_eq!(transport.controller.session_count(connection), 0);
     }
@@ -1239,7 +1191,10 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert_eq!(reply_code(rx.try_recv().unwrap()), CODE_TOO_MANY_SESSIONS);
+        assert_eq!(
+            reply_code(rx.try_recv().unwrap()),
+            ServerReply::TooManySessions.code()
+        );
         assert_eq!(transport.controller.session_count(connection), 64);
     }
 
@@ -1372,8 +1327,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(5)).await;
         transport
             .controller
-            .cleanup_expired_sessions(Duration::ZERO)
-            .await;
+            .cleanup_expired_sessions(Duration::ZERO);
         while rx.try_recv().is_ok() {}
 
         transport
@@ -1440,10 +1394,10 @@ mod tests {
             code: 0,
         };
 
-        transport
-            .send_frame(connection, oversized_message)
-            .await
-            .expect("send_frame returns Ok even when it drops the frame");
+        assert_eq!(
+            transport.send_frame(connection, oversized_message),
+            SendOutcome::Dropped(DropReason::OverBudget)
+        );
 
         assert!(
             rx.try_recv().is_err(),
@@ -1469,19 +1423,16 @@ mod tests {
 
         let connection = connection_id;
         for _ in 0..OUTGOING_QUEUE_CAPACITY {
-            transport
-                .send_frame(connection, WsMessage::Ping { timestamp: 0 })
-                .await
-                .expect("send_frame should accept sends up to channel capacity");
+            assert_eq!(
+                transport.send_frame(connection, WsMessage::Ping { timestamp: 0 }),
+                SendOutcome::Queued
+            );
         }
 
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+        assert_eq!(
             transport.send_frame(connection, WsMessage::Ping { timestamp: 0 }),
-        )
-        .await
-        .expect("send_frame must not block when the outgoing channel is full")
-        .expect("send_frame must return Ok even when dropping the overflow frame");
+            SendOutcome::Dropped(DropReason::ChannelUnavailable)
+        );
 
         rx.close();
         let mut drained = 0;
@@ -1573,7 +1524,7 @@ mod tests {
             .await
             .expect("the Close frame was sent before the drain completed");
         assert_eq!(code, CLOSE_GOING_AWAY);
-        assert_eq!(server.transport.active_connection_count().await, 0);
+        assert_eq!(server.transport.active_connection_count(), 0);
     }
 
     #[tokio::test]
@@ -1595,6 +1546,6 @@ mod tests {
             rest.is_empty(),
             "no WebSocket task may have started: {rest:?}"
         );
-        assert_eq!(server.transport.active_connection_count().await, 0);
+        assert_eq!(server.transport.active_connection_count(), 0);
     }
 }

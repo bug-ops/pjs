@@ -10,7 +10,7 @@ created: 2026-11-15
 status: partial
 related:
   - "[[039-partial-json-jiter-parser/spec]]"
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan 039: Partial JSON Parser (as built)

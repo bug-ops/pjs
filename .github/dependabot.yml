@@ -53,6 +53,30 @@ updates:
           - "minor"
           - "patch"
 
+  # JS client toolchain (npm project with lockfile)
+  - package-ecosystem: "npm"
+    directory: "/crates/pjs-js-client"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Etc/GMT-0"
+    cooldown:
+      default-days: 7
+    labels:
+      - "dependencies"
+      - "pjs-js-client"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directories:

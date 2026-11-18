@@ -15,7 +15,7 @@ code:
   - crates/pjs-core/src/error.rs
   - crates/pjs-core/Cargo.toml
   - crates/pjs-core/build.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan 059: Crate API, Errors and Features (as built)
@@ -50,7 +50,7 @@ See spec FR-002 to FR-004. Feature-gated root items: `SecureWebSocketHandler` (`
 |---|---|---|---|
 | `Error::category()` | none | one of six static labels (`json`, `validation`, `security`, `network`, `compression`, `client`) | stable strings |
 | `Error::from(serde_json::Error)` | none | `Error::Serialization` keeping the source | no `From<io::Error>`/`From<Utf8Error>` |
-| `Error::is_validation_error()` | none | true for `InvalidSessionId`, `InvalidStreamOptions`, `Patch` | `SessionLimitReached` is a client error |
+| `Error::is_validation_error()` | none | true for `InvalidSessionId`, `Patch`, `FrameSequence` | `SessionLimitReached` is a client error |
 | `global_allocator_name()` | none | `"mimalloc"` or `"system"` | reflects compile-time feature only |
 
 ## Testing strategy

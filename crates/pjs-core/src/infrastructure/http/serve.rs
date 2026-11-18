@@ -368,7 +368,7 @@ pub async fn serve_with_limits(
             max_connections_per_ip,
             ..Default::default()
         }));
-        limiter.spawn_cleanup_task(Duration::from_secs(60));
+        limiter.spawn_cleanup_task(Duration::from_mins(1));
         limiter
     });
 

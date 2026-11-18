@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `websocket_controller` benchmark in `pjs-bench`, and `client_apply_patches` and `planner_round_trip` fuzz targets (#664, #660) (#681)
 - `client_apply_patches` bench behind the `pjs_bench` cfg, a shared allocation-free `serialized_len` helper, and CI steps for test targets in the feature matrix and `npm run lint` (#670, #680, #679) (#688)
 - Bench shapes for the offload gate calibration in `pjs-bench` (#686) (#691)
+- Miri CI job for `parser::buffer_pool` and `parser::aligned_alloc`, credential patterns in `.gitignore` with a gitleaks allowlist, and tracing spans for WebSocket connections and sessions (#716, #697, #708, #726)
 
 ### Changed
 
@@ -79,6 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING** `StreamOptions.compression` removed (it had no effect); servers still accept the legacy key, but clients from this release omit it and are rejected by older servers, which require it: upgrade servers first (#655) (#691)
 - Offload gate weighs object-root entries, container elements and integers (#683) (#691)
 - JS client validates patch paths without allocating and tokenizes them once (#685) (#691)
+- `JsonPath` addresses every JSON key through quoted segments (`$["a.b"]`), accepts only canonical indices, `append_key` and `from_segments` cannot fail, `is_valid_key` is removed, `PathSegment` is closed and `to_json_pointer` renders the root as `""`; WebSocket `WirePath` and `WireSegment` are replaced by `JsonPath` (**BREAKING**) (#698, #713, #699, #726)
+- `StreamOptions` uses `MaxFrameSize` and `Option<NonZeroU32>`, `request_stream` takes `StreamOptions`, invalid options are rejected at decode with a 400 reply without a session id, and WebSocket error replies are one `ServerReply` enum (**BREAKING**) (#700, #702, #707, #726)
+- WebSocket controller and transport methods that never await are sync, `send_frame` returns `SendOutcome`, the per-session rate-limit API and the HTTP `RateLimitConfig` are removed, `RateLimitMiddleware::new` takes `security::RateLimitConfig`, and `WsMessage`, `WirePatch`, `Framing` and `WebSocketClientConfig` are `#[non_exhaustive]` (**BREAKING**) (#705, #706, #704, #707, #726)
+- `chrono` is replaced by `jiff` in public domain and application types; timestamps print `Z` instead of `+00:00` and fractional seconds are no longer padded to groups of three (**BREAKING**) (#692, #726)
+- WebSocket client rejects non-monotonic `frame_id` and mixed Frame/Patch framing with `PjsError::FrameSequence`, and applies merge frames without cloning the payload (#718, #701, #726)
+- JS client rejects non-canonical path indices, parses quoted keys and reports `appliedPatches` and `skippedPatches` in `PatchApplied`; its dev toolchain moves to TypeScript 6.0 with an npm entry in Dependabot (#713, #698, #693, #694, #726)
+- `tokio` no longer enables `parking_lot` in `pjson-rs`, `Duration::from_mins` replaces `from_secs(60/120)`, and shared helpers replace duplicated path, length and timeout code (#709, #710, #699, #703, #711, #726)
+- Offload gate calibration covers arrays of nested small objects (#715, #726)
 
 ### Fixed
 
@@ -106,6 +115,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pjs-js-client` lint works with an ESLint flat config (#679) (#688)
 - WebSocket error and pong replies can no longer be dropped by a full outgoing queue (#689) (#691)
 - Fuzz oracle compares the re-parsed document (#684) and checks plan bytes against document size (#687) (#691)
+- `pjs-js-client` `JsonReconstructor` keeps values under the keys `constructor`, `prototype` and `__proto__` (#712, #726)
+- `ws_message_decode` fuzz oracle no longer drifts on a 199-digit integer (#690, #726)
+- `JsonPath::from_str` rejects unterminated, signed and zero-padded indices (#713, #726)
 
 ## [0.7.0] - 2026-08-19
 

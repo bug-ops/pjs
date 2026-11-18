@@ -51,7 +51,7 @@ async fn test_publish_single_event() {
 
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event).await.unwrap();
@@ -67,7 +67,7 @@ async fn test_publish_multiple_events() {
     for _ in 0..5 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -82,12 +82,12 @@ async fn test_publish_different_event_types() {
 
     let event1 = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     let event2 = DomainEvent::SessionClosed {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event1).await.unwrap();
@@ -116,17 +116,17 @@ async fn test_events_by_type_filtering() {
 
     let event1 = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     let event2 = DomainEvent::SessionClosed {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     let event3 = DomainEvent::SessionActivated {
         session_id: SessionId::new(),
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event1).await.unwrap();
@@ -161,17 +161,17 @@ async fn test_events_for_session_filtering() {
 
     let event1 = DomainEvent::SessionActivated {
         session_id: session1,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     let event2 = DomainEvent::SessionActivated {
         session_id: session2,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     let event3 = DomainEvent::SessionClosed {
         session_id: session1,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event1).await.unwrap();
@@ -205,7 +205,7 @@ async fn test_recent_events_respects_limit() {
     for _ in 0..10 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -223,7 +223,7 @@ async fn test_recent_events_all_when_under_limit() {
     for _ in 0..3 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -241,7 +241,7 @@ async fn test_recent_events_returns_true_newest_first_order() {
     for _ in 0..20 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -270,7 +270,7 @@ async fn test_clear_events() {
     for _ in 0..5 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -311,7 +311,7 @@ async fn test_add_notification_callback() {
     let session_id = SessionId::new();
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event).await.unwrap();
@@ -344,7 +344,7 @@ async fn test_multiple_notification_callbacks() {
     let session_id = SessionId::new();
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event).await.unwrap();
@@ -372,7 +372,7 @@ async fn test_remove_notification_callback() {
     let session_id = SessionId::new();
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event).await.unwrap();
@@ -406,7 +406,7 @@ async fn test_callback_receives_correct_event_data() {
     let session_id = SessionId::new();
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event).await.unwrap();
@@ -428,7 +428,7 @@ async fn test_channel_receives_events() {
 
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event).await.unwrap();
@@ -449,7 +449,7 @@ async fn test_channel_receives_multiple_events() {
     for _ in 0..3 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -472,12 +472,12 @@ async fn test_channel_preserves_event_order() {
 
     let event1 = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     let event2 = DomainEvent::SessionClosed {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event1).await.unwrap();
@@ -511,7 +511,7 @@ async fn test_concurrent_publishing() {
             let session_id = SessionId::new();
             let event = DomainEvent::SessionActivated {
                 session_id,
-                timestamp: chrono::Utc::now(),
+                timestamp: jiff::Timestamp::now(),
             };
             pub_clone.publish(event).await.unwrap();
         });
@@ -537,7 +537,7 @@ async fn test_concurrent_read_write() {
             let session_id = SessionId::new();
             let event = DomainEvent::SessionActivated {
                 session_id,
-                timestamp: chrono::Utc::now(),
+                timestamp: jiff::Timestamp::now(),
             };
             pub_clone.publish(event).await.unwrap();
         });
@@ -588,7 +588,7 @@ async fn test_concurrent_callbacks() {
     let session_id = SessionId::new();
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event).await.unwrap();
@@ -612,7 +612,7 @@ async fn test_memory_management_evicts_old_events() {
     for _ in 0..10500 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -659,7 +659,7 @@ async fn test_concurrent_eviction_stays_bounded_near_target() {
                 let events: Vec<DomainEvent> = (0..batch_size)
                     .map(|_| DomainEvent::SessionActivated {
                         session_id,
-                        timestamp: chrono::Utc::now(),
+                        timestamp: jiff::Timestamp::now(),
                     })
                     .collect();
                 publisher.publish_batch(events).await.unwrap();
@@ -703,7 +703,7 @@ async fn test_eviction_removes_oldest_by_sequence_not_arbitrary_entries() {
     for _ in 0..total {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -735,7 +735,7 @@ async fn test_eviction_boundary_at_capacity_does_not_evict() {
     for _ in 0..10_000 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -761,7 +761,7 @@ async fn test_eviction_boundary_one_over_capacity_evicts_down_to_target() {
     for _ in 0..10_001 {
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         publisher.publish(event).await.unwrap();
     }
@@ -792,7 +792,7 @@ async fn test_clone_shares_state() {
 
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher1.publish(event).await.unwrap();
@@ -820,7 +820,7 @@ async fn test_clone_shared_callbacks() {
     let session_id = SessionId::new();
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher2.publish(event).await.unwrap();
@@ -843,11 +843,11 @@ async fn test_publish_batch_future_exists() {
     let events = vec![
         DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         },
         DomainEvent::SessionClosed {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         },
     ];
 
@@ -873,12 +873,12 @@ async fn test_publish_batch_stamps_sequence_in_input_order() {
             if i < batch_size / 2 {
                 DomainEvent::SessionActivated {
                     session_id,
-                    timestamp: chrono::Utc::now(),
+                    timestamp: jiff::Timestamp::now(),
                 }
             } else {
                 DomainEvent::SessionClosed {
                     session_id,
-                    timestamp: chrono::Utc::now(),
+                    timestamp: jiff::Timestamp::now(),
                 }
             }
         })
@@ -923,7 +923,7 @@ async fn test_publish_batch_over_capacity_evicts_down_to_target_in_one_pass() {
     let events: Vec<DomainEvent> = (0..batch_size)
         .map(|_| DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         })
         .collect();
 
@@ -950,7 +950,7 @@ async fn test_events_preserve_metadata() {
 
     let event = DomainEvent::SessionActivated {
         session_id,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
 
     publisher.publish(event).await.unwrap();

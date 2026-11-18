@@ -20,13 +20,11 @@
 //! The pass costs 24 bytes per container of transient memory, bounded by the
 //! inbound message cap.
 
-use super::protocol::{
-    Framing, MAX_PATCH_PATH_DEPTH, StreamOptions, WirePatch, WirePath, WireSegment, WsMessage,
-};
-use crate::serialized_len::json_len;
+use super::protocol::{Framing, MAX_PATCH_PATH_DEPTH, StreamOptions, WirePatch, WsMessage};
+use crate::serialized_len::{decimal_digits, json_len, json_str_len};
 use crate::{
-    domain::{Priority, SessionId},
-    error::{PlanError, StreamOptionsError},
+    domain::{JsonPath, PathSegment, Priority, SessionId},
+    error::PlanError,
 };
 use serde_json::{Map, Value};
 use std::{collections::HashMap, time::Duration};
@@ -34,9 +32,6 @@ use std::{collections::HashMap, time::Duration};
 /// Cumulative byte budget of one connection's outgoing channel, and therefore
 /// the largest message the planner may produce.
 pub(super) const MAX_QUEUED_OUTGOING_BYTES: usize = 16 * 1024 * 1024;
-
-/// Smallest accepted `StreamOptions::max_frame_size`.
-pub(super) const MIN_FRAME_SIZE: usize = 1024;
 
 /// Bytes a frame envelope may add around its payload or patch list.
 pub(super) const ENVELOPE_RESERVE: usize = 256;
@@ -66,27 +61,17 @@ pub(super) struct PlanOptions {
     pub(super) frame_interval: Option<Duration>,
 }
 
-impl TryFrom<&StreamOptions> for PlanOptions {
-    type Error = StreamOptionsError;
-
-    fn try_from(options: &StreamOptions) -> Result<Self, Self::Error> {
-        if options.max_frame_size < MIN_FRAME_SIZE {
-            return Err(StreamOptionsError::MaxFrameSizeTooSmall {
-                requested: options.max_frame_size,
-                min: MIN_FRAME_SIZE,
-            });
-        }
-        let frame_interval = match options.client_fps {
-            Some(0) => return Err(StreamOptionsError::ZeroClientFps),
-            Some(fps) => Some(Duration::from_secs(1) / fps),
-            None => None,
-        };
-        Ok(Self {
+impl From<&StreamOptions> for PlanOptions {
+    fn from(options: &StreamOptions) -> Self {
+        Self {
             framing: options.framing,
-            frame_limit: options.max_frame_size.min(MAX_QUEUED_OUTGOING_BYTES) - ENVELOPE_RESERVE,
+            frame_limit: options.max_frame_size.get().min(MAX_QUEUED_OUTGOING_BYTES)
+                - ENVELOPE_RESERVE,
             priority_mapping: options.priority_mapping.clone(),
-            frame_interval,
-        })
+            frame_interval: options
+                .client_fps
+                .map(|fps| Duration::from_secs(1) / fps.get()),
+        }
     }
 }
 
@@ -183,6 +168,15 @@ const ELEMENT_COST: usize = 3;
 /// 38 keeps every shape within 1.06x and the 16 KiB reference inline.
 const ROOT_ENTRY_COST: usize = 38;
 
+/// Extra weight of one non-empty array or object below the document root.
+///
+/// A nested container is planned and framed as its own unit, beyond its
+/// children's [`ELEMENT_COST`] (#715). Measured with the nested-object shapes
+/// `[{"a":{"b":0}}; n]` to depth 4: without it they planned 1.17x-1.41x the
+/// 32 KiB mixed reference; 4 keeps every shape within 0.97x, 3 left the deepest
+/// at 1.04x to 1.10x depending on the reference run.
+const NESTED_COST: usize = 4;
+
 /// Per-value weights of one early-exit walk.
 #[derive(Clone, Copy)]
 struct Weights {
@@ -192,6 +186,8 @@ struct Weights {
     element: usize,
     /// Per entry of an object root, additional to `element`.
     root_entry: usize,
+    /// Once per non-empty container below the document root.
+    nested: usize,
 }
 
 const SIZE_BOUND: Weights = Weights {
@@ -199,6 +195,7 @@ const SIZE_BOUND: Weights = Weights {
     int_extra: 0,
     element: 0,
     root_entry: 0,
+    nested: 0,
 };
 
 const PLAN_COST: Weights = Weights {
@@ -206,6 +203,7 @@ const PLAN_COST: Weights = Weights {
     int_extra: INT_COST,
     element: ELEMENT_COST,
     root_entry: ROOT_ENTRY_COST,
+    nested: NESTED_COST,
 };
 
 /// Whether `value` certainly serializes to more than `limit` bytes.
@@ -229,9 +227,10 @@ pub(super) fn exceeds_size(value: &Value, limit: usize) -> bool {
 ///
 /// The budget is in byte-equivalents of planning time, not a size bound. A
 /// scalar string, `[]` and `{}` weigh exactly their serialized bytes. Any
-/// other container adds `ELEMENT_COST` per child and, for an object root,
-/// `ROOT_ENTRY_COST` per entry; an integer weighs its digits plus `INT_COST`
-/// and a float the fixed `FLOAT_COST`. A float-free document therefore costs at
+/// other non-empty container adds `ELEMENT_COST` per child and, when it is not
+/// the document root, `NESTED_COST` once, because a nested container is planned
+/// and framed as its own unit; an object root adds `ROOT_ENTRY_COST` per entry;
+/// an integer weighs its digits plus `INT_COST` and a float the fixed `FLOAT_COST`. A float-free document therefore costs at
 /// least its serialized size, and an entry-dense document reaches the budget at
 /// a smaller size, in step with the time it takes to plan. The estimate assumes
 /// the default `serde_json::Number`.
@@ -253,11 +252,9 @@ fn exceeds(value: &Value, limit: usize, weights: Weights) -> bool {
     let mut pending = vec![value];
     let mut is_root = true;
     while let Some(node) = pending.pop() {
-        let root_entry = if std::mem::take(&mut is_root) {
-            weights.root_entry
-        } else {
-            0
-        };
+        let at_root = std::mem::take(&mut is_root);
+        let root_entry = if at_root { weights.root_entry } else { 0 };
+        let nested = if at_root { 0 } else { weights.nested };
         // Every pending child adds at least 1, so later ones can never be reached.
         let room = limit.saturating_sub(bound).saturating_add(1);
         let weight = match node {
@@ -270,13 +267,18 @@ fn exceeds(value: &Value, limit: usize, weights: Weights) -> bool {
             Value::Number(n) => number_weight(n, weights),
             Value::Array(items) => {
                 pending.extend(items.iter().take(room));
+                let children = items.len().saturating_mul(weights.element);
+                let own = if items.is_empty() { 0 } else { nested };
                 (2 + items.len().saturating_sub(1))
-                    .saturating_add(items.len().saturating_mul(weights.element))
+                    .saturating_add(children)
+                    .saturating_add(own)
             }
             Value::Object(map) => {
                 let per_entry = weights.element.saturating_add(root_entry);
+                let own = if map.is_empty() { 0 } else { nested };
                 let mut size = (2 + map.len().saturating_sub(1))
-                    .saturating_add(map.len().saturating_mul(per_entry));
+                    .saturating_add(map.len().saturating_mul(per_entry))
+                    .saturating_add(own);
                 for (key, child) in map.iter().take(room) {
                     let Some(key_size) = string_size_within(key, room.saturating_sub(size)) else {
                         return true;
@@ -299,16 +301,15 @@ fn exceeds(value: &Value, limit: usize, weights: Weights) -> bool {
 ///
 /// Scans only when `s.len() + 2 < room`, so one call costs O(`room`).
 fn string_size_within(s: &str, room: usize) -> Option<usize> {
-    (s.len().saturating_add(2) < room).then(|| string_size(s))
+    (s.len().saturating_add(2) < room).then(|| json_str_len(s))
 }
 
 /// Weight of `n`: its digits for an integer, `weights.float` for a float.
 fn number_weight(n: &serde_json::Number, weights: Weights) -> usize {
-    let digits = |magnitude: u64| magnitude.checked_ilog10().map_or(1, |d| d as usize + 1);
     if let Some(u) = n.as_u64() {
-        digits(u) + weights.int_extra
+        decimal_digits(u) + weights.int_extra
     } else if let Some(i) = n.as_i64() {
-        1 + digits(i.unsigned_abs()) + weights.int_extra
+        1 + decimal_digits(i.unsigned_abs()) + weights.int_extra
     } else {
         weights.float
     }
@@ -353,7 +354,7 @@ fn measure(value: &Value, level: usize, out: &mut Vec<Measure>) -> Result<Measur
             let before = out.len();
             for (i, (key, item)) in map.iter().enumerate() {
                 let child = measure(item, level + 1, out)?;
-                size += string_size(key) + 1 + child.size + usize::from(i > 0);
+                size += json_str_len(key) + 1 + child.size + usize::from(i > 0);
                 depth = depth.max(child.depth);
             }
             Ok(settle(out, slot, size, depth + 1, before))
@@ -391,20 +392,9 @@ fn settle(out: &mut [Measure], slot: usize, size: usize, depth: usize, before: u
     measure
 }
 
-/// Serialized length of a string value, quotes included.
-fn string_size(s: &str) -> usize {
-    // Only ASCII bytes are ever escaped, and UTF-8 continuation bytes are >= 0x80.
-    let extra = |byte: u8| match byte {
-        b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 1,
-        0..0x20 => 5,
-        _ => 0,
-    };
-    2 + s.len() + s.bytes().map(extra).sum::<usize>()
-}
-
 fn scalar_size(value: &Value) -> usize {
     match value {
-        Value::String(s) => string_size(s),
+        Value::String(s) => json_str_len(s),
         Value::Null => 4,
         Value::Bool(true) => 4,
         Value::Bool(false) => 5,
@@ -434,10 +424,19 @@ struct Frames {
     total_bytes: usize,
     held: Option<Held>,
     priority: Option<Priority>,
-    patches: Vec<WirePatch>,
-    patches_bytes: usize,
-    payload: Map<String, Value>,
-    payload_bytes: usize,
+    open: Option<Open>,
+}
+
+/// The frame being filled: one kind of content and its running serialized size.
+enum Open {
+    Patches {
+        list: Vec<WirePatch>,
+        bytes: usize,
+    },
+    Payload {
+        map: Map<String, Value>,
+        bytes: usize,
+    },
 }
 
 impl Frames {
@@ -450,10 +449,7 @@ impl Frames {
             total_bytes: 0,
             held: None,
             priority: None,
-            patches: Vec::new(),
-            patches_bytes: 0,
-            payload: Map::new(),
-            payload_bytes: 0,
+            open: None,
         }
     }
 
@@ -467,13 +463,26 @@ impl Frames {
     }
 
     fn push_patch(&mut self, patch: WirePatch, size: usize) -> Result<(), PlanError> {
-        let mut add = size + usize::from(!self.patches.is_empty());
-        if !self.patches.is_empty() && self.patches_bytes + add > self.limit {
+        let full = match &self.open {
+            Some(Open::Patches { bytes, .. }) => bytes + size + 1 > self.limit,
+            Some(Open::Payload { .. }) => true,
+            None => false,
+        };
+        if full {
             self.close()?;
-            add = size;
         }
-        self.patches.push(patch);
-        self.patches_bytes += add;
+        match &mut self.open {
+            Some(Open::Patches { list, bytes }) => {
+                list.push(patch);
+                *bytes += size + 1;
+            }
+            _ => {
+                self.open = Some(Open::Patches {
+                    list: vec![patch],
+                    bytes: size,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -484,27 +493,38 @@ impl Frames {
         value: Value,
         entry_size: usize,
     ) -> Result<(), PlanError> {
-        let mut add = entry_size + usize::from(!self.payload.is_empty());
-        if !self.payload.is_empty() && 2 + self.payload_bytes + add > self.limit {
+        let full = match &self.open {
+            Some(Open::Payload { bytes, .. }) => 2 + bytes + entry_size + 1 > self.limit,
+            Some(Open::Patches { .. }) => true,
+            None => false,
+        };
+        if full {
             self.close()?;
-            add = entry_size;
         }
-        self.payload.insert(key, value);
-        self.payload_bytes += add;
+        match &mut self.open {
+            Some(Open::Payload { map, bytes }) => {
+                map.insert(key, value);
+                *bytes += entry_size + 1;
+            }
+            _ => {
+                let mut map = Map::new();
+                map.insert(key, value);
+                self.open = Some(Open::Payload {
+                    map,
+                    bytes: entry_size,
+                });
+            }
+        }
         Ok(())
     }
 
     /// Closes the open frame, if any.
     fn close(&mut self) -> Result<(), PlanError> {
         let priority = self.priority.unwrap_or(Priority::HIGH);
-        let content = if !self.patches.is_empty() {
-            self.patches_bytes = 0;
-            Content::Patches(std::mem::take(&mut self.patches))
-        } else if !self.payload.is_empty() {
-            self.payload_bytes = 0;
-            Content::Payload(std::mem::take(&mut self.payload))
-        } else {
-            return Ok(());
+        let content = match self.open.take() {
+            Some(Open::Patches { list, .. }) => Content::Patches(list),
+            Some(Open::Payload { map, .. }) => Content::Payload(map),
+            None => return Ok(()),
         };
         self.hold(Held { priority, content })
     }
@@ -616,7 +636,7 @@ struct Planner<'a> {
     options: &'a PlanOptions,
     measured: &'a [Measure],
     frames: Frames,
-    path: Vec<WireSegment>,
+    path: Vec<PathSegment>,
     /// Sum of the serialized sizes of the path's segments.
     path_bytes: usize,
 }
@@ -662,7 +682,7 @@ impl Planner<'_> {
         4 + op_size + self.path_size()
     }
 
-    fn descend(&mut self, segment: WireSegment) {
+    fn descend(&mut self, segment: PathSegment) {
         self.path_bytes += segment_size(&segment);
         self.path.push(segment);
     }
@@ -673,8 +693,8 @@ impl Planner<'_> {
         }
     }
 
-    fn wire_path(&self) -> WirePath {
-        WirePath(self.path.clone())
+    fn wire_path(&self) -> JsonPath {
+        JsonPath::from_segments(self.path.clone())
     }
 
     // ---- merge framing -------------------------------------------------
@@ -689,7 +709,7 @@ impl Planner<'_> {
         for entry in self.sorted_entries(map, 1) {
             self.frames.begin(entry.priority)?;
             let (m, _) = self.info(&entry.value, entry.cursor);
-            let entry_size = string_size(&entry.key) + 1 + m.size;
+            let entry_size = json_str_len(&entry.key) + 1 + m.size;
             self.frames.push_entry(entry.key, entry.value, entry_size)?;
         }
         Ok(())
@@ -745,7 +765,7 @@ impl Planner<'_> {
                 batch_priority = Some(entry.priority);
             }
             let (m, _) = self.info(&entry.value, entry.cursor);
-            let entry_size = string_size(&entry.key) + 1 + m.size;
+            let entry_size = json_str_len(&entry.key) + 1 + m.size;
             if overhead + entry_size <= self.limit() && m.depth < MAX_PATCH_VALUE_DEPTH {
                 let add = entry_size + usize::from(!batch.is_empty());
                 if overhead + batch_bytes + add > self.limit() {
@@ -755,7 +775,7 @@ impl Planner<'_> {
                 batch.insert(entry.key, entry.value);
             } else {
                 self.flush_merge(&mut batch, &mut batch_bytes)?;
-                self.descend(WireSegment::Key(entry.key));
+                self.descend(PathSegment::Key(entry.key));
                 self.emit(entry.value, entry.cursor)?;
                 self.ascend();
             }
@@ -872,7 +892,7 @@ impl Planner<'_> {
                     values: vec![Value::Null],
                 };
                 self.frames.push_patch(patch, overhead + 4)?;
-                self.descend(WireSegment::Index(present));
+                self.descend(PathSegment::Index(present));
                 present += 1;
                 self.emit(item, cursor)?;
                 self.ascend();
@@ -912,7 +932,7 @@ impl Planner<'_> {
         let mut start = 0;
         let mut chunk_bytes = 0;
         for (index, c) in text.char_indices() {
-            let cost = string_size(c.encode_utf8(&mut [0; 4])) - 2;
+            let cost = json_str_len(c.encode_utf8(&mut [0; 4])) - 2;
             if chunk_bytes > 0 && chunk_bytes + cost > body_budget {
                 self.push_chunk(&text[start..index], overhead + 2 + chunk_bytes)?;
                 start = index;
@@ -935,12 +955,10 @@ impl Planner<'_> {
     }
 }
 
-fn segment_size(segment: &WireSegment) -> usize {
+fn segment_size(segment: &PathSegment) -> usize {
     match segment {
-        WireSegment::Key(key) => string_size(key),
-        WireSegment::Index(index) => index
-            .checked_ilog10()
-            .map_or(1, |digits| digits as usize + 1),
+        PathSegment::Key(key) => json_str_len(key),
+        PathSegment::Index(index) => decimal_digits(u64::try_from(*index).unwrap_or(u64::MAX)),
     }
 }
 
@@ -954,17 +972,17 @@ fn scalar_or_empty_size(value: &Value) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::websocket::protocol::apply_patch;
+    use crate::infrastructure::websocket::protocol::{MaxFrameSize, apply_patch};
     use core::assert_matches;
     use serde_json::json;
+    use std::num::NonZeroU32;
 
     fn options(framing: Framing, max_frame_size: usize) -> PlanOptions {
-        PlanOptions::try_from(&StreamOptions {
+        PlanOptions::from(&StreamOptions {
             framing,
-            max_frame_size,
+            max_frame_size: MaxFrameSize::try_from(max_frame_size).unwrap(),
             ..StreamOptions::default()
         })
-        .unwrap()
     }
 
     fn decode(plan: &Plan) -> Vec<WsMessage> {
@@ -1075,26 +1093,6 @@ mod tests {
     }
 
     #[test]
-    fn test_string_size_matches_serde_json() {
-        let every_ascii: String = (0..=0x7f_u8).map(char::from).collect();
-        for s in [
-            "",
-            "plain",
-            "q\"b\\n\n\t\r\u{8}\u{c}\u{1}\u{1f}",
-            "\u{e9}\u{1f600}\u{7f}",
-            "\u{7ff}\u{800}\u{ffff}\u{10000}\u{10ffff}\"\u{e9}\\",
-            "\u{1}\u{1}\u{1}\u{1}\"\"\"\"\u{e9}\u{1f600}\n\n",
-            every_ascii.as_str(),
-        ] {
-            assert_eq!(
-                string_size(s),
-                serde_json::to_string(s).unwrap().len(),
-                "{s:?}"
-            );
-        }
-    }
-
-    #[test]
     fn test_generated_documents_round_trip_in_patch_framing() {
         let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
         for _ in 0..200 {
@@ -1188,7 +1186,7 @@ mod tests {
                 frame_id: 0,
                 priority: Priority::HIGH,
                 patches: vec![WirePatch::Set {
-                    path: WirePath(vec![]),
+                    path: JsonPath::root(),
                     value: nested(depth),
                 }],
                 is_complete: true,
@@ -1226,44 +1224,29 @@ mod tests {
     }
 
     #[test]
-    fn test_options_validation() {
-        let too_small = StreamOptions {
-            max_frame_size: 1023,
-            ..StreamOptions::default()
-        };
-        let zero_fps = StreamOptions {
-            client_fps: Some(0),
-            ..StreamOptions::default()
-        };
-        assert_eq!(
-            PlanOptions::try_from(&too_small).unwrap_err(),
-            StreamOptionsError::MaxFrameSizeTooSmall {
-                requested: 1023,
-                min: 1024
-            }
-        );
-        assert_eq!(
-            PlanOptions::try_from(&zero_fps).unwrap_err(),
-            StreamOptionsError::ZeroClientFps
-        );
+    fn test_client_fps_sets_the_frame_interval() {
         let fps = StreamOptions {
-            client_fps: Some(4),
+            client_fps: NonZeroU32::new(4),
             ..StreamOptions::default()
         };
         assert_eq!(
-            PlanOptions::try_from(&fps).unwrap().frame_interval,
+            PlanOptions::from(&fps).frame_interval,
             Some(Duration::from_millis(250))
+        );
+        assert_eq!(
+            PlanOptions::from(&StreamOptions::default()).frame_interval,
+            None
         );
     }
 
     #[test]
     fn test_frame_limit_is_clamped_to_the_outgoing_budget() {
         let huge = StreamOptions {
-            max_frame_size: usize::MAX,
+            max_frame_size: MaxFrameSize::try_from(usize::MAX).unwrap(),
             ..StreamOptions::default()
         };
         assert_eq!(
-            PlanOptions::try_from(&huge).unwrap().frame_limit,
+            PlanOptions::from(&huge).frame_limit,
             MAX_QUEUED_OUTGOING_BYTES - ENVELOPE_RESERVE
         );
     }

@@ -8,13 +8,15 @@
 #![cfg(feature = "websocket-server")]
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use pjson_rs::domain::{Priority, SessionId};
-use pjson_rs::error::{PlanError, StreamOptionsError};
+use pjson_rs::error::PlanError;
 use pjson_rs::infrastructure::bounded_channel::{Envelope, byte_bounded_channel};
 use pjson_rs::infrastructure::websocket::{
-    AdaptiveStreamController, ConnectionId, CreateSessionError, Framing, StreamOptions,
+    AdaptiveStreamController, ConnectionId, CreateSessionError, Framing, MaxFrameSize,
+    StreamOptions,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc::Receiver;
@@ -22,6 +24,12 @@ use tokio::time::{Instant, sleep, timeout};
 
 mod wire_patch;
 use wire_patch::apply_wire_patch;
+
+fn stream_options(update: impl FnOnce(&mut StreamOptions)) -> StreamOptions {
+    let mut options = StreamOptions::default();
+    update(&mut options);
+    options
+}
 
 const MIB: usize = 1024 * 1024;
 
@@ -59,7 +67,6 @@ impl Harness {
             .await?;
         self.controller
             .start_streaming(self.owner, id)
-            .await
             .expect("session exists");
         Ok(())
     }
@@ -183,11 +190,10 @@ impl Plan {
 }
 
 fn options(framing: Framing, max_frame_size: usize) -> StreamOptions {
-    StreamOptions {
-        framing,
-        max_frame_size,
-        ..StreamOptions::default()
-    }
+    stream_options(|o| {
+        o.framing = framing;
+        o.max_frame_size = MaxFrameSize::new(max_frame_size).unwrap();
+    })
 }
 
 fn entries(count: usize, value_len: usize) -> Value {
@@ -365,10 +371,9 @@ async fn test_create_session_patch_990kb_wide_object_plans_in_few_frames_without
     let plan = Harness::new()
         .stream_all(
             data.clone(),
-            StreamOptions {
-                framing: Framing::Patch,
-                ..StreamOptions::default()
-            },
+            stream_options(|o| {
+                o.framing = Framing::Patch;
+            }),
         )
         .await;
 
@@ -476,12 +481,11 @@ async fn test_create_session_priority_mapping_orders_frames_by_priority_descendi
         let plan = Harness::new()
             .stream_all(
                 data.clone(),
-                StreamOptions {
-                    framing,
-                    max_frame_size: 2048,
-                    priority_mapping: Some(mapping.clone()),
-                    ..StreamOptions::default()
-                },
+                stream_options(|o| {
+                    o.framing = framing;
+                    o.max_frame_size = MaxFrameSize::new(2048).unwrap();
+                    o.priority_mapping = Some(mapping.clone());
+                }),
             )
             .await;
 
@@ -499,74 +503,10 @@ async fn test_create_session_priority_mapping_orders_frames_by_priority_descendi
         let applied = match framing {
             Framing::Merge => plan.apply_merge_frames(),
             Framing::Patch => plan.apply_patches(),
+            _ => unreachable!("the loop covers the two framings"),
         };
         assert_eq!(applied, data, "{framing:?}");
     }
-}
-
-// ---------------------------------------------------------------------------
-// Options validation
-// ---------------------------------------------------------------------------
-
-#[tokio::test(start_paused = true)]
-async fn test_create_session_rejects_max_frame_size_below_minimum() {
-    let harness = Harness::new();
-    let id = SessionId::new();
-
-    let result = harness
-        .controller
-        .create_session(
-            id,
-            harness.owner,
-            json!({"a": 1}),
-            options(Framing::Merge, 1023),
-        )
-        .await;
-
-    assert_eq!(
-        result,
-        Err(CreateSessionError::InvalidOptions(
-            StreamOptionsError::MaxFrameSizeTooSmall {
-                requested: 1023,
-                min: 1024
-            }
-        ))
-    );
-    harness
-        .controller
-        .create_session(
-            id,
-            harness.owner,
-            json!({"a": 1}),
-            options(Framing::Merge, 1024),
-        )
-        .await
-        .expect("a rejected request leaves no session behind, and 1024 is accepted");
-}
-
-#[tokio::test(start_paused = true)]
-async fn test_create_session_rejects_zero_client_fps() {
-    let harness = Harness::new();
-
-    let result = harness
-        .controller
-        .create_session(
-            SessionId::new(),
-            harness.owner,
-            json!({}),
-            StreamOptions {
-                client_fps: Some(0),
-                ..StreamOptions::default()
-            },
-        )
-        .await;
-
-    assert_eq!(
-        result,
-        Err(CreateSessionError::InvalidOptions(
-            StreamOptionsError::ZeroClientFps
-        ))
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -648,7 +588,6 @@ async fn test_remove_session_releases_plan_bytes() {
         harness
             .controller
             .remove_session(harness.owner, accepted[0])
-            .await
     );
 
     harness
@@ -671,7 +610,6 @@ async fn test_remove_sessions_owned_by_releases_plan_bytes_of_streaming_sessions
         harness
             .controller
             .start_streaming(harness.owner, *id)
-            .await
             .expect("starts");
     }
     sleep(Duration::from_millis(100)).await;
@@ -722,11 +660,10 @@ async fn test_stream_client_fps_is_a_floor_for_short_plans() {
     let plan = harness
         .stream_all(
             one_entry_per_frame(3),
-            StreamOptions {
-                max_frame_size: 1024,
-                client_fps: Some(1),
-                ..StreamOptions::default()
-            },
+            stream_options(|o| {
+                o.max_frame_size = MaxFrameSize::new(1024).unwrap();
+                o.client_fps = NonZeroU32::new(1);
+            }),
         )
         .await;
 
@@ -746,11 +683,10 @@ async fn test_stream_total_pacing_is_bounded_for_long_plans() {
     let plan = harness
         .stream_all(
             one_entry_per_frame(100),
-            StreamOptions {
-                max_frame_size: 1024,
-                client_fps: Some(1),
-                ..StreamOptions::default()
-            },
+            stream_options(|o| {
+                o.max_frame_size = MaxFrameSize::new(1024).unwrap();
+                o.client_fps = NonZeroU32::new(1);
+            }),
         )
         .await;
 
@@ -780,10 +716,9 @@ async fn test_stream_stalled_enqueue_removes_session_after_30_seconds() {
         .start(
             id,
             one_entry_per_frame(3),
-            StreamOptions {
-                max_frame_size: 1024,
-                ..StreamOptions::default()
-            },
+            stream_options(|o| {
+                o.max_frame_size = MaxFrameSize::new(1024).unwrap();
+            }),
         )
         .await
         .expect("accepted");
@@ -829,14 +764,13 @@ async fn test_stream_slow_but_progressing_client_completes() {
             id,
             owner,
             one_entry_per_frame(4),
-            StreamOptions {
-                max_frame_size: 1024,
-                ..StreamOptions::default()
-            },
+            stream_options(|o| {
+                o.max_frame_size = MaxFrameSize::new(1024).unwrap();
+            }),
         )
         .await
         .expect("accepted");
-    controller.start_streaming(owner, id).await.expect("starts");
+    controller.start_streaming(owner, id).expect("starts");
 
     let seen = reader.await.expect("reader");
 
@@ -863,14 +797,13 @@ async fn test_stream_absolute_deadline_ends_session_without_stream_complete() {
             id,
             owner,
             one_entry_per_frame(8),
-            StreamOptions {
-                max_frame_size: 1024,
-                ..StreamOptions::default()
-            },
+            stream_options(|o| {
+                o.max_frame_size = MaxFrameSize::new(1024).unwrap();
+            }),
         )
         .await
         .expect("accepted");
-    controller.start_streaming(owner, id).await.expect("starts");
+    controller.start_streaming(owner, id).expect("starts");
 
     sleep(Duration::from_secs(130)).await;
     let reusable = controller

@@ -20,7 +20,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use pjson_rs::Error as PjsError;
 use pjson_rs::domain::SessionId;
 use pjson_rs::infrastructure::websocket::{
-    AxumWebSocketTransport, PjsWebSocketClient, WebSocketClientConfig, WsMessage,
+    AxumWebSocketTransport, PjsWebSocketClient, StreamOptions, WebSocketClientConfig, WsMessage,
     server::create_websocket_router,
 };
 use pjson_rs::security::RateLimitConfig;
@@ -141,6 +141,12 @@ async fn assert_silent(ws: &mut TestSocket, window: Duration) {
 
 /// Verify that `create_websocket_router` responds to a real HTTP upgrade with
 /// status 101 Switching Protocols.
+fn client_config(update: impl FnOnce(&mut WebSocketClientConfig)) -> WebSocketClientConfig {
+    let mut config = WebSocketClientConfig::default();
+    update(&mut config);
+    config
+}
+
 #[tokio::test]
 async fn test_wire_upgrade_handshake() {
     let (addr, transport) = spawn_ws_test_server().await;
@@ -276,7 +282,7 @@ async fn test_wire_clean_close() {
     // active_connections after the inner websocket_task exits).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        if transport.active_connection_count().await == 0 {
+        if transport.active_connection_count() == 0 {
             break;
         }
         assert!(
@@ -435,7 +441,7 @@ async fn test_wire_disconnect_releases_only_the_closing_connection() {
         .await
         .expect("send Close");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while transport.active_connection_count().await != 1 {
+    while transport.active_connection_count() != 1 {
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for the leaving connection to be released"
@@ -785,7 +791,7 @@ async fn test_wire_stalled_write_times_out_and_closes_connection() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        if transport.active_connection_count().await == 0 {
+        if transport.active_connection_count() == 0 {
             break;
         }
         assert!(
@@ -851,7 +857,7 @@ async fn test_wire_stalled_write_stays_open_before_write_timeout() {
     // Wait for the server to register the connection before asserting it
     // stays registered.
     let established_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while transport.active_connection_count().await == 0 {
+    while transport.active_connection_count() == 0 {
         assert!(
             tokio::time::Instant::now() < established_deadline,
             "timed out waiting for the server to register the connection"
@@ -866,7 +872,7 @@ async fn test_wire_stalled_write_stays_open_before_write_timeout() {
     let observation_deadline = tokio::time::Instant::now() + patience;
     while tokio::time::Instant::now() < observation_deadline {
         assert_eq!(
-            transport.active_connection_count().await,
+            transport.active_connection_count(),
             1,
             "connection must stay open while the stalled write is still within write_timeout"
         );
@@ -881,7 +887,7 @@ async fn test_wire_stalled_write_stays_open_before_write_timeout() {
     // unrelated path). A 15s deadline is generous relative to the 5s
     // write_timeout so a hang here fails loudly instead of silently.
     let close_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while transport.active_connection_count().await != 0 {
+    while transport.active_connection_count() != 0 {
         assert!(
             tokio::time::Instant::now() < close_deadline,
             "connection with a {:?} write_timeout must eventually close once truly stalled",
@@ -923,14 +929,12 @@ async fn spawn_one_shot_sender(payload: String) -> SocketAddr {
 #[tokio::test]
 async fn test_client_max_message_size_cuts_oversize_message() {
     let addr = spawn_one_shot_sender("x".repeat(2048)).await;
-    let client =
-        PjsWebSocketClient::new(ws_url(addr))
-            .unwrap()
-            .with_config(WebSocketClientConfig {
-                max_message_size: 1024,
-                max_frame_size: 1024,
-                ..WebSocketClientConfig::default()
-            });
+    let client = PjsWebSocketClient::new(ws_url(addr))
+        .unwrap()
+        .with_config(client_config(|c| {
+            c.max_message_size = 1024;
+            c.max_frame_size = 1024;
+        }));
 
     let outcome = timeout(Duration::from_secs(5), client.connect())
         .await
@@ -945,14 +949,12 @@ async fn test_client_max_message_size_cuts_oversize_message() {
 #[tokio::test]
 async fn test_client_max_frame_size_cuts_oversize_frame_below_message_cap() {
     let addr = spawn_one_shot_sender("x".repeat(2048)).await;
-    let client =
-        PjsWebSocketClient::new(ws_url(addr))
-            .unwrap()
-            .with_config(WebSocketClientConfig {
-                max_message_size: 1024 * 1024,
-                max_frame_size: 1024,
-                ..WebSocketClientConfig::default()
-            });
+    let client = PjsWebSocketClient::new(ws_url(addr))
+        .unwrap()
+        .with_config(client_config(|c| {
+            c.max_message_size = 1024 * 1024;
+            c.max_frame_size = 1024;
+        }));
 
     let outcome = timeout(Duration::from_secs(5), client.connect())
         .await
@@ -965,11 +967,10 @@ async fn test_client_max_frame_size_cuts_oversize_frame_below_message_cap() {
 async fn test_client_within_caps_message_is_accepted() {
     let addr = spawn_one_shot_sender("not json".repeat(64)).await;
     let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
-        WebSocketClientConfig {
-            max_message_size: 1024,
-            max_frame_size: 1024,
-            ..WebSocketClientConfig::default()
-        },
+        client_config(|c| {
+            c.max_message_size = 1024;
+            c.max_frame_size = 1024;
+        }),
     ));
 
     let connect = tokio::spawn({
@@ -997,7 +998,10 @@ async fn test_client_default_caps_admit_large_in_tree_server_reply() {
     });
 
     client
-        .request_stream(json!({"blob": "x".repeat(100 * 1024)}), None)
+        .request_stream(
+            json!({"blob": "x".repeat(100 * 1024)}),
+            StreamOptions::patch(),
+        )
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1027,7 +1031,7 @@ async fn test_two_clients_receive_only_their_own_streams() {
     for (n, (client, _)) in clients.iter().enumerate() {
         ids.push(
             client
-                .request_stream(json!({"owner": n}), None)
+                .request_stream(json!({"owner": n}), StreamOptions::patch())
                 .await
                 .unwrap(),
         );
@@ -1070,7 +1074,10 @@ async fn test_client_session_receives_data_from_in_tree_server() {
     });
     let data = json!({"k": 1, "nested": {"a": [1, 2, 3]}});
 
-    let id = client.request_stream(data.clone(), None).await.unwrap();
+    let id = client
+        .request_stream(data.clone(), StreamOptions::patch())
+        .await
+        .unwrap();
     wait_until_complete(&client, id).await;
 
     assert_eq!(client.get_current_data(id).await.unwrap(), Some(data));
@@ -1084,28 +1091,38 @@ async fn test_client_session_receives_data_from_in_tree_server() {
 async fn test_client_full_of_completed_sessions_refuses_until_one_is_closed() {
     let (addr, _transport) = spawn_ws_test_server().await;
     let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
-        WebSocketClientConfig {
-            max_sessions: std::num::NonZeroUsize::new(2).unwrap(),
-            ..WebSocketClientConfig::default()
-        },
+        client_config(|c| {
+            c.max_sessions = std::num::NonZeroUsize::new(2).unwrap();
+        }),
     ));
     let connect = tokio::spawn({
         let client = Arc::clone(&client);
         async move { client.connect().await }
     });
 
-    let first = client.request_stream(json!({"k": 1}), None).await.unwrap();
-    let second = client.request_stream(json!({"k": 2}), None).await.unwrap();
+    let first = client
+        .request_stream(json!({"k": 1}), StreamOptions::patch())
+        .await
+        .unwrap();
+    let second = client
+        .request_stream(json!({"k": 2}), StreamOptions::patch())
+        .await
+        .unwrap();
     wait_until_complete(&client, first).await;
     wait_until_complete(&client, second).await;
 
     assert_matches!(
-        client.request_stream(json!({}), None).await,
+        client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await,
         Err(PjsError::SessionLimitReached { .. })
     );
     let closed = client.close_session(first).await.expect("first is tracked");
     assert_eq!(closed.data, json!({"k": 1}));
-    client.request_stream(json!({}), None).await.unwrap();
+    client
+        .request_stream(json!({}), StreamOptions::patch())
+        .await
+        .unwrap();
     assert!(client.is_stream_complete(second).await);
     connect.abort();
 }

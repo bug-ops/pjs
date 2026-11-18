@@ -309,7 +309,7 @@ impl StreamRepositoryGat for MockRepository {
                 is_healthy: true,
                 active_streams: 0,
                 total_frames: 0,
-                last_activity: chrono::Utc::now(),
+                last_activity: jiff::Timestamp::now(),
                 error_rate: 0.0,
                 metrics: HashMap::new(),
             })
@@ -499,7 +499,7 @@ impl StreamStoreGat for MockStreamStore {
                 total_bytes: 0,
                 priority_distribution: PriorityDistribution::default(),
                 avg_frame_size: 0.0,
-                creation_time: chrono::Utc::now(),
+                creation_time: jiff::Timestamp::now(),
                 completion_time: None,
                 processing_duration: None,
             })
@@ -644,7 +644,7 @@ mod tests {
         let publisher = MockEventPublisher::new();
         let event = DomainEvent::SessionClosed {
             session_id: SessionId::new(),
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
 
         publisher.publish(event).await.unwrap();

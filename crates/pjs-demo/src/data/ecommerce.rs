@@ -281,7 +281,7 @@ pub fn generate_ecommerce_data(size: DatasetSize) -> Value {
         "products": products,
         "inventory": inventory,
         "analytics": analytics,
-        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "generated_at": jiff::Timestamp::now().to_string(),
         "dataset_info": {
             "type": "ecommerce",
             "size": format!("{size:?}").to_lowercase(),

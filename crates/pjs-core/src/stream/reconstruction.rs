@@ -4,8 +4,9 @@
 //! skeleton + patch stream frames, enabling progressive data loading.
 
 use crate::Result;
-use crate::domain::value_objects::{JsonPath, PathSegment};
+use crate::domain::value_objects::JsonPath;
 use crate::error::PatchError;
+use crate::json_tree::resolve_mut;
 use crate::stream::priority::{JsonPatch, PatchOperation, PriorityStreamFrame};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
@@ -225,76 +226,13 @@ impl JsonReconstructor {
 
     /// Get mutable reference to parent of target path
     fn get_parent_mut(&mut self, path: &JsonPath) -> Result<&mut JsonValue> {
-        let segments = path.segments();
-        if segments.is_empty() {
-            return Ok(&mut self.current_state);
-        }
-
-        let parent_segments = &segments[..segments.len() - 1];
-        let mut current = &mut self.current_state;
-
-        for segment in parent_segments {
-            match segment {
-                PathSegment::Key(key) => {
-                    if let JsonValue::Object(map) = current {
-                        current = map
-                            .get_mut(key)
-                            .ok_or_else(|| PatchError::KeyNotFound(key.clone()))?;
-                    } else {
-                        return Err(PatchError::ExpectedObject.into());
-                    }
-                }
-                PathSegment::Index(idx) => {
-                    if let JsonValue::Array(arr) = current {
-                        let len = arr.len();
-                        current = arr
-                            .get_mut(*idx)
-                            .ok_or(PatchError::IndexOutOfBounds { index: *idx, len })?;
-                    } else {
-                        return Err(PatchError::ExpectedArray.into());
-                    }
-                }
-                _ => {
-                    return Err(PatchError::UnsupportedSegment.into());
-                }
-            }
-        }
-
-        Ok(current)
+        let parent = path.segments().split_last().map_or(&[][..], |(_, p)| p);
+        Ok(resolve_mut(&mut self.current_state, parent)?)
     }
 
     /// Get mutable reference at specified path
     fn get_mut_at_path(&mut self, path: &JsonPath) -> Result<&mut JsonValue> {
-        let mut current = &mut self.current_state;
-
-        for segment in path.segments() {
-            match segment {
-                PathSegment::Key(key) => {
-                    if let JsonValue::Object(map) = current {
-                        current = map
-                            .get_mut(key)
-                            .ok_or_else(|| PatchError::KeyNotFound(key.clone()))?;
-                    } else {
-                        return Err(PatchError::ExpectedObject.into());
-                    }
-                }
-                PathSegment::Index(idx) => {
-                    if let JsonValue::Array(arr) = current {
-                        let len = arr.len();
-                        current = arr
-                            .get_mut(*idx)
-                            .ok_or(PatchError::IndexOutOfBounds { index: *idx, len })?;
-                    } else {
-                        return Err(PatchError::ExpectedArray.into());
-                    }
-                }
-                _ => {
-                    return Err(PatchError::UnsupportedSegment.into());
-                }
-            }
-        }
-
-        Ok(current)
+        Ok(resolve_mut(&mut self.current_state, path.segments())?)
     }
 
     /// Get current JSON state (read-only)
@@ -403,6 +341,7 @@ impl ReconstructionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::value_objects::PathSegment;
     use crate::stream::Priority;
     use core::assert_matches;
     use serde_json::json;
@@ -452,7 +391,7 @@ mod tests {
         reconstructor.current_state = skeleton;
 
         // Create patch to set name
-        let path = JsonPath::from_segments(vec![PathSegment::Key("name".to_string())]).unwrap();
+        let path = JsonPath::from_segments(vec![PathSegment::Key("name".to_string())]);
 
         let patch = JsonPatch {
             path,
@@ -497,7 +436,7 @@ mod tests {
         reconstructor.current_state = skeleton;
 
         // Create patch to append items
-        let path = JsonPath::from_segments(vec![PathSegment::Key("items".to_string())]).unwrap();
+        let path = JsonPath::from_segments(vec![PathSegment::Key("items".to_string())]);
 
         let patch = JsonPatch {
             path,
@@ -602,8 +541,7 @@ mod tests {
             PathSegment::Key("level1".to_string()),
             PathSegment::Key("level2".to_string()),
             PathSegment::Key("level3".to_string()),
-        ])
-        .unwrap();
+        ]);
 
         let patch = JsonPatch {
             path,
@@ -651,8 +589,7 @@ mod tests {
             PathSegment::Key("l3".to_string()),
             PathSegment::Key("l4".to_string()),
             PathSegment::Key("l5".to_string()),
-        ])
-        .unwrap();
+        ]);
 
         let patch = JsonPatch {
             path,
@@ -685,7 +622,7 @@ mod tests {
 
         // Add patches in reverse order
         let patch_c = JsonPatch {
-            path: JsonPath::from_segments(vec![PathSegment::Key("c".to_string())]).unwrap(),
+            path: JsonPath::from_segments(vec![PathSegment::Key("c".to_string())]),
             operation: PatchOperation::Set {
                 value: json!("third"),
             },
@@ -693,7 +630,7 @@ mod tests {
         };
 
         let patch_a = JsonPatch {
-            path: JsonPath::from_segments(vec![PathSegment::Key("a".to_string())]).unwrap(),
+            path: JsonPath::from_segments(vec![PathSegment::Key("a".to_string())]),
             operation: PatchOperation::Set {
                 value: json!("first"),
             },
@@ -701,7 +638,7 @@ mod tests {
         };
 
         let patch_b = JsonPatch {
-            path: JsonPath::from_segments(vec![PathSegment::Key("b".to_string())]).unwrap(),
+            path: JsonPath::from_segments(vec![PathSegment::Key("b".to_string())]),
             operation: PatchOperation::Set {
                 value: json!("second"),
             },
@@ -738,8 +675,7 @@ mod tests {
         let path = JsonPath::from_segments(vec![
             PathSegment::Key("obj".to_string()),
             PathSegment::Key("field".to_string()),
-        ])
-        .unwrap();
+        ]);
 
         let patch = JsonPatch {
             path,
@@ -770,7 +706,7 @@ mod tests {
         let skeleton = json!({"items": []});
         reconstructor.current_state = skeleton;
 
-        let path = JsonPath::from_segments(vec![PathSegment::Key("items".to_string())]).unwrap();
+        let path = JsonPath::from_segments(vec![PathSegment::Key("items".to_string())]);
 
         let patch = JsonPatch {
             path,
@@ -798,7 +734,7 @@ mod tests {
         let skeleton = json!({"keep": "this", "remove": "me"});
         reconstructor.current_state = skeleton;
 
-        let path = JsonPath::from_segments(vec![PathSegment::Key("remove".to_string())]).unwrap();
+        let path = JsonPath::from_segments(vec![PathSegment::Key("remove".to_string())]);
 
         let patch = JsonPatch {
             path,
@@ -827,8 +763,7 @@ mod tests {
         let path = JsonPath::from_segments(vec![
             PathSegment::Key("outer".to_string()),
             PathSegment::Key("remove".to_string()),
-        ])
-        .unwrap();
+        ]);
 
         let patch = JsonPatch {
             path,
@@ -857,7 +792,7 @@ mod tests {
         let skeleton = json!({"field": "old"});
         reconstructor.current_state = skeleton;
 
-        let path = JsonPath::from_segments(vec![PathSegment::Key("field".to_string())]).unwrap();
+        let path = JsonPath::from_segments(vec![PathSegment::Key("field".to_string())]);
 
         let patch = JsonPatch {
             path,
@@ -903,8 +838,7 @@ mod tests {
         let path = JsonPath::from_segments(vec![
             PathSegment::Key("value".to_string()),
             PathSegment::Key("nested".to_string()),
-        ])
-        .unwrap();
+        ]);
 
         let patch = JsonPatch {
             path,
@@ -927,8 +861,7 @@ mod tests {
         let path = JsonPath::from_segments(vec![
             PathSegment::Key("arr".to_string()),
             PathSegment::Index(5),
-        ])
-        .unwrap();
+        ]);
 
         let patch = JsonPatch {
             path,

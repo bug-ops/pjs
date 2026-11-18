@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use pjson_rs::domain::entities::frame::{FrameType, PatchOperation};
+use pjson_rs::domain::entities::frame::FrameType;
 use pjson_rs::domain::entities::stream::StreamConfig;
 use pjson_rs::domain::value_objects::{JsonData, JsonPath, Priority, SessionId};
 use pjson_rs::domain::{Frame, Stream};
@@ -173,32 +173,24 @@ fn test_create_patch_frames_round_trips_generated_key_alphabet_documents() {
 }
 
 #[test]
-fn test_extract_prioritized_patches_emits_root_set_first_when_key_is_unencodable() {
+fn test_extract_prioritized_patches_addresses_unencodable_keys_without_a_root_set() {
     let data = json!({"a.b": {"c": 1}, "ok": 2, "list": [1, 2]});
-    let rules = HashMap::from([("ok".to_owned(), Priority::CRITICAL)]);
-    let stream = streaming(
-        &data,
-        StreamConfig {
-            priority_rules: rules,
-            ..StreamConfig::default()
-        },
-    );
+    let stream = streaming(&data, StreamConfig::default());
 
     let patches = stream
         .extract_prioritized_patches(Priority::BACKGROUND)
         .expect("patches");
 
-    let (first, first_priority) = patches.first().expect("at least one patch");
     assert!(
-        first.path.segments().is_empty(),
-        "first patch targets the root"
+        patches.iter().all(|(p, _)| !p.path.segments().is_empty()),
+        "no patch targets the root"
     );
-    assert_eq!(first.operation, PatchOperation::Set);
     assert!(
-        patches.iter().all(|(_, p)| *p <= *first_priority),
-        "root Set priority must be >= every other patch priority"
+        patches
+            .iter()
+            .any(|(p, _)| p.path.to_string() == r#"$["a.b"].c"#),
+        "the unencodable key is addressed by a quoted segment"
     );
-    assert!(*first_priority >= Priority::CRITICAL);
 }
 
 #[test]
@@ -218,12 +210,12 @@ fn test_extract_prioritized_patches_has_no_root_set_without_unencodable_keys() {
 }
 
 #[test]
-fn test_create_skeleton_frame_keeps_unencodable_subtrees_verbatim() {
+fn test_create_skeleton_frame_does_not_ship_unencodable_subtrees_verbatim() {
     let data = json!({"a.b": {"c": [1, 2]}, "x": {"a[0]": [3, 4]}, "ok": 5});
     let mut stream = streaming(&data, StreamConfig::default());
 
     let skeleton = payload_value(&stream.create_skeleton_frame().expect("skeleton"));
 
-    assert_eq!(skeleton["a.b"], json!({"c": [1, 2]}));
-    assert_eq!(skeleton["x"]["a[0]"], json!([3, 4]));
+    assert_eq!(skeleton["a.b"], json!({"c": []}));
+    assert_eq!(skeleton["x"]["a[0]"], json!([]));
 }

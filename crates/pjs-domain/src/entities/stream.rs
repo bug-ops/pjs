@@ -3,11 +3,11 @@
 use crate::{
     DomainError, DomainResult,
     entities::{Frame, frame::FramePatch},
-    value_objects::{JsonData, JsonPath, PathSegment, Priority, SessionId, StreamId},
+    value_objects::{JsonData, JsonPath, Priority, SessionId, StreamId},
 };
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Stream state in its lifecycle
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,9 +83,9 @@ pub struct Stream {
     state: StreamState,
     config: StreamConfig,
     stats: StreamStats,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    completed_at: Option<DateTime<Utc>>,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+    completed_at: Option<Timestamp>,
     next_sequence: u64,
     source_data: Option<JsonData>,
     metadata: HashMap<String, String>,
@@ -94,7 +94,7 @@ pub struct Stream {
 impl Stream {
     /// Create new stream
     pub fn new(session_id: SessionId, source_data: JsonData, config: StreamConfig) -> Self {
-        let now = Utc::now();
+        let now = Timestamp::now();
 
         Self {
             id: StreamId::new(),
@@ -137,17 +137,17 @@ impl Stream {
     }
 
     /// Get creation timestamp
-    pub fn created_at(&self) -> DateTime<Utc> {
+    pub fn created_at(&self) -> Timestamp {
         self.created_at
     }
 
     /// Get last update timestamp
-    pub fn updated_at(&self) -> DateTime<Utc> {
+    pub fn updated_at(&self) -> Timestamp {
         self.updated_at
     }
 
     /// Get completion timestamp
-    pub fn completed_at(&self) -> Option<DateTime<Utc>> {
+    pub fn completed_at(&self) -> Option<Timestamp> {
         self.completed_at
     }
 
@@ -187,7 +187,7 @@ impl Stream {
         match self.state {
             StreamState::Streaming => {
                 self.state = StreamState::Completed;
-                self.completed_at = Some(Utc::now());
+                self.completed_at = Some(Timestamp::now());
                 self.update_timestamp();
                 Ok(())
             }
@@ -203,7 +203,7 @@ impl Stream {
         match self.state {
             StreamState::Preparing | StreamState::Streaming => {
                 self.state = StreamState::Failed;
-                self.completed_at = Some(Utc::now());
+                self.completed_at = Some(Timestamp::now());
                 self.add_metadata("error".to_string(), error);
                 Ok(())
             }
@@ -219,7 +219,7 @@ impl Stream {
         match self.state {
             StreamState::Preparing | StreamState::Streaming => {
                 self.state = StreamState::Cancelled;
-                self.completed_at = Some(Utc::now());
+                self.completed_at = Some(Timestamp::now());
                 self.update_timestamp();
                 Ok(())
             }
@@ -405,7 +405,7 @@ impl Stream {
     }
 
     /// Get stream duration
-    pub fn duration(&self) -> Option<chrono::Duration> {
+    pub fn duration(&self) -> Option<jiff::SignedDuration> {
         self.completed_at.map(|end| end - self.created_at)
     }
 
@@ -445,7 +445,7 @@ impl Stream {
 
     /// Private helper: Update timestamp
     fn update_timestamp(&mut self) {
-        self.updated_at = Utc::now();
+        self.updated_at = Timestamp::now();
     }
 
     /// Private helper: Record frame creation for stats
@@ -487,27 +487,20 @@ impl Stream {
     }
 
     /// Private helper: Generate skeleton from source data.
-    ///
-    /// Values under keys [`JsonPath`] cannot encode are kept verbatim: no patch
-    /// can address them, so the skeleton is the only carrier for those subtrees.
     fn generate_skeleton(&self, data: &JsonData) -> DomainResult<JsonData> {
         // Simplified skeleton generation - create empty structure
         match data {
             JsonData::Object(obj) => {
                 let mut skeleton = HashMap::new();
                 for (key, value) in obj.iter() {
-                    let skeleton_value = if !JsonPath::is_valid_key(key) {
-                        value.clone()
-                    } else {
-                        match value {
-                            JsonData::Array(_) => JsonData::Array(Vec::new()),
-                            JsonData::Object(_) => self.generate_skeleton(value)?,
-                            JsonData::Integer(_) => JsonData::Integer(0),
-                            JsonData::Float(_) => JsonData::Float(0.0),
-                            JsonData::String(_) => JsonData::Null,
-                            JsonData::Bool(_) => JsonData::Bool(false),
-                            JsonData::Null => JsonData::Null,
-                        }
+                    let skeleton_value = match value {
+                        JsonData::Array(_) => JsonData::Array(Vec::new()),
+                        JsonData::Object(_) => self.generate_skeleton(value)?,
+                        JsonData::Integer(_) => JsonData::Integer(0),
+                        JsonData::Float(_) => JsonData::Float(0.0),
+                        JsonData::String(_) => JsonData::Null,
+                        JsonData::Bool(_) => JsonData::Bool(false),
+                        JsonData::Null => JsonData::Null,
                     };
                     skeleton.insert(key.clone(), skeleton_value);
                 }
@@ -518,44 +511,6 @@ impl Stream {
         }
     }
 
-    /// Private helper: the part of `data` that no emitted patch can carry.
-    ///
-    /// Holds the values under [`JsonPath`]-unencodable keys verbatim, empty
-    /// objects, and exactly the object parents that those values or an emitted
-    /// leaf patch (`emitted`) need to exist. Other leaves and arrays are omitted,
-    /// and so are objects whose leaves were all dropped by the threshold, so a
-    /// dropped value stays absent instead of appearing as a placeholder.
-    /// Returns `None` when nothing under `data` is needed.
-    fn unencodable_projection(
-        data: &JsonData,
-        path: &JsonPath,
-        emitted: &HashSet<&[PathSegment]>,
-    ) -> Option<HashMap<String, JsonData>> {
-        let JsonData::Object(obj) = data else {
-            return None;
-        };
-        let mut projection = HashMap::new();
-        let mut needed = false;
-        for (key, value) in obj.iter() {
-            let Ok(child) = path.append_key(key) else {
-                projection.insert(key.clone(), value.clone());
-                continue;
-            };
-            match value {
-                JsonData::Object(children) if children.is_empty() => {
-                    projection.insert(key.clone(), value.clone());
-                }
-                JsonData::Object(_) => {
-                    if let Some(nested) = Self::unencodable_projection(value, &child, emitted) {
-                        projection.insert(key.clone(), JsonData::Object(nested));
-                    }
-                }
-                _ => needed |= emitted.contains(child.segments()),
-            }
-        }
-        (needed || !projection.is_empty()).then_some(projection)
-    }
-
     /// Private helper: Extract patches with priority filtering.
     ///
     /// Walks `data` recursively, emitting one `Set` patch per leaf-level
@@ -564,40 +519,13 @@ impl Stream {
     /// frame). Each patch is paired with a computed priority so that
     /// [`Self::chunk_patches_for_commit`] can group chunks by maximum
     /// priority. Patches whose priority falls below `threshold` are dropped.
-    ///
-    /// When some object key cannot be encoded as a [`JsonPath`] segment, its
-    /// subtree has no patch address, so a root `Set` of the object structure with
-    /// those subtrees verbatim and no placeholders for other values is inserted
-    /// ahead of every other patch.
-    /// Its priority is the maximum of `CRITICAL` and every other patch
-    /// priority, so the stable sort keeps it first; like any patch it is
-    /// dropped when below `threshold`. Each extraction is a self-contained
-    /// snapshot: the root `Set` resets earlier deltas, and a cross-stream
-    /// truncation can deliver it without the leaf patches that follow.
     fn extract_patches(
         &self,
         data: &JsonData,
         threshold: Priority,
     ) -> DomainResult<Vec<(crate::entities::frame::FramePatch, Priority)>> {
         let mut patches = Vec::new();
-        let has_unencodable_keys =
-            self.collect_patches(data, &JsonPath::root(), threshold, &mut patches)?;
-        if has_unencodable_keys {
-            let priority = patches
-                .iter()
-                .map(|(_, p)| *p)
-                .fold(Priority::CRITICAL, Priority::max);
-            if priority >= threshold {
-                let emitted = patches
-                    .iter()
-                    .map(|(patch, _)| patch.path.segments())
-                    .collect();
-                let structure = Self::unencodable_projection(data, &JsonPath::root(), &emitted)
-                    .unwrap_or_default();
-                let root = FramePatch::set(JsonPath::root(), JsonData::Object(structure));
-                patches.insert(0, (root, priority));
-            }
-        }
+        self.collect_patches(data, &JsonPath::root(), threshold, &mut patches)?;
         // Sort by priority descending so high-priority patches land in earlier
         // frames within the chunk-based batch layout.
         patches.sort_by_key(|p| core::cmp::Reverse(p.1));
@@ -605,26 +533,18 @@ impl Stream {
     }
 
     /// Recursive walker that emits prioritized patches into `out`.
-    ///
-    /// Returns `true` when any object key at or below `data` cannot be encoded
-    /// as a [`JsonPath`] segment; such subtrees are not descended into.
     fn collect_patches(
         &self,
         data: &JsonData,
         path: &JsonPath,
         threshold: Priority,
         out: &mut Vec<(crate::entities::frame::FramePatch, Priority)>,
-    ) -> DomainResult<bool> {
+    ) -> DomainResult<()> {
         if let JsonData::Object(map) = data {
-            let mut has_unencodable_keys = false;
             for (key, value) in map.iter() {
-                let Ok(child_path) = path.append_key(key) else {
-                    has_unencodable_keys = true;
-                    continue;
-                };
-                has_unencodable_keys |= self.collect_patches(value, &child_path, threshold, out)?;
+                self.collect_patches(value, &path.append_key(key), threshold, out)?;
             }
-            return Ok(has_unencodable_keys);
+            return Ok(());
         }
 
         let priority = self.compute_priority(path, data);
@@ -632,7 +552,7 @@ impl Stream {
             let patch = crate::entities::frame::FramePatch::set(path.clone(), data.clone());
             out.push((patch, priority));
         }
-        Ok(false)
+        Ok(())
     }
 
     /// Compute a priority for a patch by delegating to
@@ -732,6 +652,7 @@ impl Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::value_objects::PathSegment;
 
     #[test]
     fn test_stream_creation() {
@@ -916,49 +837,30 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_patches_root_set_carries_unencodable_subtree() {
+    fn test_extract_patches_address_unencodable_keys_without_a_root_set() {
         let stream = streaming(serde_json::json!({"a.b": {"c": 1}, "ok": 2}));
 
         let patches = stream
             .extract_prioritized_patches(Priority::BACKGROUND)
             .expect("patches");
 
-        let (root, _) = patches.first().expect("root set first");
-        assert_eq!(root.path, JsonPath::root());
-        let expected: JsonData = serde_json::json!({"a.b": {"c": 1}}).into();
-        assert_eq!(root.value, expected);
+        let mut paths: Vec<String> = patches.iter().map(|(p, _)| p.path.to_string()).collect();
+        paths.sort();
+        assert_eq!(paths, ["$.ok", r#"$["a.b"].c"#]);
     }
 
-    #[test]
-    fn test_extract_patches_root_set_survives_critical_threshold() {
-        let stream = streaming(serde_json::json!({"a.b": 1, "logs": "z"}));
-
+    /// Applies the skeleton, then only the extracted `Set` patches in order, with
+    /// the reconstructor's rules (a parent must already exist).
+    fn reconstruct(data: serde_json::Value, threshold: Priority) -> serde_json::Value {
+        let stream = streaming(data.clone());
         let patches = stream
-            .extract_prioritized_patches(Priority::CRITICAL)
+            .extract_prioritized_patches(threshold)
             .expect("patches");
-
-        let (root, priority) = patches.first().expect("root set first");
-        assert_eq!(root.path, JsonPath::root());
-        assert_eq!(*priority, Priority::CRITICAL);
-    }
-
-    #[test]
-    fn test_extract_patches_no_root_set_for_encodable_keys() {
-        let stream = streaming(serde_json::json!({"a": {"b": 1}, "c": [1]}));
-
-        let patches = stream
-            .extract_prioritized_patches(Priority::BACKGROUND)
-            .expect("patches");
-
-        assert!(patches.iter().all(|(p, _)| !p.path.segments().is_empty()));
-    }
-
-    /// Applies only the extracted `Set` patches, in order, to an initial `{}`
-    /// with the reconstructor's rules (a parent must already exist): the HTTP
-    /// path, where no skeleton frame is sent.
-    fn apply_patches_only(patches: &[(FramePatch, Priority)]) -> serde_json::Value {
-        let mut state = serde_json::json!({});
-        for (patch, _) in patches {
+        let skeleton = stream
+            .generate_skeleton(&data.into())
+            .expect("skeleton generates");
+        let mut state = serde_json::to_value(&skeleton).expect("JsonData serializes");
+        for (patch, _) in &patches {
             let value = serde_json::to_value(&patch.value).expect("JsonData serializes");
             let Some((last, parents)) = patch.path.segments().split_last() else {
                 state = value;
@@ -970,7 +872,7 @@ mod tests {
                     PathSegment::Key(key) => node.get_mut(key.as_str()),
                     PathSegment::Index(index) => node.get_mut(*index),
                 }
-                .expect("parent exists: root Set carries the structure");
+                .expect("parent exists in the skeleton");
             }
             match last {
                 PathSegment::Key(key) => {
@@ -984,60 +886,26 @@ mod tests {
         state
     }
 
-    fn reconstruct_without_skeleton(data: serde_json::Value) -> serde_json::Value {
-        let patches = streaming(data)
-            .extract_prioritized_patches(Priority::BACKGROUND)
-            .expect("patches");
-        apply_patches_only(&patches)
-    }
-
     #[test]
-    fn test_patches_only_reconstruct_unencodable_keys_next_to_arrays_and_nested_objects() {
+    fn test_skeleton_and_patches_reconstruct_unencodable_keys() {
         for data in [
             serde_json::json!({"a.b": {"c": 1}, "arr": [1, 2], "n": {"x": {"y": 2}, "z": [3]}, "ok": 5}),
             serde_json::json!({"n": {"a[0]": [1], "deep": {"k]": {"v": 1}, "w": "s"}}, "list": []}),
             serde_json::json!({"": null, "o": {}, "p": {"q": {"r": true}}}),
+            serde_json::json!({"rows": [{"a.b": 1}, {"ok": {"x[": 2}}]}),
         ] {
-            assert_eq!(reconstruct_without_skeleton(data.clone()), data);
+            assert_eq!(reconstruct(data.clone(), Priority::BACKGROUND), data);
         }
     }
 
     #[test]
-    fn test_patches_only_keep_unencodable_keys_inside_array_elements() {
-        let data = serde_json::json!({"rows": [{"a.b": 1}, {"ok": {"x[": 2}}]});
+    fn test_skeleton_does_not_ship_unencodable_subtrees_verbatim() {
+        let stream = streaming(serde_json::json!({"a.b": 7, "": {"x": 8}}));
+        let data = stream.source_data.clone().expect("source data");
 
-        let patches = streaming(data.clone())
-            .extract_prioritized_patches(Priority::BACKGROUND)
-            .expect("patches");
+        let skeleton = serde_json::to_value(stream.generate_skeleton(&data).expect("skeleton"))
+            .expect("serializes");
 
-        assert!(
-            patches.iter().all(|(p, _)| !p.path.segments().is_empty()),
-            "array elements travel inside their array's Set, no root Set"
-        );
-        assert_eq!(apply_patches_only(&patches), data);
-    }
-
-    #[test]
-    fn test_patches_only_object_with_all_leaves_dropped_stays_absent() {
-        let data = serde_json::json!({"a.b": 1, "n": {"logs": "z"}, "e": {}});
-        let patches = streaming(data)
-            .extract_prioritized_patches(Priority::CRITICAL)
-            .expect("patches");
-
-        let state = apply_patches_only(&patches);
-
-        assert_eq!(state, serde_json::json!({"a.b": 1, "e": {}}));
-    }
-
-    #[test]
-    fn test_patches_only_dropped_leaves_stay_absent() {
-        let data = serde_json::json!({"a.b": 1, "n": {"id": 1, "logs": "z"}, "logs": [1]});
-        let patches = streaming(data)
-            .extract_prioritized_patches(Priority::CRITICAL)
-            .expect("patches");
-
-        let state = apply_patches_only(&patches);
-
-        assert_eq!(state, serde_json::json!({"a.b": 1, "n": {"id": 1}}));
+        assert_eq!(skeleton, serde_json::json!({"a.b": 0, "": {"x": 0}}));
     }
 }

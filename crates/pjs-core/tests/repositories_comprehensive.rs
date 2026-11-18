@@ -10,7 +10,7 @@
 //
 // Coverage target: 100%
 
-use chrono::Utc;
+use jiff::Timestamp;
 use pjson_rs::domain::{
     config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET},
     ports::repositories::{
@@ -119,7 +119,7 @@ fn test_session_query_criteria_with_states() {
 
 #[test]
 fn test_session_query_criteria_with_dates() {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let criteria = SessionQueryCriteria::builder()
         .created_after(now)
         .created_before(now)
@@ -561,7 +561,7 @@ fn test_pagination_with_sorting() {
 fn test_stream_filter_combination() {
     let filter = StreamFilter::builder()
         .statuses(vec![StreamStatus::Active, StreamStatus::Paused])
-        .created_after(Utc::now())
+        .created_after(Timestamp::now())
         .has_frames(FramePresence::WithFrames)
         .build()
         .unwrap();

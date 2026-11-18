@@ -81,7 +81,7 @@ proptest! {
     #[test]
     fn json_path_valid_keys(key in "[a-zA-Z][a-zA-Z0-9_]{0,30}") {
         let path = JsonPath::root().append_key(&key);
-        prop_assert!(path.is_ok());
+        prop_assert_eq!(path.depth(), 1);
     }
 
     /// JSON path depth calculation is consistent
@@ -89,7 +89,7 @@ proptest! {
     fn json_path_depth_consistent(depth in 1usize..10) {
         let mut path = JsonPath::root();
         for i in 0..depth {
-            path = path.append_key(&format!("key{i}")).unwrap();
+            path = path.append_key(&format!("key{i}"));
         }
         prop_assert_eq!(path.depth(), depth);
     }
@@ -99,7 +99,7 @@ proptest! {
     fn json_path_parent_child_relationship(depth in 2usize..10) {
         let mut path = JsonPath::root();
         for i in 0..depth {
-            path = path.append_key(&format!("key{i}")).unwrap();
+            path = path.append_key(&format!("key{i}"));
         }
 
         let parent = path.parent().expect("Non-root path should have parent");
@@ -225,7 +225,7 @@ proptest! {
     #[test]
     fn json_path_append_creates_child(key in "[a-zA-Z][a-zA-Z0-9_]{0,20}") {
         let parent = JsonPath::root();
-        let child = parent.append_key(&key).unwrap();
+        let child = parent.append_key(&key);
         prop_assert!(parent.is_prefix_of(&child));
         prop_assert_eq!(child.depth(), parent.depth() + 1);
     }
@@ -243,7 +243,7 @@ proptest! {
     fn json_path_string_roundtrip(depth in 1usize..5) {
         let mut path = JsonPath::root();
         for i in 0..depth {
-            path = path.append_key(&format!("key{i}")).unwrap();
+            path = path.append_key(&format!("key{i}"));
         }
         let string_repr = path.to_string();
         prop_assert!(string_repr.starts_with('$'));
@@ -288,7 +288,7 @@ proptest! {
         let initial_depth = path.depth();
 
         for i in 0..steps {
-            path = path.append_key(&format!("k{i}")).unwrap();
+            path = path.append_key(&format!("k{i}"));
         }
 
         prop_assert_eq!(path.depth(), initial_depth + steps);
@@ -344,11 +344,11 @@ proptest! {
     fn json_path_prefix_transitive(depth in 2usize..8) {
         let mut path1 = JsonPath::root();
         for i in 0..depth {
-            path1 = path1.append_key(&format!("a{i}")).unwrap();
+            path1 = path1.append_key(&format!("a{i}"));
         }
 
-        let path2 = path1.append_key("b").unwrap();
-        let path3 = path2.append_key("c").unwrap();
+        let path2 = path1.append_key("b");
+        let path3 = path2.append_key("c");
 
         prop_assert!(path1.is_prefix_of(&path2));
         prop_assert!(path2.is_prefix_of(&path3));
@@ -385,7 +385,7 @@ proptest! {
     fn json_path_root_prefix_of_all(depth in 1usize..10) {
         let mut path = JsonPath::root();
         for i in 0..depth {
-            path = path.append_key(&format!("x{i}")).unwrap();
+            path = path.append_key(&format!("x{i}"));
         }
         prop_assert!(JsonPath::root().is_prefix_of(&path));
     }
@@ -403,13 +403,6 @@ proptest! {
         } else {
             prop_assert_eq!(pa, pb);
         }
-    }
-
-    /// JSON path empty key is rejected
-    #[test]
-    fn json_path_rejects_empty_key(_dummy in Just(0u8)) {
-        let result = JsonPath::root().append_key("");
-        prop_assert!(result.is_err());
     }
 
     /// SessionId equality is transitive
@@ -453,9 +446,7 @@ proptest! {
     fn json_path_max_depth_handling(keys in prop::collection::vec("[a-z]{1,5}", 1..20)) {
         let mut path = JsonPath::root();
         for key in &keys {
-            if let Ok(new_path) = path.append_key(key) {
-                path = new_path;
-            }
+            path = path.append_key(key);
         }
         prop_assert!(path.depth() <= keys.len());
         prop_assert!(path.to_string().starts_with('$'));

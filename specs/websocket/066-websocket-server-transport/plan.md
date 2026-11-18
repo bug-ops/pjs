@@ -15,7 +15,7 @@ code:
   - crates/pjs-core/src/infrastructure/websocket/mod.rs
   - crates/pjs-core/src/infrastructure/websocket/planner.rs
   - crates/pjs-core/src/infrastructure/websocket/controller.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan (as-built): WebSocket server transport
@@ -39,7 +39,7 @@ flowchart TB
 
 - One select loop per connection owning the socket sink, so every write goes through `send_with_write_timeout`.
 - Frames go straight into the owning connection's bounded channel; the controller keys sessions by connection, so a session id is private to its connection and a slow reader stalls only its own sessions (#569, #570, #571, #572).
-- `send_frame` is fire-and-forget with `try_send` to rule out deadlock on the connection's own loop.
+- `send_frame` is a synchronous fire-and-forget `try_send` returning `SendOutcome`, to rule out deadlock on the connection's own loop.
 - Fixed-text replies and length-only logging prevent echo and log amplification.
 - Origin default is deny-all for browsers while native clients (no `Origin`) keep working.
 - The plan is built once at session creation and kept as pre-serialised messages; the per-connection plan budget (`live_plan_bytes`, released frame by frame and on every removal path) bounds memory of live plans, and pacing and deadlines bound how long a session can occupy it.
@@ -48,7 +48,7 @@ flowchart TB
 
 ## Public API surface
 
-`AxumWebSocketTransport` (`new`, `with_rate_limit_config`, `with_allowed_origins`, `with_shutdown`, `with_max_sessions_per_connection`, `upgrade_handler`, `handle_socket`, `controller`, `active_connection_count`), `create_websocket_router`, `AdaptiveStreamController`, `ConnectionId`, `CreateSessionError` (`AlreadyExists`, `TooManySessions`, `InvalidOptions`, `PlanRejected`), `ClientMetrics`, `StreamOptions`, `WsMessage`, `SecureWebSocketHandler`, `byte_bounded_channel` (`infrastructure::bounded_channel`).
+`AxumWebSocketTransport` (`new`, `with_rate_limit_config`, `with_allowed_origins`, `with_shutdown`, `with_max_sessions_per_connection`, `upgrade_handler`, `handle_socket`, `controller`, `active_connection_count`), `create_websocket_router`, `AdaptiveStreamController`, `ConnectionId`, `CreateSessionError` (`AlreadyExists`, `TooManySessions`, `PlanRejected`), `SendOutcome`, `DropReason`, `ClientMetrics`, `StreamOptions`, `WsMessage`, `SecureWebSocketHandler`, `byte_bounded_channel` (`infrastructure::bounded_channel`).
 
 ## Contracts
 
@@ -56,11 +56,11 @@ flowchart TB
 |---|---|---|---|
 | `AxumWebSocketTransport::new` / `with_rate_limit_config` | inside a Tokio runtime | sweep task spawned; Origin policy `DenyAll` | Does not panic outside a runtime (#602) |
 | `upgrade_handler` | `ConnectInfo<SocketAddr>` present | 429, 403, or upgrade with size caps | Missing `ConnectInfo` yields 500 |
-| `create_session(id, owner, data, opts)` | none | inserts iff id free, session cap not reached, options valid and the plan fits the connection budget | Never overwrites; `AlreadyExists`, `TooManySessions`, `InvalidOptions` or `PlanRejected` otherwise; no session on error |
+| `create_session(id, owner, data, opts)` | none | inserts iff id free, session cap not reached and the plan fits the connection budget (options are validated at decode time) | Never overwrites; `AlreadyExists`, `TooManySessions` or `PlanRejected` otherwise; no session on error |
 | `plan_stream(id, data, opts)` | validated options | frames ordered by priority desc, one priority each, each within the frame limit (unless one entry cannot split) | `PlanError`: `UnitExceedsBudget`, `TooManyFrames`, `PlanBytesExceeded`, `PathTooDeep`, `ConnectionBudgetExhausted` (budget check at registration) |
 | `handle_frame_ack(owner, ...)` | session exists and owned by `owner` | appends ack, updates EMA | Otherwise `UnknownSession`, no state change |
 | `remove_sessions_owned_by(owner)` | none | removes and aborts all of owner's sessions, returns count | O(owner's sessions) |
-| `send_frame(conn, msg)` | none | `Ok(())` always; frame queued or dropped with warn | No delivery acknowledgement |
+| `send_frame(conn, msg)` | none | `SendOutcome::Queued`, or `Dropped(DropReason)` with a warn; plain `fn`, never blocks | No delivery acknowledgement |
 | `cleanup_expired_sessions(max_age)` | none | sessions older than `max_age` removed and aborted, plan reservation released | Age counts from creation, not activity; streams normally end earlier via the stall timeout (30 s per enqueue) or deadline (120 s + plan_bytes / 64 KiB/s) |
 
 ## Testing strategy

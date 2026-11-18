@@ -193,23 +193,22 @@ impl PriorityAssigner {
         match data {
             JsonData::Object(map) => {
                 for (key, value) in map {
-                    if let Ok(field_path) = current_path.append_key(key) {
-                        let priority = self.calculate_field_priority(&field_path, value);
+                    let field_path = current_path.append_key(key);
+                    let priority = self.calculate_field_priority(&field_path, value);
 
-                        fields.push(PrioritizedField {
-                            path: field_path.clone(),
-                            priority,
-                            value: value.clone(),
-                        });
+                    fields.push(PrioritizedField {
+                        path: field_path.clone(),
+                        priority,
+                        value: value.clone(),
+                    });
 
-                        self.extract_fields_recursive(
-                            value,
-                            &field_path,
-                            fields,
-                            current_depth + 1,
-                            max_depth,
-                        );
-                    }
+                    self.extract_fields_recursive(
+                        value,
+                        &field_path,
+                        fields,
+                        current_depth + 1,
+                        max_depth,
+                    );
                 }
             }
             JsonData::Array(arr) => {

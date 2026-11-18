@@ -1,8 +1,9 @@
 /**
- * Acceptance tests for #657: root `$` patches and unencodable keys.
+ * Acceptance tests for #657: root `$` patches.
  *
- * Frames mirror what the Rust domain `Stream` and pjs-wasm emit for objects
- * whose keys `JsonPath` cannot encode (`.`, `[`, `]`, empty).
+ * Root `set`/`merge` frames remain valid input (non-object roots, whole-value
+ * replacement); keys with `.`, `[`, `]` or empty are now addressed by quoted
+ * path segments instead (see reconstructor-own-keys-acceptance.test.ts).
  */
 
 import { describe, test, expect, beforeEach } from '@jest/globals';

@@ -23,7 +23,7 @@ code:
   - crates/pjs-core/src/config.rs
   - crates/pjs-core/src/parser/zero_copy.rs
   - crates/pjs-core/src/parser/buffer_pool.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 051: Security Limits and Validated Configuration
@@ -87,6 +87,10 @@ Status: partial. The remaining unread config fields are listed in Open Questions
 
 ### FR-010 Config accessors
 `NetworkLimits::connection_timeout`, `BufferLimits::buffer_ttl`, `SessionLimits::session_timeout` shall return `Duration` from the `*_secs` fields.
+Status: done.
+
+### FR-011 Serialized-size estimation
+Serialized-size estimation shall use one `json_str_len` escape table (and `decimal_digits`) shared by the websocket planner, the websocket client and the compression savings estimate; it shall equal `serde_json` output length for every string (proptest). No limit value changes (#703).
 Status: done.
 
 ## Non-Functional Requirements

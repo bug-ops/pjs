@@ -30,7 +30,7 @@ use tokio::sync::Semaphore;
 const WAIT: Duration = Duration::from_secs(10);
 
 fn small_plan() -> Result<Plan, PlanError> {
-    let options = PlanOptions::try_from(&StreamOptions::default()).expect("default options");
+    let options = PlanOptions::from(&StreamOptions::default());
     plan_stream(SessionId::new(), json!({"a": 1}), &options)
 }
 

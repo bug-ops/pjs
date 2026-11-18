@@ -14,7 +14,7 @@ related:
   - "[[031-array-duplication-reconstruction/spec]]"
 code:
   - crates/pjs-core/src/stream/reconstruction.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 046: JSON Reconstruction
@@ -47,7 +47,7 @@ A `Skeleton` frame shall replace the entire current state with its `data` (its `
 Status: done.
 
 ### FR-003 Patch application
-For a `Patch` frame, each patch shall be applied in order: `Set` and `Replace` -> `set_at_path`; `Append` -> `append_at_path`; `Remove` -> `remove_at_path`. The result is `PatchesApplied { count, priority, paths }`.
+For a `Patch` frame, each patch shall be applied in order: `Set` and `Replace` -> `set_at_path`; `Append` -> `append_at_path`; `Remove` -> `remove_at_path`. Target resolution goes through one crate-private resolver over `&[PathSegment]` (`resolve_mut`; read-only `resolve` for the WebSocket client), shared with the WebSocket protocol and client (#699). The result is `PatchesApplied { count, priority, paths }`.
 Status: done. A failing patch aborts the frame; patches before it stay applied (no rollback).
 
 ### FR-004 Set semantics
@@ -71,7 +71,7 @@ Status: done.
 Status: done.
 
 ### FR-009 Error type
-All failures shall be `crate::Error::Patch(PatchError)` with variants `KeyNotFound(String)`, `IndexOutOfBounds { index, len }`, `NotAnIndex`, `ExpectedObject`, `ExpectedArray`, `NotAContainer`, `NoTargetKey`, `UnsupportedSegment`.
+All failures shall be `crate::Error::Patch(PatchError)` with variants `KeyNotFound(String)`, `IndexOutOfBounds { index, len }`, `NotAnIndex`, `ExpectedObject`, `ExpectedArray`, `NotAContainer`, `NoTargetKey` (`UnsupportedSegment` was removed in #699: `PathSegment` is closed).
 Status: done (stringly typed; see Open Questions).
 
 ## Non-Functional Requirements

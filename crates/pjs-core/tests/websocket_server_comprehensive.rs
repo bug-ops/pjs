@@ -18,11 +18,19 @@ use pjson_rs::{
     domain::{Priority, SessionId},
     infrastructure::byte_bounded_channel,
     infrastructure::websocket::{
-        AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, StreamOptions, WsMessage,
+        AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, MaxFrameSize,
+        StreamOptions, WsMessage,
     },
 };
 use serde_json::{Value, json};
+use std::num::NonZeroU32;
 use std::sync::Arc;
+
+fn stream_options(update: impl FnOnce(&mut StreamOptions)) -> StreamOptions {
+    let mut options = StreamOptions::default();
+    update(&mut options);
+    options
+}
 
 async fn create(
     controller: &AdaptiveStreamController,
@@ -162,8 +170,7 @@ async fn test_remove_unknown_session_is_a_no_op() {
 
     let removed = transport
         .controller()
-        .remove_session(ConnectionId::new(), SessionId::new())
-        .await;
+        .remove_session(ConnectionId::new(), SessionId::new());
 
     assert!(!removed);
 }
@@ -176,12 +183,11 @@ async fn test_remove_session_removes_session_from_controller() {
     let owner = ConnectionId::new();
     let session_id = create(&controller, owner, json!({"k": "v"})).await;
 
-    assert!(controller.remove_session(owner, session_id).await);
+    assert!(controller.remove_session(owner, session_id));
 
     // Session must be gone — subsequent operations must return UnknownSession.
     let err = controller
         .handle_frame_ack(owner, session_id, 0, 10)
-        .await
         .unwrap_err();
     assert_matches!(
         err,
@@ -220,7 +226,7 @@ async fn test_controller_start_streaming() {
     let owner = ConnectionId::new();
     let session_id = create(&controller, owner, data).await;
 
-    let result = controller.start_streaming(owner, session_id).await;
+    let result = controller.start_streaming(owner, session_id);
 
     assert!(result.is_ok());
 }
@@ -229,9 +235,7 @@ async fn test_controller_start_streaming() {
 async fn test_controller_start_streaming_invalid_session() {
     let controller = AdaptiveStreamController::new();
 
-    let result = controller
-        .start_streaming(ConnectionId::new(), SessionId::new())
-        .await;
+    let result = controller.start_streaming(ConnectionId::new(), SessionId::new());
 
     assert!(result.is_err());
 }
@@ -243,7 +247,7 @@ async fn test_controller_handle_frame_ack() {
     let owner = ConnectionId::new();
     let session_id = create(&controller, owner, json!({"test": "data"})).await;
 
-    let result = controller.handle_frame_ack(owner, session_id, 0, 50).await;
+    let result = controller.handle_frame_ack(owner, session_id, 0, 50);
 
     assert!(result.is_ok());
 }
@@ -258,15 +262,12 @@ async fn test_controller_handle_frame_ack_multiple() {
     // Acknowledge multiple frames
     controller
         .handle_frame_ack(owner, session_id, 0, 50)
-        .await
         .unwrap();
     controller
         .handle_frame_ack(owner, session_id, 1, 60)
-        .await
         .unwrap();
     controller
         .handle_frame_ack(owner, session_id, 2, 55)
-        .await
         .unwrap();
 
     // All should succeed
@@ -276,9 +277,7 @@ async fn test_controller_handle_frame_ack_multiple() {
 async fn test_controller_handle_frame_ack_invalid_session() {
     let controller = AdaptiveStreamController::new();
 
-    let result = controller
-        .handle_frame_ack(ConnectionId::new(), SessionId::new(), 0, 50)
-        .await;
+    let result = controller.handle_frame_ack(ConnectionId::new(), SessionId::new(), 0, 50);
 
     assert!(result.is_err());
 }
@@ -291,7 +290,7 @@ async fn test_controller_delivers_frames_to_the_attached_connection() {
     controller.attach_connection(owner, tx);
 
     let session_id = create(&controller, owner, json!({"test": "data"})).await;
-    controller.start_streaming(owner, session_id).await.unwrap();
+    controller.start_streaming(owner, session_id).unwrap();
 
     let envelope = tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
         .await
@@ -309,7 +308,8 @@ async fn test_controller_delivers_frames_to_the_attached_connection() {
 fn test_stream_options_default() {
     let options = StreamOptions::default();
 
-    assert_eq!(options.max_frame_size, 64 * 1024);
+    assert_eq!(options.max_frame_size, MaxFrameSize::default());
+    assert_eq!(options.max_frame_size.get(), 64 * 1024);
     assert_eq!(options.client_fps, None);
     assert!(options.priority_mapping.is_none());
 }
@@ -322,15 +322,14 @@ fn test_stream_options_custom() {
     priority_mapping.insert("critical".to_string(), Priority::CRITICAL);
     priority_mapping.insert("high".to_string(), Priority::HIGH);
 
-    let options = StreamOptions {
-        max_frame_size: 1024 * 1024,
-        client_fps: Some(60),
-        priority_mapping: Some(priority_mapping.clone()),
-        ..Default::default()
-    };
+    let options = stream_options(|o| {
+        o.max_frame_size = MaxFrameSize::new(1024 * 1024).unwrap();
+        o.client_fps = NonZeroU32::new(60);
+        o.priority_mapping = Some(priority_mapping.clone());
+    });
 
-    assert_eq!(options.max_frame_size, 1024 * 1024);
-    assert_eq!(options.client_fps, Some(60));
+    assert_eq!(options.max_frame_size.get(), 1024 * 1024);
+    assert_eq!(options.client_fps, NonZeroU32::new(60));
     assert_eq!(
         options.priority_mapping.as_ref().unwrap().get("critical"),
         Some(&Priority::CRITICAL)
@@ -359,8 +358,8 @@ fn test_stream_options_deserialization() {
 
     let options: StreamOptions = serde_json::from_value(json).unwrap();
 
-    assert_eq!(options.max_frame_size, 2048);
-    assert_eq!(options.client_fps, Some(30));
+    assert_eq!(options.max_frame_size.get(), 2048);
+    assert_eq!(options.client_fps, NonZeroU32::new(30));
 }
 
 // ============================================================================
@@ -528,20 +527,17 @@ async fn test_full_websocket_lifecycle() {
     // 2. Simulate frame acknowledgments
     controller
         .handle_frame_ack(owner, session_id, 0, 30)
-        .await
         .unwrap();
 
     controller
         .handle_frame_ack(owner, session_id, 1, 35)
-        .await
         .unwrap();
 
     // 3. Close stream — session must be removed from the controller.
-    assert!(controller.remove_session(owner, session_id).await);
+    assert!(controller.remove_session(owner, session_id));
 
     let err = controller
         .handle_frame_ack(owner, session_id, 0, 0)
-        .await
         .unwrap_err();
     assert_matches!(err, PjsError::UnknownSession(_));
 }
@@ -578,10 +574,7 @@ async fn test_multiple_concurrent_sessions() {
 
     // Start streaming for all sessions
     for (owner, session_id) in &session_ids {
-        controller
-            .start_streaming(*owner, *session_id)
-            .await
-            .unwrap();
+        controller.start_streaming(*owner, *session_id).unwrap();
     }
 }
 
@@ -594,14 +587,11 @@ async fn test_websocket_error_handling() {
         !transport
             .controller()
             .remove_session(ConnectionId::new(), SessionId::new())
-            .await
     );
 
     // Try to handle frame ack for non-existent session
     let controller = transport.controller();
-    let result = controller
-        .handle_frame_ack(ConnectionId::new(), SessionId::new(), 0, 50)
-        .await;
+    let result = controller.handle_frame_ack(ConnectionId::new(), SessionId::new(), 0, 50);
     assert!(result.is_err());
 }
 
@@ -618,8 +608,12 @@ async fn test_websocket_send_frame() {
         is_complete: false,
     };
 
-    let result = transport.send_frame(connection, message).await;
+    let outcome = transport.send_frame(connection, message);
 
-    // Should succeed (or at least not panic)
-    assert!(result.is_ok());
+    assert_eq!(
+        outcome,
+        pjson_rs::infrastructure::websocket::SendOutcome::Dropped(
+            pjson_rs::infrastructure::websocket::DropReason::NoConnection
+        )
+    );
 }

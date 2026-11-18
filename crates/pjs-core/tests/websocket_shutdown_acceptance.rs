@@ -94,7 +94,7 @@ async fn test_shutdown_serve_returns_drained_and_leaves_no_connections() {
         .expect("join")
         .expect("io ok");
     assert_eq!(outcome, ShutdownOutcome::Drained);
-    assert_eq!(server.transport.active_connection_count().await, 0);
+    assert_eq!(server.transport.active_connection_count(), 0);
 }
 
 #[tokio::test]

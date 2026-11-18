@@ -22,7 +22,7 @@ related:
   - "[[038-zero-copy-lazy-json-parser/spec]]"
   - "[[041-simd-features-and-global-allocator/spec]]"
   - "[[046-json-reconstruction/spec]]"
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 039: Partial JSON Parser (`partial-parse` feature)
@@ -149,7 +149,7 @@ Status: done.
 ## Open Questions
 
 - `build_streaming_hint`/`collect_leaves` iterate a `HashMap`, so the tentative path is order-dependent. This violates the trait's own determinism contract for `streaming_hint`. Needs a follow-up decision (track insertion order in the walker rather than re-deriving it from `JsonData`).
-- `collect_leaves` replaces a key that `JsonPath::append_key` rejects (`.`, `[`, `]` or empty) with the parent path, so hints for such keys collapse onto the parent path.
+- Resolved by #698: `collect_leaves` and the streaming-hint path builder append every key through the infallible `JsonPath::append_key`; keys with `.`, `[`, `]` or the empty key no longer collapse onto the parent path.
 - `walk_number` uses `expect` on `f64` parse of a `BigInt` decimal string; documented as infallible, but it is a panic site in a parser for untrusted input.
 - `ParseDiagnostic` and `PartialParseResult` have no `#[non_exhaustive]`; adding a variant is a breaking change.
 - No production caller (module docs, CHANGELOG #485). Decide whether to wire it into streaming ingestion or keep it as an unexercised library capability.

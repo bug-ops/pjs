@@ -11,7 +11,8 @@ pub mod zstd;
 
 use crate::config::{ConfigError, ValidatedCompressionConfig};
 use crate::domain::{DomainError, DomainResult};
-use savings::{decimal_digits, delta_plan, rle_net_saving, rle_runs, run_saving};
+use crate::serialized_len::decimal_digits;
+use savings::{delta_plan, rle_net_saving, rle_runs, run_saving};
 use serde_json::{Value as JsonValue, json};
 use std::collections::HashMap;
 

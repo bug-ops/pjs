@@ -4,7 +4,7 @@ use crate::{
     DomainError, DomainResult,
     value_objects::{JsonData, JsonPath, Priority, StreamId},
 };
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -39,7 +39,7 @@ pub struct Frame {
     #[serde(with = "crate::serde_support::priority")]
     priority: Priority,
     sequence: u64,
-    timestamp: DateTime<Utc>,
+    timestamp: Timestamp,
     payload: JsonData,
     metadata: HashMap<String, String>,
 }
@@ -68,7 +68,7 @@ impl Frame {
             frame_type: FrameType::Skeleton,
             priority: Priority::CRITICAL,
             sequence,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             payload: skeleton_data,
             metadata: HashMap::new(),
         }
@@ -119,7 +119,7 @@ impl Frame {
             frame_type: FrameType::Patch,
             priority,
             sequence,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             payload,
             metadata: HashMap::new(),
         })
@@ -140,7 +140,7 @@ impl Frame {
             frame_type: FrameType::Complete,
             priority: Priority::CRITICAL,
             sequence,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             payload,
             metadata: HashMap::new(),
         }
@@ -169,7 +169,7 @@ impl Frame {
             frame_type: FrameType::Error,
             priority: Priority::CRITICAL,
             sequence,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             payload,
             metadata: HashMap::new(),
         }
@@ -196,7 +196,7 @@ impl Frame {
     }
 
     /// Get timestamp
-    pub fn timestamp(&self) -> DateTime<Utc> {
+    pub fn timestamp(&self) -> Timestamp {
         self.timestamp
     }
 

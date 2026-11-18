@@ -11,8 +11,8 @@ use crate::domain::{
     ports::gat::{EventPublisherGat, StreamRepositoryGat},
     value_objects::{Priority, SessionId, StreamId},
 };
-use chrono::Utc;
 use futures::future::try_join_all;
+use jiff::Timestamp;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -146,7 +146,7 @@ where
         let completion_event = DomainEvent::StreamCompleted {
             session_id,
             stream_id,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         };
 
         self.event_publisher.publish(completion_event).await?;
@@ -289,7 +289,7 @@ where
         let test_event = DomainEvent::StreamCompleted {
             session_id: SessionId::new(),
             stream_id: StreamId::new(),
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         };
         let event_start = Instant::now();
         self.event_publisher.publish(test_event).await?;
@@ -373,7 +373,7 @@ mod tests {
         },
         value_objects::{JsonData, StreamId},
     };
-    use chrono::Utc;
+    use jiff::Timestamp;
     use std::collections::HashMap;
     use std::future::Future;
     use std::sync::{Arc, Mutex};
@@ -662,7 +662,7 @@ mod tests {
                     is_healthy: true,
                     active_streams: 0,
                     total_frames: 0,
-                    last_activity: Utc::now(),
+                    last_activity: Timestamp::now(),
                     error_rate: 0.0,
                     metrics: HashMap::new(),
                 })
