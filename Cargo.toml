@@ -33,13 +33,13 @@ getrandom = "0.4"
 gungraun = "=0.20.0"
 headers-accept = "0.3.0"
 hmac = "0.13"
-hyper = "1.12"
-hyper-util = "0.1"
-jiff = { version = "1.0.1", default-features = false }
+hyper = "1.11"
+hyper-util = "0.1.20"
+jiff = { version = "1.0", default-features = false }
 jiter = "0.19"
 js-sys = "0.3"
 jsonwebtoken = { version = "12.0", default-features = false, features = ["use_pem"] }
-mediatype = "0.23"
+mediatype = "0.21.0"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 mimalloc = "0.1"
