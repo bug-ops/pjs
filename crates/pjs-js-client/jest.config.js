@@ -9,6 +9,8 @@ export default {
     '<rootDir>/tests/**/*.test.js'
   ],
   
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/tests/cross-stack/'],
+
   // Module handling
   extensionsToTreatAsEsm: ['.ts'],
   moduleNameMapper: {

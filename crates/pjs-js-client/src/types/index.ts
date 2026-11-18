@@ -69,12 +69,33 @@ export interface SkeletonFrame extends BaseFrame {
 }
 
 /**
+ * Any JSON value.
+ */
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/**
+ * Wire patch operations, in canonical order.
+ */
+export const PATCH_OPERATIONS = ['set', 'append', 'merge', 'delete', 'append_str'] as const;
+
+/**
+ * Wire patch operation kind derived from {@link PATCH_OPERATIONS}.
+ */
+export type PatchOperationKind = (typeof PATCH_OPERATIONS)[number];
+
+/**
  * Patch operation for updating JSON structure
  */
 export interface PatchOperation {
   path: JsonPath;
   value: any;
-  operation: 'set' | 'append' | 'merge' | 'delete';
+  operation: PatchOperationKind;
 }
 
 /**
@@ -335,6 +356,11 @@ export type RenderCallback = (data: any, metadata: {
  * Stream options for individual requests
  */
 export interface StreamOptions {
+  /**
+   * JSON document to stream (required by the WebSocket transport).
+   */
+  data?: JsonValue;
+
   /**
    * Custom priority strategy
    */

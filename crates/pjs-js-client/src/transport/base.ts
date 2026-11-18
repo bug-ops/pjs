@@ -5,7 +5,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { Frame, PJSClientConfig, PJSError, PJSErrorType } from '../types/index.js';
+import { Frame, JsonValue, PJSClientConfig, PJSError, PJSErrorType } from '../types/index.js';
 
 /** Name of the SSE event (and NDJSON marker key) a server sends before closing on shutdown. */
 export const SHUTDOWN_EVENT = 'shutdown';
@@ -27,6 +27,8 @@ export interface ConnectResult {
 export interface StreamOptions {
   sessionId: string;
   streamId: string;
+  /** JSON document to stream (required by the WebSocket transport). */
+  data?: JsonValue;
   queryParams?: Record<string, string>;
   headers?: Record<string, string>;
 }

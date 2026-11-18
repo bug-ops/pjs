@@ -148,3 +148,8 @@ export function tokenizeJsonPath(path: string): JsonPathParse {
 export function isValidJsonPath(path: string): boolean {
   return scanJsonPath(path, null) === null;
 }
+
+/** Formats typed segments back into a path string; inverse of {@link tokenizeJsonPath}. */
+export function formatJsonPath(_segments: readonly JsonPathSegment[]): string {
+  throw new Error('not implemented');
+}
