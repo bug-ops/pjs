@@ -853,6 +853,41 @@ jobs:
       - name: Check pjs-wasm MSRV (wasm32)
         run: cargo +1.89 check -p pjs-wasm --target wasm32-unknown-unknown --locked
 
+  # Machine-checks the SAFETY invariants of the only `unsafe` in pjs-core
+  # (raw alloc/realloc/dealloc, Send/Sync impls, set_len).
+  miri:
+    name: Miri (buffer_pool, aligned_alloc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [changes]
+    permissions:
+      contents: read
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: miri, rust-src
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "miri"
+          cache-on-failure: true
+
+      # Tree Borrows: crossbeam-epoch (via rayon in BufferPool) trips Stacked
+      # Borrows; ignore-leaks: rayon's global pool threads outlive main.
+      - name: Run Miri
+        env:
+          MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-ignore-leaks"
+        run: cargo miri test -p pjson-rs --lib -- parser::buffer_pool parser::aligned_alloc
+
   # ── Security (independent, no Rust build required) ────────────────────────
   security-osv:
     name: OSV Security Scan
@@ -949,6 +984,7 @@ jobs:
       - wasm-package-validation
       - feature-matrix
       - msrv
+      - miri
       - security-osv
       - security-deny
       - js-client-test
@@ -979,6 +1015,7 @@ jobs:
           check wasm-package-validation   "${{ needs.wasm-package-validation.result }}"
           check feature-matrix            "${{ needs.feature-matrix.result }}"
           check msrv                      "${{ needs.msrv.result }}"
+          check miri                      "${{ needs.miri.result }}"
           check security-osv              "${{ needs.security-osv.result }}"
           check security-deny             "${{ needs.security-deny.result }}"
           check js-client-test            "${{ needs.js-client-test.result }}"
