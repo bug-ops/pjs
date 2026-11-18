@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod clock;
 pub mod entities;
 pub mod events;
 #[doc(hidden)]

@@ -28,7 +28,9 @@ use std::{
 /// retains idle: every buffer is charged its size-class capacity from allocation
 /// until it is freed, and a new allocation that would push the total past the
 /// limit fails with [`DomainError::ResourceExhausted`]. Reusing an idle buffer
-/// never fails on the budget.
+/// never fails on the budget. Before an allocation fails, idle buffers (largest
+/// size class and oldest first) are evicted to make room, so one size class cannot
+/// starve the others.
 ///
 /// A buffer is returned to the pool on drop only while it still has exactly its
 /// size-class capacity and layout. One grown through
@@ -210,8 +212,9 @@ impl BufferPool {
     ///
     /// [`DomainError::SecurityViolation`] when `size` exceeds the configured maximum
     /// buffer size; [`DomainError::ResourceExhausted`] when a new allocation would push
-    /// the bytes handed out plus retained past `max_total_memory`. Reuse never fails on
-    /// the budget.
+    /// the bytes handed out plus retained past `max_total_memory` even after idle buffers
+    /// are evicted, i.e. when checked-out buffers alone leave no room. Reuse never fails
+    /// on the budget.
     pub fn acquire(&self, size: BufferSize) -> DomainResult<PooledBuffer> {
         // Security validation: check buffer size
         self.config
@@ -241,14 +244,7 @@ impl BufferPool {
         }
 
         // No buffer available: charge the budget, then create a new one
-        self.budget
-            .try_reserve(class_bytes, self.config.max_total_memory)
-            .map_err(|live| {
-                DomainError::ResourceExhausted(format!(
-                    "Adding buffer of size {} would exceed memory limit: current={}, limit={}",
-                    class_bytes, live, self.config.max_total_memory
-                ))
-            })?;
+        self.reserve_class(class_bytes)?;
 
         let buffer = match AlignedBuffer::new(size as usize, self.config.simd_alignment) {
             Ok(buffer) => buffer,
@@ -260,6 +256,57 @@ impl BufferPool {
 
         self.record_acquire(false);
         Ok(self.checked_out(buffer, size, policy))
+    }
+
+    /// Charge `class_bytes` to the budget, evicting idle buffers once if the first attempt fails
+    fn reserve_class(&self, class_bytes: usize) -> DomainResult<()> {
+        let limit = self.config.max_total_memory;
+        if self.budget.try_reserve(class_bytes, limit).is_ok() {
+            return Ok(());
+        }
+        self.evict_idle(class_bytes);
+        self.budget.try_reserve(class_bytes, limit).map_err(|live| {
+            DomainError::ResourceExhausted(format!(
+                "Adding buffer of size {} would exceed memory limit: current={}, limit={}",
+                class_bytes, live, limit
+            ))
+        })
+    }
+
+    /// Free idle buffers, largest class and oldest first, until `class_bytes` fits the budget
+    fn evict_idle(&self, class_bytes: usize) {
+        let limit = self.config.max_total_memory;
+        let shortfall = || {
+            self.budget
+                .live()
+                .saturating_add(class_bytes)
+                .saturating_sub(limit)
+        };
+
+        let mut sizes: Vec<BufferSize> = self.pools.iter().map(|entry| *entry.key()).collect();
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+
+        for size in sizes {
+            let Some(mut bucket) = self.pools.get_mut(&size) else {
+                continue;
+            };
+            let mut missing = shortfall();
+            let count = bucket
+                .buffers
+                .iter()
+                .take_while(|buffer| {
+                    let more = missing > 0;
+                    missing = missing.saturating_sub(buffer.capacity);
+                    more
+                })
+                .count();
+            for evicted in bucket.buffers.drain(..count) {
+                self.budget.release(evicted.capacity);
+            }
+            if shortfall() == 0 {
+                return;
+            }
+        }
     }
 
     /// Acquire a buffer with at least the specified capacity
@@ -285,37 +332,16 @@ impl BufferPool {
         let mut freed_buffers = 0;
         let mut freed_memory = 0;
 
-        // DashMap doesn't have retain, so we collect keys to remove
-        let mut keys_to_remove = Vec::new();
-
-        for mut entry in self.pools.iter_mut() {
-            let bucket = entry.value_mut();
-            let old_count = bucket.buffers.len();
-
-            bucket.buffers.retain(|buffer| {
-                let age = now.duration_since(buffer.last_used);
-                if age > self.config.buffer_ttl {
-                    freed_memory += buffer.capacity;
-                    false
-                } else {
-                    true
-                }
-            });
-
-            freed_buffers += old_count - bucket.buffers.len();
-
-            // Mark bucket for removal if empty and not recently accessed
-            if bucket.buffers.is_empty()
-                && now.duration_since(bucket.last_access) >= self.config.buffer_ttl
-            {
-                keys_to_remove.push(*entry.key());
+        self.pools.retain(|_, bucket| {
+            for buffer in bucket.buffers.extract_if(.., |buffer| {
+                now.duration_since(buffer.last_used) > self.config.buffer_ttl
+            }) {
+                freed_buffers += 1;
+                freed_memory += buffer.capacity;
             }
-        }
-
-        // Remove empty buckets
-        for key in keys_to_remove {
-            self.pools.remove(&key);
-        }
+            !bucket.buffers.is_empty()
+                || now.duration_since(bucket.last_access) < self.config.buffer_ttl
+        });
 
         self.budget.release(freed_memory);
         if self.config.track_stats {

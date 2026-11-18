@@ -75,8 +75,12 @@ Jobs `wasm-native-tests` (`cargo nextest run -p pjs-wasm --tests`), `wasm-build`
 Status: done.
 
 ### FR-007 JS client job
-Job `js-client-test` (Node 20, `npm ci --ignore-scripts`, downloads `wasm-build-web` into `crates/pjs-wasm/pkg`) shall run `npm run typecheck` and `npm test` in `crates/pjs-js-client`. It also runs `npm run build`, builds the `js_client_ws_fixture` example, and runs `npx jest --config jest.cross-stack.config.js` against `dist` with `PJS_WS_FIXTURE_BIN` (#731). It also runs for JS-only changes because `wasm-build` runs when `js` changed.
+Job `js-client-test` (matrix Node 22 and 24, `fail-fast: false`; `npm ci --ignore-scripts`, downloads `wasm-build-web` into `crates/pjs-wasm/pkg`) shall run `npm run typecheck` and `npm test` in `crates/pjs-js-client`. It also runs `npm run build`, builds the `js_client_ws_fixture` example, and runs `npx jest --config jest.cross-stack.config.js` against `dist` with `PJS_WS_FIXTURE_BIN` (#731). It also runs for JS-only changes because `wasm-build` runs when `js` changed.
 Status: done ([[022-ci-js-client-enforcement/spec]]; #180).
+
+### FR-018 Instruction-count job (report-only)
+Job `bench-instructions` (pull_request only, `needs.changes.outputs.bench`, `continue-on-error: true`, 30 min) shall install Valgrind and `gungraun-runner` at the version locked for it in `Cargo.lock` (read in a step, not duplicated in `env`), record a `base` baseline from a clean checkout of the base commit (in `base-src`; the head `gungraun_parser` bench and the `gungraun` dev-dependency are added there only when the base lacks them) into the shared target dir, then run `cargo bench -p pjs-bench --bench gungraun_parser -- --baseline=base` and publish the output to the step summary. The `gungraun` dev-dependency is Linux-only and `gungraun_parser` has an empty `main` elsewhere. The job is not part of `ci-success` and sets no failure limit yet ([[decisions/adr-002-instruction-count-bench-gate|ADR-002]]).
+Status: done as reporting (#736).
 
 ### FR-008 Fuzz jobs
 Jobs `fuzz` and `fuzz-explore` as specified in [[076-fuzz-targets/spec]].
@@ -148,6 +152,7 @@ Job graph: `changes` -> {`quality`, `feature-matrix`, `fuzz`, `build`, `doctest`
 ## Agent Boundaries
 
 - Always: pin new actions to SHAs; extend `ci-success` when adding a job; keep the `ci.yml` path filter in sync with workspace layout.
+- Exception (user-approved, #736): the `bench-instructions` job is report-only and is not in `ci-success`; making it gating is a follow-up once variance is measured.
 - Ask first: adding required jobs that run on every PR (cost), raising permissions.
 - Never: use `pull_request_target` with PR code checkout; add `RUSTFLAGS` that differ from local checks.
 
@@ -157,7 +162,7 @@ Job graph: `changes` -> {`quality`, `feature-matrix`, `fuzz`, `build`, `doctest`
 - No benchmark job (see [[075-bench-suite/spec]]); the quiet-machine A/B procedure is documented in `crates/pjs-bench/README.md` (#619); `CLAUDE.md` and `.claude/rules` mention a `jemalloc` feature, but no `Cargo.toml` defines it (the matrix covers `system` and `mimalloc`).
 - Demo integration tests are not exercised in PR CI ([[077-demo-servers/spec]]); the comment near `coverage` ("zero tests") is stale.
 - `wasm-pack test` (documented in `.claude/rules/branching.md`) is not run in CI.
-- `wasm-pack@latest` and `cargo-fuzz` are installed unpinned.
+- `install-action` tool pins (`CARGO_FUZZ_VERSION`, `CARGO_HACK_VERSION`, `CARGO_LLVM_COV_VERSION`, `CARGO_NEXTEST_VERSION`, `WASM_PACK_VERSION`) live in the workflow `env:` block; Dependabot cannot track them, so refresh them with the Actions bump (#744). Node inputs are not tracked by Dependabot either: review the Node matrix each April and October (#743; Node 26 once `actions/setup-node` supports it).
 - `ci.yml` mentions `main, develop`; there is no `develop` branch convention elsewhere in the repo docs. [NEEDS CLARIFICATION]
 
 ## See Also

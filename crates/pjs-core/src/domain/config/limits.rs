@@ -55,6 +55,13 @@ pub const MAX_FRAMES_PER_REQUEST: usize = 1_000;
 /// sessions are not meant to be long-lived resources.
 pub const MAX_SESSION_TIMEOUT_SECONDS: u64 = 604_800;
 
+/// Maximum number of concurrent streams a single session may be configured
+/// with.
+///
+/// Enforced by `MaxConcurrentStreams`'s validating constructor. Equal to the
+/// `high_throughput` preset's ceiling, so no preset is narrowed.
+pub const MAX_CONCURRENT_STREAMS_PER_SESSION: usize = 1_000;
+
 #[cfg(test)]
 mod tests {
     use super::*;

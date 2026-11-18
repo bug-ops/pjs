@@ -160,7 +160,7 @@ impl Drop for CorpusBudgetReservation {
 fn now_millis() -> u64 {
     static START: OnceLock<Instant> = OnceLock::new();
     let start = *START.get_or_init(Instant::now);
-    start.elapsed().as_millis() as u64
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Evict entries whose `last_access` is older than `ttl`, then resynchronize
@@ -192,7 +192,8 @@ fn evict_expired_sessions(
     corpus_bytes_in_flight: &AtomicUsize,
 ) {
     let now = now_millis();
-    let ttl_millis = ttl.as_millis() as u64;
+    // A ttl beyond u64 milliseconds saturates, so it evicts nothing.
+    let ttl_millis = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
     sessions.retain(|_, state| {
         now.saturating_sub(state.last_access.load(Ordering::Relaxed)) < ttl_millis
     });

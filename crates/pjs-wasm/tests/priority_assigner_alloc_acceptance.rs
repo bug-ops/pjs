@@ -6,7 +6,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-use pjs_wasm::priority_assignment::{PriorityAssigner, PriorityConfig};
+use pjs_wasm::priority_assignment::PriorityAssigner;
+use pjson_rs_domain::services::PriorityHeuristicConfig;
 use pjson_rs_domain::value_objects::{JsonData, JsonPath};
 
 thread_local! {
@@ -40,8 +41,8 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 
 #[test]
 fn calculate_field_priority_allocates_nothing_per_call() {
-    let mut config = PriorityConfig::default();
-    config.add_critical_field("session_id".to_owned());
+    let mut config = PriorityHeuristicConfig::default();
+    config.critical_fields.push("session_id".to_owned());
     let assigner = PriorityAssigner::with_config(config);
     let paths = [
         JsonPath::new("$.session_id").unwrap(),

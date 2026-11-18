@@ -8,10 +8,13 @@
  */
 
 import { ConnectResult, StreamOptions, Transport } from './base.js';
+import { isRecord } from './json-record.js';
 import { formatJsonPath, JsonPathSegment } from '../core/json-path.js';
 import {
+  Frame,
   FrameType,
   isPatchOperationKind,
+  MAX_PATCH_PATH_DEPTH,
   PatchOperation,
   PJSError,
   PJSErrorType,
@@ -21,6 +24,25 @@ import {
 /** Frame size the client asks the server to split the document by. */
 const MAX_FRAME_SIZE = 64 * 1024;
 
+/** UTF-8 byte length of a string without encoding it; a lone surrogate counts as U+FFFD (3 bytes), as in `TextEncoder`. */
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit < 0x80) {
+      bytes += 1;
+    } else if (unit < 0x800) {
+      bytes += 2;
+    } else if (unit >= 0xd800 && unit < 0xdc00 && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      bytes += 4;
+      i++;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
 /** Close code for a deliberate client disconnect. */
 const CLOSE_NORMAL = 1000;
 
@@ -29,6 +51,7 @@ interface ActiveStream {
   readonly sessionId: string;
   nextFrameId: number;
   patchFrames: number;
+  patchBytes: number;
   skeletonSent: boolean;
   readonly resolve: () => void;
   readonly reject: (error: PJSError) => void;
@@ -40,16 +63,12 @@ interface ParsedPatchMessage {
   readonly patches: PatchOperation[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function isIndex(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function parseSegments(value: unknown): JsonPathSegment[] | null {
-  if (!Array.isArray(value)) return null;
+  if (!Array.isArray(value) || value.length > MAX_PATCH_PATH_DEPTH) return null;
   const segments: JsonPathSegment[] = [];
   for (const segment of value) {
     if (typeof segment === 'string') {
@@ -80,7 +99,9 @@ function parsePatchMessage(data: Record<string, unknown>): ParsedPatchMessage | 
     const [operation, rawSegments, value] = entry as [unknown, unknown, unknown];
     const segments = parseSegments(rawSegments);
     if (!isPatchOperationKind(operation)) return `StreamPatch has unknown operation: ${String(operation)}`;
-    if (segments === null) return 'StreamPatch path segments must be strings or non-negative integers';
+    if (segments === null) {
+      return `StreamPatch path must be at most ${MAX_PATCH_PATH_DEPTH} strings or non-negative integers`;
+    }
     operations.push({ operation, path: formatJsonPath(segments), value });
   }
   return { frameId, priority, patches: operations };
@@ -229,6 +250,7 @@ export class WebSocketTransport extends Transport {
         sessionId,
         nextFrameId: 0,
         patchFrames: 0,
+        patchBytes: 0,
         skeletonSent: false,
         resolve,
         reject
@@ -289,7 +311,7 @@ export class WebSocketTransport extends Transport {
 
     switch (message.type) {
       case 'StreamPatch':
-        if (sessionId === stream.sessionId) this.handleStreamPatch(stream, data);
+        if (sessionId === stream.sessionId) this.handleStreamPatch(stream, data, raw);
         break;
       case 'StreamComplete':
         if (sessionId === stream.sessionId) this.handleStreamComplete(stream);
@@ -304,7 +326,13 @@ export class WebSocketTransport extends Transport {
     }
   }
 
-  private handleStreamPatch(stream: ActiveStream, data: Record<string, unknown>): void {
+  private handleStreamPatch(stream: ActiveStream, data: Record<string, unknown>, raw: string): void {
+    stream.patchBytes += utf8ByteLength(raw);
+    const limit = this.config.maxStreamBytes;
+    if (stream.patchBytes > limit) {
+      this.failProtocol(stream, `Stream exceeded maxStreamBytes (${limit})`, { sessionId: stream.sessionId });
+      return;
+    }
     const parsed = parsePatchMessage(data);
     if (typeof parsed === 'string') {
       this.failProtocol(stream, parsed);
@@ -324,7 +352,7 @@ export class WebSocketTransport extends Transport {
     // A listener may have stopped, superseded or disconnected this stream while the skeleton was emitted.
     if (this.active !== stream) return;
     stream.patchFrames++;
-    this.emitFrame({
+    this.emitGuarded(stream, {
       frame_type: FrameType.Patch,
       priority: parsed.priority,
       sequence: parsed.frameId,
@@ -333,9 +361,27 @@ export class WebSocketTransport extends Transport {
     });
   }
 
+  /** Emits a frame; a throwing listener fails the stream instead of escaping `onmessage`. */
+  private emitGuarded(stream: ActiveStream, frame: Frame): void {
+    try {
+      this.emitFrame(frame);
+    } catch (error) {
+      // A listener that already stopped or superseded the stream has settled it; nothing is left to fail.
+      if (this.active !== stream) return;
+      this.cancel(stream.sessionId);
+      this.settleActive((active) => active.reject(new PJSError(
+        PJSErrorType.StreamError,
+        'Frame listener threw',
+        { sessionId: active.sessionId },
+        error as Error
+      )));
+    }
+  }
+
   private handleStreamComplete(stream: ActiveStream): void {
     this.emitSkeletonOnce(stream);
     if (this.active !== stream) return;
+    // total_frames counts the skeleton, the patch frames and this Complete frame.
     // Detach before emitting: a listener may start the next stream re-entrantly, and a completed stream needs no StreamCancel.
     this.active = undefined;
     try {
@@ -343,7 +389,7 @@ export class WebSocketTransport extends Transport {
         frame_type: FrameType.Complete,
         priority: Priority.Critical,
         stream_id: stream.sessionId,
-        total_frames: stream.patchFrames
+        total_frames: stream.patchFrames + 2
       });
     } finally {
       stream.resolve();
@@ -366,7 +412,7 @@ export class WebSocketTransport extends Transport {
   private emitSkeletonOnce(stream: ActiveStream): void {
     if (stream.skeletonSent) return;
     stream.skeletonSent = true;
-    this.emitFrame({
+    this.emitGuarded(stream, {
       frame_type: FrameType.Skeleton,
       priority: Priority.Critical,
       payload: {},

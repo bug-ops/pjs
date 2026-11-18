@@ -75,7 +75,7 @@ stateDiagram-v2
 Code: `stream_session.rs`. `SessionState` is `#[non_exhaustive]` in `pjs-domain`.
 
 ### FR-003 Stream creation and limits
-`create_stream(JsonData)` shall require `is_active()` (else `InvalidSessionState`), reject when `streams.len() >= max_concurrent_streams` (`TooManyStreams`), insert a `Stream` using `default_stream_config`, increment `total_streams` and `active_streams`, emit `StreamCreated`. `create_stream_with_config(data, Option<StreamConfig>)` shall additionally apply the config via `update_stream_config` (emits `StreamConfigUpdated`); the second step cannot fail for a fresh `Preparing` stream and is guarded by a `debug_assert!`.
+`create_stream(JsonData)` shall require `is_active()` (else `InvalidSessionState`), reject when `streams.len() >= max_concurrent_streams` (`TooManyStreams`), insert a `Stream` (built with `Stream::with_clock` from the session's `TimeProvider`, #759) using `default_stream_config`, increment `total_streams` and `active_streams`, emit `StreamCreated`. `create_stream_with_config(data, Option<StreamConfig>)` shall additionally apply the config via `update_stream_config` (emits `StreamConfigUpdated`); the second step cannot fail for a fresh `Preparing` stream and is guarded by a `debug_assert!`.
 Note: the stream limit counts **all** streams in the map including completed ones, not only active ones.
 Code: `create_stream`, `create_stream_with_config`, `update_stream_config`.
 
@@ -144,7 +144,7 @@ Code: `health_check`.
 ## 9. Open Questions
 - `close()` cancels streams but does not decrement `stats.active_streams`, emit `StreamCancelled`, or count them in `failed_streams`; `force_close_expired()` removes streams but leaves stats unchanged. [NEEDS CLARIFICATION: intended?]
 - `fail_stream`, `force_close_expired`, `extend_timeout` and the `SessionExpired` event have no production caller or emitter; nothing sweeps expired sessions (see [[057-in-memory-repositories/spec|057]]).
-- `SessionConfig` fields are `pub`; `max_concurrent_streams > 0` is enforced only by `CommandValidator`, while the timeout range is typed.
+- `SessionConfig` fields are `pub`; both `max_concurrent_streams` (`MaxConcurrentStreams`, 1..=1000, #769) and the timeout range are typed.
 - `client_info`, `user_agent`, `ip_address` are `Option<String>` (primitive obsession).
 - `pending_events` is unbounded if no caller drains it; only `*_atomic` methods and `save_and_publish` drain.
 - `max_concurrent_streams` counts finished streams, so a session can become permanently full.

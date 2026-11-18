@@ -1,4 +1,6 @@
 /**
+ * @jest-environment node
+ *
  * Acceptance tests for #644 (NDJSON sibling): the server ends an NDJSON stream
  * with the terminal line `{"event":"shutdown"}`. HttpTransport must report it
  * as a 'shutdown' notification, not as a frame or a validation error, and stop
@@ -7,32 +9,15 @@
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { HttpTransport } from '../../src/transport/http.js';
-import {
-  Priority,
-  TransportType,
-  type PJSClientConfig
-} from '../../src/types/index.js';
+import { TransportType } from '../../src/types/index.js';
+import { makeConfig } from '../helpers/fake-pjs-server.js';
 
 const SKELETON_LINE = JSON.stringify({
-  frame_type: 'skeleton',
+  frame_type: 'Skeleton',
   priority: 100,
-  payload: { data: { a: 1 } }
+  payload: { a: 1 }
 });
 const MARKER_LINE = '{"event":"shutdown"}';
-
-function makeConfig(): Required<PJSClientConfig> {
-  return {
-    baseUrl: 'http://localhost:3000',
-    transport: TransportType.HTTP,
-    sessionId: 'session-1',
-    headers: {},
-    timeout: 1000,
-    debug: false,
-    bufferSize: 1024,
-    priorityThreshold: Priority.Background,
-    maxConcurrentStreams: 1
-  };
-}
 
 interface ReaderProbe {
   reads: number;
@@ -60,7 +45,7 @@ function ndjsonResponse(chunks: string[], probe: ReaderProbe): Response {
     status: 200,
     statusText: 'OK',
     headers: new Headers(),
-    json: async () => ({ session_id: 'session-1' }),
+    json: async () => ({ session_id: 'session-1', stream_id: 'stream-1' }),
     body: { getReader: () => reader }
   } as unknown as Response;
 }
@@ -80,11 +65,11 @@ describe('HttpTransport NDJSON shutdown marker', () => {
         : ndjsonResponse(chunks, probe)
     ) as unknown as typeof fetch;
     await transport.connect();
-    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1' });
+    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1', data: { a: 1 } });
   }
 
   beforeEach(() => {
-    transport = new HttpTransport(makeConfig());
+    transport = new HttpTransport(makeConfig(TransportType.HTTP));
     probe = { reads: 0, cancelled: false };
     shutdowns = 0;
     errors = [];
@@ -152,6 +137,6 @@ describe('HttpTransport NDJSON shutdown marker', () => {
     await runStream([`${SKELETON_LINE}\n`]);
 
     expect(shutdowns).toBe(0);
-    expect(frames).toHaveLength(1);
+    expect(frames).toHaveLength(2);
   });
 });

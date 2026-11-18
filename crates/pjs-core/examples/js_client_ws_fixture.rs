@@ -1,7 +1,8 @@
-//! WebSocket server fixture for the `pjs-js-client` cross-stack tests.
+//! Server fixture for the `pjs-js-client` cross-stack tests.
 //!
 //! Serves the stock `pjs-core` WebSocket router (default origin policy, no
-//! `Origin` header accepted) on an ephemeral loopback port, prints
+//! `Origin` header accepted) and the stock REST router (`create_pjs_router`,
+//! in-memory adapters) on one ephemeral loopback port, prints
 //! `PJS_WS_FIXTURE_LISTENING <addr>` once it is bound, and exits when stdin
 //! reaches end of file so the test harness can stop it by closing the pipe.
 //!
@@ -15,8 +16,10 @@ use std::io::Read;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use pjson_rs::infrastructure::websocket::{
-    AxumWebSocketTransport, server::create_websocket_router,
+use pjson_rs::infrastructure::{
+    adapters::{GatInMemoryStreamRepository, GatInMemoryStreamStore, InMemoryEventPublisher},
+    http::axum_adapter::{PjsAppState, create_pjs_router},
+    websocket::{AxumWebSocketTransport, server::create_websocket_router},
 };
 use tokio::net::TcpListener;
 
@@ -28,7 +31,13 @@ async fn main() -> std::io::Result<()> {
         std::process::exit(0);
     });
 
-    let app = create_websocket_router().with_state(Arc::new(AxumWebSocketTransport::new()));
+    let ws = create_websocket_router().with_state(Arc::new(AxumWebSocketTransport::new()));
+    let rest = create_pjs_router().with_state(PjsAppState::new(
+        Arc::new(GatInMemoryStreamRepository::new()),
+        Arc::new(InMemoryEventPublisher::new()),
+        Arc::new(GatInMemoryStreamStore::new()),
+    ));
+    let app = ws.merge(rest);
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     println!("PJS_WS_FIXTURE_LISTENING {}", listener.local_addr()?);
 

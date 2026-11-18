@@ -78,7 +78,7 @@ For any valid JSON `payload`, applying every frame of `PriorityStreamer::analyze
 |----|----------|-------------|--------|
 | NFR-001 | Correctness | `current_state()` equals the payload for arbitrary valid JSON | done for the tested shapes; no property test found [NEEDS CLARIFICATION] |
 | NFR-002 | Compatibility | `PriorityStreamFrame`/`JsonPatch` wire shape unchanged | done |
-| NFR-003 | Performance | No second full clone of array contents | partial: `Set` carries a skeleton (`[]`), arrays are cloned once into `Append`; `skeletonize_arrays` still clones non-array leaves per level |
+| NFR-003 | Performance | No second full clone of array contents | partial: `Set` carries a skeleton (`[]`), arrays are cloned once into `Append`; `skeletonize_arrays` clones non-array leaves once per strictly increasing priority step along a chain (no-op `Set`s are not emitted, #770) |
 | NFR-004 | Testability | Full round-trip tests exist | done |
 
 ## 5. Data Model

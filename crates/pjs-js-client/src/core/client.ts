@@ -7,9 +7,12 @@
 
 import { EventEmitter } from 'events';
 import {
+  DeepReadonly,
+  DEFAULT_MAX_STREAM_BYTES,
   EventListener,
   Frame,
   FrameType,
+  JsonValue,
   PJSClientConfig,
   PJSError,
   PJSErrorType,
@@ -245,7 +248,9 @@ export class PJSClient extends EventEmitter {
       debug: config.debug ?? false,
       bufferSize: config.bufferSize ?? 1024 * 1024, // 1MB
       priorityThreshold: config.priorityThreshold ?? Priority.Background,
-      maxConcurrentStreams: config.maxConcurrentStreams ?? 10
+      maxConcurrentStreams: config.maxConcurrentStreams ?? 10,
+      maxStreamBytes: config.maxStreamBytes ?? DEFAULT_MAX_STREAM_BYTES,
+      stateDelivery: config.stateDelivery ?? 'live'
     };
   }
 
@@ -341,13 +346,14 @@ export class PJSClient extends EventEmitter {
     let skeletonReceived = false;
     const progressInfo: ProgressInfo = {
       framesReceived: 0,
-      bytesReceived: 0,
       elapsedTime: 0,
       prioritiesReceived: []
     };
 
     // Per-stream reconstructor so concurrent streams don't share state
     const reconstructor = new JsonReconstructor();
+    const frameState = (): DeepReadonly<JsonValue> =>
+      this.config.stateDelivery === 'live' ? reconstructor.getLiveState() : reconstructor.getCurrentState();
 
     return new Promise<T>((resolve, reject) => {
       let settled = false;
@@ -397,15 +403,15 @@ export class PJSClient extends EventEmitter {
             }
 
             const skeletonResult = reconstructor.processSkeleton(frame);
-            result = skeletonResult.data;
+            const view = skeletonResult.success ? frameState() : undefined;
 
             this.emit(PJSEvent.SkeletonReady, {
-              data: result,
+              data: view,
               processingTime: progressInfo.elapsedTime
             });
 
             if (options.onRender) {
-              void options.onRender(result, {
+              void options.onRender(view, {
                 priority: frame.priority,
                 isComplete: false,
                 progress: progressInfo
@@ -418,7 +424,7 @@ export class PJSClient extends EventEmitter {
             }
 
             const applied = reconstructor.applyPatch(frame);
-            result = reconstructor.getCurrentState();
+            const view = frameState();
 
             // Emit one PatchApplied per frame (not per operation)
             const patches = frame.payload.patches;
@@ -427,14 +433,14 @@ export class PJSClient extends EventEmitter {
                 patch: patches[0],
                 path: patches[0].path,
                 priority: frame.priority,
-                resultingData: result,
+                resultingData: view,
                 appliedPatches: applied.appliedPatches,
                 skippedPatches: applied.skippedPatches
               });
             }
 
             if (options.onRender) {
-              void options.onRender(result, {
+              void options.onRender(view, {
                 priority: frame.priority,
                 isComplete: false,
                 progress: progressInfo
@@ -442,6 +448,9 @@ export class PJSClient extends EventEmitter {
             }
 
           } else if (frame.frame_type === FrameType.Complete) {
+            // A once-cloned state: the stream() result and the Complete notifications share it.
+            const finalState = skeletonReceived ? reconstructor.getCurrentState() : undefined;
+            result = finalState;
             stats.performance.timeToCompletion = progressInfo.elapsedTime;
             const totalTime = progressInfo.elapsedTime / 1000;
             stats.performance.framesPerSecond = stats.totalFrames / totalTime;
@@ -452,13 +461,13 @@ export class PJSClient extends EventEmitter {
             progressInfo.completionPercentage = 100;
 
             this.emit(PJSEvent.StreamComplete, {
-              data: result!,
+              data: finalState,
               stats: progressInfo,
               totalTime: progressInfo.elapsedTime
             });
 
             if (options.onRender) {
-              void options.onRender(result!, {
+              void options.onRender(finalState, {
                 priority: frame.priority,
                 isComplete: true,
                 progress: progressInfo

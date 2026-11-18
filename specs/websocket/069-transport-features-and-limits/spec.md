@@ -58,7 +58,7 @@ verified: 2026-11-15
 | `websocket-server` (default) | `http-server` | Gates `infrastructure::websocket` server module and `SecureWebSocketHandler` (re-exported at crate root); test target `websocket_security` (#598) |
 | `websocket-client` (default) | `tokio-tungstenite`, `url`; `websocket::client` | Builds on its own (#598); wire test target requires `websocket-server` + `websocket-client` |
 | `http-auth-jwt` | `http-server` + `jsonwebtoken`; `JwtAuthLayer`, `JwtConfig` | Not accepted by router constructors |
-| `metrics` | `http-server` + `metrics` + `metrics-exporter-prometheus`; `/metrics` route; `pjs_frames_total` | Sets `feature(once_cell_try)` |
+| `metrics` | `http-server` + `metrics` + `metrics-exporter-prometheus`; `/metrics` route; `pjs_frames_total`, request series, state gauges, `pjs_websocket_connections` (needs `websocket-server`), `pjs_rate_limited_total`, `pjs_bytes_sent_total` (spec 065) | Sets `feature(once_cell_try)` |
 | `compression` (default) | dictionary route `GET /pjs/sessions/{id}/dictionary` (not wasm32) | zstd dictionary training |
 | `http-client` | none | Listed in README.md and `.claude/CLAUDE.md`; absent from `Cargo.toml` and code |
 
@@ -91,6 +91,7 @@ See [[062-http-serve-connection-limits/spec|062]]: header timeout 10 s, duration
 | Limit | Value | Where |
 |---|---|---|
 | Inbound frame/message cap | 1 MiB default; 256 KiB `low_resource` | `RateLimitConfig::max_frame_size` |
+| Inbound messages per second per IP | 30 plus burst allowance 5 by default; every inbound frame counts, Text, Binary, Ping and Pong alike (#745); over budget closes `1008` | `RateLimitConfig::max_messages_per_second`, `burst_allowance` |
 | Connections per IP | 10 default; 50 `high_traffic`; 2 `low_resource` | `RateLimitConfig` |
 | Upgrade requests per window (60 s) | 100 default; 1000 `high_traffic`; 20 `low_resource` | `RateLimitConfig` |
 | Messages per second (+burst) | 30 (+5) default; 100 (+20) `high_traffic`; 5 (+2) `low_resource` | `RateLimitConfig` |

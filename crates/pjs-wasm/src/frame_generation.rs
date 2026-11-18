@@ -8,46 +8,13 @@
 use crate::priority_assignment::{PriorityAssigner, group_by_priority, sort_priorities};
 use pjson_rs_domain::entities::Frame;
 use pjson_rs_domain::entities::frame::FramePatch;
+use pjson_rs_domain::services::skeleton;
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority, StreamId};
-use std::collections::HashMap;
 
 /// The frame's wire payload as `JsonData`, for assertions on its structure.
 #[cfg(test)]
 pub(crate) fn payload_data(frame: &Frame) -> JsonData {
     JsonData::from(serde_json::to_value(frame.body()).expect("body serializes"))
-}
-
-/// Build a skeleton structure from `data`: same shape, but with null/empty leaf values.
-///
-/// Recursion stops at `max_depth`, replacing anything deeper with `JsonData::Null`.
-pub(crate) fn build_skeleton(data: &JsonData, current_depth: usize, max_depth: usize) -> JsonData {
-    if current_depth >= max_depth {
-        return JsonData::Null;
-    }
-
-    match data {
-        JsonData::Object(map) => {
-            let mut skeleton_map = HashMap::with_capacity(map.len());
-
-            for (k, v) in map.iter() {
-                let skeleton_value = match v {
-                    JsonData::Object(_) => build_skeleton(v, current_depth + 1, max_depth),
-                    JsonData::Array(_) => JsonData::Array(vec![]),
-                    JsonData::String(_) => JsonData::Null,
-                    JsonData::Integer(_) => JsonData::Integer(0),
-                    JsonData::Float(_) => JsonData::Float(0.0),
-                    JsonData::Bool(_) => JsonData::Bool(false),
-                    JsonData::Null => JsonData::Null,
-                    _ => JsonData::Null,
-                };
-                skeleton_map.insert(k.clone(), skeleton_value);
-            }
-
-            JsonData::Object(skeleton_map)
-        }
-        JsonData::Array(_) => JsonData::Array(vec![]),
-        _ => JsonData::Null,
-    }
 }
 
 /// Generate priority-ordered frames for `data`: a skeleton frame, one patch frame per
@@ -70,7 +37,7 @@ pub(crate) fn generate_frames(
     let mut sequence = 0u64;
 
     // 1. Generate skeleton frame (always first, critical priority)
-    let skeleton = build_skeleton(data, 0, max_depth);
+    let skeleton = skeleton(data, max_depth);
     frames.push(Frame::skeleton(stream_id, sequence, skeleton));
     sequence += 1;
 

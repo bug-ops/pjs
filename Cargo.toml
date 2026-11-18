@@ -30,6 +30,7 @@ dhat = "0.3"
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 futures = "0.3"
 getrandom = "0.4"
+gungraun = "=0.20.0"
 headers-accept = "0.3.0"
 hmac = "0.13"
 hyper = "1.11"

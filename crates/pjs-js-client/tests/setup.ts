@@ -92,7 +92,7 @@ global.fetch = jest.fn().mockImplementation((url: string, _options?: RequestInit
     status: 200,
     statusText: 'OK',
     headers: new Headers(),
-    json: async () => ({ session_id: 'test-session' }),
+    json: async () => ({ session_id: 'test-session', stream_id: 'test-stream' }),
     text: async () => '{"type":"skeleton","priority":100,"data":{"test":true}}',
     body: {
       getReader: () => ({

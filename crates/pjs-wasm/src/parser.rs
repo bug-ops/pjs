@@ -314,7 +314,7 @@ mod tests {
         let data = JsonData::Object(obj);
 
         let skeleton =
-            crate::frame_generation::build_skeleton(&data, 0, crate::security::DEFAULT_MAX_DEPTH);
+            pjson_rs_domain::services::skeleton(&data, crate::security::DEFAULT_MAX_DEPTH);
 
         if let JsonData::Object(map) = skeleton {
             assert_eq!(map.get("name"), Some(&JsonData::Null));
@@ -333,7 +333,7 @@ mod tests {
         let data = JsonData::Object(outer);
 
         let skeleton =
-            crate::frame_generation::build_skeleton(&data, 0, crate::security::DEFAULT_MAX_DEPTH);
+            pjson_rs_domain::services::skeleton(&data, crate::security::DEFAULT_MAX_DEPTH);
 
         if let JsonData::Object(map) = skeleton {
             if let Some(JsonData::Object(inner_map)) = map.get("address") {
@@ -351,7 +351,7 @@ mod tests {
         let data = JsonData::Array(vec![JsonData::Integer(1), JsonData::Integer(2)]);
 
         let skeleton =
-            crate::frame_generation::build_skeleton(&data, 0, crate::security::DEFAULT_MAX_DEPTH);
+            pjson_rs_domain::services::skeleton(&data, crate::security::DEFAULT_MAX_DEPTH);
         assert_eq!(skeleton, JsonData::Array(vec![]));
     }
 
@@ -486,7 +486,7 @@ mod tests {
         }
 
         // With depth limit of 5, deeper levels should be replaced with Null
-        let skeleton = crate::frame_generation::build_skeleton(&current, 0, 5);
+        let skeleton = pjson_rs_domain::services::skeleton(&current, 5);
 
         // Verify skeleton doesn't exceed depth limit
         fn count_depth(data: &JsonData, current: usize) -> usize {

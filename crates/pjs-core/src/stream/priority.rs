@@ -7,11 +7,12 @@
 //! - Incremental reconstruction
 
 use crate::Result;
-use crate::domain::value_objects::{JsonPath, Priority};
+use crate::domain::value_objects::{JsonPath, PathSegment, Priority};
 use crate::stream::patch::WirePatch;
 use pjson_rs_domain::services::{PriorityHeuristicConfig, ValueShape, compute_priority};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::VecDeque;
+use std::num::NonZeroUsize;
 
 /// Patch operation for updating JSON structure
 ///
@@ -61,29 +62,36 @@ pub enum PriorityStreamFrame {
 /// [`compute_priority`] heuristic and its default field lists, so a document
 /// is ordered the same way on every transport. A `Set` is raised to the
 /// highest `Append` priority in its subtree, so it is never applied after an
-/// `Append` it must precede.
+/// `Append` it must precede. A `Set` that an ancestor `Set` of at least the same
+/// priority already makes redundant is not emitted.
 pub struct PriorityStreamer {
     config: StreamerConfig,
     heuristic: PriorityHeuristicConfig,
 }
 
 /// Configuration for [`PriorityStreamer`].
+///
+/// # Examples
+///
+/// ```
+/// use std::num::NonZeroUsize;
+/// use pjson_rs::stream::priority::{PriorityStreamer, StreamerConfig};
+///
+/// let streamer = PriorityStreamer::with_config(StreamerConfig {
+///     max_patch_size: NonZeroUsize::new(50).expect("non-zero"),
+/// });
+/// # let _ = streamer;
+/// ```
 #[derive(Debug, Clone)]
 pub struct StreamerConfig {
-    /// Enable name-based heuristics that infer priorities from common field names.
-    pub detect_semantics: bool,
     /// Maximum number of patches per [`PriorityStreamFrame::Patch`] batch.
-    pub max_patch_size: usize,
-    /// Patches with priority below this threshold are dropped.
-    pub priority_threshold: Priority,
+    pub max_patch_size: NonZeroUsize,
 }
 
 impl Default for StreamerConfig {
     fn default() -> Self {
         Self {
-            detect_semantics: true,
-            max_patch_size: 100,
-            priority_threshold: Priority::LOW,
+            max_patch_size: NonZeroUsize::new(100).expect("100 is non-zero"),
         }
     }
 }
@@ -127,7 +135,9 @@ impl PriorityStreamer {
                 priority: Priority::CRITICAL,
             });
         }
-        self.extract_patches(json, &JsonPath::root(), &mut patches)?;
+        let mut path = JsonPath::root();
+        let (effective, _) = self.collect_effective_priorities(json, &mut path);
+        self.extract_patches(json, &mut path, None, effective, &mut patches);
 
         // Group patches by priority
         patches.sort_by_key(|patch| std::cmp::Reverse(patch.priority));
@@ -145,7 +155,7 @@ impl PriorityStreamer {
             current_priority = patch.priority;
             current_batch.push(patch);
 
-            if current_batch.len() >= self.config.max_patch_size {
+            if current_batch.len() >= self.config.max_patch_size.get() {
                 plan.frames.push_back(PriorityStreamFrame::Patch {
                     patches: std::mem::take(&mut current_batch),
                     priority: current_priority,
@@ -186,6 +196,7 @@ impl PriorityStreamer {
                             JsonValue::Array(_) => JsonValue::Array(vec![]),
                             JsonValue::Object(_) => self.generate_skeleton(value),
                             JsonValue::String(_) => JsonValue::Null,
+                            JsonValue::Number(n) if n.is_f64() => JsonValue::from(0.0),
                             JsonValue::Number(_) => JsonValue::Number(0.into()),
                             JsonValue::Bool(_) => JsonValue::Bool(false),
                             JsonValue::Null => JsonValue::Null,
@@ -216,42 +227,70 @@ impl PriorityStreamer {
         }
     }
 
-    /// Extract patches from JSON structure
+    /// First pass: price every object field, mirroring the document's shape, and
+    /// return the highest `Append` priority in `json`'s subtree.
+    ///
+    /// A field's effective priority is its own priority raised to the highest
+    /// `Append` priority below it, so its `Set` can never be applied after an
+    /// `Append` it must precede (#394 C1/C2).
+    fn collect_effective_priorities(
+        &self,
+        json: &JsonValue,
+        path: &mut JsonPath,
+    ) -> (FieldPriorities, Option<Priority>) {
+        match json {
+            JsonValue::Object(map) => {
+                let mut fields = Vec::with_capacity(map.len());
+                let mut ceiling = None;
+                for (key, value) in map {
+                    path.push(PathSegment::Key(key.clone()));
+                    let own = self.priority_of(path, value);
+                    let (children, below) = self.collect_effective_priorities(value, path);
+                    fields.push((below.map_or(own, |append| own.max(append)), children));
+                    ceiling = ceiling.max(below);
+                    path.pop();
+                }
+                (FieldPriorities(fields), ceiling)
+            }
+            JsonValue::Array(arr) if !arr.is_empty() => (
+                FieldPriorities::default(),
+                Some(self.priority_of_array(path, arr)),
+            ),
+            _ => (FieldPriorities::default(), None),
+        }
+    }
+
+    /// Second pass: emit patches in pre-order.
+    ///
+    /// A field's `Set` is emitted only when its effective priority exceeds that
+    /// of every ancestor field: otherwise an ancestor `Set` with at least that
+    /// priority is applied first and already carries the same content, so the
+    /// field's `Set` would be a no-op. Along any chain a leaf is therefore
+    /// cloned once per strictly increasing priority step, not once per depth.
     fn extract_patches(
         &self,
         json: &JsonValue,
-        current_path: &JsonPath,
+        path: &mut JsonPath,
+        ancestor_priority: Option<Priority>,
+        effective: FieldPriorities,
         patches: &mut Vec<JsonPatch>,
-    ) -> Result<()> {
+    ) {
         match json {
             JsonValue::Object(map) => {
-                for (key, value) in map {
-                    let field_path = current_path.append_key(key);
-                    let own_priority = self.priority_of(&field_path, value);
-
-                    let mut child_patches = Vec::new();
-                    self.extract_patches(value, &field_path, &mut child_patches)?;
-
-                    // Hoist the Set's priority to at least the highest Append
-                    // priority anywhere in its subtree, so a Set can never be
-                    // sorted/applied after an Append it must precede (#394 C1/C2).
-                    let append_ceiling = child_patches
-                        .iter()
-                        .filter(|p| matches!(p.patch, WirePatch::Append { .. }))
-                        .map(|p| p.priority)
-                        .max();
-                    let priority =
-                        append_ceiling.map_or(own_priority, |ceiling| own_priority.max(ceiling));
-
-                    patches.push(JsonPatch {
-                        patch: WirePatch::Set {
-                            path: field_path.clone(),
-                            value: Self::skeletonize_arrays(value),
-                        },
-                        priority,
-                    });
-
-                    patches.extend(child_patches);
+                for ((key, value), (priority, children)) in map.iter().zip(effective.0) {
+                    path.push(PathSegment::Key(key.clone()));
+                    if ancestor_priority.is_none_or(|ancestor| priority > ancestor) {
+                        patches.push(JsonPatch {
+                            patch: WirePatch::Set {
+                                path: path.clone(),
+                                value: Self::skeletonize_arrays(value),
+                            },
+                            priority,
+                        });
+                    }
+                    let below = ancestor_priority.max(Some(priority));
+                    self.extract_patches(value, path, below, children, patches);
+                    path.pop();
                 }
             }
             JsonValue::Array(arr) => {
@@ -262,11 +301,11 @@ impl PriorityStreamer {
                     // let a short tail chunk outrank the bulk chunks and jump
                     // ahead of them in the priority sort, corrupting element
                     // order on reconstruction (#394 C2, chunked variant).
-                    let priority = self.priority_of_array(current_path, arr);
-                    for chunk in arr.chunks(self.config.max_patch_size) {
+                    let priority = self.priority_of_array(path, arr);
+                    for chunk in arr.chunks(self.config.max_patch_size.get()) {
                         patches.push(JsonPatch {
                             patch: WirePatch::Append {
-                                path: current_path.clone(),
+                                path: path.clone(),
                                 values: chunk.to_vec(),
                             },
                             priority,
@@ -275,10 +314,10 @@ impl PriorityStreamer {
                 } else if !arr.is_empty() {
                     patches.push(JsonPatch {
                         patch: WirePatch::Append {
-                            path: current_path.clone(),
+                            path: path.clone(),
                             values: arr.clone(),
                         },
-                        priority: self.priority_of_array(current_path, arr),
+                        priority: self.priority_of_array(path, arr),
                     });
                 }
             }
@@ -286,8 +325,6 @@ impl PriorityStreamer {
                 // Primitive values handled by parent object/array
             }
         }
-
-        Ok(())
     }
 
     fn priority_of(&self, path: &JsonPath, value: &JsonValue) -> Priority {
@@ -304,6 +341,11 @@ impl PriorityStreamer {
         )
     }
 }
+
+/// Effective priority of each object field of one value, with the same nesting
+/// as the value; empty for arrays and scalars.
+#[derive(Debug, Default)]
+struct FieldPriorities(Vec<(Priority, FieldPriorities)>);
 
 /// Plan for streaming JSON with priority ordering
 #[derive(Debug)]
@@ -497,8 +539,7 @@ mod tests {
     #[test]
     fn test_round_trip_chunked_array_exceeds_max_patch_size() {
         let config = StreamerConfig {
-            max_patch_size: 5,
-            ..StreamerConfig::default()
+            max_patch_size: NonZeroUsize::new(5).unwrap(),
         };
         let streamer = PriorityStreamer::with_config(config);
         let items: Vec<JsonValue> = (0..23).map(|i| json!(i)).collect();
@@ -519,8 +560,7 @@ mod tests {
         // would sort ahead of the head and be applied first, corrupting
         // element order.
         let config = StreamerConfig {
-            max_patch_size: 60,
-            ..StreamerConfig::default()
+            max_patch_size: NonZeroUsize::new(60).unwrap(),
         };
         let streamer = PriorityStreamer::with_config(config);
         let items: Vec<JsonValue> = (0..130).map(|i| json!(i)).collect();

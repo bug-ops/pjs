@@ -266,6 +266,15 @@ fn format_batch_owned(
 // BatchFrameStream
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "metrics")]
+fn record_http_bytes(bytes: &[u8]) {
+    use crate::infrastructure::http::metrics::{Transport, record_bytes_sent};
+    record_bytes_sent(Transport::Http, bytes.len());
+}
+
+#[cfg(not(feature = "metrics"))]
+fn record_http_bytes(_bytes: &[u8]) {}
+
 /// Batch frame stream for improved throughput.
 pub struct BatchFrameStream<S> {
     inner: S,
@@ -322,12 +331,14 @@ where
                 if batch.len() >= batch_size {
                     let bytes = format_batch_owned(&batch, format)?;
                     batch.clear();
+                    record_http_bytes(&bytes);
                     yield bytes;
                 }
             }
 
             if !batch.is_empty() {
                 let bytes = format_batch_owned(&batch, format)?;
+                record_http_bytes(&bytes);
                 yield bytes;
             }
         }

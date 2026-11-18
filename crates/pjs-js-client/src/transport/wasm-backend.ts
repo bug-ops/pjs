@@ -166,9 +166,11 @@ export class WasmBackend extends Transport {
       const minPriority = options.minPriority ?? 1;
       stream.setMinPriority(minPriority);
 
-      // Set up callbacks
+      // The module's own total is not the number of frames this backend emits.
+      let framesEmitted = 0;
       stream.onFrame((frameData: FrameData) => {
         const frame = this.convertWasmFrame(frameData);
+        framesEmitted++;
         this.emitFrame(frame);
       });
 
@@ -186,7 +188,7 @@ export class WasmBackend extends Transport {
         this.emitFrame({
           frame_type: FrameType.Complete,
           priority: Priority.Background,
-          total_frames: stats.totalFrames
+          total_frames: framesEmitted + 1
         });
       });
 

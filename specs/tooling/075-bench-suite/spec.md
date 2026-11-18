@@ -126,8 +126,8 @@ Fixtures are inline: `SMALL_JSON`, `MEDIUM_JSON`, `generate_large_json()` (1000 
 - `dhat-heap` feature is declared but no bench or source references `dhat` or the feature. `scripts/profile.sh heap` runs `cargo build --bench simple_throughput --features dhat-heap` without `-p pjs-bench`, so it cannot resolve in the virtual workspace root; `cpu` has the same missing `-p`. [NEEDS CLARIFICATION: not executed; flagged from reading]
 - `profile.sh` help text refers to `.local/performance-profile.md`, which is untracked.
 - SIMD paths (`simd-auto`, `simd-avx512`) and the hybrid parser selection have no dedicated bench (only `sonic_rs` vs `serde_json` directly).
-- No benchmark for WASM, compression, or priority queue ordering, though those are listed as critical paths.
-- No automated gate for the 10% regression rule: [[decisions/adr-002-instruction-count-bench-gate|ADR-002]] (proposed) evaluates a gungraun instruction-count job with a provisional, unmeasured limit; implementation and variance measurement are tracked in #736.
+- No benchmark for WASM, compression, or priority queue ordering, though those are listed as critical paths. `buffer_pool` (acquire plus drop, hit and miss, three size classes) and `priority_streamer` (`analyze`, wide and deep documents) benches exist since #774; `gungraun_parser` is the instruction-count variant of the parser group (#736).
+- No automated gate for the 10% regression rule: [[decisions/adr-002-instruction-count-bench-gate|ADR-002]] (accepted; limit provisional) backs the report-only `bench-instructions` CI job ([[078-ci-pipeline/spec]] FR-018); making it gating needs a variance measurement on hosted runners.
 
 ## See Also
 

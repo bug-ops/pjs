@@ -7,7 +7,7 @@
 //! delegation in place so a future regression — e.g. someone reintroducing a
 //! bespoke field-name table in the WASM crate — fails CI loudly.
 
-use pjs_wasm::priority_assignment::{PriorityAssigner, PriorityConfig};
+use pjs_wasm::priority_assignment::PriorityAssigner;
 use pjson_rs_domain::services::{PriorityHeuristicConfig, ValueShape, compute_priority};
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority};
 use std::collections::HashMap;
@@ -134,8 +134,8 @@ fn issue_242_worked_example_now_agrees() {
 fn user_added_critical_field_takes_effect() {
     // Sanity check that the JS-friendly customisation API still flows through
     // to the domain heuristic.
-    let mut config = PriorityConfig::default();
-    config.add_critical_field("session_id".to_string());
+    let mut config = PriorityHeuristicConfig::default();
+    config.critical_fields.push("session_id".to_string());
     let assigner = PriorityAssigner::with_config(config);
 
     let path = JsonPath::new("$.session_id").unwrap();

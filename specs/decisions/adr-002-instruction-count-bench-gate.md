@@ -10,7 +10,7 @@ tags:
   - ci
   - pjs
 created: 2026-11-18
-status: proposed
+status: accepted
 issue: "#695"
 code:
   - crates/pjs-bench/benches/
@@ -26,7 +26,7 @@ related:
 
 ## Status
 
-Proposed. This is a written evaluation only (issue #695): no CI job, no dependency and no measurement were added. Implementation and the variance measurement are tracked in follow-up #736.
+Accepted; limit provisional until the variance is measured. #695 was the written evaluation. #736 adds the `gungraun` dev-dependency (Linux only), the `gungraun_parser` bench and a report-only CI job outside `ci-success` (user-approved exception to the gating rule). Making the job gating is a follow-up.
 
 ## Context
 
@@ -51,7 +51,7 @@ The project rule is that a benchmark regression above 10% is a P1. Nothing enfor
 
 ## Open follow-ups
 
-- #736: port one bench in a scratch branch, measure variance against Criterion on a hosted runner, fix the subset and the final limit, add the CI job.
+- Measure run-to-run variance on a hosted runner, fix the subset and the final limit, then make the job gating and add it to `ci-success`.
 
 ## See also
 

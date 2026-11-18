@@ -219,6 +219,8 @@ where
     pub(crate) stream_query_handler: Arc<StreamQueryHandler<R, S, F>>,
     pub(crate) system_handler: Arc<SystemQueryHandler<R>>,
     pub(crate) dictionary_store: Arc<dyn DictionaryStore>,
+    #[cfg(feature = "metrics")]
+    pub(crate) metrics_throttle: Arc<crate::infrastructure::http::metrics::GaugeRefreshThrottle>,
 }
 
 impl<R, P, S, F> Clone for PjsAppState<R, P, S, F>
@@ -235,6 +237,8 @@ where
             stream_query_handler: self.stream_query_handler.clone(),
             system_handler: self.system_handler.clone(),
             dictionary_store: self.dictionary_store.clone(),
+            #[cfg(feature = "metrics")]
+            metrics_throttle: self.metrics_throttle.clone(),
         }
     }
 }
@@ -315,13 +319,19 @@ where
             )),
             system_handler: Arc::new(SystemQueryHandler::with_start_time(repository, started_at)),
             dictionary_store,
+            #[cfg(feature = "metrics")]
+            metrics_throttle: Arc::new(
+                crate::infrastructure::http::metrics::GaugeRefreshThrottle::new(),
+            ),
         }
     }
 }
 
 /// Request to create a new streaming session
 ///
-/// `max_concurrent_streams: 0`, `timeout_seconds: 0`, or a `timeout_seconds`
+/// A `max_concurrent_streams` outside
+/// `1..=`[`crate::domain::config::limits::MAX_CONCURRENT_STREAMS_PER_SESSION`]
+/// (1000), `timeout_seconds: 0`, or a `timeout_seconds`
 /// above [`crate::domain::config::limits::MAX_SESSION_TIMEOUT_SECONDS`] (7
 /// days) are rejected with `400 Bad Request` before the session is created.
 #[derive(Debug, Deserialize)]
@@ -640,7 +650,7 @@ where
     #[cfg(feature = "metrics")]
     let router = router.route(
         "/metrics",
-        get(crate::infrastructure::http::metrics::metrics_handler),
+        get(crate::infrastructure::http::metrics::metrics_handler::<R, P, S>),
     );
 
     router
@@ -780,7 +790,8 @@ const RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 /// calls, so the **last** `.layer()` call ends up outermost (sees the request
 /// first, the response last):
 /// ```text
-/// TraceLayer                  ← distributed tracing (outermost)
+/// request metrics             ← `http_requests_total` / duration (outermost, `metrics` feature)
+/// TraceLayer                  ← distributed tracing
 /// TimeoutLayer                ← whole-request timeout (pre-response phase only)
 /// ResponseBodyTimeoutLayer    ← per-frame idle timeout on the response body
 /// CorsLayer                   ← CORS (outside auth, so preflight is answered before auth)
@@ -826,12 +837,14 @@ where
     S: StreamStoreGat + Send + Sync + 'static,
 {
     let cors = build_cors_layer(config)?;
+    #[cfg(feature = "metrics")]
+    crate::infrastructure::http::metrics::install_for_router();
     let router = router.layer(GlobalConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS));
     let router = match rate_limit {
         Some(rate_limit) => router.layer(rate_limit),
         None => router,
     };
-    Ok(router
+    let router = router
         .layer(middleware::from_fn(security_middleware))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(cors)
@@ -840,7 +853,12 @@ where
             StatusCode::REQUEST_TIMEOUT,
             REQUEST_TIMEOUT,
         ))
-        .layer(TraceLayer::new_for_http()))
+        .layer(TraceLayer::new_for_http());
+    #[cfg(feature = "metrics")]
+    let router = router.layer(middleware::from_fn(
+        crate::infrastructure::http::metrics::request_metrics_middleware,
+    ));
+    Ok(router)
 }
 
 /// Parse a raw path segment into a [`SessionId`], mapping failure to [`PjsError::InvalidSessionId`].
@@ -1399,11 +1417,11 @@ mod tests {
 
         // Calling again must be idempotent.
         let handle2 = install_global_recorder().expect("second call must not fail");
-        assert_eq!(
-            handle.render(),
-            handle2.render(),
-            "both handles must render the same metrics"
-        );
+        // Global recorder shared with concurrent tests: compare a unique counter, not the whole output.
+        metrics::counter!("pjs_test_endpoint_format_total").increment(1);
+        let line = "pjs_test_endpoint_format_total 1";
+        assert!(handle.render().contains(line), "{}", handle.render());
+        assert!(handle2.render().contains(line));
     }
 
     #[cfg(feature = "metrics")]

@@ -35,7 +35,7 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-  SRC["Stream.source_data (JsonData)"] -->|generate_skeleton| SK["Skeleton frame (CRITICAL)"]
+  SRC["Stream.source_data (JsonData)"] -->|services::skeleton| SK["Skeleton frame (CRITICAL)"]
   SRC -->|collect_patches over objects| P["(FramePatch, Priority) list"]
   P -->|compute_priority + priority_rules overrides| CP["services::compute_priority"]
   P -->|"sort desc, chunk_patches_for_commit(max_frames)"| CH["chunks"]
@@ -89,4 +89,4 @@ Split of work inside `Stream`: `create_patch_frames` = `extract_prioritized_patc
 
 - No I/O, `unsafe` forbidden, errors are values.
 - Frame/stream sizes are not bounded inside the domain crate; limits belong to `pjs-core` configs ([[051-security-limits-and-validated-config/spec|051]]).
-- Recursive walkers (`generate_skeleton`, `collect_patches`) rely on callers (or deserialisation) bounding `JsonData` depth.
+- The `Stream` walkers (`services::skeleton`, `collect_patches`) are bounded at `MAX_DESERIALIZE_DEPTH` (64): the skeleton nulls an object at that depth and the patch walk emits it whole as one `Set`.

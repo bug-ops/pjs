@@ -5,10 +5,12 @@
 
 use crate::Result;
 use crate::domain::value_objects::JsonPath;
+use crate::error::FrameSequenceError;
 use crate::stream::patch::apply_patch;
 use crate::stream::priority::PriorityStreamFrame;
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 /// Client-side JSON reconstruction engine
 ///
@@ -27,27 +29,63 @@ pub struct JsonReconstructor {
     current_state: JsonValue,
     /// Queue of received frames waiting to be processed
     frame_queue: VecDeque<PriorityStreamFrame>,
-    /// Whether reconstruction is complete
-    is_complete: bool,
     /// Statistics about reconstruction process
     stats: ReconstructionStats,
 }
 
-/// Statistics about the reconstruction process
+/// Timing of one reconstruction run; "finished without starting" and
+/// "end before start" cannot be represented.
+#[derive(Debug, Clone, Copy, Default)]
+enum Timing {
+    #[default]
+    NotStarted,
+    Running {
+        start: Instant,
+    },
+    Finished {
+        start: Instant,
+        end: Instant,
+    },
+}
+
+impl Timing {
+    fn start(&mut self) {
+        if matches!(self, Self::NotStarted) {
+            *self = Self::Running {
+                start: Instant::now(),
+            };
+        }
+    }
+
+    fn finish(&mut self) {
+        if let Self::Running { start } = *self {
+            *self = Self::Finished {
+                start,
+                end: Instant::now(),
+            };
+        }
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        match *self {
+            Self::Finished { start, end } => Some(end.duration_since(start)),
+            Self::NotStarted | Self::Running { .. } => None,
+        }
+    }
+}
+
+/// Read-only statistics about the reconstruction process.
+///
+/// Obtained from [`JsonReconstructor::stats`]; counters saturate at `u64::MAX`
+/// instead of overflowing. Rates and the duration are `None` until the
+/// reconstruction has completed.
 #[derive(Debug, Clone, Default)]
 pub struct ReconstructionStats {
-    /// Total frames processed
-    pub frames_processed: u32,
-    /// Total patches applied
-    pub patches_applied: u32,
-    /// Number of skeleton frames received
-    pub skeleton_frames: u32,
-    /// Number of patch frames received
-    pub patch_frames: u32,
-    /// Time when reconstruction started
-    pub start_time: Option<std::time::Instant>,
-    /// Time when reconstruction completed
-    pub end_time: Option<std::time::Instant>,
+    frames_processed: u64,
+    patches_applied: u64,
+    skeleton_frames: u64,
+    patch_frames: u64,
+    timing: Timing,
 }
 
 impl JsonReconstructor {
@@ -56,21 +94,23 @@ impl JsonReconstructor {
         Self {
             current_state: JsonValue::Null,
             frame_queue: VecDeque::new(),
-            is_complete: false,
             stats: ReconstructionStats::default(),
         }
     }
 
     /// Add a frame to the reconstruction queue
     pub fn add_frame(&mut self, frame: PriorityStreamFrame) {
-        if self.stats.start_time.is_none() {
-            self.stats.start_time = Some(std::time::Instant::now());
-        }
-
+        self.stats.timing.start();
         self.frame_queue.push_back(frame);
     }
 
     /// Process next frame in the queue
+    ///
+    /// # Errors
+    ///
+    /// [`FrameSequenceError::AfterComplete`] when the stream already completed;
+    /// the frame is consumed and dropped, and state and stats are unchanged.
+    /// Patch application errors are propagated.
     pub fn process_next_frame(&mut self) -> Result<ProcessResult> {
         if let Some(frame) = self.frame_queue.pop_front() {
             self.process_frame(frame)
@@ -80,6 +120,11 @@ impl JsonReconstructor {
     }
 
     /// Process all queued frames
+    ///
+    /// # Errors
+    ///
+    /// Returns at the first rejected frame, see [`Self::process_next_frame`];
+    /// frames queued behind it stay queued.
     pub fn process_all_frames(&mut self) -> Result<Vec<ProcessResult>> {
         let mut results = Vec::new();
 
@@ -92,7 +137,10 @@ impl JsonReconstructor {
 
     /// Process a single frame
     fn process_frame(&mut self, frame: PriorityStreamFrame) -> Result<ProcessResult> {
-        self.stats.frames_processed += 1;
+        if self.is_complete() {
+            return Err(FrameSequenceError::AfterComplete.into());
+        }
+        self.stats.frames_processed = self.stats.frames_processed.saturating_add(1);
 
         match frame {
             PriorityStreamFrame::Skeleton {
@@ -100,31 +148,29 @@ impl JsonReconstructor {
                 priority: _,
                 complete: _,
             } => {
-                self.stats.skeleton_frames += 1;
+                self.stats.skeleton_frames = self.stats.skeleton_frames.saturating_add(1);
                 self.current_state = data;
                 Ok(ProcessResult::SkeletonApplied)
             }
 
             PriorityStreamFrame::Patch { patches, priority } => {
-                self.stats.patch_frames += 1;
+                self.stats.patch_frames = self.stats.patch_frames.saturating_add(1);
                 let mut applied_paths = Vec::new();
 
                 for patch in patches {
                     let path = apply_patch(&mut self.current_state, patch.patch)?;
                     applied_paths.push(path);
-                    self.stats.patches_applied += 1;
+                    self.stats.patches_applied = self.stats.patches_applied.saturating_add(1);
                 }
 
                 Ok(ProcessResult::PatchesApplied {
-                    count: applied_paths.len(),
                     priority,
                     paths: applied_paths,
                 })
             }
 
             PriorityStreamFrame::Complete { checksum: _ } => {
-                self.is_complete = true;
-                self.stats.end_time = Some(std::time::Instant::now());
+                self.stats.timing.finish();
                 Ok(ProcessResult::ReconstructionComplete)
             }
         }
@@ -137,7 +183,7 @@ impl JsonReconstructor {
 
     /// Check if reconstruction is complete
     pub fn is_complete(&self) -> bool {
-        self.is_complete
+        matches!(self.stats.timing, Timing::Finished { .. })
     }
 
     /// Get reconstruction statistics
@@ -149,31 +195,26 @@ impl JsonReconstructor {
     pub fn reset(&mut self) {
         self.current_state = JsonValue::Null;
         self.frame_queue.clear();
-        self.is_complete = false;
         self.stats = ReconstructionStats::default();
     }
 
     /// Get reconstruction progress (0.0 to 1.0)
     pub fn progress(&self) -> f32 {
-        if self.is_complete {
+        if self.is_complete() {
             1.0
         } else if self.stats.frames_processed == 0 {
             0.0
         } else {
             // Rough estimate based on frames processed vs expected
-            (self.stats.frames_processed as f32
-                / (self.stats.frames_processed + self.frame_queue.len() as u32) as f32)
-                .min(0.95) // Never show 100% until complete
+            let queued = u64::try_from(self.frame_queue.len()).unwrap_or(u64::MAX);
+            let total = self.stats.frames_processed.saturating_add(queued);
+            (self.stats.frames_processed as f32 / total as f32).min(0.95) // Never show 100% until complete
         }
     }
 
     /// Get reconstruction duration if available
-    pub fn duration(&self) -> Option<std::time::Duration> {
-        if let (Some(start), Some(end)) = (self.stats.start_time, self.stats.end_time) {
-            Some(end.duration_since(start))
-        } else {
-            None
-        }
+    pub fn duration(&self) -> Option<Duration> {
+        self.stats.duration()
     }
 }
 
@@ -186,8 +227,6 @@ pub enum ProcessResult {
     SkeletonApplied,
     /// Patch frames were applied
     PatchesApplied {
-        /// Number of patches applied
-        count: usize,
         /// Priority of the patches
         priority: crate::stream::Priority,
         /// Paths that were modified
@@ -204,32 +243,45 @@ impl Default for JsonReconstructor {
 }
 
 impl ReconstructionStats {
+    /// Total frames processed
+    pub fn frames_processed(&self) -> u64 {
+        self.frames_processed
+    }
+
+    /// Total patches applied
+    pub fn patches_applied(&self) -> u64 {
+        self.patches_applied
+    }
+
+    /// Number of skeleton frames received
+    pub fn skeleton_frames(&self) -> u64 {
+        self.skeleton_frames
+    }
+
+    /// Number of patch frames received
+    pub fn patch_frames(&self) -> u64 {
+        self.patch_frames
+    }
+
+    /// Time from the first queued frame to the processed `Complete` frame,
+    /// `None` until the reconstruction has completed
+    pub fn duration(&self) -> Option<Duration> {
+        self.timing.duration()
+    }
+
     /// Get processing rate in frames per second
     pub fn frames_per_second(&self) -> Option<f32> {
-        if let (Some(start), Some(end)) = (self.start_time, self.end_time) {
-            let duration = end.duration_since(start);
-            if duration.as_secs_f32() > 0.0 {
-                Some(self.frames_processed as f32 / duration.as_secs_f32())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        self.rate(self.frames_processed)
     }
 
     /// Get patches per second rate
     pub fn patches_per_second(&self) -> Option<f32> {
-        if let (Some(start), Some(end)) = (self.start_time, self.end_time) {
-            let duration = end.duration_since(start);
-            if duration.as_secs_f32() > 0.0 {
-                Some(self.patches_applied as f32 / duration.as_secs_f32())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        self.rate(self.patches_applied)
+    }
+
+    fn rate(&self, count: u64) -> Option<f32> {
+        let secs = self.duration()?.as_secs_f32();
+        (secs > 0.0).then_some(count as f32 / secs)
     }
 }
 
@@ -247,7 +299,7 @@ mod tests {
     fn test_reconstructor_creation() {
         let reconstructor = JsonReconstructor::new();
         assert!(!reconstructor.is_complete());
-        assert_eq!(reconstructor.stats().frames_processed, 0);
+        assert_eq!(reconstructor.stats().frames_processed(), 0);
         assert_eq!(reconstructor.current_state(), &JsonValue::Null);
     }
 
@@ -272,7 +324,7 @@ mod tests {
 
         assert_matches!(result, ProcessResult::SkeletonApplied);
         assert_eq!(reconstructor.current_state(), &skeleton);
-        assert_eq!(reconstructor.stats().skeleton_frames, 1);
+        assert_eq!(reconstructor.stats().skeleton_frames(), 1);
     }
 
     #[test]
@@ -306,11 +358,7 @@ mod tests {
         reconstructor.add_frame(frame);
         let result = reconstructor.process_next_frame().unwrap();
 
-        if let ProcessResult::PatchesApplied { count, .. } = result {
-            assert_eq!(count, 1);
-        } else {
-            panic!("Expected PatchesApplied result");
-        }
+        assert_matches!(result, ProcessResult::PatchesApplied { ref paths, .. } if paths.len() == 1);
 
         let expected = json!({
             "name": "John Doe",
@@ -318,7 +366,7 @@ mod tests {
         });
 
         assert_eq!(reconstructor.current_state(), &expected);
-        assert_eq!(reconstructor.stats().patches_applied, 1);
+        assert_eq!(reconstructor.stats().patches_applied(), 1);
     }
 
     #[test]
@@ -368,7 +416,7 @@ mod tests {
         let result = reconstructor.process_next_frame().unwrap();
         assert_matches!(result, ProcessResult::ReconstructionComplete);
         assert!(reconstructor.is_complete());
-        assert!(reconstructor.stats().end_time.is_some());
+        assert!(reconstructor.stats().duration().is_some());
     }
 
     #[test]
@@ -407,15 +455,16 @@ mod tests {
 
         // Setup some state
         reconstructor.current_state = json!({"test": true});
-        reconstructor.is_complete = true;
-        reconstructor.stats.frames_processed = 5;
+        reconstructor.add_frame(PriorityStreamFrame::Complete { checksum: None });
+        reconstructor.process_next_frame().unwrap();
+        assert!(reconstructor.is_complete());
 
         // Reset
         reconstructor.reset();
 
         assert_eq!(reconstructor.current_state(), &JsonValue::Null);
         assert!(!reconstructor.is_complete());
-        assert_eq!(reconstructor.stats().frames_processed, 0);
+        assert_eq!(reconstructor.stats().frames_processed(), 0);
     }
 
     // NEW TESTS FOR COVERAGE IMPROVEMENT (Task P2-TEST-003)

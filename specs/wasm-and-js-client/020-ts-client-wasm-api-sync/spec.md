@@ -43,7 +43,7 @@ verified: 2026-11-15
 > - Gate is a separate `typecheck` CI step, not `"pretest": "tsc --noEmit"` (package.json has no `pretest`).
 > - WASM isolation uses an ambient `declare module 'pjs-wasm'` shim, not a Jest `__mocks__/pjs-wasm`; CI also builds and downloads the real `wasm-build-web` artifact for `js-client-test`.
 > - Crate is `tsify` 0.5, not `tsify-next`.
-> - `package.json` `engines.node` is `>=18.0.0` as the original spec stated.
+> - `package.json` `engines.node` is `>=22.0.0` since #743 (the original spec stated `>=18.0.0`).
 
 ## Problem
 

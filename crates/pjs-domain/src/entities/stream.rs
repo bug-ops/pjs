@@ -2,12 +2,18 @@
 
 use crate::{
     DomainError, DomainResult,
+    clock::TimeProvider,
     entities::{Frame, frame::FramePatch},
-    value_objects::{JsonData, JsonPath, PathSegment, Priority, SessionId, StreamId},
+    services::skeleton,
+    value_objects::{
+        JsonData, JsonPath, MAX_DESERIALIZE_DEPTH, PathSegment, Priority, SessionId, StreamId,
+    },
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
 
 /// Stream state in its lifecycle
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,28 +32,11 @@ pub enum StreamState {
 }
 
 /// Stream configuration and metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StreamConfig {
-    /// Maximum frame size in bytes
-    pub max_frame_size: usize,
-    /// Maximum frames per batch
-    pub max_frames_per_batch: usize,
-    /// Compression settings
-    pub enable_compression: bool,
     /// Custom priority rules
     #[serde(with = "crate::serde_support::priority_map")]
     pub priority_rules: HashMap<String, Priority>,
-}
-
-impl Default for StreamConfig {
-    fn default() -> Self {
-        Self {
-            max_frame_size: 64 * 1024, // 64KB
-            max_frames_per_batch: 10,
-            enable_compression: true,
-            priority_rules: HashMap::new(),
-        }
-    }
 }
 
 /// Stream statistics for monitoring
@@ -84,13 +73,39 @@ enum Lifecycle {
     Cancelled { at: Timestamp },
 }
 
+/// Time source of a [`Stream`]; `System` avoids an allocation for the default case.
+#[derive(Clone)]
+enum Clock {
+    System,
+    Injected(Arc<dyn TimeProvider>),
+}
+
+impl Clock {
+    fn now(&self) -> Timestamp {
+        match self {
+            Self::System => Timestamp::now(),
+            Self::Injected(clock) => clock.now(),
+        }
+    }
+}
+
+impl fmt::Debug for Clock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::System => f.write_str("System"),
+            Self::Injected(_) => f.write_str("Injected"),
+        }
+    }
+}
+
 /// Priority data stream entity
 ///
 /// # Wire format
 ///
 /// Serializes as the stream layout with `state`, `completed_at` and, only in
 /// the `Failed` state, `failure_reason`. Decoding validates that these agree
-/// with the state and that `next_sequence` is at least 1.
+/// with the state and that `next_sequence` is at least 1. The clock is not part
+/// of the wire format; a decoded stream uses the system clock.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "StreamWire")]
 pub struct Stream {
@@ -104,6 +119,7 @@ pub struct Stream {
     next_sequence: u64,
     source_data: Option<JsonData>,
     metadata: HashMap<String, String>,
+    clock: Clock,
 }
 
 /// Private decoding layout of [`Stream`]; validated by `TryFrom`.
@@ -199,14 +215,61 @@ impl TryFrom<StreamWire> for Stream {
             next_sequence: wire.next_sequence,
             source_data: wire.source_data,
             metadata: wire.metadata,
+            clock: Clock::System,
         })
     }
 }
 
 impl Stream {
-    /// Create new stream
+    /// Create new stream timestamped by the system clock.
     pub fn new(session_id: SessionId, source_data: JsonData, config: StreamConfig) -> Self {
-        let now = Timestamp::now();
+        Self::with_clock_source(session_id, source_data, config, Clock::System)
+    }
+
+    /// Create a stream whose every timestamp (`created_at`, `updated_at`,
+    /// `completed_at` and the timestamps of the frames it builds) comes from
+    /// `clock`, so an owner with an injected clock runs a single time domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use jiff::Timestamp;
+    /// use pjson_rs_domain::Stream;
+    /// use pjson_rs_domain::clock::TimeProvider;
+    /// use pjson_rs_domain::value_objects::{JsonData, SessionId};
+    ///
+    /// struct Epoch;
+    /// impl TimeProvider for Epoch {
+    ///     fn now(&self) -> Timestamp {
+    ///         Timestamp::UNIX_EPOCH
+    ///     }
+    /// }
+    ///
+    /// let stream = Stream::with_clock(
+    ///     SessionId::new(),
+    ///     JsonData::Null,
+    ///     Default::default(),
+    ///     Arc::new(Epoch),
+    /// );
+    /// assert_eq!(stream.created_at(), Timestamp::UNIX_EPOCH);
+    /// ```
+    pub fn with_clock(
+        session_id: SessionId,
+        source_data: JsonData,
+        config: StreamConfig,
+        clock: Arc<dyn TimeProvider>,
+    ) -> Self {
+        Self::with_clock_source(session_id, source_data, config, Clock::Injected(clock))
+    }
+
+    fn with_clock_source(
+        session_id: SessionId,
+        source_data: JsonData,
+        config: StreamConfig,
+        clock: Clock,
+    ) -> Self {
+        let now = clock.now();
 
         Self {
             id: StreamId::new(),
@@ -219,6 +282,7 @@ impl Stream {
             next_sequence: 1,
             source_data: Some(source_data),
             metadata: HashMap::new(),
+            clock,
         }
     }
 
@@ -316,10 +380,8 @@ impl Stream {
     pub fn complete(&mut self) -> DomainResult<()> {
         match self.lifecycle {
             Lifecycle::Streaming => {
-                self.lifecycle = Lifecycle::Completed {
-                    at: Timestamp::now(),
-                };
-                self.update_timestamp();
+                let at = self.update_timestamp();
+                self.lifecycle = Lifecycle::Completed { at };
                 Ok(())
             }
             _ => Err(self.invalid_transition("complete stream")),
@@ -331,11 +393,8 @@ impl Stream {
     pub fn fail(&mut self, error: String) -> DomainResult<()> {
         match self.lifecycle {
             Lifecycle::Preparing | Lifecycle::Streaming => {
-                self.lifecycle = Lifecycle::Failed {
-                    at: Timestamp::now(),
-                    reason: error,
-                };
-                self.update_timestamp();
+                let at = self.update_timestamp();
+                self.lifecycle = Lifecycle::Failed { at, reason: error };
                 Ok(())
             }
             _ => Err(self.invalid_transition("fail stream")),
@@ -346,10 +405,8 @@ impl Stream {
     pub fn cancel(&mut self) -> DomainResult<()> {
         match self.lifecycle {
             Lifecycle::Preparing | Lifecycle::Streaming => {
-                self.lifecycle = Lifecycle::Cancelled {
-                    at: Timestamp::now(),
-                };
-                self.update_timestamp();
+                let at = self.update_timestamp();
+                self.lifecycle = Lifecycle::Cancelled { at };
                 Ok(())
             }
             _ => Err(self.invalid_transition("cancel stream")),
@@ -381,8 +438,12 @@ impl Stream {
             DomainError::InvalidStreamState("No source data available for skeleton".to_string())
         })?;
 
-        let skeleton = self.generate_skeleton(skeleton_data)?;
-        let frame = Frame::skeleton(self.id, self.next_sequence, skeleton);
+        let frame = Frame::skeleton(
+            self.id,
+            self.next_sequence,
+            skeleton(skeleton_data, MAX_DESERIALIZE_DEPTH),
+        )
+        .with_timestamp(self.clock.now());
 
         self.record_frame_created(&frame);
 
@@ -499,7 +560,8 @@ impl Stream {
     ) -> DomainResult<Frame> {
         self.ensure_streaming()?;
 
-        let frame = Frame::patch(self.id, self.next_sequence, priority, frame_patches)?;
+        let frame = Frame::patch(self.id, self.next_sequence, priority, frame_patches)?
+            .with_timestamp(self.clock.now());
         self.record_frame_created(&frame);
         Ok(frame)
     }
@@ -508,7 +570,8 @@ impl Stream {
     pub fn create_completion_frame(&mut self, checksum: Option<String>) -> DomainResult<Frame> {
         self.ensure_streaming()?;
 
-        let frame = Frame::complete(self.id, self.next_sequence, checksum);
+        let frame =
+            Frame::complete(self.id, self.next_sequence, checksum).with_timestamp(self.clock.now());
         self.record_frame_created(&frame);
 
         Ok(frame)
@@ -563,9 +626,11 @@ impl Stream {
         Ok(())
     }
 
-    /// Private helper: Update timestamp
-    fn update_timestamp(&mut self) {
-        self.updated_at = Timestamp::now();
+    /// Private helper: stamp `updated_at` from the clock and return it.
+    fn update_timestamp(&mut self) -> Timestamp {
+        let now = self.clock.now();
+        self.updated_at = now;
+        now
     }
 
     /// Private helper: Record frame creation for stats
@@ -603,32 +668,7 @@ impl Stream {
         self.stats.average_frame_size =
             self.stats.total_bytes as f64 / self.stats.total_frames as f64;
 
-        self.update_timestamp();
-    }
-
-    /// Private helper: Generate skeleton from source data.
-    fn generate_skeleton(&self, data: &JsonData) -> DomainResult<JsonData> {
-        // Simplified skeleton generation - create empty structure
-        match data {
-            JsonData::Object(obj) => {
-                let mut skeleton = HashMap::new();
-                for (key, value) in obj.iter() {
-                    let skeleton_value = match value {
-                        JsonData::Array(_) => JsonData::Array(Vec::new()),
-                        JsonData::Object(_) => self.generate_skeleton(value)?,
-                        JsonData::Integer(_) => JsonData::Integer(0),
-                        JsonData::Float(_) => JsonData::Float(0.0),
-                        JsonData::String(_) => JsonData::Null,
-                        JsonData::Bool(_) => JsonData::Bool(false),
-                        JsonData::Null => JsonData::Null,
-                    };
-                    skeleton.insert(key.clone(), skeleton_value);
-                }
-                Ok(JsonData::Object(skeleton))
-            }
-            JsonData::Array(_) => Ok(JsonData::Array(Vec::new())),
-            _ => Ok(JsonData::Null),
-        }
+        self.updated_at = frame.timestamp();
     }
 
     /// Private helper: Extract patches with priority filtering.
@@ -655,7 +695,8 @@ impl Stream {
         patches
     }
 
-    /// Recursive walker that emits prioritized patches into `out`.
+    /// Recursive walker that emits prioritized patches into `out`, descending
+    /// at most [`MAX_DESERIALIZE_DEPTH`] object levels.
     ///
     /// Walks one mutable `path` buffer; a leaf is priced on the borrowed
     /// buffer, and the path and value are cloned only when a patch is emitted.
@@ -666,7 +707,11 @@ impl Stream {
         heuristic: &crate::services::PriorityHeuristicConfig,
         out: &mut Vec<(FramePatch, Priority)>,
     ) {
-        if let JsonData::Object(map) = data {
+        // An object at the depth bound is emitted whole: the skeleton nulls it
+        // (see `services::skeleton`), so this keeps the stream lossless.
+        if let JsonData::Object(map) = data
+            && path.depth() < MAX_DESERIALIZE_DEPTH
+        {
             for (key, value) in map.iter() {
                 path.push(PathSegment::Key(key.clone()));
                 Self::collect_patches(value, path, threshold, heuristic, out);
@@ -988,9 +1033,7 @@ mod tests {
         let patches = stream
             .extract_prioritized_patches(threshold)
             .expect("patches");
-        let skeleton = stream
-            .generate_skeleton(&data.into())
-            .expect("skeleton generates");
+        let skeleton = crate::services::skeleton(&data.into(), MAX_DESERIALIZE_DEPTH);
         let mut state = serde_json::to_value(&skeleton).expect("JsonData serializes");
         for (patch, _) in &patches {
             let value = serde_json::to_value(patch.value()).expect("JsonData serializes");
@@ -1035,8 +1078,9 @@ mod tests {
         let stream = streaming(serde_json::json!({"a.b": 7, "": {"x": 8}}));
         let data = stream.source_data.clone().expect("source data");
 
-        let skeleton = serde_json::to_value(stream.generate_skeleton(&data).expect("skeleton"))
-            .expect("serializes");
+        let skeleton =
+            serde_json::to_value(crate::services::skeleton(&data, MAX_DESERIALIZE_DEPTH))
+                .expect("serializes");
 
         assert_eq!(skeleton, serde_json::json!({"a.b": 0, "": {"x": 0}}));
     }

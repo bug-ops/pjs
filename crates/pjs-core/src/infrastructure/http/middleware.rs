@@ -286,6 +286,13 @@ where
                     })
                     .to_string();
 
+                    #[cfg(feature = "metrics")]
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        crate::infrastructure::http::metrics::record_rate_limited(
+                            crate::infrastructure::http::metrics::Transport::Http,
+                        );
+                    }
+
                     let mut response = Response::builder()
                         .status(status)
                         .header(header::CONTENT_TYPE, "application/json")

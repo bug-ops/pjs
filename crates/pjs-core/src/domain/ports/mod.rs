@@ -37,23 +37,5 @@ pub use writer::{
 
 // Legacy async_trait implementations removed - use GAT versions instead
 
-/// Time provider port (for testability)
-pub trait TimeProvider: Send + Sync {
-    /// Get current timestamp
-    fn now(&self) -> jiff::Timestamp;
-
-    /// Get current unix timestamp in milliseconds
-    fn now_millis(&self) -> u64 {
-        self.now().as_millisecond() as u64
-    }
-}
-
-/// Default implementation using system time
-#[derive(Debug, Clone)]
-pub struct SystemTimeProvider;
-
-impl TimeProvider for SystemTimeProvider {
-    fn now(&self) -> jiff::Timestamp {
-        jiff::Timestamp::now()
-    }
-}
+// Time provider port (defined in the domain crate so entities can use it)
+pub use pjson_rs_domain::clock::{SystemTimeProvider, TimeProvider};

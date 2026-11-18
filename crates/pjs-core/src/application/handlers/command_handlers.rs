@@ -194,9 +194,6 @@ where
 
     fn handle(&self, command: CreateSessionCommand) -> Self::HandleFuture<'_> {
         async move {
-            CommandValidator::validate_create_session(&command)
-                .map_err(|errors| ApplicationError::Validation(errors.join("; ")))?;
-
             // Create new session
             let mut session = StreamSession::new(command.config);
 
@@ -531,29 +528,13 @@ where
 /// domain layer.
 ///
 /// Invoked as the first statement of [`CommandHandlerGat::handle`] for
-/// [`CreateSessionCommand`], [`CreateStreamCommand`], and
-/// [`GenerateFramesCommand`] on [`SessionCommandHandler`] — ahead of any
+/// [`CreateStreamCommand`] and [`GenerateFramesCommand`] on [`SessionCommandHandler`] — ahead of any
 /// session lookup, so a malformed request fails with
 /// [`ApplicationError::Validation`] (HTTP 400) instead of a later domain
 /// error or a misleading 404/500.
 pub struct CommandValidator;
 
 impl CommandValidator {
-    /// Validate CreateSessionCommand
-    pub fn validate_create_session(command: &CreateSessionCommand) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
-
-        if command.config.max_concurrent_streams == 0 {
-            errors.push("max_concurrent_streams must be greater than 0".to_string());
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
-
     /// Validate CreateStreamCommand
     pub fn validate_create_stream(command: &CreateStreamCommand) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
@@ -1374,29 +1355,6 @@ mod tests {
             "FramesBatched must be published even though append_frames failed \
              (was {events_before}, now {events_after})"
         );
-    }
-
-    #[tokio::test]
-    async fn test_create_session_rejects_zero_max_concurrent_streams() {
-        let repository = Arc::new(MockRepository::new());
-        let event_publisher = Arc::new(MockEventPublisher);
-        let handler = SessionCommandHandler::new(repository, event_publisher);
-
-        let config = SessionConfig {
-            max_concurrent_streams: 0,
-            ..Default::default()
-        };
-
-        let result = handler
-            .handle(CreateSessionCommand {
-                config,
-                client_info: None,
-                user_agent: None,
-                ip_address: None,
-            })
-            .await;
-
-        assert_matches!(result, Err(ApplicationError::Validation(_)));
     }
 
     #[tokio::test]

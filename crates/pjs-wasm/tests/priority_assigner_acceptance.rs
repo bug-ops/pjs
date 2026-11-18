@@ -1,18 +1,17 @@
-//! Acceptance tests for #755: `PriorityAssigner` is fixed by the config passed
-//! to `with_config` (projected onto the domain heuristic once through
-//! `PriorityConfig::into_heuristic`) and scores exactly like `compute_priority`.
+//! Acceptance tests for #755: `PriorityAssigner` is fixed by the heuristic
+//! config passed to `with_config` and scores exactly like `compute_priority`.
 
-use pjs_wasm::priority_assignment::{PriorityAssigner, PriorityConfig};
-use pjson_rs_domain::services::{ValueShape, compute_priority};
+use pjs_wasm::priority_assignment::PriorityAssigner;
+use pjson_rs_domain::services::{PriorityHeuristicConfig, ValueShape, compute_priority};
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority};
 use serde_json::json;
 
-fn custom_config() -> PriorityConfig {
-    let mut config = PriorityConfig::default();
-    config.add_critical_field("session_id".to_owned());
-    config.add_high_field("display_name".to_owned());
-    config.add_low_pattern("debug_info".to_owned());
-    config.add_background_pattern("telemetry".to_owned());
+fn custom_config() -> PriorityHeuristicConfig {
+    let mut config = PriorityHeuristicConfig::default();
+    config.critical_fields.push("session_id".to_owned());
+    config.high_fields.push("display_name".to_owned());
+    config.low_fields.push("debug_info".to_owned());
+    config.background_fields.push("telemetry".to_owned());
     config.large_array_threshold = 3;
     config.large_string_threshold = 4;
     config
@@ -34,7 +33,7 @@ fn inputs() -> Vec<(JsonPath, JsonData)> {
 
 #[test]
 fn calculate_field_priority_equals_compute_priority_over_the_projected_config() {
-    let heuristic = custom_config().into_heuristic();
+    let heuristic = custom_config();
     let assigner = PriorityAssigner::with_config(custom_config());
 
     for (path, value) in inputs() {
@@ -47,20 +46,8 @@ fn calculate_field_priority_equals_compute_priority_over_the_projected_config() 
 }
 
 #[test]
-fn into_heuristic_carries_every_tier_and_threshold() {
-    let heuristic = custom_config().into_heuristic();
-
-    assert!(heuristic.critical_fields.iter().any(|f| f == "session_id"));
-    assert!(heuristic.high_fields.iter().any(|f| f == "display_name"));
-    assert!(heuristic.low_fields.iter().any(|f| f == "debug_info"));
-    assert!(heuristic.background_fields.iter().any(|f| f == "telemetry"));
-    assert_eq!(heuristic.large_array_threshold, 3);
-    assert_eq!(heuristic.large_string_threshold, 4);
-}
-
-#[test]
 fn extract_prioritized_fields_with_limit_prices_each_field_like_compute_priority() {
-    let heuristic = custom_config().into_heuristic();
+    let heuristic = custom_config();
     let assigner = PriorityAssigner::with_config(custom_config());
     let data = JsonData::from(json!({
         "session_id": 1,

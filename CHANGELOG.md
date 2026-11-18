@@ -43,8 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bench shapes for the offload gate calibration in `pjs-bench` (#686) (#691)
 - Miri CI job for `parser::buffer_pool` and `parser::aligned_alloc`, credential patterns in `.gitignore` with a gitleaks allowlist, and tracing spans for WebSocket connections and sessions (#716, #697, #708, #726)
 - Cross-stack test running the compiled `pjs-js-client` bundle against a real `pjs-core` WebSocket server in the `js-client-test` CI job (#731) (#740)
+- `pjs-domain` gains `clock` (`TimeProvider`, `Stream::with_clock`), `services::skeleton` and public `JsonPath::push`/`pop`; `pjson-rs` gains `MaxConcurrentStreams` (#759, #758, #770, #769) (#PRNUM)
+- `/metrics` exports request count and latency, session, stream, WebSocket connection, rate-limit and byte series with bounded labels (#741) (#PRNUM)
+- `BufferPool` and `PriorityStreamer::analyze` benches and a report-only gungraun instruction-count CI job (#774, #736) (#PRNUM)
 
 ### Changed
+
+- **BREAKING** `JsonReconstructor` rejects frames after `Complete` with `FrameSequenceError::AfterComplete`; `ReconstructionStats` fields are private (u64 getters, `duration()`); `PatchesApplied` loses `count` (#761) (#PRNUM)
+- **BREAKING** `SessionConfig::max_concurrent_streams` is `MaxConcurrentStreams` (1..=1000, 400 above); `SessionConfig::enable_compression`, `StreamConfig` and `StreamerConfig` inert fields and `CommandValidator::validate_create_session` removed (#769, #760) (#PRNUM)
+- **BREAKING** `PriorityStreamer` no longer emits `Set` patches an ancestor `Set` covers and uses `0.0` for float skeleton leaves; domain `Stream` skeleton and patch walks are bounded at depth 64 (#770, #758) (#PRNUM)
+- **BREAKING** WebSocket server answers an invalid `StreamOptions` field with `400 invalid stream option: <field>` and counts Ping/Pong against the per-IP message budget; peer disconnects are no longer logged at ERROR (#768, #745, #767) (#PRNUM)
+- **BREAKING** `metrics_handler` is generic over `PjsAppState` and building a router with `metrics` claims the global recorder (#741) (#PRNUM)
+- `pjs-wasm` drops the Rust-only `PriorityConfig` and shares the domain skeleton generator; domain `Stream` timestamps follow the session clock (#771, #758, #759) (#PRNUM)
+- **BREAKING** `pjs-js-client` HTTP and SSE transports speak the shipped REST routes and synthesize `Skeleton`/`Complete` with `total_frames` (#735) (#PRNUM)
+- **BREAKING** `pjs-js-client` drops `ProgressInfo.bytesReceived`, skips `append`/`merge` onto a missing or wrong-kind target, caps patch depth and stream bytes, adds `stateDelivery`, fails the stream on a throwing frame listener, and requires Node 22 (#766, #764, #746, #739, #743) (#PRNUM)
+- CI pins `install-action` tools, tests the JS client on Node 22 and 24, publishes with native `cargo publish --workspace`; spec 066 states the 400 answer for over-deep documents; stale picomatch ignore removed from `osv-scanner.toml` (#744, #743, #742, #737, #738) (#PRNUM)
 
 - **BREAKING** `pjson-rs` removes `infrastructure::http::axum_extension` (`PjsExtension` and its config and request types); use `create_pjs_router*` with `Router::merge` (#748) (#775)
 - **BREAKING** `pjson-rs` removes the placeholder middlewares `websocket_upgrade_middleware`, `compression_middleware`, `CircuitBreakerMiddleware`, `health_check_middleware` and `PjsMiddleware::with_compression` (#749) (#775)
@@ -109,6 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `BufferPool::acquire` evicts idle buffers of other size classes before failing on the byte budget, and a dictionary store TTL beyond `u64` milliseconds no longer wraps (#773, #762) (#PRNUM)
 - `pjs-domain` `JsonPath::to_json_pointer` escapes `~` and `/` in keys per RFC 6901 (#757) (#775)
 - `pjs-js-client` `WebSocketTransport.startStream` sends `StreamInit` before registering the active stream, so a failed start no longer crashes the next `stream()` or `disconnect()` (#763) (#775)
 - `pjs-domain` `Stream` keeps values under object keys `JsonPath` cannot encode via the skeleton and a root `Set` patch (#643) (#665)

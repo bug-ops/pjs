@@ -218,8 +218,11 @@ pub enum FrameKind {
     Patch,
 }
 
-/// Why a server's data frame was refused: it broke the frame sequence of its
-/// stream.
+/// Why a data frame was refused: it broke the frame sequence of its stream.
+///
+/// Raised by the WebSocket client for a server's frames and by
+/// [`JsonReconstructor`](crate::stream::JsonReconstructor) for frames that
+/// arrive after the stream completed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum FrameSequenceError {
@@ -239,6 +242,9 @@ pub enum FrameSequenceError {
         /// The kind of the received frame
         received: FrameKind,
     },
+    /// A frame arrived after the stream's `Complete` frame was processed
+    #[error("frame received after the stream completed")]
+    AfterComplete,
 }
 
 /// Why a stream plan was rejected.
@@ -465,7 +471,9 @@ pub enum Error {
     #[error("Stream plan rejected")]
     PlanRejected(#[from] PlanError),
 
-    /// The server broke the frame sequence of a stream; the session was dropped
+    /// A frame broke the frame sequence of a stream (a server's frame on the
+    /// WebSocket client, which drops the session; or a frame after `Complete`
+    /// in a reconstructor)
     #[error("Frame sequence violation")]
     FrameSequence(#[from] FrameSequenceError),
 }

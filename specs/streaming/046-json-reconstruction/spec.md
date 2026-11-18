@@ -38,8 +38,8 @@ verified: 2026-11-18
 ## Functional Requirements
 
 ### FR-001 Frame queue
-`add_frame` shall enqueue a frame and record `start_time` on the first call. `process_next_frame` pops one frame (returns `ProcessResult::NoFrames` when empty); `process_all_frames` drains the queue and returns one `ProcessResult` per frame, stopping at the first error.
-Status: done. On error the failing frame has already been popped and counted in `frames_processed`; remaining frames stay queued.
+`add_frame` shall enqueue a frame and start the timing on the first call. `process_next_frame` pops one frame (returns `ProcessResult::NoFrames` when empty); `process_all_frames` drains the queue and returns one `ProcessResult` per frame, stopping at the first error.
+Status: done. On a patch error the failing frame has already been popped and counted in `frames_processed`; remaining frames stay queued. A frame rejected after `Complete` (FR-007) is popped but not counted.
 Code: `add_frame`, `process_next_frame`, `process_all_frames`.
 
 ### FR-002 Skeleton application
@@ -47,7 +47,7 @@ A `Skeleton` frame shall replace the entire current state with its `data` (its `
 Status: done.
 
 ### FR-003 Patch application
-For a `Patch` frame, each patch (`JsonPatch.patch`, a `WirePatch`) shall be applied in order through the crate-private `stream::patch::apply_patch`, shared with the WebSocket client (#751): `Set` -> `json_tree::set`; `Merge`, `Append` and `AppendStr` resolve the target with `resolve_mut` and extend the object, array or string (a wrong target kind fails with `ExpectedObject`/`ExpectedArray`/`ExpectedString`). There is no path depth limit; the WebSocket client checks `MAX_PATCH_PATH_DEPTH` before it calls the shared core. A failing patch leaves the state unchanged; patches applied earlier in the same frame stay applied. The result is `PatchesApplied { count, priority, paths }`.
+For a `Patch` frame, each patch (`JsonPatch.patch`, a `WirePatch`) shall be applied in order through the crate-private `stream::patch::apply_patch`, shared with the WebSocket client (#751): `Set` -> `json_tree::set`; `Merge`, `Append` and `AppendStr` resolve the target with `resolve_mut` and extend the object, array or string (a wrong target kind fails with `ExpectedObject`/`ExpectedArray`/`ExpectedString`). There is no path depth limit; the WebSocket client checks `MAX_PATCH_PATH_DEPTH` before it calls the shared core. A failing patch leaves the state unchanged; patches applied earlier in the same frame stay applied. The result is `PatchesApplied { priority, paths }`; the patch count is `paths.len()`.
 Status: done. A failing patch aborts the frame; patches before it stay applied (no rollback).
 
 ### FR-004 Set semantics
@@ -63,11 +63,11 @@ Removed in #751: `PatchOperation::Remove`, `remove_at_path`, `json_tree::remove`
 Status: done.
 
 ### FR-007 Completion
-A `Complete` frame shall set `is_complete()` to true and record `end_time`; the checksum is ignored.
-Status: done.
+A `Complete` frame shall set `is_complete()` to true and finish the timing; the checksum is ignored. Every frame processed afterwards (`Skeleton`, `Patch` or a second `Complete`) is rejected with `Error::FrameSequence(FrameSequenceError::AfterComplete)`: the frame is consumed and dropped, state and stats stay unchanged, frames queued behind it stay queued and are rejected the same way, and `process_all_frames` returns at the first rejection. `reset()` accepts a new stream.
+Status: done (#761).
 
 ### FR-008 Progress and statistics
-`progress()` returns `1.0` when complete, `0.0` before any frame, otherwise `processed / (processed + queued)` capped at `0.95`. `ReconstructionStats` counts frames, patches, skeleton frames, patch frames and exposes `frames_per_second`/`patches_per_second` once start and end times exist. `reset()` restores the initial state.
+`progress()` returns `1.0` when complete, `0.0` before any frame, otherwise `processed / (processed + queued)` capped at `0.95`. `ReconstructionStats` is a read-only view: `u64` counters (saturating) exposed through getters `frames_processed`, `patches_applied`, `skeleton_frames`, `patch_frames`, plus `duration`, `frames_per_second` and `patches_per_second`, which are `None` until `Complete` has been processed. Timing is a private enum (`NotStarted`, `Running`, `Finished`), so an end without a start cannot exist; `JsonReconstructor::duration` delegates to `ReconstructionStats::duration`. `reset()` restores the initial state.
 Status: done.
 
 ### FR-009 Error type
@@ -82,7 +82,7 @@ Status: done (stringly typed; see Open Questions).
 
 ## Data Model
 
-`JsonReconstructor { current_state: serde_json::Value, frame_queue: VecDeque<PriorityStreamFrame>, is_complete: bool, stats: ReconstructionStats }`; `ProcessResult { NoFrames, SkeletonApplied, PatchesApplied{count, priority, paths}, ReconstructionComplete }` (distinct from `stream::ProcessResult` of `StreamProcessor`, same name); `ReconstructionStats` with `u32` counters and `Option<Instant>` times.
+`JsonReconstructor { current_state: serde_json::Value, frame_queue: VecDeque<PriorityStreamFrame>, stats: ReconstructionStats }` (`is_complete()` is derived from the stats' `Timing::Finished`, there is no separate flag); `ProcessResult { NoFrames, SkeletonApplied, PatchesApplied{priority, paths}, ReconstructionComplete }` (distinct from `stream::ProcessResult` of `StreamProcessor`, same name); `ReconstructionStats` with private `u64` counters and a private `Timing` enum.
 
 ## Edge Cases and Errors
 
@@ -92,7 +92,7 @@ Status: done (stringly typed; see Open Questions).
 | Patch path with missing intermediate key | `Err("Key not found: ..")` |
 | `Set` on array parent, index == len | `Err("Array index out of bounds")` |
 | Path ending in an index segment | resolved (#719): `Set` on `$.arr[i]` acts on element `i`; `Set` on `$.a[0]` where `a` is not an array fails with `ExpectedArray` |
-| Frames after `Complete` | still applied; `is_complete` stays true |
+| Frames after `Complete` | `Err(FrameSequence(AfterComplete))`; frame dropped, state and stats unchanged |
 
 ## Success Criteria
 
@@ -106,7 +106,7 @@ Status: done (stringly typed; see Open Questions).
 
 ## Open Questions
 
-1. Counters `frames_processed: u32` / `patches_applied: u32` use unchecked `+=`.
+1. Resolved (#761): counters are `u64` with saturating increments. The frame queue is still unbounded; callers bound it (see NFR-SEC-001).
 2. Resolved by #599: errors are typed `PatchError` variants.
 3. `Skeleton.complete` is ignored, so "skeleton may continue in later frames" has no effect.
 4. Resolved (#751): `Replace` and `Remove` no longer exist; the reconstructor applies the `WirePatch` ops.

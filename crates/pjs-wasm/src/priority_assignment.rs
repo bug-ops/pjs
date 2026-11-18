@@ -5,100 +5,19 @@
 //! WebAssembly transport produces the same priorities as the HTTP transport
 //! for the same payload — see issue #242 for the divergence this resolves.
 //!
-//! [`PriorityConfig`] is the JS-facing customisation surface (populated
-//! through [`crate::priority_config::PriorityConfigBuilder`]); the actual
-//! algorithm now lives entirely in the domain crate.
+//! The JS-facing customisation surface is
+//! [`crate::priority_config::PriorityConfigBuilder`], which builds a
+//! [`PriorityHeuristicConfig`] directly; the actual algorithm lives entirely
+//! in the domain crate.
 
 use pjson_rs_domain::services::{PriorityHeuristicConfig, ValueShape, compute_priority};
 use pjson_rs_domain::value_objects::{JsonData, JsonPath, Priority};
 use std::collections::HashMap;
 
-/// Configuration surface for the WASM priority assigner.
-///
-/// Field tier lists are forwarded to [`PriorityHeuristicConfig`] verbatim;
-/// matching is case-insensitive on the last path segment, just like the
-/// HTTP transport.
-#[derive(Debug, Clone)]
-pub struct PriorityConfig {
-    /// Field names mapped to [`Priority::CRITICAL`].
-    pub critical_fields: Vec<String>,
-    /// Field names mapped to [`Priority::HIGH`].
-    pub high_fields: Vec<String>,
-    /// Field names mapped to [`Priority::LOW`]. (JS API: `addLowPattern`).
-    pub low_patterns: Vec<String>,
-    /// Field names mapped to [`Priority::BACKGROUND`]. (JS API:
-    /// `addBackgroundPattern`).
-    pub background_patterns: Vec<String>,
-    /// Arrays larger than this lose 40 priority points in the heuristic
-    /// fallback.
-    pub large_array_threshold: usize,
-    /// Strings longer than this lose 20 priority points in the heuristic
-    /// fallback.
-    pub large_string_threshold: usize,
-}
-
-impl Default for PriorityConfig {
-    fn default() -> Self {
-        let domain = PriorityHeuristicConfig::default();
-        Self {
-            critical_fields: domain.critical_fields.clone(),
-            high_fields: domain.high_fields.clone(),
-            low_patterns: domain.low_fields.clone(),
-            background_patterns: domain.background_fields.clone(),
-            large_array_threshold: domain.large_array_threshold,
-            large_string_threshold: domain.large_string_threshold,
-        }
-    }
-}
-
-impl PriorityConfig {
-    /// Add a critical-tier field name.
-    pub fn add_critical_field(&mut self, field: String) {
-        push_unique(&mut self.critical_fields, field);
-    }
-
-    /// Add a high-tier field name.
-    pub fn add_high_field(&mut self, field: String) {
-        push_unique(&mut self.high_fields, field);
-    }
-
-    /// Add a low-tier field name (kept for JS API compatibility — the match is
-    /// exact and case-insensitive, not substring).
-    pub fn add_low_pattern(&mut self, pattern: String) {
-        push_unique(&mut self.low_patterns, pattern);
-    }
-
-    /// Add a background-tier field name.
-    pub fn add_background_pattern(&mut self, pattern: String) {
-        push_unique(&mut self.background_patterns, pattern);
-    }
-
-    /// Consume this config and project it onto the domain heuristic config,
-    /// so the parity between transports is preserved by construction.
-    pub fn into_heuristic(self) -> PriorityHeuristicConfig {
-        PriorityHeuristicConfig {
-            critical_fields: self.critical_fields,
-            high_fields: self.high_fields,
-            low_fields: self.low_patterns,
-            background_fields: self.background_patterns,
-            large_array_threshold: self.large_array_threshold,
-            large_string_threshold: self.large_string_threshold,
-            ..PriorityHeuristicConfig::default()
-        }
-    }
-}
-
-fn push_unique(dest: &mut Vec<String>, value: String) {
-    if !dest.iter().any(|v| v == &value) {
-        dest.push(value);
-    }
-}
-
 /// Priority assignment engine for JSON data.
 ///
-/// Holds the [`PriorityHeuristicConfig`] projected once from the
-/// [`PriorityConfig`] it is built with; the configuration is immutable
-/// afterwards.
+/// Holds the [`PriorityHeuristicConfig`] it is built with; the configuration
+/// is immutable afterwards.
 #[derive(Debug)]
 pub struct PriorityAssigner {
     heuristic: PriorityHeuristicConfig,
@@ -107,14 +26,12 @@ pub struct PriorityAssigner {
 impl PriorityAssigner {
     /// Create a priority assigner with the default configuration.
     pub fn new() -> Self {
-        Self::with_config(PriorityConfig::default())
+        Self::with_config(PriorityHeuristicConfig::default())
     }
 
     /// Create a priority assigner with a custom configuration.
-    pub fn with_config(config: PriorityConfig) -> Self {
-        Self {
-            heuristic: config.into_heuristic(),
-        }
+    pub fn with_config(heuristic: PriorityHeuristicConfig) -> Self {
+        Self { heuristic }
     }
 
     /// Calculate priority for a single `(path, value)` pair.
@@ -240,20 +157,10 @@ mod tests {
 
     #[test]
     fn default_config_creation() {
-        let config = PriorityConfig::default();
+        let config = PriorityHeuristicConfig::default();
         assert!(config.critical_fields.iter().any(|i| i == "id"));
         assert!(config.high_fields.iter().any(|i| i == "name"));
         assert_eq!(config.large_array_threshold, 100);
-    }
-
-    #[test]
-    fn config_modification() {
-        let mut config = PriorityConfig::default();
-        config.add_critical_field("custom_id".to_string());
-        assert!(config.critical_fields.iter().any(|i| i == "custom_id"));
-
-        config.add_high_field("display_name".to_string());
-        assert!(config.high_fields.iter().any(|i| i == "display_name"));
     }
 
     #[test]

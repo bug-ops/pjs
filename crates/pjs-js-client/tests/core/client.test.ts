@@ -18,8 +18,10 @@ import {
 
 describe('PJSClient', () => {
   let client: PJSClient;
+  let originalFetch: typeof fetch;
 
   beforeEach(() => {
+    originalFetch = global.fetch;
     client = new PJSClient({
       baseUrl: 'http://localhost:3000',
       debug: false
@@ -27,6 +29,7 @@ describe('PJSClient', () => {
   });
 
   afterEach(() => {
+    global.fetch = originalFetch;
     if (client.isClientConnected()) {
       client.disconnect();
     }
@@ -126,8 +129,19 @@ describe('PJSClient', () => {
         done();
       });
 
-      // The mocked fetch streams no frames, so the stream times out and emits an error
-      timingOutClient.stream('/test').catch(() => {
+      // The frame page never ends, so the stream times out and emits an error
+      global.fetch = jest.fn(async (url: string, init?: RequestInit) =>
+        init?.method === 'GET'
+          ? ({
+              ok: true,
+              status: 200,
+              statusText: 'OK',
+              headers: new Headers(),
+              body: { getReader: () => ({ read: () => new Promise(() => {}), cancel: async () => {}, releaseLock: () => {} }) }
+            } as unknown as Response)
+          : originalFetch(url, init)
+      ) as unknown as typeof fetch;
+      timingOutClient.stream('/test', { data: {} }).catch(() => {
         // Expected to fail
       });
     });

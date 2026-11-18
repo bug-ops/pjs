@@ -98,7 +98,7 @@ When `HttpServerConfig::allowed_origins` is empty, the CORS layer shall deny all
 
 ### FR-004 Session creation
 
-When `POST /pjs/sessions` receives `CreateSessionRequest { max_concurrent_streams?, timeout_seconds?, client_info? }`, the handler shall default `max_concurrent_streams` to 10 and `timeout_seconds` to 3600, record the `User-Agent` header, and return `{ session_id, expires_at }` where `expires_at = now + timeout_seconds`. The command handler rejects `max_concurrent_streams == 0`, `timeout_seconds == 0`, and `timeout_seconds > MAX_SESSION_TIMEOUT_SECONDS` (604 800, seven days) with `ApplicationError::Validation` (HTTP 400). The session config sets `enable_compression: true`; `ip_address` is always `None`.
+When `POST /pjs/sessions` receives `CreateSessionRequest { max_concurrent_streams?, timeout_seconds?, client_info? }`, the handler shall default `max_concurrent_streams` to 10 and `timeout_seconds` to 3600, record the `User-Agent` header, and return `{ session_id, expires_at }` where `expires_at = now + timeout_seconds`. The handler rejects `max_concurrent_streams` outside `1..=MAX_CONCURRENT_STREAMS_PER_SESSION` (1000), `timeout_seconds == 0`, and `timeout_seconds > MAX_SESSION_TIMEOUT_SECONDS` (604 800, seven days) with `ApplicationError::Validation` (HTTP 400). `SessionConfig` has no `enable_compression` field (#760); `ip_address` is always `None`.
 
 ### FR-005 Stream lifecycle
 

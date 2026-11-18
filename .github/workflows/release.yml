@@ -15,6 +15,9 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
+  # install-action tool pins; refresh together with the Actions bump
+  CARGO_NEXTEST_VERSION: 0.9.152
+  WASM_PACK_VERSION: 0.15.1
 
 jobs:
   # Extract and verify version (runs first, others depend on it)
@@ -102,7 +105,7 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: nextest
+          tool: cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
 
       - name: Run tests with nextest
         run: cargo nextest run --workspace --all-features --all-targets --no-fail-fast
@@ -138,11 +141,9 @@ jobs:
         id: auth
 
       - name: Publish crates to crates.io
-        uses: katyo/publish-crates@02cc2f1ad653fb25c7d1ff9eb590a8a50d06186b # v2
-        with:
-          registry-token: ${{ steps.auth.outputs.token }}
-          ignore-unpublished-changes: true
-          publish-delay: 10000
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --workspace --locked
 
   # Publish WASM bindings to npm via Trusted Publishing (provenance)
   # Setup: https://docs.npmjs.com/generating-provenance-statements
@@ -178,7 +179,7 @@ jobs:
       - name: Install wasm-pack
         uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
-          tool: wasm-pack
+          tool: wasm-pack@${{ env.WASM_PACK_VERSION }}
 
       - name: Build WASM package
         run: wasm-pack build crates/pjs-wasm --target web --release --scope pjson

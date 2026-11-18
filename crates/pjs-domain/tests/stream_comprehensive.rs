@@ -38,16 +38,14 @@ mod stream_lifecycle_tests {
         let session_id = SessionId::new();
         let source_data = JsonData::Null;
         let config = StreamConfig {
-            max_frame_size: 128 * 1024,
-            max_frames_per_batch: 20,
-            enable_compression: false,
-            priority_rules: HashMap::new(),
+            priority_rules: HashMap::from([("note".to_string(), Priority::CRITICAL)]),
         };
 
-        let stream = Stream::new(session_id, source_data, config.clone());
-        assert_eq!(stream.config().max_frame_size, 128 * 1024);
-        assert_eq!(stream.config().max_frames_per_batch, 20);
-        assert!(!stream.config().enable_compression);
+        let stream = Stream::new(session_id, source_data, config);
+        assert_eq!(
+            stream.config().priority_rules.get("note"),
+            Some(&Priority::CRITICAL)
+        );
     }
 
     #[test]
@@ -505,12 +503,11 @@ mod config_update_tests {
         let mut stream = Stream::new(session_id, source_data, StreamConfig::default());
 
         let new_config = StreamConfig {
-            max_frame_size: 256 * 1024,
-            ..Default::default()
+            priority_rules: HashMap::from([("note".to_string(), Priority::HIGH)]),
         };
 
         assert!(stream.update_config(new_config).is_ok());
-        assert_eq!(stream.config().max_frame_size, 256 * 1024);
+        assert_eq!(stream.config().priority_rules.len(), 1);
     }
 
     #[test]
@@ -522,12 +519,11 @@ mod config_update_tests {
         assert!(stream.start_streaming().is_ok());
 
         let new_config = StreamConfig {
-            max_frames_per_batch: 15,
-            ..Default::default()
+            priority_rules: HashMap::from([("note".to_string(), Priority::LOW)]),
         };
 
         assert!(stream.update_config(new_config).is_ok());
-        assert_eq!(stream.config().max_frames_per_batch, 15);
+        assert_eq!(stream.config().priority_rules.len(), 1);
     }
 
     #[test]
@@ -654,9 +650,6 @@ mod stream_config_tests {
     #[test]
     fn test_config_default() {
         let config = StreamConfig::default();
-        assert_eq!(config.max_frame_size, 64 * 1024);
-        assert_eq!(config.max_frames_per_batch, 10);
-        assert!(config.enable_compression);
         assert_eq!(config.priority_rules.len(), 0);
     }
 
@@ -666,10 +659,7 @@ mod stream_config_tests {
         priority_rules.insert("critical_path".to_string(), Priority::CRITICAL);
         priority_rules.insert("background_task".to_string(), Priority::BACKGROUND);
 
-        let config = StreamConfig {
-            priority_rules,
-            ..Default::default()
-        };
+        let config = StreamConfig { priority_rules };
 
         assert_eq!(config.priority_rules.len(), 2);
         assert_eq!(

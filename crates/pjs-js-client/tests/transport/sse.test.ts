@@ -1,4 +1,6 @@
 /**
+ * @jest-environment node
+ *
  * Acceptance tests for #644: SSETransport must deliver the named `shutdown`
  * event as a typed transport 'shutdown' notification, close the EventSource
  * and never reconnect.
@@ -6,12 +8,8 @@
 
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { SSETransport } from '../../src/transport/sse.js';
-import {
-  PJSError,
-  Priority,
-  TransportType,
-  type PJSClientConfig
-} from '../../src/types/index.js';
+import { PJSError, TransportType } from '../../src/types/index.js';
+import { FakePjsServer, SESSION_ID, makeConfig } from '../helpers/fake-pjs-server.js';
 
 class RecordingEventSource extends EventTarget {
   static readonly CONNECTING = 0;
@@ -40,20 +38,6 @@ class RecordingEventSource extends EventTarget {
   }
 }
 
-function makeConfig(): Required<PJSClientConfig> {
-  return {
-    baseUrl: 'http://localhost:3000',
-    transport: TransportType.ServerSentEvents,
-    sessionId: 'session-1',
-    headers: {},
-    timeout: 1000,
-    debug: false,
-    bufferSize: 1024,
-    priorityThreshold: Priority.Background,
-    maxConcurrentStreams: 1
-  };
-}
-
 describe('SSETransport shutdown event', () => {
   const originalEventSource = globalThis.EventSource;
   let transport: SSETransport;
@@ -61,12 +45,16 @@ describe('SSETransport shutdown event', () => {
   let shutdowns: number;
   let errors: Error[];
   let frames: unknown[];
+  let started: Promise<unknown>;
+  let server: FakePjsServer;
 
   beforeEach(async () => {
+    server = new FakePjsServer([]);
+    server.install();
     RecordingEventSource.instances = [];
     (globalThis as { EventSource: unknown }).EventSource = RecordingEventSource;
 
-    transport = new SSETransport(makeConfig());
+    transport = new SSETransport(makeConfig(TransportType.ServerSentEvents));
     shutdowns = 0;
     errors = [];
     frames = [];
@@ -75,11 +63,17 @@ describe('SSETransport shutdown event', () => {
     transport.on('frame', (frame: unknown) => { frames.push(frame); });
 
     await transport.connect();
-    await transport.startStream('/s1', { sessionId: 'session-1', streamId: 'stream-1' });
+    started = transport
+      .startStream('/s1', { sessionId: SESSION_ID, streamId: 'stream-1', data: { a: 1 } })
+      .catch(() => undefined);
+    await new Promise((resolve) => setImmediate(resolve));
     source = RecordingEventSource.instances[0]!;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await transport.disconnect();
+    await started;
+    server.restore();
     (globalThis as { EventSource: unknown }).EventSource = originalEventSource;
   });
 
@@ -110,8 +104,9 @@ describe('SSETransport shutdown event', () => {
     expect(shutdowns).toBe(1);
   });
 
-  test('keeps reporting plain connection errors before any shutdown', () => {
+  test('keeps reporting plain connection errors before any shutdown', async () => {
     source.onerror?.(new Event('error'));
+    await started;
 
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(PJSError);
@@ -119,7 +114,7 @@ describe('SSETransport shutdown event', () => {
   });
 
   test('still delivers regular frames before the shutdown event', () => {
-    const frame = { frame_type: 'skeleton', priority: 100, payload: { data: {} } };
+    const frame = { frame_type: 'Skeleton', priority: 100, payload: {} };
     source.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
     source.emitNamed('shutdown', '{"event":"shutdown"}');
 

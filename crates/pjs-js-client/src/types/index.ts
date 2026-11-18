@@ -209,7 +209,41 @@ export interface PJSClientConfig {
    * @default 10
    */
   maxConcurrentStreams?: number;
+
+  /**
+   * Maximum cumulative UTF-8 bytes of `StreamPatch` messages accepted for one
+   * WebSocket stream; a stream that exceeds it is dropped with a
+   * `ProtocolError`.
+   * @default 16 MiB
+   */
+  maxStreamBytes?: number;
+
+  /**
+   * How the per-frame state reaches `onRender` and `PatchApplied` listeners.
+   * `'live'` hands over the reconstructor's own state without a copy: treat it
+   * as read-only and do not keep it across frames. `'snapshot'` hands over an
+   * independent deep clone for every frame. The value `stream()` resolves with
+   * is always an independent clone.
+   * @default 'live'
+   */
+  stateDelivery?: StateDelivery;
 }
+
+/** Selects how per-frame state is delivered, see {@link PJSClientConfig.stateDelivery}. */
+export type StateDelivery = 'live' | 'snapshot';
+
+/** Default for {@link PJSClientConfig.maxStreamBytes}. */
+export const DEFAULT_MAX_STREAM_BYTES = 16 * 1024 * 1024;
+
+/** Most path segments a `StreamPatch` patch may address (spec 067). */
+export const MAX_PATCH_PATH_DEPTH = 128;
+
+/** A value deeply marked read-only, the type of the `'live'` per-frame state. */
+export type DeepReadonly<T> = T extends readonly (infer U)[]
+  ? readonly DeepReadonly<U>[]
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+    : T;
 
 // Event System Types
 
@@ -234,7 +268,6 @@ export enum PJSEvent {
 export interface ProgressInfo {
   framesReceived: number;
   totalFrames?: number;
-  bytesReceived: number;
   elapsedTime: number;
   prioritiesReceived: Priority[];
   completionPercentage?: number;
@@ -248,12 +281,12 @@ export interface PJSEventData {
   [PJSEvent.Disconnected]: { reason?: string };
   [PJSEvent.Error]: { error: Error; context?: string };
   [PJSEvent.FrameReceived]: { frame: Frame };
-  [PJSEvent.SkeletonReady]: { data: any; processingTime: number };
+  [PJSEvent.SkeletonReady]: { data: DeepReadonly<JsonValue> | undefined; processingTime: number };
   [PJSEvent.PatchApplied]: { 
     patch: PatchOperation; 
     path: JsonPath; 
     priority: Priority;
-    resultingData?: any;
+    resultingData?: DeepReadonly<JsonValue>;
     appliedPatches: number;
     skippedPatches: number;
   };
@@ -353,7 +386,7 @@ export interface PriorityStrategy {
 /**
  * Render callback for progressive UI updates
  */
-export type RenderCallback = (data: any, metadata: {
+export type RenderCallback = (data: DeepReadonly<JsonValue> | undefined, metadata: {
   priority: Priority;
   path?: JsonPath;
   isComplete: boolean;

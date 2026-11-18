@@ -4,7 +4,7 @@ use super::{
     AdaptiveStreamController, ConnectionId, CreateSessionError, WriteFailure, WsMessage,
     controller::{connection_plan_budget_for, spawn_task},
     planner::MAX_QUEUED_OUTGOING_BYTES,
-    protocol::{ServerReply, bounded_log_text},
+    protocol::{ServerReply, bounded_log_text, invalid_stream_option},
     send_with_write_timeout,
 };
 use crate::{
@@ -590,6 +590,10 @@ impl AxumWebSocketTransport {
             connection_id,
         };
 
+        #[cfg(feature = "metrics")]
+        let _connection_gauge =
+            crate::infrastructure::http::metrics::WebSocketConnectionGauge::open();
+
         let (sender, receiver) = socket.split();
         ConnectionLoop {
             transport: &self,
@@ -893,9 +897,13 @@ impl ConnectionLoop<'_> {
     }
 
     async fn send_text(&mut self, json_str: String, what: &str) -> ControlFlow<()> {
+        let len = json_str.len();
         let message = Message::Text(json_str.into());
         match send_with_write_timeout(&mut self.sender, message, self.write_timeout).await {
-            Ok(()) => ControlFlow::Continue(()),
+            Ok(()) => {
+                record_ws_bytes(len);
+                ControlFlow::Continue(())
+            }
             Err(e) => {
                 error!(what, error = %e, "Failed to send to client");
                 ControlFlow::Break(())
@@ -920,6 +928,7 @@ impl ConnectionLoop<'_> {
             Ok(()) => true,
             Err(e) => {
                 warn!(kind, error = %e, "Inbound frame rejected (rate limit)");
+                record_ws_rate_limited();
                 close_policy_violation(&mut self.sender, e.to_string(), self.write_timeout).await;
                 false
             }
@@ -958,8 +967,9 @@ impl ConnectionLoop<'_> {
                             column = e.column(),
                             "Failed to parse WebSocket message"
                         );
-                        self.write_reply(Reply::error(None, ServerReply::Malformed))
-                            .await
+                        let reply = invalid_stream_option(&text)
+                            .map_or(ServerReply::Malformed, ServerReply::InvalidStreamOption);
+                        self.write_reply(Reply::error(None, reply)).await
                     }
                 }
             }
@@ -971,6 +981,9 @@ impl ConnectionLoop<'_> {
                 ControlFlow::Continue(())
             }
             Ok(Message::Ping(data)) => {
+                if !self.admit(data.len(), "ping").await {
+                    return ControlFlow::Break(());
+                }
                 let pong = Message::Pong(data);
                 match send_with_write_timeout(&mut self.sender, pong, self.write_timeout).await {
                     Ok(()) => ControlFlow::Continue(()),
@@ -980,7 +993,10 @@ impl ConnectionLoop<'_> {
                     }
                 }
             }
-            Ok(Message::Pong(_)) => {
+            Ok(Message::Pong(data)) => {
+                if !self.admit(data.len(), "pong").await {
+                    return ControlFlow::Break(());
+                }
                 debug!("Received pong from client");
                 ControlFlow::Continue(())
             }
@@ -989,10 +1005,51 @@ impl ConnectionLoop<'_> {
                 ControlFlow::Break(())
             }
             Err(e) => {
-                error!(error = %e, "WebSocket error");
+                match SocketErrorClass::of(&e) {
+                    SocketErrorClass::PeerDisconnect => {
+                        info!(error = %e, "WebSocket peer disconnected");
+                    }
+                    SocketErrorClass::PeerProtocol => {
+                        warn!(error = %e, "WebSocket peer violated the protocol");
+                    }
+                    SocketErrorClass::Server => error!(error = %e, "WebSocket error"),
+                }
                 ControlFlow::Break(())
             }
         }
+    }
+}
+
+/// Who caused a socket error, deciding its log level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SocketErrorClass {
+    /// The peer's transport went away (reset, abort, broken pipe, early EOF).
+    PeerDisconnect,
+    /// The peer sent something invalid, or reset without a closing handshake.
+    PeerProtocol,
+    /// Any other I/O failure: not attributable to the peer.
+    Server,
+}
+
+impl SocketErrorClass {
+    /// Classifies by the `io::Error` in the source chain, if any. No downcast
+    /// to `tungstenite::Error`: axum links tungstenite 0.29 while this crate
+    /// depends on 0.30, so one would silently never match.
+    fn of(error: &axum::Error) -> Self {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+        while let Some(current) = source {
+            if let Some(io) = current.downcast_ref::<std::io::Error>() {
+                return match io.kind() {
+                    std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof => Self::PeerDisconnect,
+                    _ => Self::Server,
+                };
+            }
+            source = current.source();
+        }
+        Self::PeerProtocol
     }
 }
 
@@ -1012,9 +1069,29 @@ async fn send_reply(
     write_timeout: Duration,
 ) -> Result<(), ReplyFailure> {
     let json = serde_json::to_string(reply)?;
+    let len = json.len();
     send_with_write_timeout(sender, Message::Text(json.into()), write_timeout).await?;
+    record_ws_bytes(len);
     Ok(())
 }
+
+#[cfg(feature = "metrics")]
+fn record_ws_bytes(len: usize) {
+    use crate::infrastructure::http::metrics::{Transport, record_bytes_sent};
+    record_bytes_sent(Transport::WebSocket, len);
+}
+
+#[cfg(not(feature = "metrics"))]
+fn record_ws_bytes(_len: usize) {}
+
+#[cfg(feature = "metrics")]
+fn record_ws_rate_limited() {
+    use crate::infrastructure::http::metrics::{Transport, record_rate_limited};
+    record_rate_limited(Transport::WebSocket);
+}
+
+#[cfg(not(feature = "metrics"))]
+fn record_ws_rate_limited() {}
 
 /// Helper function to create WebSocket router for Axum
 pub fn create_websocket_router() -> axum::Router<Arc<AxumWebSocketTransport>> {

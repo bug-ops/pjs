@@ -117,20 +117,13 @@ fn reconstructor_reports_applied_paths_in_order_without_loss() {
     )
     .expect("patches apply");
 
-    let [
-        ProcessResult::PatchesApplied {
-            count,
-            paths,
-            priority,
-        },
-    ] = results.as_slice()
-    else {
+    let [ProcessResult::PatchesApplied { paths, priority }] = results.as_slice() else {
         panic!("expected one PatchesApplied, got {results:?}");
     };
-    assert_eq!(*count, 2);
+    assert_eq!(paths.len(), 2);
     assert_eq!(*priority, Priority::HIGH);
     assert_eq!(paths, &[path("$.a"), path("$.b")]);
-    assert_eq!(reconstructor.stats().patches_applied, 2);
+    assert_eq!(reconstructor.stats().patches_applied(), 2);
 }
 
 #[test]

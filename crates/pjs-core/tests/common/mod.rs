@@ -511,7 +511,6 @@ impl StreamStoreGat for MockStreamStore {
 pub struct SessionBuilder {
     max_concurrent_streams: usize,
     timeout_seconds: u64,
-    enable_compression: bool,
 }
 
 impl SessionBuilder {
@@ -519,7 +518,6 @@ impl SessionBuilder {
         Self {
             max_concurrent_streams: 10,
             timeout_seconds: 3600,
-            enable_compression: true,
         }
     }
 
@@ -533,20 +531,17 @@ impl SessionBuilder {
         self
     }
 
-    pub fn enable_compression(mut self, value: bool) -> Self {
-        self.enable_compression = value;
-        self
-    }
-
     pub fn build(self) -> StreamSession {
-        use pjson_rs::domain::aggregates::stream_session::{SessionConfig, SessionTimeout};
+        use pjson_rs::domain::aggregates::stream_session::{
+            MaxConcurrentStreams, SessionConfig, SessionTimeout,
+        };
 
         let config = SessionConfig {
-            max_concurrent_streams: self.max_concurrent_streams,
+            max_concurrent_streams: MaxConcurrentStreams::try_from(self.max_concurrent_streams)
+                .expect("test stream cap in range"),
             session_timeout: SessionTimeout::try_from(self.timeout_seconds)
                 .expect("test timeout in range"),
             default_stream_config: Default::default(),
-            enable_compression: self.enable_compression,
             metadata: Default::default(),
         };
 
@@ -658,7 +653,7 @@ mod tests {
             .timeout_seconds(1800)
             .build();
 
-        assert_eq!(session.config().max_concurrent_streams, 5);
+        assert_eq!(session.config().max_concurrent_streams.get(), 5);
         assert_eq!(u64::from(session.config().session_timeout), 1800);
     }
 

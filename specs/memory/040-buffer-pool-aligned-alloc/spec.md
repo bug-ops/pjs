@@ -81,7 +81,7 @@ Status: done. `acquire_with_capacity(n)` with `n` above 4 MiB returns `DomainErr
 
 ### FR-040-007 Acquire
 
-`BufferPool::acquire(size)` shall: validate `size` against `buffers.max_buffer_size` (`SecurityViolation`); reuse a pooled buffer of the same size if any (cache hit, never fails on the budget); otherwise reject when the live bytes (handed out plus retained) plus the size-class capacity of `size` would exceed `max_total_memory` (`ResourceExhausted`, message contains "memory limit", live bytes unchanged) and allocate a new aligned buffer (cache miss). Every buffer is charged its size-class capacity (`size` rounded up to the effective alignment) from allocation until it is freed; `current_memory_usage()` returns the live bytes in O(1). A returned `PooledBuffer` shall have `len == 0`.
+`BufferPool::acquire(size)` shall: validate `size` against `buffers.max_buffer_size` (`SecurityViolation`); reuse a pooled buffer of the same size if any (cache hit, never fails on the budget); otherwise, when the live bytes (handed out plus retained) plus the size-class capacity of `size` would exceed `max_total_memory`, evict idle buffers (largest size class first, oldest first) until it fits and retry the reservation once, rejecting with `ResourceExhausted` (message contains "memory limit") only if it still does not fit; without concurrent acquires that means the checked-out bytes plus the class exceed the limit, while a racing caller may take the freed room and make the call fail safe (#773). Then allocate a new aligned buffer (cache miss). Every buffer is charged its size-class capacity (`size` rounded up to the effective alignment) from allocation until it is freed; `current_memory_usage()` returns the live bytes in O(1). A returned `PooledBuffer` shall have `len == 0`.
 Status: done.
 
 ### FR-040-008 Return on drop
@@ -143,7 +143,7 @@ Status: done.
 | `reserve` result > `isize::MAX` | `InvalidInput` |
 | allocator returns null | `ResourceExhausted` |
 | `acquire` size above `max_buffer_size` | `SecurityViolation` |
-| `acquire` over `max_total_memory` | `ResourceExhausted` ("memory limit") |
+| `acquire` over `max_total_memory` | idle buffers evicted first; `ResourceExhausted` ("memory limit") only if checked-out bytes leave no room |
 | second `initialize_global_buffer_pool` | `InternalError` |
 
 ## Success Criteria
