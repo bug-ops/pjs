@@ -4,8 +4,9 @@
 //! skeleton + patch stream frames, enabling progressive data loading.
 
 use crate::Result;
-use crate::domain::value_objects::{JsonPath, PathSegment};
+use crate::domain::value_objects::JsonPath;
 use crate::error::PatchError;
+use crate::json_tree::resolve_mut;
 use crate::stream::priority::{JsonPatch, PatchOperation, PriorityStreamFrame};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
@@ -225,70 +226,13 @@ impl JsonReconstructor {
 
     /// Get mutable reference to parent of target path
     fn get_parent_mut(&mut self, path: &JsonPath) -> Result<&mut JsonValue> {
-        let segments = path.segments();
-        if segments.is_empty() {
-            return Ok(&mut self.current_state);
-        }
-
-        let parent_segments = &segments[..segments.len() - 1];
-        let mut current = &mut self.current_state;
-
-        for segment in parent_segments {
-            match segment {
-                PathSegment::Key(key) => {
-                    if let JsonValue::Object(map) = current {
-                        current = map
-                            .get_mut(key)
-                            .ok_or_else(|| PatchError::KeyNotFound(key.clone()))?;
-                    } else {
-                        return Err(PatchError::ExpectedObject.into());
-                    }
-                }
-                PathSegment::Index(idx) => {
-                    if let JsonValue::Array(arr) = current {
-                        let len = arr.len();
-                        current = arr
-                            .get_mut(*idx)
-                            .ok_or(PatchError::IndexOutOfBounds { index: *idx, len })?;
-                    } else {
-                        return Err(PatchError::ExpectedArray.into());
-                    }
-                }
-            }
-        }
-
-        Ok(current)
+        let parent = path.segments().split_last().map_or(&[][..], |(_, p)| p);
+        Ok(resolve_mut(&mut self.current_state, parent)?)
     }
 
     /// Get mutable reference at specified path
     fn get_mut_at_path(&mut self, path: &JsonPath) -> Result<&mut JsonValue> {
-        let mut current = &mut self.current_state;
-
-        for segment in path.segments() {
-            match segment {
-                PathSegment::Key(key) => {
-                    if let JsonValue::Object(map) = current {
-                        current = map
-                            .get_mut(key)
-                            .ok_or_else(|| PatchError::KeyNotFound(key.clone()))?;
-                    } else {
-                        return Err(PatchError::ExpectedObject.into());
-                    }
-                }
-                PathSegment::Index(idx) => {
-                    if let JsonValue::Array(arr) = current {
-                        let len = arr.len();
-                        current = arr
-                            .get_mut(*idx)
-                            .ok_or(PatchError::IndexOutOfBounds { index: *idx, len })?;
-                    } else {
-                        return Err(PatchError::ExpectedArray.into());
-                    }
-                }
-            }
-        }
-
-        Ok(current)
+        Ok(resolve_mut(&mut self.current_state, path.segments())?)
     }
 
     /// Get current JSON state (read-only)
@@ -397,6 +341,7 @@ impl ReconstructionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::value_objects::PathSegment;
     use crate::stream::Priority;
     use core::assert_matches;
     use serde_json::json;

@@ -45,7 +45,7 @@ Each pattern carries a **status** (Compliant, Partial, Drift) and an **enforceme
 
 | Layer | Crate / path | Allowed dependencies |
 |---|---|---|
-| Domain (pure) | `crates/pjs-domain/` (`pjson-rs-domain`) | `chrono`, `serde`, `serde_json`, `smallvec`, `thiserror`, `uuid` (see its `Cargo.toml`); `[lints.rust] unsafe_code = "forbid"` |
+| Domain (pure) | `crates/pjs-domain/` (`pjson-rs-domain`) | `jiff`, `serde`, `serde_json`, `smallvec`, `thiserror`, `uuid` (see its `Cargo.toml`); `[lints.rust] unsafe_code = "forbid"` |
 | Domain (extended) | `crates/pjs-core/src/domain/` | re-exports `pjs-domain` (`pub use pjson_rs_domain::{DomainError, DomainResult, entities, events, value_objects}`), adds `aggregates/`, `config/`, `ports/`, `services/`, `macros.rs` |
 | Application | `crates/pjs-core/src/application/` | domain; defines `commands/`, `queries/`, `handlers/`, `dto/`, `shared.rs` |
 | Infrastructure | `crates/pjs-core/src/infrastructure/` | domain ports plus `axum`, `tokio`, `tokio-tungstenite`, `subtle`, etc.: `adapters/`, `http/`, `websocket/`, `repositories/`, `bounded_channel.rs`, `schema_repository.rs` |

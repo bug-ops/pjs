@@ -4,98 +4,136 @@
 //! connection use, so the wire format has a single definition regardless of
 //! which WebSocket feature is enabled.
 
-use crate::domain::{Priority, SessionId};
+use crate::domain::{JsonPath, PathSegment, Priority, SessionId};
 #[cfg(any(feature = "websocket-client", test))]
-use crate::error::{PatchError, StreamOptionsError};
+use crate::error::PatchError;
+#[cfg(feature = "websocket-server")]
+use crate::error::PlanError;
+use crate::error::{FrameKind, StreamOptionsError};
+#[cfg(any(feature = "websocket-client", test))]
+use crate::json_tree::resolve_mut;
 use futures::{Sink, SinkExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, num::NonZeroU32, time::Duration};
 
-/// `Error` code the server sends when a session id is already live on the connection.
-pub(crate) const CODE_CONFLICT: u16 = 409;
+/// Maximum number of characters of peer-supplied text written to one log line.
+pub(crate) const MAX_LOGGED_TEXT_CHARS: usize = 256;
 
-/// A fixed server `Error` reply: a code and a non-echoing text.
-///
-/// The single definition of the plan and stream failure replies, shared by the
-/// server (rejections at `StreamInit`) and the controller (mid-stream drops).
-#[cfg(feature = "websocket-server")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct FixedError {
-    pub(super) code: u16,
-    pub(super) reason: &'static str,
+/// Renders peer-supplied text for a log line: escaped, and cut to
+/// [`MAX_LOGGED_TEXT_CHARS`] characters with the original length noted.
+pub(crate) fn bounded_log_text(text: &str) -> String {
+    match text.char_indices().nth(MAX_LOGGED_TEXT_CHARS) {
+        None => format!("{text:?}"),
+        Some((cut, _)) => format!("{:?}... ({} bytes total)", &text[..cut], text.len()),
+    }
 }
 
-#[cfg(feature = "websocket-server")]
-impl FixedError {
+/// Every `Error` reply the server sends: a code and a fixed, non-echoing text.
+///
+/// The single definition of the reply table (spec 067), shared by the server
+/// (replies to inbound messages), the controller (mid-stream drops) and the
+/// client (which recognizes a reply by its exact code and text).
+#[cfg(any(feature = "websocket-server", feature = "websocket-client"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerReply {
+    /// Undecodable text frame.
+    Malformed,
+    /// `StreamInit` carrying the nil UUID.
+    NilSessionId,
+    /// `StreamInit` whose id is already live on the connection.
+    DuplicateSessionId,
+    /// `StreamInit` over the per-connection live-session cap.
+    TooManySessions,
     /// One message exceeds the connection's outgoing byte budget.
-    pub(super) const FRAME_EXCEEDS_BUDGET: Self = Self {
-        code: 413,
-        reason: "frame exceeds the outgoing byte budget",
-    };
+    FrameExceedsBudget,
     /// The document's plan exceeds the plan limits (frames, bytes, path depth).
-    pub(super) const PLAN_TOO_LARGE: Self = Self {
-        code: 413,
-        reason: "stream plan too large",
-    };
+    PlanTooLarge,
     /// The connection already holds the most plan bytes it may.
-    pub(super) const PLAN_BUDGET_EXHAUSTED: Self = Self {
-        code: 429,
-        reason: "connection plan budget exhausted",
-    };
+    PlanBudgetExhausted,
     /// A planned message could not be serialized (a server fault, not the
     /// client's request).
-    pub(super) const PLAN_UNSERIALIZABLE: Self = Self {
-        code: 500,
-        reason: "stream plan could not be built",
-    };
+    PlanUnserializable,
     /// One frame waited too long for room in the connection's channel.
-    pub(super) const STREAM_STALLED: Self = Self {
-        code: 408,
-        reason: "stream stalled",
-    };
+    StreamStalled,
     /// The stream outlived its absolute deadline.
-    pub(super) const STREAM_DEADLINE_EXCEEDED: Self = Self {
-        code: 408,
-        reason: "stream deadline exceeded",
-    };
+    StreamDeadlineExceeded,
 }
 
-/// Default deadline for a single outbound WebSocket sink write.
-///
-/// Writing to the sink blocks until the peer's TCP receive buffer drains;
-/// a peer that stops reading (dead connection, slow-loris) would otherwise
-/// wedge the connection's task — and, on the server, the
-/// `Arc<RateLimitGuard>` it holds — until the OS eventually times out the
-/// socket. No existing timeout in `config::security::NetworkLimits` fits
-/// this: `connection_timeout_secs` bounds establishing a connection, not a
-/// steady-state write. 10s is long enough to absorb ordinary network
-/// jitter while still freeing a stuck connection promptly.
-///
-/// This bounds a single `feed`+`flush`, not a minimum throughput: a
-/// legitimate large frame (see `MAX_QUEUED_OUTGOING_BYTES` in `server.rs`,
-/// up to 16 MiB) sent to a genuinely slow-but-honest client needs roughly
-/// 13 Mbps to flush inside 10s, or it gets disconnected same as a stalled
-/// peer would. This is an accepted, documented tradeoff rather than a
-/// per-byte deadline: distinguishing "slow but making progress" from
-/// "stalled" would need tracking partial-write progress, which
-/// `Sink::send`'s `feed`+`flush` doesn't expose, and misclassifying a
-/// stalled peer as "still making progress" is the failure mode this
-/// timeout exists to close. Operators serving large frames to
-/// bandwidth-constrained clients should raise the value passed to
-/// [`send_with_write_timeout`] accordingly (the server threads its value
-/// through `RateLimitConfig::write_timeout`).
-///
-/// Shares its 10s default with `RateLimitConfig::write_timeout`, but the
-/// two are independent constants gated behind different features
-/// (`websocket-client` vs. `websocket-server`) and can't easily share a single
-/// definition — an intentional change to one's default should be mirrored in
-/// the other unless a divergence is deliberate.
-#[cfg(feature = "websocket-client")]
-pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(any(feature = "websocket-server", feature = "websocket-client"))]
+impl ServerReply {
+    /// Every variant, for exact `(code, text)` matching.
+    #[cfg(any(feature = "websocket-client", test))]
+    const ALL: [Self; 10] = [
+        Self::Malformed,
+        Self::NilSessionId,
+        Self::DuplicateSessionId,
+        Self::TooManySessions,
+        Self::FrameExceedsBudget,
+        Self::PlanTooLarge,
+        Self::PlanBudgetExhausted,
+        Self::PlanUnserializable,
+        Self::StreamStalled,
+        Self::StreamDeadlineExceeded,
+    ];
+
+    /// The wire `code`.
+    pub(crate) const fn code(self) -> u16 {
+        match self {
+            Self::Malformed | Self::NilSessionId => 400,
+            Self::StreamStalled | Self::StreamDeadlineExceeded => 408,
+            Self::DuplicateSessionId => 409,
+            Self::FrameExceedsBudget | Self::PlanTooLarge => 413,
+            Self::TooManySessions | Self::PlanBudgetExhausted => 429,
+            Self::PlanUnserializable => 500,
+        }
+    }
+
+    /// The fixed wire `error` text.
+    pub(crate) const fn reason(self) -> &'static str {
+        match self {
+            Self::Malformed => "malformed message",
+            Self::NilSessionId => "nil session id is not allowed",
+            Self::DuplicateSessionId => "session id already in use",
+            Self::TooManySessions => "too many live sessions on this connection",
+            Self::FrameExceedsBudget => "frame exceeds the outgoing byte budget",
+            Self::PlanTooLarge => "stream plan too large",
+            Self::PlanBudgetExhausted => "connection plan budget exhausted",
+            Self::PlanUnserializable => "stream plan could not be built",
+            Self::StreamStalled => "stream stalled",
+            Self::StreamDeadlineExceeded => "stream deadline exceeded",
+        }
+    }
+
+    /// The reply a received `Error` message is, if its code and text both
+    /// match one exactly.
+    #[cfg(any(feature = "websocket-client", test))]
+    pub(crate) fn from_wire(code: u16, reason: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|reply| reply.code() == code && reply.reason() == reason)
+    }
+}
+
+/// Reply for a rejected plan: the connection budget is transient (429), a
+/// document over the limits is permanent for that document (413), and a plan
+/// that cannot be serialized is a server fault (500).
+#[cfg(feature = "websocket-server")]
+impl From<PlanError> for ServerReply {
+    fn from(error: PlanError) -> Self {
+        match error {
+            PlanError::ConnectionBudgetExhausted { .. } => Self::PlanBudgetExhausted,
+            PlanError::UnitExceedsBudget { .. } => Self::FrameExceedsBudget,
+            PlanError::TooManyFrames { .. }
+            | PlanError::PlanBytesExceeded { .. }
+            | PlanError::PathTooDeep { .. } => Self::PlanTooLarge,
+            PlanError::Unserializable => Self::PlanUnserializable,
+        }
+    }
+}
 
 /// Writes `message` to `sink`, aborting the write if it does not complete
-/// within `timeout` (see `WRITE_TIMEOUT` for the production default and
+/// within `timeout` (see `DEFAULT_WRITE_TIMEOUT` for the production default and
 /// the rationale/tradeoffs of a fixed per-write deadline).
 ///
 /// Used at every outbound WebSocket write site (server and client). A
@@ -178,6 +216,7 @@ impl<E: std::error::Error + 'static> std::error::Error for WriteFailure<E> {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
+#[non_exhaustive]
 pub enum WsMessage {
     /// Stream initialization request
     StreamInit {
@@ -301,6 +340,7 @@ impl WsMessage {
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Framing {
     /// Top-level key merge frames
     #[default]
@@ -317,55 +357,52 @@ impl Framing {
     }
 }
 
-/// Longest [`WirePath`] a patch may carry.
+/// Longest [`JsonPath`] a patch may carry.
 ///
 /// Receivers refuse longer paths so a hostile peer cannot grow their state's
 /// nesting without bound (recursive drop would overflow the stack); the server
 /// refuses to plan documents that need longer ones.
 pub const MAX_PATCH_PATH_DEPTH: usize = 128;
 
-/// One step of a [`WirePath`]: a JSON string addresses an object member and a
-/// JSON integer an array element, so every key (including `.`, `[`, `]` and
-/// the empty string) is expressible and `"0"` stays distinct from index `0`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WireSegment {
-    /// Object member name
-    Key(String),
-    /// Array element index
-    Index(usize),
-}
+/// Wire form of a [`JsonPath`] segment: a JSON string addresses an object
+/// member and a JSON integer an array element, so every key (including `.`,
+/// `[`, `]` and the empty string) is expressible and `"0"` stays distinct from
+/// index `0`.
+struct WireSegment<'a>(&'a PathSegment);
 
-impl Serialize for WireSegment {
+impl Serialize for WireSegment<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Key(key) => serializer.serialize_str(key),
-            Self::Index(index) => serializer.serialize_u64(*index as u64),
+        match self.0 {
+            PathSegment::Key(key) => serializer.serialize_str(key),
+            PathSegment::Index(index) => serializer.serialize_u64(*index as u64),
         }
     }
 }
 
-impl<'de> Deserialize<'de> for WireSegment {
+struct OwnedWireSegment(PathSegment);
+
+impl<'de> Deserialize<'de> for OwnedWireSegment {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct SegmentVisitor;
 
         impl serde::de::Visitor<'_> for SegmentVisitor {
-            type Value = WireSegment;
+            type Value = OwnedWireSegment;
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str("a string key or a non-negative integer index")
             }
 
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<WireSegment, E> {
-                Ok(WireSegment::Key(v.to_owned()))
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<OwnedWireSegment, E> {
+                Ok(OwnedWireSegment(PathSegment::Key(v.to_owned())))
             }
 
-            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<WireSegment, E> {
-                Ok(WireSegment::Key(v))
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<OwnedWireSegment, E> {
+                Ok(OwnedWireSegment(PathSegment::Key(v)))
             }
 
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<WireSegment, E> {
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<OwnedWireSegment, E> {
                 usize::try_from(v)
-                    .map(WireSegment::Index)
+                    .map(|index| OwnedWireSegment(PathSegment::Index(index)))
                     .map_err(|_| E::custom("array index does not fit in usize"))
             }
         }
@@ -374,11 +411,35 @@ impl<'de> Deserialize<'de> for WireSegment {
     }
 }
 
-/// Location of a patch target inside the receiver's document; the empty path
-/// is the document root.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct WirePath(pub Vec<WireSegment>);
+/// Serialize adapter writing a [`JsonPath`] as the wire array of segments.
+struct ArrayPathRef<'a>(&'a JsonPath);
+
+impl Serialize for ArrayPathRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.segments().iter().map(WireSegment))
+    }
+}
+
+/// Deserialize adapter reading the wire array of segments into a [`JsonPath`].
+struct ArrayPath(JsonPath);
+
+impl<'de> Deserialize<'de> for ArrayPath {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let segments = Vec::<OwnedWireSegment>::deserialize(deserializer)?;
+        Ok(Self(JsonPath::from_segments(
+            segments.into_iter().map(|segment| segment.0),
+        )))
+    }
+}
+
+impl From<Framing> for FrameKind {
+    fn from(framing: Framing) -> Self {
+        match framing {
+            Framing::Merge => Self::Merge,
+            Framing::Patch => Self::Patch,
+        }
+    }
+}
 
 /// One patch operation of a [`WsMessage::StreamPatch`] frame.
 ///
@@ -402,32 +463,33 @@ pub struct WirePath(pub Vec<WireSegment>);
 /// assert!(serde_json::from_str::<WirePatch>(r#"["merge", [], [1]]"#).is_err());
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum WirePatch {
     /// Replace the value at `path`
     Set {
         /// Target location
-        path: WirePath,
+        path: JsonPath,
         /// New value
         value: Value,
     },
     /// Insert or replace object entries at `path`
     Merge {
         /// Target location
-        path: WirePath,
+        path: JsonPath,
         /// Entries to insert
         entries: serde_json::Map<String, Value>,
     },
     /// Append array elements at `path`
     Append {
         /// Target location
-        path: WirePath,
+        path: JsonPath,
         /// Elements to append
         values: Vec<Value>,
     },
     /// Append text to the string at `path`
     AppendStr {
         /// Target location
-        path: WirePath,
+        path: JsonPath,
         /// Text to append
         text: String,
     },
@@ -450,22 +512,22 @@ impl Serialize for WirePatch {
         match self {
             Self::Set { path, value } => {
                 seq.serialize_element("set")?;
-                seq.serialize_element(path)?;
+                seq.serialize_element(&ArrayPathRef(path))?;
                 seq.serialize_element(value)?;
             }
             Self::Merge { path, entries } => {
                 seq.serialize_element("merge")?;
-                seq.serialize_element(path)?;
+                seq.serialize_element(&ArrayPathRef(path))?;
                 seq.serialize_element(entries)?;
             }
             Self::Append { path, values } => {
                 seq.serialize_element("append")?;
-                seq.serialize_element(path)?;
+                seq.serialize_element(&ArrayPathRef(path))?;
                 seq.serialize_element(values)?;
             }
             Self::AppendStr { path, text } => {
                 seq.serialize_element("append_str")?;
-                seq.serialize_element(path)?;
+                seq.serialize_element(&ArrayPathRef(path))?;
                 seq.serialize_element(text)?;
             }
         }
@@ -498,7 +560,7 @@ impl<'de> Deserialize<'de> for WirePatch {
                 }
 
                 let op: PatchOp = seq.next_element()?.ok_or_else(|| missing(0))?;
-                let path: WirePath = seq.next_element()?.ok_or_else(|| missing(1))?;
+                let ArrayPath(path) = seq.next_element()?.ok_or_else(|| missing(1))?;
                 let patch = match op {
                     PatchOp::Set => WirePatch::Set {
                         path,
@@ -550,7 +612,7 @@ pub(crate) fn apply_patch(state: &mut Value, patch: WirePatch) -> Result<(), Pat
     | WirePatch::Merge { path, .. }
     | WirePatch::Append { path, .. }
     | WirePatch::AppendStr { path, .. }) = &patch;
-    let segments = path.0.as_slice();
+    let segments = path.segments();
     if segments.len() > MAX_PATCH_PATH_DEPTH {
         return Err(PatchError::PathTooDeep {
             depth: segments.len(),
@@ -559,36 +621,36 @@ pub(crate) fn apply_patch(state: &mut Value, patch: WirePatch) -> Result<(), Pat
     }
 
     match patch {
-        WirePatch::Set { path, value } => match path.0.split_last() {
+        WirePatch::Set { path, value } => match path.segments().split_last() {
             None => *state = value,
-            Some((last, parent_path)) => match (resolve(state, parent_path)?, last) {
-                (Value::Object(map), WireSegment::Key(key)) => {
+            Some((last, parent_path)) => match (resolve_mut(state, parent_path)?, last) {
+                (Value::Object(map), PathSegment::Key(key)) => {
                     map.insert(key.clone(), value);
                 }
-                (Value::Array(items), WireSegment::Index(index)) => {
+                (Value::Array(items), PathSegment::Index(index)) => {
                     let len = items.len();
                     *items
                         .get_mut(*index)
                         .ok_or(PatchError::IndexOutOfBounds { index: *index, len })? = value;
                 }
-                (_, WireSegment::Key(_)) => return Err(PatchError::ExpectedObject),
-                (_, WireSegment::Index(_)) => return Err(PatchError::ExpectedArray),
+                (_, PathSegment::Key(_)) => return Err(PatchError::ExpectedObject),
+                (_, PathSegment::Index(_)) => return Err(PatchError::ExpectedArray),
             },
         },
         WirePatch::Merge { path, entries } => {
-            let Value::Object(target) = resolve(state, &path.0)? else {
+            let Value::Object(target) = resolve_mut(state, path.segments())? else {
                 return Err(PatchError::ExpectedObject);
             };
             target.extend(entries);
         }
         WirePatch::Append { path, values } => {
-            let Value::Array(target) = resolve(state, &path.0)? else {
+            let Value::Array(target) = resolve_mut(state, path.segments())? else {
                 return Err(PatchError::ExpectedArray);
             };
             target.extend(values);
         }
         WirePatch::AppendStr { path, text } => {
-            let Value::String(target) = resolve(state, &path.0)? else {
+            let Value::String(target) = resolve_mut(state, path.segments())? else {
                 return Err(PatchError::ExpectedString);
             };
             target.push_str(&text);
@@ -597,32 +659,11 @@ pub(crate) fn apply_patch(state: &mut Value, patch: WirePatch) -> Result<(), Pat
     Ok(())
 }
 
-#[cfg(any(feature = "websocket-client", test))]
-fn resolve<'a>(state: &'a mut Value, path: &[WireSegment]) -> Result<&'a mut Value, PatchError> {
-    let mut node = state;
-    for segment in path {
-        node = match (node, segment) {
-            (Value::Object(map), WireSegment::Key(key)) => map
-                .get_mut(key)
-                .ok_or_else(|| PatchError::KeyNotFound(key.clone()))?,
-            (Value::Array(items), WireSegment::Index(index)) => {
-                let len = items.len();
-                items
-                    .get_mut(*index)
-                    .ok_or(PatchError::IndexOutOfBounds { index: *index, len })?
-            }
-            (_, WireSegment::Key(_)) => return Err(PatchError::ExpectedObject),
-            (_, WireSegment::Index(_)) => return Err(PatchError::ExpectedArray),
-        };
-    }
-    Ok(node)
-}
-
 /// Stream configuration options, carried by `StreamInit`.
 ///
-/// The server validates them when it creates the session: `max_frame_size`
-/// must be at least 1024 and `client_fps` must not be zero, otherwise the
-/// request is answered with an `Error` message (code 400) and no stream.
+/// `max_frame_size` must be at least 1024 and `client_fps` must not be zero;
+/// the types enforce it at decode time, so a `StreamInit` carrying other values
+/// is an undecodable message (answered `400 "malformed message"`, no stream).
 ///
 /// `priority_mapping` values are validated [`Priority`] values on the wire:
 /// decoding rejects an entry that [`Priority::new`] refuses. Top-level keys
@@ -632,30 +673,28 @@ fn resolve<'a>(state: &'a mut Value, path: &[WireSegment]) -> Result<&'a mut Val
 /// # Examples
 ///
 /// ```
-/// use pjson_rs::infrastructure::websocket::{Framing, StreamOptions};
+/// use pjson_rs::infrastructure::websocket::{Framing, MaxFrameSize, StreamOptions};
 ///
 /// assert_eq!(StreamOptions::default().framing, Framing::Merge);
-/// let split = StreamOptions {
-///     framing: Framing::Patch,
-///     max_frame_size: 16 * 1024,
-///     ..StreamOptions::default()
-/// };
+/// let mut split = StreamOptions::patch();
+/// split.max_frame_size = MaxFrameSize::new(16 * 1024).unwrap();
 /// assert_ne!(split, StreamOptions::default());
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StreamOptions {
     /// Largest message the server sends, in bytes (at least 1024).
     ///
     /// The limit covers the whole message, envelope included. A piece that
     /// cannot be split further (a single top-level entry under
     /// [`Framing::Merge`]) may exceed it and then travels alone.
-    pub max_frame_size: usize,
+    pub max_frame_size: MaxFrameSize,
     /// Client processing capability in frames per second (never zero).
     ///
     /// Sets a floor of `1 / fps` seconds between frames while the plan has at
     /// most `30 * fps` frames; longer plans shrink the delay so that pacing
     /// adds at most 30 seconds in total.
-    pub client_fps: Option<u32>,
+    pub client_fps: Option<NonZeroU32>,
     /// Custom priority mapping
     #[serde(default, with = "option_priority_map")]
     pub priority_mapping: Option<HashMap<String, Priority>>,
@@ -677,55 +716,64 @@ impl StreamOptions {
 
 /// Validated `max_frame_size`: the largest message the server sends, in bytes.
 ///
+/// Decoding a value below [`MaxFrameSize::MIN`] fails, so an invalid size
+/// cannot reach the planner.
+///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use pjson_rs::infrastructure::websocket::MaxFrameSize;
 ///
 /// assert_eq!(MaxFrameSize::new(1024).unwrap().get(), 1024);
 /// assert!(MaxFrameSize::new(1023).is_err());
+/// assert_eq!(MaxFrameSize::default().get(), 64 * 1024);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "usize", into = "usize")]
 pub struct MaxFrameSize(usize);
 
 impl MaxFrameSize {
-    /// Validates `bytes` against the minimum frame size.
+    /// Smallest accepted size in bytes.
+    pub const MIN: usize = 1024;
+
+    /// Validates `bytes` against [`MaxFrameSize::MIN`].
     ///
     /// # Errors
     ///
-    /// Returns [`StreamOptionsError::MaxFrameSizeTooSmall`] below 1024 bytes.
-    pub fn new(_bytes: usize) -> Result<Self, StreamOptionsError> {
-        todo!("MaxFrameSize::new")
+    /// Returns [`StreamOptionsError::MaxFrameSizeTooSmall`] below the minimum.
+    pub fn new(bytes: usize) -> Result<Self, StreamOptionsError> {
+        if bytes < Self::MIN {
+            return Err(StreamOptionsError::MaxFrameSizeTooSmall {
+                requested: bytes,
+                min: Self::MIN,
+            });
+        }
+        Ok(Self(bytes))
     }
 
     /// The validated size in bytes.
     pub fn get(self) -> usize {
-        todo!("MaxFrameSize::get")
+        self.0
     }
 }
 
 impl TryFrom<usize> for MaxFrameSize {
     type Error = StreamOptionsError;
 
-    fn try_from(_bytes: usize) -> Result<Self, Self::Error> {
-        todo!("MaxFrameSize::try_from")
+    fn try_from(bytes: usize) -> Result<Self, Self::Error> {
+        Self::new(bytes)
+    }
+}
+
+impl From<MaxFrameSize> for usize {
+    fn from(size: MaxFrameSize) -> Self {
+        size.get()
     }
 }
 
 impl Default for MaxFrameSize {
     fn default() -> Self {
-        todo!("MaxFrameSize::default")
-    }
-}
-
-impl Default for StreamOptions {
-    fn default() -> Self {
-        Self {
-            max_frame_size: 64 * 1024, // 64KB
-            client_fps: None,          // Auto-detect
-            priority_mapping: None,
-            framing: Framing::default(),
-        }
+        Self(64 * 1024)
     }
 }
 
@@ -760,8 +808,47 @@ mod option_priority_map {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "websocket-client")]
+    use crate::security::rate_limit::DEFAULT_WRITE_TIMEOUT;
     use core::assert_matches;
     use serde_json::json;
+
+    #[test]
+    fn test_server_reply_all_lists_every_variant_with_unique_wire_pairs() {
+        // The exhaustive match makes a new variant a compile error here, so
+        // `ALL` cannot silently miss it: the indices must cover `0..N`.
+        let index = |reply: ServerReply| match reply {
+            ServerReply::Malformed => 0,
+            ServerReply::NilSessionId => 1,
+            ServerReply::DuplicateSessionId => 2,
+            ServerReply::TooManySessions => 3,
+            ServerReply::FrameExceedsBudget => 4,
+            ServerReply::PlanTooLarge => 5,
+            ServerReply::PlanBudgetExhausted => 6,
+            ServerReply::PlanUnserializable => 7,
+            ServerReply::StreamStalled => 8,
+            ServerReply::StreamDeadlineExceeded => 9,
+        };
+        let mut seen: Vec<usize> = ServerReply::ALL.into_iter().map(index).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..ServerReply::ALL.len()).collect::<Vec<_>>());
+        assert_eq!(ServerReply::ALL.len(), 10);
+
+        let mut pairs: Vec<(u16, &str)> = ServerReply::ALL
+            .into_iter()
+            .map(|reply| (reply.code(), reply.reason()))
+            .collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        assert_eq!(pairs.len(), ServerReply::ALL.len(), "wire pairs are unique");
+        for reply in ServerReply::ALL {
+            assert_eq!(
+                ServerReply::from_wire(reply.code(), reply.reason()),
+                Some(reply)
+            );
+        }
+        assert_eq!(ServerReply::from_wire(409, "some other conflict"), None);
+    }
 
     #[tokio::test(start_paused = true)]
     async fn test_send_with_write_timeout_times_out_on_stalled_sink() {
@@ -787,18 +874,18 @@ mod tests {
     #[tokio::test]
     async fn test_send_with_write_timeout_succeeds_on_ready_sink() {
         let mut sink = futures::sink::drain();
-        send_with_write_timeout(&mut sink, "hello", WRITE_TIMEOUT)
+        send_with_write_timeout(&mut sink, "hello", DEFAULT_WRITE_TIMEOUT)
             .await
             .expect("a sink that accepts immediately must not be treated as stalled");
     }
 
-    fn key(k: &str) -> WireSegment {
-        WireSegment::Key(k.to_owned())
+    fn key(k: &str) -> PathSegment {
+        PathSegment::Key(k.to_owned())
     }
 
-    fn set(path: Vec<WireSegment>, value: Value) -> WirePatch {
+    fn set(path: Vec<PathSegment>, value: Value) -> WirePatch {
         WirePatch::Set {
-            path: WirePath(path),
+            path: JsonPath::from_segments(path),
             value,
         }
     }
@@ -816,7 +903,7 @@ mod tests {
         apply_patch(&mut state, set(vec![key("b")], json!(2))).unwrap();
         apply_patch(
             &mut state,
-            set(vec![key("a"), WireSegment::Index(1)], json!("x")),
+            set(vec![key("a"), PathSegment::Index(1)], json!("x")),
         )
         .unwrap();
         assert_eq!(state, json!({"a": [0, "x"], "b": 2}));
@@ -825,7 +912,7 @@ mod tests {
     #[test]
     fn test_apply_set_index_out_of_bounds_is_rejected() {
         let mut state = json!([0]);
-        let err = apply_patch(&mut state, set(vec![WireSegment::Index(1)], json!(1))).unwrap_err();
+        let err = apply_patch(&mut state, set(vec![PathSegment::Index(1)], json!(1))).unwrap_err();
         assert_eq!(err, PatchError::IndexOutOfBounds { index: 1, len: 1 });
     }
 
@@ -833,7 +920,7 @@ mod tests {
     fn test_apply_set_wrong_parent_kind_is_rejected() {
         let mut state = json!({"a": 1});
         assert_eq!(
-            apply_patch(&mut state, set(vec![WireSegment::Index(0)], json!(1))).unwrap_err(),
+            apply_patch(&mut state, set(vec![PathSegment::Index(0)], json!(1))).unwrap_err(),
             PatchError::ExpectedArray
         );
         let mut state = json!([1]);
@@ -847,7 +934,7 @@ mod tests {
     fn test_apply_merge_extends_object_and_rejects_non_object() {
         let mut state = json!({"o": {"a": 1}, "n": 5});
         let merge = |path: &str, entries: Value| WirePatch::Merge {
-            path: WirePath(vec![key(path)]),
+            path: JsonPath::from_segments(vec![key(path)]),
             entries: entries.as_object().unwrap().clone(),
         };
         apply_patch(&mut state, merge("o", json!({"a": 2, "b": 3}))).unwrap();
@@ -861,7 +948,7 @@ mod tests {
     #[test]
     fn test_apply_append_and_append_str_check_target_kind() {
         let mut state = json!({"l": [1], "s": "ab"});
-        let at = |k: &str| WirePath(vec![key(k)]);
+        let at = |k: &str| JsonPath::from_segments(vec![key(k)]);
         apply_patch(
             &mut state,
             WirePatch::Append {
@@ -1073,12 +1160,12 @@ mod tests {
         );
 
         let zero = json!({
-            "max_frame_size": 1, "client_fps": null, "compression": true,
+            "max_frame_size": 1024, "client_fps": null, "compression": true,
             "priority_mapping": {"field": 0}
         });
         assert!(serde_json::from_value::<StreamOptions>(zero).is_err());
 
-        let absent = json!({"max_frame_size": 1, "client_fps": null, "compression": true});
+        let absent = json!({"max_frame_size": 1024, "client_fps": null, "compression": true});
         assert_eq!(
             serde_json::from_value::<StreamOptions>(absent)
                 .unwrap()

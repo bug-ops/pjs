@@ -11,7 +11,7 @@ pub use planner_entry::plan_messages;
 
 #[cfg(feature = "websocket-client")]
 mod client_harness {
-    use super::super::{WirePatch, client::ClientStreamSession};
+    use super::super::{Framing, WirePatch, client::ClientStreamSession};
     use crate::{Result as PjsResult, domain::SessionId};
     use serde_json::Value;
 
@@ -33,7 +33,7 @@ mod client_harness {
     impl ClientPatchHarness {
         /// Starts from the empty-object state a stream begins with.
         pub fn new() -> Self {
-            Self(ClientStreamSession::new(SessionId::new()))
+            Self(ClientStreamSession::new(SessionId::new(), Framing::Patch))
         }
 
         /// Applies `patches` in order, refusing any patch that would take the
@@ -50,6 +50,16 @@ mod client_harness {
             max_bytes: usize,
         ) -> PjsResult<()> {
             self.0.apply_patches(patches, max_bytes)
+        }
+
+        /// Merges a merge-framing `payload` with the production cap semantics.
+        ///
+        /// # Errors
+        ///
+        /// Returns a limit error when the merged size would pass `max_bytes`;
+        /// nothing is modified then.
+        pub fn apply_frame(&mut self, payload: Value, max_bytes: usize) -> PjsResult<()> {
+            self.0.apply_frame(payload, max_bytes)
         }
 
         /// The document reconstructed so far.
@@ -78,15 +88,13 @@ mod planner_entry {
     ///
     /// # Errors
     ///
-    /// [`CreateSessionError::InvalidOptions`] for options that fail
-    /// validation and [`CreateSessionError::PlanRejected`] for a document the
-    /// planner refuses; no other variant occurs.
+    /// [`CreateSessionError::PlanRejected`] for a document the planner
+    /// refuses; no other variant occurs.
     pub fn plan_messages(
         data: Value,
         options: &StreamOptions,
     ) -> Result<Vec<String>, CreateSessionError> {
-        let plan_options =
-            PlanOptions::try_from(options).map_err(CreateSessionError::InvalidOptions)?;
+        let plan_options = PlanOptions::from(options);
         plan_stream(SessionId::new(), data, &plan_options)
             .map(|plan| plan.messages)
             .map_err(CreateSessionError::PlanRejected)

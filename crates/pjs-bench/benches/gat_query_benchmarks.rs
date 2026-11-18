@@ -5,8 +5,8 @@
 //! - Zero Box<dyn Future> allocations
 //! - Lock-free DashMap operations
 
-use chrono::{Duration, Utc};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use jiff::{SignedDuration, Timestamp};
 use pjson_rs::{
     domain::{
         aggregates::{StreamSession, stream_session::SessionConfig},
@@ -104,7 +104,7 @@ fn bench_find_sessions_by_criteria(c: &mut Criterion) {
             .unwrap();
 
         let criteria = SessionQueryCriteria::builder()
-            .created_after(Utc::now() - Duration::hours(1))
+            .created_after(Timestamp::now() - SignedDuration::from_hours(1))
             .build()
             .unwrap();
 

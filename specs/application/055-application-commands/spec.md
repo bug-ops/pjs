@@ -95,7 +95,7 @@ Code: `application/mod.rs`; `infrastructure/http/axum_adapter.rs` (`IntoResponse
 
 ## 4. Non-Functional Requirements
 - NFR-CONC-001: no handler performs find-mutate-save for stream/session mutations except `CreateSession`; concurrency tests `test_batch_generate_frames_concurrent_with_complete_stream_loses_no_update` and `test_save_and_publish_does_not_leak_pending_events_across_commands` pin this.
-- NFR-SEC-001: `MAX_FRAMES_PER_REQUEST` and `SessionTimeout` (bounded by `MAX_SESSION_TIMEOUT_SECONDS`) bound work and avoid chrono overflow.
+- NFR-SEC-001: `MAX_FRAMES_PER_REQUEST` and `SessionTimeout` (bounded by `MAX_SESSION_TIMEOUT_SECONDS`) bound work and avoid timestamp arithmetic overflow.
 - NFR-PERF-001: handlers are monomorphised over `R`, `P`, `F`; no boxed futures.
 
 ## 5. Data Model

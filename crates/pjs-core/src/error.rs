@@ -188,9 +188,6 @@ pub enum PatchError {
     /// The path is empty where an operation needs a target key
     #[error("path has no target key")]
     NoTargetKey,
-    /// The path contains a segment kind the operation cannot follow
-    #[error("unsupported path segment")]
-    UnsupportedSegment,
     /// The target of a string operation is not a string
     #[error("expected a string")]
     ExpectedString,
@@ -216,9 +213,41 @@ pub enum StreamOptionsError {
         /// Minimum size
         min: usize,
     },
-    /// `client_fps` of zero
-    #[error("client_fps must not be zero")]
-    ZeroClientFps,
+}
+
+/// Kind of data frame a stream carries: the frame encoding it was requested with.
+///
+/// Mirrors `websocket::Framing` so the error module does not depend on features.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FrameKind {
+    /// `StreamFrame` messages carrying object payloads to merge
+    Merge,
+    /// `StreamPatch` messages carrying path-addressed patches
+    Patch,
+}
+
+/// Why a server's data frame was refused: it broke the frame sequence of its
+/// stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum FrameSequenceError {
+    /// The frame id is not the next one (a duplicate, a gap or a wrong start)
+    #[error("expected frame id {expected}, received {received}")]
+    UnexpectedFrameId {
+        /// The id the session expects next
+        expected: u32,
+        /// The id the frame carried
+        received: u32,
+    },
+    /// The frame kind differs from the framing the stream was requested with
+    #[error("expected {expected:?} frames, received {received:?}")]
+    FramingMismatch {
+        /// The requested framing
+        expected: FrameKind,
+        /// The kind of the received frame
+        received: FrameKind,
+    },
 }
 
 /// Why a stream plan was rejected.
@@ -441,13 +470,13 @@ pub enum Error {
     #[error("Rate limit violation")]
     RateLimited(#[from] RateLimitError),
 
-    /// The stream options in a request failed validation
-    #[error("Invalid stream options")]
-    InvalidStreamOptions(#[from] StreamOptionsError),
-
     /// The stream plan was refused
     #[error("Stream plan rejected")]
     PlanRejected(#[from] PlanError),
+
+    /// The server broke the frame sequence of a stream; the session was dropped
+    #[error("Frame sequence violation")]
+    FrameSequence(#[from] FrameSequenceError),
 }
 
 impl Error {
@@ -478,7 +507,7 @@ impl Error {
     pub fn is_validation_error(&self) -> bool {
         matches!(
             self,
-            Self::InvalidSessionId(_) | Self::InvalidStreamOptions(_) | Self::Patch(_)
+            Self::InvalidSessionId(_) | Self::Patch(_) | Self::FrameSequence(_)
         )
     }
 
@@ -494,9 +523,7 @@ impl Error {
     pub fn category(&self) -> &'static str {
         match self {
             Self::InvalidJson { .. } | Self::Serialization(_) => "json",
-            Self::InvalidSessionId(_) | Self::InvalidStreamOptions(_) | Self::Patch(_) => {
-                "validation"
-            }
+            Self::InvalidSessionId(_) | Self::Patch(_) | Self::FrameSequence(_) => "validation",
             Self::LimitExceeded { .. } | Self::CompressionBomb(_) | Self::RateLimited(_) => {
                 "security"
             }

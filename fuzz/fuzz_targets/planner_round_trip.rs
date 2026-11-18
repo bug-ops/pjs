@@ -5,7 +5,7 @@ use pjs_fuzz::reparsed;
 use pjson_rs::infrastructure::{
     StreamOptions, WsMessage,
     websocket::{
-        Framing,
+        Framing, MaxFrameSize,
         fuzzing::{ClientPatchHarness, plan_messages},
     },
 };
@@ -117,11 +117,12 @@ fuzz_target!(|data: &[u8]| {
     } else {
         Framing::Patch
     };
-    let options = StreamOptions {
-        max_frame_size: frame_size(head),
-        framing,
-        ..StreamOptions::default()
+    let Ok(max_frame_size) = MaxFrameSize::new(frame_size(head)) else {
+        return;
     };
+    let mut options = StreamOptions::default();
+    options.max_frame_size = max_frame_size;
+    options.framing = framing;
 
     let Ok(texts) = plan_messages(document.clone(), &options) else {
         return;
@@ -147,10 +148,10 @@ fuzz_target!(|data: &[u8]| {
             "message over the queue budget"
         );
         assert!(
-            !is_splittable(message) || text.len() <= options.max_frame_size,
+            !is_splittable(message) || text.len() <= max_frame_size.get(),
             "{} > {}",
             text.len(),
-            options.max_frame_size
+            max_frame_size.get()
         );
     }
 
@@ -158,5 +159,6 @@ fuzz_target!(|data: &[u8]| {
     match framing {
         Framing::Patch => assert_eq!(replay_patches(&messages), expected, "round trip drifted"),
         Framing::Merge => check_merge_root(&messages, &expected),
+        _ => unreachable!("the target picks Merge or Patch"),
     }
 });

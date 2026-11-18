@@ -22,7 +22,7 @@ pub use axum_adapter::{
 #[cfg(feature = "http-server")]
 pub use axum_adapter::{create_pjs_router_with_auth, create_pjs_router_with_rate_limit_and_auth};
 pub use axum_extension::{HttpExtensionConfig, PjsExtension};
-pub use middleware::{RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig};
+pub use middleware::{RateLimitMiddleware, TrustedProxyConfig};
 #[cfg(feature = "http-server")]
 pub use serve::{ConnectionLimits, HeaderSizeLimit, serve_with_limits};
 #[cfg(feature = "http-server")]

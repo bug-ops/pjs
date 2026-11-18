@@ -141,6 +141,12 @@ async fn assert_silent(ws: &mut TestSocket, window: Duration) {
 
 /// Verify that `create_websocket_router` responds to a real HTTP upgrade with
 /// status 101 Switching Protocols.
+fn client_config(update: impl FnOnce(&mut WebSocketClientConfig)) -> WebSocketClientConfig {
+    let mut config = WebSocketClientConfig::default();
+    update(&mut config);
+    config
+}
+
 #[tokio::test]
 async fn test_wire_upgrade_handshake() {
     let (addr, transport) = spawn_ws_test_server().await;
@@ -923,14 +929,12 @@ async fn spawn_one_shot_sender(payload: String) -> SocketAddr {
 #[tokio::test]
 async fn test_client_max_message_size_cuts_oversize_message() {
     let addr = spawn_one_shot_sender("x".repeat(2048)).await;
-    let client =
-        PjsWebSocketClient::new(ws_url(addr))
-            .unwrap()
-            .with_config(WebSocketClientConfig {
-                max_message_size: 1024,
-                max_frame_size: 1024,
-                ..WebSocketClientConfig::default()
-            });
+    let client = PjsWebSocketClient::new(ws_url(addr))
+        .unwrap()
+        .with_config(client_config(|c| {
+            c.max_message_size = 1024;
+            c.max_frame_size = 1024;
+        }));
 
     let outcome = timeout(Duration::from_secs(5), client.connect())
         .await
@@ -945,14 +949,12 @@ async fn test_client_max_message_size_cuts_oversize_message() {
 #[tokio::test]
 async fn test_client_max_frame_size_cuts_oversize_frame_below_message_cap() {
     let addr = spawn_one_shot_sender("x".repeat(2048)).await;
-    let client =
-        PjsWebSocketClient::new(ws_url(addr))
-            .unwrap()
-            .with_config(WebSocketClientConfig {
-                max_message_size: 1024 * 1024,
-                max_frame_size: 1024,
-                ..WebSocketClientConfig::default()
-            });
+    let client = PjsWebSocketClient::new(ws_url(addr))
+        .unwrap()
+        .with_config(client_config(|c| {
+            c.max_message_size = 1024 * 1024;
+            c.max_frame_size = 1024;
+        }));
 
     let outcome = timeout(Duration::from_secs(5), client.connect())
         .await
@@ -965,11 +967,10 @@ async fn test_client_max_frame_size_cuts_oversize_frame_below_message_cap() {
 async fn test_client_within_caps_message_is_accepted() {
     let addr = spawn_one_shot_sender("not json".repeat(64)).await;
     let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
-        WebSocketClientConfig {
-            max_message_size: 1024,
-            max_frame_size: 1024,
-            ..WebSocketClientConfig::default()
-        },
+        client_config(|c| {
+            c.max_message_size = 1024;
+            c.max_frame_size = 1024;
+        }),
     ));
 
     let connect = tokio::spawn({
@@ -1090,10 +1091,9 @@ async fn test_client_session_receives_data_from_in_tree_server() {
 async fn test_client_full_of_completed_sessions_refuses_until_one_is_closed() {
     let (addr, _transport) = spawn_ws_test_server().await;
     let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
-        WebSocketClientConfig {
-            max_sessions: std::num::NonZeroUsize::new(2).unwrap(),
-            ..WebSocketClientConfig::default()
-        },
+        client_config(|c| {
+            c.max_sessions = std::num::NonZeroUsize::new(2).unwrap();
+        }),
     ));
     let connect = tokio::spawn({
         let client = Arc::clone(&client);

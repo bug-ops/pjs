@@ -12,9 +12,10 @@ pub fn generate_analytics_data(size: DatasetSize) -> Value {
     // Time series data for charts
     let time_series: Vec<Value> = (0..data_points)
         .map(|i| {
-            let timestamp = chrono::Utc::now() - chrono::Duration::hours((data_points - i) as i64);
+            let timestamp =
+                jiff::Timestamp::now() - jiff::SignedDuration::from_hours((data_points - i) as i64);
             json!({
-                "timestamp": timestamp.to_rfc3339(),
+                "timestamp": timestamp.to_string(),
                 "metrics": {
                     "revenue": rng.random_range(1000.0..50000.0),
                     "users": rng.random_range(100..5000),
@@ -31,7 +32,7 @@ pub fn generate_analytics_data(size: DatasetSize) -> Value {
         "dashboard": {
             "name": "PJS Analytics Demo",
             "description": "Real-time analytics dashboard",
-            "last_updated": chrono::Utc::now().to_rfc3339()
+            "last_updated": jiff::Timestamp::now().to_string()
         },
         "time_series": time_series,
         "summary": {
@@ -39,7 +40,7 @@ pub fn generate_analytics_data(size: DatasetSize) -> Value {
             "total_users": rng.random_range(10000..500000),
             "growth_rate": rng.random_range(-5.0..25.0)
         },
-        "generated_at": chrono::Utc::now().to_rfc3339()
+        "generated_at": jiff::Timestamp::now().to_string()
     })
 }
 
@@ -59,7 +60,7 @@ pub fn generate_realtime_data(size: DatasetSize) -> Value {
                 "name": format!("System Metric {}", i + 1),
                 "value": rng.random_range(0.0..100.0),
                 "status": status,
-                "timestamp": chrono::Utc::now().to_rfc3339()
+                "timestamp": jiff::Timestamp::now().to_string()
             })
         })
         .collect();
@@ -70,6 +71,6 @@ pub fn generate_realtime_data(size: DatasetSize) -> Value {
             "status": "operational"
         },
         "metrics": metrics,
-        "generated_at": chrono::Utc::now().to_rfc3339()
+        "generated_at": jiff::Timestamp::now().to_string()
     })
 }

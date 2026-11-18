@@ -49,11 +49,8 @@ mod fuzzing_gate {}
 
 #[cfg(feature = "websocket-server")]
 pub use controller::{AdaptiveStreamController, ClientMetrics, ConnectionId, CreateSessionError};
-#[cfg(feature = "websocket-client")]
-pub(crate) use protocol::WRITE_TIMEOUT;
 pub use protocol::{
-    Framing, MAX_PATCH_PATH_DEPTH, MaxFrameSize, StreamOptions, WirePatch, WirePath, WireSegment,
-    WsMessage,
+    Framing, MAX_PATCH_PATH_DEPTH, MaxFrameSize, StreamOptions, WirePatch, WsMessage,
 };
 pub(crate) use protocol::{WriteFailure, send_with_write_timeout};
 #[cfg(feature = "websocket-server")]

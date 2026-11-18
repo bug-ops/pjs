@@ -3,8 +3,8 @@
 //! API frozen in the architect plan ("Frozen #604 API"); failures assert the
 //! `DomainError::InvalidInput` variant, not its text.
 
-use chrono::{Duration, Utc};
 use core::assert_matches;
+use jiff::{SignedDuration, Timestamp};
 use pjson_rs::domain::DomainError;
 use pjson_rs::domain::config::limits::{MAX_PAGINATION_LIMIT, MAX_PAGINATION_OFFSET};
 use pjson_rs::domain::entities::{Stream, frame::FramePatch};
@@ -59,7 +59,7 @@ fn test_stream_filter_build_empty_builder_has_no_filters() {
 
 #[test]
 fn test_stream_filter_getters_return_set_values() {
-    let after = Utc::now();
+    let after = Timestamp::now();
     let filter = StreamFilter::builder()
         .created_after(after)
         .has_frames(FramePresence::WithFrames)
@@ -181,11 +181,11 @@ fn test_session_query_criteria_build_min_above_max_rejected() {
 
 #[test]
 fn test_session_query_criteria_build_created_after_later_than_before_rejected() {
-    let now = Utc::now();
+    let now = Timestamp::now();
     assert_invalid_input(
         SessionQueryCriteria::builder()
             .created_after(now)
-            .created_before(now - Duration::seconds(1))
+            .created_before(now - SignedDuration::from_secs(1))
             .build(),
     );
 }
@@ -197,7 +197,7 @@ fn test_session_query_criteria_build_empty_states_rejected() {
 
 #[test]
 fn test_session_query_criteria_build_equal_bounds_accepted() {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let criteria = SessionQueryCriteria::builder()
         .min_stream_count(3)
         .max_stream_count(3)

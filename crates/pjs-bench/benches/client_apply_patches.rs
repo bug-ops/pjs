@@ -8,23 +8,23 @@
 //!
 //! Each case applies one frame worth of patches to a fresh session:
 //! `set_keys` (one `Set` per top-level key), `merge_entries` (one root `Merge`),
-//! `append_values` (one `Append` of scalars) and `append_str_chunks`.
+//! `append_values` (one `Append` of scalars) and `append_str_chunks`; the
+//! `client_apply_frame` group merges one merge-framing payload (#701).
 
 #[cfg(pjs_bench)]
 mod bench {
     use std::hint::black_box;
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
-    use pjson_rs::infrastructure::websocket::{
-        WirePatch, WirePath, WireSegment, fuzzing::ClientPatchHarness,
-    };
+    use pjson_rs::domain::JsonPath;
+    use pjson_rs::infrastructure::websocket::{WirePatch, fuzzing::ClientPatchHarness};
     use serde_json::{Map, Value, json};
 
     const COUNTS: [usize; 3] = [100, 1_000, 10_000];
     const MAX_BYTES: usize = usize::MAX;
 
-    fn key_path(key: String) -> WirePath {
-        WirePath(vec![WireSegment::Key(key)])
+    fn key_path(key: String) -> JsonPath {
+        JsonPath::root().append_key(&key)
     }
 
     fn entry(index: usize) -> (String, Value) {
@@ -49,7 +49,7 @@ mod bench {
     fn merge_entries(count: usize) -> Vec<WirePatch> {
         let entries: Map<String, Value> = (0..count).map(entry).collect();
         vec![WirePatch::Merge {
-            path: WirePath(Vec::new()),
+            path: JsonPath::root(),
             entries,
         }]
     }
@@ -77,6 +77,31 @@ mod bench {
             text: "chunk ".into(),
         });
         std::iter::once(init).chain(chunks).collect()
+    }
+
+    fn merge_frame(c: &mut Criterion) {
+        let mut group = c.benchmark_group("client_apply_frame");
+        for count in COUNTS {
+            let payload = Value::Object((0..count).map(entry).collect());
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_with_input(
+                BenchmarkId::new("merge_entries", count),
+                &payload,
+                |b, payload| {
+                    b.iter_batched(
+                        || (ClientPatchHarness::new(), payload.clone()),
+                        |(mut harness, payload)| {
+                            harness
+                                .apply_frame(payload, MAX_BYTES)
+                                .expect("frame applies");
+                            black_box(harness.tracked_bytes())
+                        },
+                        BatchSize::LargeInput,
+                    );
+                },
+            );
+        }
+        group.finish();
     }
 
     fn apply_patches(c: &mut Criterion) {
@@ -109,7 +134,7 @@ mod bench {
         group.finish();
     }
 
-    criterion_group!(benches, apply_patches);
+    criterion_group!(benches, apply_patches, merge_frame);
 }
 
 #[cfg(pjs_bench)]

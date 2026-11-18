@@ -1,7 +1,7 @@
 //! PJS Domain Layer - Pure Business Logic
 //!
 //! This crate contains the pure domain logic for PJS (Priority JSON Streaming Protocol)
-//! with a small dependency set: `serde`, `serde_json`, `chrono`, `smallvec`,
+//! with a small dependency set: `serde`, `serde_json`, `jiff`, `smallvec`,
 //! `uuid` and `thiserror`.
 //!
 //! The domain layer is WASM-compatible and can be used in both native and

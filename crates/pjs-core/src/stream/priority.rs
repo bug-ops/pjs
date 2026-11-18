@@ -177,14 +177,9 @@ impl PriorityStreamer {
     }
 
     /// Whether the root cannot be rebuilt from path-addressed patches alone:
-    /// a scalar root has no path-addressable children, and an object root with
-    /// a key `JsonPath` cannot encode has no patch that could carry that key.
+    /// a scalar root has no path-addressable children.
     fn needs_root_set(json: &JsonValue) -> bool {
-        match json {
-            JsonValue::Object(map) => map.keys().any(|key| !JsonPath::is_valid_key(key)),
-            JsonValue::Array(_) => false,
-            _ => true,
-        }
+        !matches!(json, JsonValue::Object(_) | JsonValue::Array(_))
     }
 
     /// Generate skeleton structure with null/empty values
@@ -212,26 +207,15 @@ impl PriorityStreamer {
         }
     }
 
-    /// Deep-clone `value`, emptying every array reachable via a JsonPath-encodable
-    /// key — mirrors `extract_patches`'s own traversal exactly. A subtree under a
-    /// key `JsonPath` cannot encode (`.`/`[`/`]`) is left fully populated, since
-    /// `extract_patches`'s recursion will never reach it to emit a compensating
-    /// `Append` (see #394 C3). Encodability depends only on the key string itself
-    /// (`JsonPath::append_key`'s sole failure mode), not on the accumulated path,
-    /// so this check does not need to thread a `JsonPath` through the recursion.
+    /// Deep-clone `value`, emptying every array reachable through objects —
+    /// mirrors `extract_patches`'s own traversal exactly, so each emptied array
+    /// gets its compensating `Append` (see #394 C3).
     fn skeletonize_arrays(value: &JsonValue) -> JsonValue {
         match value {
             JsonValue::Object(map) => {
                 let skeleton = map
                     .iter()
-                    .map(|(key, v)| {
-                        let value = if JsonPath::is_valid_key(key) {
-                            Self::skeletonize_arrays(v)
-                        } else {
-                            v.clone()
-                        };
-                        (key.clone(), value)
-                    })
+                    .map(|(key, v)| (key.clone(), Self::skeletonize_arrays(v)))
                     .collect();
                 JsonValue::Object(skeleton)
             }
@@ -250,11 +234,6 @@ impl PriorityStreamer {
         match json {
             JsonValue::Object(map) => {
                 for (key, value) in map {
-                    // Keys JsonPath cannot encode (`.`, `[`, `]`) are skipped:
-                    // one weird key must not abort the whole streaming plan.
-                    if !JsonPath::is_valid_key(key) {
-                        continue;
-                    }
                     let field_path = current_path.append_key(key);
                     let own_priority = self.calculate_field_priority(&field_path, key, value);
 
@@ -425,21 +404,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_needs_root_set_follows_the_shared_key_rule() {
-        for key in ["", "a.b", "a[0]", "a]"] {
-            assert!(
-                PriorityStreamer::needs_root_set(&json!({ key: 1 })),
-                "{key:?}"
-            );
-            assert!(!JsonPath::is_valid_key(key), "{key:?}");
+    fn test_needs_root_set_only_for_scalar_roots() {
+        for key in ["", "a.b", "a[0]", "a]", "ok"] {
+            assert!(!PriorityStreamer::needs_root_set(&json!({ key: 1 })));
         }
-        for key in ["ok", "0", "with space"] {
-            assert!(
-                !PriorityStreamer::needs_root_set(&json!({ key: 1 })),
-                "{key:?}"
-            );
-            assert!(JsonPath::is_valid_key(key), "{key:?}");
-        }
+        assert!(!PriorityStreamer::needs_root_set(&json!([1])));
+        assert!(PriorityStreamer::needs_root_set(&json!(1)));
     }
 
     /// Runs `payload` through `PriorityStreamer::analyze()` and applies every
@@ -459,7 +429,7 @@ mod tests {
     #[test]
     fn test_json_path_creation() {
         let path = JsonPath::root();
-        assert_eq!(path.to_json_pointer(), "/");
+        assert_eq!(path.to_json_pointer(), "");
 
         let path = path.append_key("users").append_index(0).append_key("name");
         assert_eq!(path.to_json_pointer(), "/users/0/name");

@@ -18,6 +18,33 @@ use thiserror::Error;
 /// the in-tree server itself accepts and echoes back.
 pub(crate) const DEFAULT_MAX_INBOUND_FRAME_SIZE: usize = 1024 * 1024;
 
+/// Default deadline for a single outbound WebSocket sink write.
+///
+/// Writing to the sink blocks until the peer's TCP receive buffer drains;
+/// a peer that stops reading (dead connection, slow-loris) would otherwise
+/// wedge the connection's task — and, on the server, the
+/// `Arc<RateLimitGuard>` it holds — until the OS eventually times out the
+/// socket. No existing timeout in `config::security::NetworkLimits` fits
+/// this: `connection_timeout_secs` bounds establishing a connection, not a
+/// steady-state write. 10s is long enough to absorb ordinary network
+/// jitter while still freeing a stuck connection promptly.
+///
+/// This bounds a single `feed`+`flush`, not a minimum throughput: a
+/// legitimate large frame (see `MAX_QUEUED_OUTGOING_BYTES` in `server.rs`,
+/// up to 16 MiB) sent to a genuinely slow-but-honest client needs roughly
+/// 13 Mbps to flush inside 10s, or it gets disconnected same as a stalled
+/// peer would. This is an accepted, documented tradeoff rather than a
+/// per-byte deadline: distinguishing "slow but making progress" from
+/// "stalled" would need tracking partial-write progress, which
+/// `Sink::send`'s `feed`+`flush` doesn't expose, and misclassifying a
+/// stalled peer as "still making progress" is the failure mode this
+/// timeout exists to close. Operators serving large frames to
+/// bandwidth-constrained clients should raise the value passed to
+/// `send_with_write_timeout` accordingly (the server threads its value
+/// through `RateLimitConfig::write_timeout`; the client through
+/// `PjsWebSocketClient::with_write_timeout`).
+pub(crate) const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Hard upper bound on the number of distinct client IPs [`ClientRateLimiter`]
 /// tracks at once, independent of the periodic TTL-based [`ClientRateLimiter::cleanup_expired`]
 /// sweep. The sweep only runs every few minutes ([`DEFAULT_CLEANUP_INTERVAL`]) and
@@ -105,18 +132,14 @@ pub struct RateLimitConfig {
     ///
     /// Guards against a peer that stops reading wedging the connection's
     /// task indefinitely. Bounds a single write, not overall throughput —
-    /// see `infrastructure::websocket::protocol::WRITE_TIMEOUT`'s doc for the
-    /// tradeoff this implies for large frames sent to slow clients, and
-    /// raise this value if that tradeoff doesn't fit a deployment's
-    /// expected client bandwidth. Defaults to the same 10s value as
-    /// `infrastructure::websocket::protocol::WRITE_TIMEOUT`; the two constants are
-    /// independent (different feature gates), so an intentional change to
-    /// one should be mirrored in the other unless a divergence is
-    /// deliberate. [`Self::low_resource`] tightens this to 3s. This value
-    /// governs the server side only — `PjsWebSocketClient` has its own
-    /// independent write-timeout knob (see
+    /// see `DEFAULT_WRITE_TIMEOUT` for the tradeoff this implies for large
+    /// frames sent to slow clients, and raise this value if that tradeoff
+    /// doesn't fit a deployment's expected client bandwidth. Defaults to
+    /// `DEFAULT_WRITE_TIMEOUT`; [`Self::low_resource`] tightens this to 3s.
+    /// This value governs the server side only — `PjsWebSocketClient` has its
+    /// own write-timeout knob (see
     /// `infrastructure::websocket::PjsWebSocketClient::with_write_timeout`),
-    /// also defaulting to `WRITE_TIMEOUT`.
+    /// also defaulting to `DEFAULT_WRITE_TIMEOUT`.
     pub write_timeout: Duration,
 }
 
@@ -124,12 +147,12 @@ impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
             max_requests_per_window: 100,
-            window_duration: Duration::from_secs(60),
+            window_duration: Duration::from_mins(1),
             max_connections_per_ip: 10,
             max_frame_size: DEFAULT_MAX_INBOUND_FRAME_SIZE,
             max_messages_per_second: 30,
             burst_allowance: 5,
-            write_timeout: Duration::from_secs(10),
+            write_timeout: DEFAULT_WRITE_TIMEOUT,
         }
     }
 }
@@ -166,7 +189,7 @@ impl RateLimitConfig {
             // unaffected by this preset. A slow-but-honest client now
             // needs roughly 3.3x the downlink bandwidth it needed under
             // the 10s default to avoid being disconnected as "stalled"
-            // (see `infrastructure::websocket::protocol::WRITE_TIMEOUT`'s doc for
+            // (see `DEFAULT_WRITE_TIMEOUT`'s doc for
             // the full bandwidth-vs-deadline tradeoff) — raise this value
             // if a low-resource deployment still expects to serve large
             // frames to bandwidth-constrained clients.

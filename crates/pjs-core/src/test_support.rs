@@ -338,7 +338,7 @@ impl StreamRepositoryGat for MockRepository {
                 is_healthy: true,
                 active_streams: 0,
                 total_frames: 0,
-                last_activity: chrono::Utc::now(),
+                last_activity: jiff::Timestamp::now(),
                 error_rate: 0.0,
                 metrics: HashMap::new(),
             })

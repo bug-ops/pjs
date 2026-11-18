@@ -5,8 +5,15 @@
 #![cfg(any(feature = "websocket-server", feature = "websocket-client"))]
 
 use pjson_rs::domain::SessionId;
-use pjson_rs::infrastructure::websocket::{StreamOptions, WsMessage};
+use pjson_rs::infrastructure::websocket::{MaxFrameSize, StreamOptions, WsMessage};
 use serde_json::{Value, json};
+use std::num::NonZeroU32;
+
+fn stream_options(update: impl FnOnce(&mut StreamOptions)) -> StreamOptions {
+    let mut options = StreamOptions::default();
+    update(&mut options);
+    options
+}
 
 const SESSION_ID: &str = "123e4567-e89b-12d3-a456-426614174000";
 
@@ -50,7 +57,7 @@ fn test_stream_init_serialize_has_no_compression_key_anywhere() {
 fn test_stream_init_decode_accepts_options_without_compression() {
     let options = decode_options(json!({"max_frame_size": 4096}));
 
-    assert_eq!(options.max_frame_size, 4096);
+    assert_eq!(options.max_frame_size.get(), 4096);
     assert_eq!(options.client_fps, None);
 }
 
@@ -71,7 +78,7 @@ fn test_stream_init_decode_ignores_a_legacy_compression_key() {
 fn test_stream_init_decode_ignores_other_unknown_option_keys() {
     let options = decode_options(json!({"max_frame_size": 2048, "future_option": [1, 2]}));
 
-    assert_eq!(options.max_frame_size, 2048);
+    assert_eq!(options.max_frame_size.get(), 2048);
 }
 
 #[test]
@@ -83,11 +90,10 @@ fn test_stream_init_decode_requires_max_frame_size() {
 
 #[test]
 fn test_stream_options_round_trip_through_serde_is_lossless() {
-    let options = StreamOptions {
-        max_frame_size: 8192,
-        client_fps: Some(30),
-        ..StreamOptions::default()
-    };
+    let options = stream_options(|o| {
+        o.max_frame_size = MaxFrameSize::new(8192).unwrap();
+        o.client_fps = NonZeroU32::new(30);
+    });
 
     let decoded: StreamOptions =
         serde_json::from_value(serde_json::to_value(&options).expect("serializable"))

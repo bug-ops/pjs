@@ -76,7 +76,7 @@ fn generate_demo_data(size: &str) -> Value {
             "categories": 3,
             "avg_price": 50.0
         },
-        "generated_at": chrono::Utc::now().to_rfc3339()
+        "generated_at": jiff::Timestamp::now().to_string()
     })
 }
 

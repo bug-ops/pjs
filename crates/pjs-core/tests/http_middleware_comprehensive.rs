@@ -175,8 +175,11 @@ async fn test_pjs_middleware_no_metrics_headers() {
 
 #[tokio::test]
 async fn test_rate_limit_middleware_creation() {
-    use pjson_rs::infrastructure::http::RateLimitConfig;
-    let config = RateLimitConfig::new(100);
+    use pjson_rs::security::RateLimitConfig;
+    let config = RateLimitConfig {
+        max_requests_per_window: 100,
+        ..RateLimitConfig::default()
+    };
     let _rate_limit = RateLimitMiddleware::new(config);
 
     // RateLimitMiddleware created successfully
@@ -184,8 +187,11 @@ async fn test_rate_limit_middleware_creation() {
 
 #[tokio::test]
 async fn test_rate_limit_middleware_burst_calculation() {
-    use pjson_rs::infrastructure::http::RateLimitConfig;
-    let config = RateLimitConfig::new(200);
+    use pjson_rs::security::RateLimitConfig;
+    let config = RateLimitConfig {
+        max_requests_per_window: 200,
+        ..RateLimitConfig::default()
+    };
     let _rate_limit = RateLimitMiddleware::new(config);
 
     // RateLimitMiddleware created successfully
@@ -193,8 +199,11 @@ async fn test_rate_limit_middleware_burst_calculation() {
 
 #[tokio::test]
 async fn test_rate_limit_middleware_small_limit() {
-    use pjson_rs::infrastructure::http::RateLimitConfig;
-    let config = RateLimitConfig::new(4);
+    use pjson_rs::security::RateLimitConfig;
+    let config = RateLimitConfig {
+        max_requests_per_window: 4,
+        ..RateLimitConfig::default()
+    };
     let _rate_limit = RateLimitMiddleware::new(config);
 
     // RateLimitMiddleware created successfully
@@ -202,8 +211,11 @@ async fn test_rate_limit_middleware_small_limit() {
 
 #[tokio::test]
 async fn test_rate_limit_middleware_clone() {
-    use pjson_rs::infrastructure::http::RateLimitConfig;
-    let config = RateLimitConfig::new(150);
+    use pjson_rs::security::RateLimitConfig;
+    let config = RateLimitConfig {
+        max_requests_per_window: 150,
+        ..RateLimitConfig::default()
+    };
     let rate_limit1 = RateLimitMiddleware::new(config);
     let _rate_limit2 = rate_limit1.clone();
 

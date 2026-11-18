@@ -18,11 +18,19 @@ use pjson_rs::{
     domain::{Priority, SessionId},
     infrastructure::byte_bounded_channel,
     infrastructure::websocket::{
-        AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, StreamOptions, WsMessage,
+        AdaptiveStreamController, AxumWebSocketTransport, ConnectionId, MaxFrameSize,
+        StreamOptions, WsMessage,
     },
 };
 use serde_json::{Value, json};
+use std::num::NonZeroU32;
 use std::sync::Arc;
+
+fn stream_options(update: impl FnOnce(&mut StreamOptions)) -> StreamOptions {
+    let mut options = StreamOptions::default();
+    update(&mut options);
+    options
+}
 
 async fn create(
     controller: &AdaptiveStreamController,
@@ -300,7 +308,8 @@ async fn test_controller_delivers_frames_to_the_attached_connection() {
 fn test_stream_options_default() {
     let options = StreamOptions::default();
 
-    assert_eq!(options.max_frame_size, 64 * 1024);
+    assert_eq!(options.max_frame_size, MaxFrameSize::default());
+    assert_eq!(options.max_frame_size.get(), 64 * 1024);
     assert_eq!(options.client_fps, None);
     assert!(options.priority_mapping.is_none());
 }
@@ -313,15 +322,14 @@ fn test_stream_options_custom() {
     priority_mapping.insert("critical".to_string(), Priority::CRITICAL);
     priority_mapping.insert("high".to_string(), Priority::HIGH);
 
-    let options = StreamOptions {
-        max_frame_size: 1024 * 1024,
-        client_fps: Some(60),
-        priority_mapping: Some(priority_mapping.clone()),
-        ..Default::default()
-    };
+    let options = stream_options(|o| {
+        o.max_frame_size = MaxFrameSize::new(1024 * 1024).unwrap();
+        o.client_fps = NonZeroU32::new(60);
+        o.priority_mapping = Some(priority_mapping.clone());
+    });
 
-    assert_eq!(options.max_frame_size, 1024 * 1024);
-    assert_eq!(options.client_fps, Some(60));
+    assert_eq!(options.max_frame_size.get(), 1024 * 1024);
+    assert_eq!(options.client_fps, NonZeroU32::new(60));
     assert_eq!(
         options.priority_mapping.as_ref().unwrap().get("critical"),
         Some(&Priority::CRITICAL)
@@ -350,8 +358,8 @@ fn test_stream_options_deserialization() {
 
     let options: StreamOptions = serde_json::from_value(json).unwrap();
 
-    assert_eq!(options.max_frame_size, 2048);
-    assert_eq!(options.client_fps, Some(30));
+    assert_eq!(options.max_frame_size.get(), 2048);
+    assert_eq!(options.client_fps, NonZeroU32::new(30));
 }
 
 // ============================================================================

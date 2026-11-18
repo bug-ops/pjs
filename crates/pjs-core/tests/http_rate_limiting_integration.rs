@@ -21,49 +21,14 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use pjson_rs::infrastructure::http::{RateLimitConfig, RateLimitMiddleware, TrustedProxyConfig};
+use pjson_rs::infrastructure::http::{RateLimitMiddleware, TrustedProxyConfig};
+use pjson_rs::security::RateLimitConfig;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tower::ServiceExt;
 
 fn peer(addr: [u8; 4], port: u16) -> ConnectInfo<SocketAddr> {
     ConnectInfo(SocketAddr::from((IpAddr::V4(Ipv4Addr::from(addr)), port)))
-}
-
-// ============================================================================
-// RateLimitConfig Tests
-// ============================================================================
-
-#[test]
-fn test_rate_limit_config_default() {
-    let config = RateLimitConfig::default();
-
-    assert_eq!(config.max_requests_per_window, 100);
-    assert_eq!(config.window_duration, Duration::from_secs(60));
-}
-
-#[test]
-fn test_rate_limit_config_new() {
-    let config = RateLimitConfig::new(50);
-
-    assert_eq!(config.max_requests_per_window, 50);
-    assert_eq!(config.window_duration, Duration::from_secs(60));
-}
-
-#[test]
-fn test_rate_limit_config_with_window() {
-    let config = RateLimitConfig::new(100).with_window(Duration::from_secs(30));
-
-    assert_eq!(config.max_requests_per_window, 100);
-    assert_eq!(config.window_duration, Duration::from_secs(30));
-}
-
-#[test]
-fn test_rate_limit_config_builder_pattern() {
-    let config = RateLimitConfig::new(200).with_window(Duration::from_secs(120));
-
-    assert_eq!(config.max_requests_per_window, 200);
-    assert_eq!(config.window_duration, Duration::from_secs(120));
 }
 
 // ============================================================================
@@ -74,8 +39,26 @@ async fn test_handler() -> impl IntoResponse {
     "OK"
 }
 
+fn limit(requests: u32, window: Duration) -> RateLimitConfig {
+    RateLimitConfig {
+        max_requests_per_window: requests,
+        window_duration: window,
+        ..RateLimitConfig::default()
+    }
+}
+
 fn create_test_router(config: RateLimitConfig) -> Router {
-    let middleware = RateLimitMiddleware::new(config);
+    create_trusted_test_router(config, None)
+}
+
+fn create_trusted_test_router(
+    config: RateLimitConfig,
+    trusted: Option<TrustedProxyConfig>,
+) -> Router {
+    let mut middleware = RateLimitMiddleware::new(config);
+    if let Some(trusted) = trusted {
+        middleware = middleware.with_trusted_proxies(trusted);
+    }
 
     Router::new()
         .route("/test", get(test_handler))
@@ -84,7 +67,7 @@ fn create_test_router(config: RateLimitConfig) -> Router {
 
 #[tokio::test]
 async fn test_rate_limit_middleware_allows_requests_under_limit() {
-    let config = RateLimitConfig::new(5).with_window(Duration::from_secs(10));
+    let config = limit(5, Duration::from_secs(10));
     let app = create_test_router(config);
 
     // First request should succeed
@@ -104,7 +87,7 @@ async fn test_rate_limit_middleware_allows_requests_under_limit() {
 #[tokio::test]
 async fn test_rate_limit_middleware_blocks_requests_over_limit() {
     // Very strict limit for testing
-    let config = RateLimitConfig::new(2).with_window(Duration::from_millis(100));
+    let config = limit(2, Duration::from_millis(100));
     let app = create_test_router(config);
 
     // First two requests should succeed
@@ -134,7 +117,7 @@ async fn test_rate_limit_middleware_blocks_requests_over_limit() {
 
 #[tokio::test]
 async fn test_rate_limit_headers_format() {
-    let config = RateLimitConfig::new(10).with_window(Duration::from_secs(60));
+    let config = limit(10, Duration::from_secs(60));
     let app = create_test_router(config);
 
     let request = Request::builder().uri("/test").body(Body::empty()).unwrap();
@@ -179,7 +162,7 @@ async fn test_rate_limit_remaining_decreases_across_requests() {
     // All requests here share the same fallback bucket (no `ConnectInfo`
     // extension), so consecutive requests must show `X-RateLimit-Remaining`
     // strictly decreasing rather than just being present/parseable.
-    let config = RateLimitConfig::new(5).with_window(Duration::from_secs(60));
+    let config = limit(5, Duration::from_secs(60));
     let app = create_test_router(config);
 
     let remaining_of = |response: &axum::response::Response| -> u32 {
@@ -216,7 +199,7 @@ async fn test_rate_limit_remaining_decreases_across_requests() {
 /// fresh bucket.
 #[tokio::test]
 async fn test_rate_limit_ignores_x_forwarded_for_by_default() {
-    let config = RateLimitConfig::new(2).with_window(Duration::from_millis(100));
+    let config = limit(2, Duration::from_millis(100));
     let app = create_test_router(config);
 
     for _ in 0..2 {
@@ -244,7 +227,7 @@ async fn test_rate_limit_ignores_x_forwarded_for_by_default() {
 /// Same as above for `X-Real-IP` — never trusted by default.
 #[tokio::test]
 async fn test_rate_limit_ignores_x_real_ip_by_default() {
-    let config = RateLimitConfig::new(2).with_window(Duration::from_millis(100));
+    let config = limit(2, Duration::from_millis(100));
     let app = create_test_router(config);
 
     for _ in 0..2 {
@@ -273,7 +256,7 @@ async fn test_rate_limit_ignores_x_real_ip_by_default() {
 /// client-supplied header.
 #[tokio::test]
 async fn test_rate_limit_different_ips_isolated() {
-    let config = RateLimitConfig::new(1).with_window(Duration::from_millis(100));
+    let config = limit(1, Duration::from_millis(100));
     let app = create_test_router(config);
 
     let mut request1 = Request::builder().uri("/test").body(Body::empty()).unwrap();
@@ -299,7 +282,7 @@ async fn test_rate_limit_different_ips_isolated() {
 
 #[tokio::test]
 async fn test_rate_limit_window_reset() {
-    let config = RateLimitConfig::new(1).with_window(Duration::from_millis(50));
+    let config = limit(1, Duration::from_millis(50));
     let app = create_test_router(config);
 
     // First request succeeds
@@ -326,7 +309,7 @@ async fn test_rate_limit_window_reset() {
 
 #[tokio::test]
 async fn test_rate_limit_429_response_body() {
-    let config = RateLimitConfig::new(1).with_window(Duration::from_millis(100));
+    let config = limit(1, Duration::from_millis(100));
     let app = create_test_router(config);
 
     // Exhaust rate limit
@@ -363,10 +346,9 @@ async fn test_rate_limit_429_response_body() {
 #[tokio::test]
 async fn test_rate_limit_x_forwarded_for_uses_rightmost_untrusted_entry() {
     let trusted_proxy = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 200));
-    let config = RateLimitConfig::new(2)
-        .with_window(Duration::from_millis(100))
-        .with_trusted_proxies(TrustedProxyConfig::new(vec![trusted_proxy]));
-    let app = create_test_router(config);
+    let config = limit(2, Duration::from_millis(100));
+    let app =
+        create_trusted_test_router(config, Some(TrustedProxyConfig::new(vec![trusted_proxy])));
 
     // Same real client (rightmost entry, appended by the trusted proxy) but a
     // different attacker-controlled leftmost entry each time — must still
@@ -428,7 +410,7 @@ async fn test_rate_limit_x_forwarded_for_uses_rightmost_untrusted_entry() {
 
 #[tokio::test]
 async fn test_rate_limit_fallback_to_localhost() {
-    let config = RateLimitConfig::new(2).with_window(Duration::from_millis(100));
+    let config = limit(2, Duration::from_millis(100));
     let app = create_test_router(config);
 
     // Requests without IP headers should use localhost
@@ -452,7 +434,7 @@ async fn test_rate_limit_fallback_to_localhost() {
 
 #[tokio::test]
 async fn test_rate_limit_concurrent_requests_same_ip() {
-    let config = RateLimitConfig::new(5).with_window(Duration::from_millis(200));
+    let config = limit(5, Duration::from_millis(200));
     let app = create_test_router(config);
 
     let mut handles = vec![];
@@ -491,7 +473,7 @@ async fn test_rate_limit_concurrent_requests_same_ip() {
 
 #[tokio::test]
 async fn test_rate_limit_concurrent_requests_different_ips() {
-    let config = RateLimitConfig::new(2).with_window(Duration::from_millis(200));
+    let config = limit(2, Duration::from_millis(200));
     let app = create_test_router(config);
 
     let mut handles = vec![];
@@ -544,7 +526,7 @@ async fn test_rate_limit_concurrent_requests_different_ips() {
 
 #[tokio::test]
 async fn test_rate_limit_overhead_minimal() {
-    let config = RateLimitConfig::new(1000).with_window(Duration::from_secs(60));
+    let config = limit(1000, Duration::from_secs(60));
     let app = create_test_router(config);
 
     let start = std::time::Instant::now();

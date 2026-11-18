@@ -6,7 +6,7 @@
 //! `reconstructed_*` fields to be `pub(super)`.
 
 use super::client::ClientStreamSession;
-use super::protocol::{WirePatch, apply_patch};
+use super::protocol::{Framing, WirePatch, apply_patch};
 use crate::domain::SessionId;
 use crate::error::{Error, LimitKind, PatchError};
 use core::assert_matches;
@@ -17,7 +17,7 @@ fn patch(text: &str) -> WirePatch {
 }
 
 fn session() -> ClientStreamSession {
-    ClientStreamSession::new(SessionId::new())
+    ClientStreamSession::new(SessionId::new(), Framing::Patch)
 }
 
 fn serialized_len(value: &Value) -> usize {

@@ -27,7 +27,7 @@ code:
   - crates/pjs-js-client/src/types/index.ts
   - crates/pjs-js-client/src/utils/index.ts
   - crates/pjs-js-client/src/index.ts
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 073: TypeScript client core (client, transports, reconstruction)
@@ -74,7 +74,7 @@ Code: `client.ts::stream`, `processStream`.
 Status: done.
 
 ### FR-005 Events and callbacks
-Per frame the client shall emit `frame_received`; for a skeleton `skeleton_ready` and `onRender(data, {priority, isComplete:false, progress})`; for a patch frame one `patch_applied` (first patch only) and `onRender`; for the complete frame `stream_complete`, final `onRender` with `isComplete:true`, and `progress_update`/`onProgress`. `PJSEvent.Error` has a default no-op listener so unhandled errors do not crash the process.
+Per frame the client shall emit `frame_received`; for a skeleton `skeleton_ready` and `onRender(data, {priority, isComplete:false, progress})`; for a patch frame one `patch_applied` (first patch only; the payload also carries `appliedPatches` and `skippedPatches`) and `onRender`; for the complete frame `stream_complete`, final `onRender` with `isComplete:true`, and `progress_update`/`onProgress`. `PJSEvent.Error` has a default no-op listener so unhandled errors do not crash the process.
 Code: `client.ts`, `types/index.ts` (`PJSEvent`, `PJSEventData`).
 Status: done.
 
@@ -84,7 +84,7 @@ Code: `client.ts`; `getStreamStats()`.
 Status: partial.
 
 ### FR-007 Frame validation
-`FrameProcessor.validateFrame` shall return `{isValid, errors}`: frame must be an object with a known `frame_type` (`Skeleton|Patch|Complete|Error`), numeric `priority` in 0..=100, skeleton requires `payload`, patch requires non-empty `payload.patches` with each patch having a path matching `^\$(\.[^.[\]]+(\[\d+\])?)*$` (key grammar aligned with Rust `JsonPath::is_valid_key`: any non-empty key without `.`, `[`, `]`) and `operation` in `set|append|merge|delete`.
+`FrameProcessor.validateFrame` shall return `{isValid, errors}`: frame must be an object with a known `frame_type` (`Skeleton|Patch|Complete|Error`), numeric `priority` in 0..=100, skeleton requires `payload`, patch requires non-empty `payload.patches` with each patch having a path accepted by the shared path scanner `isValidJsonPath` (grammar below) and `operation` in `set|append|merge|delete`.
 Code: `frame-processor.ts`; `utils/index.ts::validateFrame` is a second, looser type guard.
 Status: done.
 
@@ -94,13 +94,13 @@ Code: `frame-processor.ts`.
 Status: implemented but unused by the client (tested in `tests/core/frame-processor.test.ts`).
 
 ### FR-009 JSON reconstruction
-`JsonReconstructor` shall: `processSkeleton` (deep clone payload; reject a second call), `applyPatch` (per patch: path `$` addresses the root, where `set` replaces the state with a deep clone of the value and `merge` shallow-merges plain objects (otherwise replaces), while `append`/`delete` at the root are skipped; every other path must match the grammar below; operations `set`, `append` (push scalar or spread array), `merge` (shallow object merge, otherwise replace), `delete` (array index splice or own-property delete); unknown operations/paths counted as skipped), `getCurrentState()` (deep clone), `reset`, `markComplete`, `getMetadata`. Path grammar (`core/json-path.ts`, internal, shared with `FrameProcessor` and `parseJsonPath`): `$` followed by any number of `.key` or `[n]` segments; a key is non-empty without `.`, `[`, `]` (the Rust `JsonPath::is_valid_key` rule), `n` is a decimal safe integer. `$` alone addresses the root and `$[0]...` indexes an array root. Resolution is strict: missing intermediate object keys followed by a key are created, but every index must already exist (`n < length`, on an array), so an out-of-range, non-array or under-a-missing-key index skips the patch instead of creating sparse arrays or literal keys. Root `merge` of two plain objects mutates the state in place.
+`JsonReconstructor` shall: `processSkeleton` (deep clone payload; reject a second call), `applyPatch` (per patch: path `$` addresses the root, where `set` replaces the state with a deep clone of the value and `merge` shallow-merges plain objects (otherwise replaces), while `append`/`delete` at the root are skipped; every other path must match the grammar below; operations `set`, `append` (push scalar or spread array), `merge` (shallow object merge, otherwise replace), `delete` (array index splice or own-property delete); unknown operations/paths counted as skipped), `getCurrentState()` (deep clone), `reset`, `markComplete`, `getMetadata`. Path grammar (`core/json-path.ts`, internal, shared with `FrameProcessor` and `parseJsonPath`): `$` followed by any number of `.plain`, `[index]` or `["quoted"]` segments. `plain` is non-empty without `.`, `[`, `]`. `index` is `0` or `[1-9][0-9]*` (ASCII, no sign, no leading zeros) up to `Number.MAX_SAFE_INTEGER`; Rust's bound is `usize` (documented divergence; no real array reaches either). `quoted` is the canonical `JSON.stringify` literal of a key that is not plain and has no lone surrogates; non-canonical escapes, plain keys in quotes and a missing `]` are rejected (the Rust grammar of spec 042). `$` alone addresses the root and `$[0]...` indexes an array root. Resolution is strict: missing intermediate object keys followed by a key are created, but every index must already exist (`n < length`, on an array), so an out-of-range, non-array or under-a-missing-key index skips the patch instead of creating sparse arrays or literal keys. Root `merge` of two plain objects mutates the state in place.
 Code: `json-reconstructor.ts`.
 Status: done.
 
 ### FR-010 Prototype-pollution defence
-The reconstructor shall reject path segments `__proto__`, `constructor`, `prototype`, create intermediate objects with `Object.create(null)`, write values with `Object.defineProperty`, and deep-clone with null-prototype objects.
-Code: `json-reconstructor.ts` (`UNSAFE_KEYS`, `assertSafeKey`).
+Keys `__proto__`, `constructor` and `prototype` are ordinary data: the reconstructor stores and reads them as own properties for every operation (`set`, `merge`, `append`, `delete`, intermediate and tail). Every read on the walk and at the tail goes through an own-property check, writes use `Object.defineProperty`, intermediates are `Object.create(null)`, and deep clones use null-prototype objects, so no patch can reach a prototype. The former deny-list (`UNSAFE_KEYS`, `assertSafeKey`) was removed (#712).
+Code: `json-reconstructor.ts`; test `tests/core/reconstructor-own-keys-acceptance.test.ts`.
 Status: done.
 
 ### FR-011 Transports
@@ -136,10 +136,9 @@ Status: done (#644). Tests: `tests/transport/{sse,http,shutdown-marker,client-sh
 | Condition | Result |
 |-----------|--------|
 | Patch before skeleton (`PJSClient`) | `PJSError(ProtocolError)` |
-| Patch path not matching the grammar (no `$`, empty segment, bad index) | skipped; rejected by `FrameProcessor.validateFrame` |
+| Patch path not matching the grammar (no `$`, empty segment, bad index incl. leading zeros, missing `]`) | skipped; rejected by `FrameProcessor.validateFrame` |
 | Index past the end, on a non-array, or under a missing key | patch skipped, no sparse array or literal key created |
 | Root `$` `append`/`delete` | skipped |
-| Unsafe key in path | patch skipped (error caught) |
 | `delete` on missing key | no-op counted as applied; out-of-range index skipped |
 | NDJSON line unparsable | `ParseError` emitted, stream continues |
 | WebSocket closes with code != 1000 | up to 5 reconnects |
@@ -162,7 +161,6 @@ Status: done (#644). Tests: `tests/transport/{sse,http,shutdown-marker,client-sh
 - Priority mismatch: TS `Priority.High = 75`; Rust `Priority::HIGH = 80`. FrameProcessor accepts 0..=100 while Rust priorities are 1..=255.
 - Unused configuration: `bufferSize`, `priorityThreshold`, `maxConcurrentStreams` and `StreamOptions.priorityStrategy` are accepted and defaulted but never read.
 - `calculateHeuristicPriority` in `utils/index.ts` is a third, substring-based priority table that is exported but unused by the client and differs from `compute_priority` in the domain crate.
-- No test asserts the prototype-pollution defence (FR-010): `tests/core/json-reconstructor.test.ts` has no `__proto__`/`prototype` case.
 - Two frame validators (`FrameProcessor.validateFrame` and `utils.validateFrame`) with different rules (priority range, error reporting).
 - Endpoint compatibility: no route `/pjs/stream{endpoint}`, `/pjs/stream{endpoint}/sse`, or `/pjs/ws` was found in `crates/pjs-core/src/infrastructure/http`; the server routes are `/pjs/sessions/{id}/streams/{stream_id}/frames/stream` and `/pjs/ws/{session_id}` (per `.claude/rules/continuous-improvement.md`). [NEEDS CLARIFICATION: which server the client targets]
 - Version strings disagree: `package.json` `0.3.0-alpha.2`, `src/index.ts` `VERSION` and HTTP `client_info.version` `0.3.0-alpha.1`.

@@ -46,14 +46,11 @@ impl SecureWebSocketHandler {
     pub fn check_upgrade_request(&self, client_ip: IpAddr) -> Result<(), RateLimitError> {
         match self.rate_limiter.check_request(client_ip) {
             Ok(()) => {
-                info!("WebSocket upgrade request allowed for IP: {}", client_ip);
+                info!(%client_ip, "WebSocket upgrade request allowed");
                 Ok(())
             }
             Err(e) => {
-                warn!(
-                    "WebSocket upgrade request denied for IP {}: {}",
-                    client_ip, e
-                );
+                warn!(%client_ip, error = %e, "WebSocket upgrade request denied");
                 Err(e)
             }
         }
@@ -66,11 +63,11 @@ impl SecureWebSocketHandler {
     ) -> Result<RateLimitGuard, RateLimitError> {
         match RateLimitGuard::new(self.rate_limiter.clone(), client_ip) {
             Ok(guard) => {
-                info!("WebSocket connection established for IP: {}", client_ip);
+                info!(%client_ip, "WebSocket connection established");
                 Ok(guard)
             }
             Err(e) => {
-                warn!("WebSocket connection denied for IP {}: {}", client_ip, e);
+                warn!(%client_ip, error = %e, "WebSocket connection denied");
                 Err(e)
             }
         }
@@ -85,7 +82,7 @@ impl SecureWebSocketHandler {
         match guard.check_message(frame_size) {
             Ok(()) => Ok(()),
             Err(e) => {
-                error!("WebSocket message validation failed: {}", e);
+                error!(error = %e, "WebSocket message validation failed");
                 Err(e)
             }
         }

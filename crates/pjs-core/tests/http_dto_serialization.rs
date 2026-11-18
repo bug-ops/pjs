@@ -65,7 +65,7 @@ fn test_create_session_request_invalid_type() {
 fn test_create_session_response_serialize() {
     let response = CreateSessionResponse {
         session_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
-        expires_at: chrono::Utc::now(),
+        expires_at: jiff::Timestamp::now(),
     };
 
     let json = serde_json::to_value(&response).unwrap();
@@ -77,7 +77,7 @@ fn test_create_session_response_serialize() {
 fn test_create_session_response_session_id_format() {
     let response = CreateSessionResponse {
         session_id: "test-session-id".to_string(),
-        expires_at: chrono::Utc::now(),
+        expires_at: jiff::Timestamp::now(),
     };
 
     let json = serde_json::to_value(&response).unwrap();

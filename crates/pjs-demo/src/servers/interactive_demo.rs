@@ -108,7 +108,7 @@ async fn traditional_endpoint(
         "data": data,
         "metadata": metadata,
         "approach": "traditional",
-        "generated_at": chrono::Utc::now().to_rfc3339()
+        "generated_at": jiff::Timestamp::now().to_string()
     });
 
     Ok(Json(response))
@@ -185,7 +185,7 @@ async fn pjs_streaming_endpoint(
             "data": data,
             "metadata": metadata,
             "approach": "pjs_optimized",
-            "generated_at": chrono::Utc::now().to_rfc3339()
+            "generated_at": jiff::Timestamp::now().to_string()
         });
 
         let response = axum::response::Response::builder()
@@ -276,7 +276,7 @@ fn generate_skeleton(dataset_type: DatasetType) -> Value {
             "products": [],
             "inventory": null,
             "analytics": null,
-            "generated_at": chrono::Utc::now().to_rfc3339(),
+            "generated_at": jiff::Timestamp::now().to_string(),
             "dataset_info": {
                 "type": "ecommerce",
                 "loading": true
@@ -292,7 +292,7 @@ fn generate_skeleton(dataset_type: DatasetType) -> Value {
             "posts": [],
             "trending": [],
             "analytics": null,
-            "generated_at": chrono::Utc::now().to_rfc3339(),
+            "generated_at": jiff::Timestamp::now().to_string(),
             "dataset_info": {
                 "type": "social",
                 "loading": true
@@ -302,11 +302,11 @@ fn generate_skeleton(dataset_type: DatasetType) -> Value {
             "dashboard": {
                 "name": "PJS Analytics Demo",
                 "description": "Loading dashboard...",
-                "last_updated": chrono::Utc::now().to_rfc3339()
+                "last_updated": jiff::Timestamp::now().to_string()
             },
             "time_series": [],
             "summary": null,
-            "generated_at": chrono::Utc::now().to_rfc3339()
+            "generated_at": jiff::Timestamp::now().to_string()
         }),
         DatasetType::RealTime => json!({
             "system": {
@@ -314,7 +314,7 @@ fn generate_skeleton(dataset_type: DatasetType) -> Value {
                 "status": "connecting..."
             },
             "metrics": [],
-            "generated_at": chrono::Utc::now().to_rfc3339()
+            "generated_at": jiff::Timestamp::now().to_string()
         }),
     }
 }

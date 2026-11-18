@@ -86,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn test_max_session_timeout_seconds_fits_chrono_duration() {
+    fn test_max_session_timeout_seconds_fits_signed_duration() {
         assert_eq!(MAX_SESSION_TIMEOUT_SECONDS, 604_800);
         const { assert!(MAX_SESSION_TIMEOUT_SECONDS <= u32::MAX as u64) };
     }

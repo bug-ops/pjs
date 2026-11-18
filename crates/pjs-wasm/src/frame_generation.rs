@@ -14,8 +14,6 @@ use std::collections::HashMap;
 /// Build a skeleton structure from `data`: same shape, but with null/empty leaf values.
 ///
 /// Recursion stops at `max_depth`, replacing anything deeper with `JsonData::Null`.
-/// Values under keys that [`JsonPath`] cannot encode are kept verbatim, because no
-/// patch can address them.
 pub(crate) fn build_skeleton(data: &JsonData, current_depth: usize, max_depth: usize) -> JsonData {
     if current_depth >= max_depth {
         return JsonData::Null;
@@ -27,7 +25,6 @@ pub(crate) fn build_skeleton(data: &JsonData, current_depth: usize, max_depth: u
 
             for (k, v) in map.iter() {
                 let skeleton_value = match v {
-                    _ if !JsonPath::is_valid_key(k) => v.clone(),
                     JsonData::Object(_) => build_skeleton(v, current_depth + 1, max_depth),
                     JsonData::Array(_) => JsonData::Array(vec![]),
                     JsonData::String(_) => JsonData::Null,

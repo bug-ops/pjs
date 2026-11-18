@@ -9,7 +9,7 @@ created: 2026-11-15
 status: implemented
 related:
   - "[[076-fuzz-targets/spec]]"
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan 076: as-built

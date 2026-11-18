@@ -957,9 +957,7 @@ impl StreamStoreGat for GatInMemoryStreamStore {
                         creation_time: stream.created_at(),
                         completion_time: stream.completed_at(),
                         processing_duration: stream.duration().map(|d| {
-                            std::time::Duration::from_millis(
-                                d.num_milliseconds().try_into().unwrap_or(0),
-                            )
+                            std::time::Duration::from_millis(d.as_millis().try_into().unwrap_or(0))
                         }),
                     })
                 }
@@ -1002,8 +1000,8 @@ mod tests {
         aggregates::stream_session::SessionConfig, entities::stream::StreamConfig,
         value_objects::JsonData,
     };
-    use chrono::{Duration, Utc};
     use core::assert_matches;
+    use jiff::{SignedDuration, Timestamp};
 
     // ===== Helper function tests =====
 
@@ -1113,10 +1111,10 @@ mod tests {
         repo.save_session(session).await.unwrap();
 
         // Filter by time range - should find the session
-        let now = Utc::now();
+        let now = Timestamp::now();
         let criteria = SessionQueryCriteria::builder()
-            .created_after(now - Duration::hours(1))
-            .created_before(now + Duration::hours(1))
+            .created_after(now - SignedDuration::from_hours(1))
+            .created_before(now + SignedDuration::from_hours(1))
             .build()
             .unwrap();
         let pagination = SessionPagination::default();
@@ -1130,7 +1128,7 @@ mod tests {
 
         // Filter by future time range - should find nothing
         let criteria_future = SessionQueryCriteria::builder()
-            .created_after(now + Duration::hours(1))
+            .created_after(now + SignedDuration::from_hours(1))
             .build()
             .unwrap();
         let result_future = repo
@@ -1258,23 +1256,23 @@ mod tests {
     /// `StreamSession::new` calls (real wall-clock, no guaranteed spacing)
     /// would make `CreatedAt`/`UpdatedAt` ordering assertions flaky.
     struct ManualTimeProvider {
-        now: std::sync::Mutex<chrono::DateTime<Utc>>,
+        now: std::sync::Mutex<jiff::Timestamp>,
     }
 
     impl ManualTimeProvider {
-        fn new(start: chrono::DateTime<Utc>) -> Self {
+        fn new(start: jiff::Timestamp) -> Self {
             Self {
                 now: std::sync::Mutex::new(start),
             }
         }
 
-        fn advance(&self, duration: Duration) {
+        fn advance(&self, duration: SignedDuration) {
             *self.now.lock().unwrap() += duration;
         }
     }
 
     impl crate::domain::ports::TimeProvider for ManualTimeProvider {
-        fn now(&self) -> chrono::DateTime<Utc> {
+        fn now(&self) -> jiff::Timestamp {
             *self.now.lock().unwrap()
         }
     }
@@ -1282,9 +1280,7 @@ mod tests {
     #[tokio::test]
     async fn test_compare_by_field_created_at_both_orders() {
         let repo = GatInMemoryStreamRepository::new();
-        let clock = std::sync::Arc::new(ManualTimeProvider::new(
-            chrono::DateTime::from_timestamp(0, 0).unwrap(),
-        ));
+        let clock = std::sync::Arc::new(ManualTimeProvider::new(jiff::Timestamp::UNIX_EPOCH));
 
         let mut earlier =
             StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
@@ -1292,7 +1288,7 @@ mod tests {
         let earlier_id = earlier.id();
         repo.save_session(earlier).await.unwrap();
 
-        clock.advance(Duration::seconds(10));
+        clock.advance(SignedDuration::from_secs(10));
         let mut later = StreamSession::with_time_provider(SessionConfig::default(), clock.clone());
         later.activate().unwrap();
         let later_id = later.id();
@@ -1326,9 +1322,7 @@ mod tests {
     #[tokio::test]
     async fn test_compare_by_field_updated_at_both_orders() {
         let repo = GatInMemoryStreamRepository::new();
-        let clock = std::sync::Arc::new(ManualTimeProvider::new(
-            chrono::DateTime::from_timestamp(0, 0).unwrap(),
-        ));
+        let clock = std::sync::Arc::new(ManualTimeProvider::new(jiff::Timestamp::UNIX_EPOCH));
 
         // Both sessions created at the same instant so only the later mutation
         // of `touched` can distinguish `updated_at` ordering.
@@ -1343,7 +1337,7 @@ mod tests {
         touched.activate().unwrap();
         let touched_id = touched.id();
 
-        clock.advance(Duration::seconds(10));
+        clock.advance(SignedDuration::from_secs(10));
         touched
             .create_stream(JsonData::String("advance updated_at".to_string()))
             .unwrap();
@@ -1575,11 +1569,11 @@ mod tests {
         );
         store.store_stream(stream).await.unwrap();
 
-        let now = Utc::now();
+        let now = Timestamp::now();
 
         // Filter by created_after in the past - should find stream
         let filter = StreamFilter::builder()
-            .created_after(now - Duration::hours(1))
+            .created_after(now - SignedDuration::from_hours(1))
             .build()
             .unwrap();
 
@@ -1591,7 +1585,7 @@ mod tests {
 
         // Filter by created_after in the future - should find nothing
         let filter_future = StreamFilter::builder()
-            .created_after(now + Duration::hours(1))
+            .created_after(now + SignedDuration::from_hours(1))
             .build()
             .unwrap();
 

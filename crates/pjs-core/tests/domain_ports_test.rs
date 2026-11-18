@@ -21,8 +21,8 @@ fn test_system_time_provider_now() {
     let now = provider.now();
 
     // Verify time is recent (within last minute)
-    let diff = chrono::Utc::now() - now;
-    assert!(diff.num_seconds().abs() < 60);
+    let diff = jiff::Timestamp::now() - now;
+    assert!(diff.as_secs().abs() < 60);
 }
 
 #[test]
@@ -137,12 +137,12 @@ fn test_session_query_criteria_default() {
 
 #[test]
 fn test_session_query_criteria_with_filters() {
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
 
     let criteria = SessionQueryCriteria::builder()
         .states(vec!["active".to_string(), "pending".to_string()])
         .created_after(now)
-        .created_before(now + chrono::Duration::hours(1))
+        .created_before(now + jiff::SignedDuration::from_hours(1))
         .client_info_pattern("test-*".to_string())
         .has_active_streams(true)
         .min_stream_count(1)
@@ -187,7 +187,7 @@ fn test_stream_filter_empty() {
 fn test_stream_filter_with_criteria() {
     let filter = StreamFilter::builder()
         .statuses(vec![StreamStatus::Active, StreamStatus::Completed])
-        .created_after(chrono::Utc::now())
+        .created_after(jiff::Timestamp::now())
         .has_frames(FramePresence::WithFrames)
         .build()
         .unwrap();
@@ -652,7 +652,7 @@ fn test_session_query_result_debug() {
 
 #[test]
 fn test_stream_statistics_creation() {
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
 
     let stats = StreamStatistics {
         total_frames: 100,
@@ -660,7 +660,7 @@ fn test_stream_statistics_creation() {
         priority_distribution: pjson_rs::domain::events::PriorityDistribution::default(),
         avg_frame_size: 10240.0,
         creation_time: now,
-        completion_time: Some(now + chrono::Duration::seconds(60)),
+        completion_time: Some(now + jiff::SignedDuration::from_secs(60)),
         processing_duration: Some(Duration::from_secs(60)),
     };
 
@@ -672,7 +672,7 @@ fn test_stream_statistics_creation() {
 
 #[test]
 fn test_stream_statistics_clone() {
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
 
     let stats = StreamStatistics {
         total_frames: 50,
@@ -691,7 +691,7 @@ fn test_stream_statistics_clone() {
 
 #[test]
 fn test_stream_statistics_debug() {
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
 
     let stats = StreamStatistics {
         total_frames: 10,

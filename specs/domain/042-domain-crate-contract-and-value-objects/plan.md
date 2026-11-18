@@ -9,7 +9,7 @@ created: 2026-11-15
 status: implemented
 related:
   - "[[042-domain-crate-contract-and-value-objects/spec]]"
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan 042: Domain Crate Contract and Value Objects (as built)
@@ -49,7 +49,7 @@ Module layout: `lib.rs` (errors, re-exports), `value_objects/{priority,id,json_d
 - Value objects with invariants do not derive serde; embedding types choose their wire encoding via `#[serde(with = "serde_support::...")]` so one encoding exists per type.
 - `JsonData` is the domain's own JSON type (not `serde_json::Value`) so the domain API does not leak a serialisation library; conversion from `serde_json::Value` exists for adapters.
 - `JsonPath` consolidates two earlier copies into one segmented type (CHANGELOG 0.6.3 Changed, #379).
-- Enums that may grow are `#[non_exhaustive]` (`DomainError`, `JsonData`, `PathSegment`, `BackpressureSignal`, state/frame enums).
+- Enums that may grow are `#[non_exhaustive]` (`DomainError`, `JsonData`, `BackpressureSignal`, state/frame enums); `PathSegment` is a closed enum (key or index).
 - `unsafe_code = "forbid"` at manifest level.
 
 ## Public API surface
@@ -65,8 +65,8 @@ Root re-exports: `Frame`, `Stream`, `DomainEvent`, `SessionState`, `PriorityHeur
 | `Priority::from_percentage(p)` | `0.0 <= p <= 100.0` | value in `1..=255` | NaN rejected |
 | `Id::<T>::new()` | none | random v4 UUID | uses OS randomness (`js` feature on wasm32) |
 | `Id::<T>::from_string(s)` | none | `Ok` iff `s` parses as a UUID | accepts any UUID version/format `uuid` accepts |
-| `JsonPath::new(s)` | none | `Ok(p)` implies `p.to_string()` reparses to `p` | keys with `.`, `[`, `]` impossible |
-| `JsonPath::append_key(k)` | `k` non-empty, no `.[]` | new path, depth + 1 | original unchanged (clones segments, O(depth)) |
+| `JsonPath::new(s)` | none | `Ok(p)` implies `p.to_string() == s` and reparses to `p` | any key is representable (quoted when not plain) |
+| `JsonPath::append_key(k)` | none (any key, infallible) | new path, depth + 1 | original unchanged (clones segments, O(depth)) |
 | `JsonPath::is_prefix_of(o)` | none | strict prefix only; a path is not its own prefix | |
 | `JsonData::float(f)` | none | `Ok` iff finite | direct `JsonData::Float(NAN)` bypasses it |
 | `JsonData::set_path(p, v)` | none | `true` iff stored | `false` if traversal hits a non-object |

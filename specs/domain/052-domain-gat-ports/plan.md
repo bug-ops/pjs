@@ -20,7 +20,7 @@ verified: 2026-11-15
 # Plan 052: Domain GAT Ports (as built)
 
 ## Architecture
-Ports live in `pjs-core::domain::ports`. Entities, value objects, events and `DomainError` come from `pjs-domain` (re-exported by `domain/mod.rs`); `StreamSession` and the ports live in `pjs-core` because they need `tokio`/`chrono` types and async.
+Ports live in `pjs-core::domain::ports`. Entities, value objects, events and `DomainError` come from `pjs-domain` (re-exported by `domain/mod.rs`); `StreamSession` and the ports live in `pjs-core` because they need `tokio`/`jiff` types and async.
 
 ```mermaid
 flowchart LR

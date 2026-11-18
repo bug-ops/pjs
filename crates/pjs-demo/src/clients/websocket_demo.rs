@@ -61,7 +61,7 @@ pub struct PjsFrame {
     #[serde(rename = "@compressed")]
     pub compressed: Option<bool>,
     #[serde(rename = "@timestamp")]
-    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub timestamp: Option<jiff::Timestamp>,
     pub data: JsonValue,
 }
 
@@ -75,7 +75,7 @@ pub struct StreamCompletion {
     #[serde(rename = "@total_frames")]
     pub total_frames: usize,
     #[serde(rename = "@timestamp")]
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub timestamp: jiff::Timestamp,
 }
 
 /// Client statistics

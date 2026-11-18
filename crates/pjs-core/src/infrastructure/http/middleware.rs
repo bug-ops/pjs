@@ -185,51 +185,6 @@ impl TrustedProxyConfig {
     }
 }
 
-/// Rate limiting configuration for HTTP endpoints
-#[derive(Debug, Clone)]
-pub struct RateLimitConfig {
-    /// Maximum requests per time window (default: 100)
-    pub max_requests_per_window: u32,
-    /// Time window duration (default: 60 seconds)
-    pub window_duration: std::time::Duration,
-    /// Opt-in trusted-proxy allowlist. `None` (the default) always keys the
-    /// rate limiter on the real TCP peer address. See [`TrustedProxyConfig`].
-    pub trusted_proxies: Option<TrustedProxyConfig>,
-}
-
-impl Default for RateLimitConfig {
-    fn default() -> Self {
-        Self {
-            max_requests_per_window: 100,
-            window_duration: std::time::Duration::from_secs(60),
-            trusted_proxies: None,
-        }
-    }
-}
-
-impl RateLimitConfig {
-    /// Build a per-minute rate limit (`requests_per_minute` requests per 60-second window).
-    pub fn new(requests_per_minute: u32) -> Self {
-        Self {
-            max_requests_per_window: requests_per_minute,
-            window_duration: std::time::Duration::from_secs(60),
-            trusted_proxies: None,
-        }
-    }
-
-    /// Override the window duration that `max_requests_per_window` applies to.
-    pub fn with_window(mut self, duration: std::time::Duration) -> Self {
-        self.window_duration = duration;
-        self
-    }
-
-    /// Opt in to trusting `X-Forwarded-For`/`X-Real-IP` from the given proxy allowlist.
-    pub fn with_trusted_proxies(mut self, config: TrustedProxyConfig) -> Self {
-        self.trusted_proxies = Some(config);
-        self
-    }
-}
-
 /// Rate limiting middleware for PJS endpoints
 ///
 /// Uses token bucket algorithm from security::rate_limit module
@@ -248,23 +203,14 @@ impl RateLimitMiddleware {
     /// entries (see [`crate::security::rate_limit::ClientRateLimiter::spawn_cleanup_task`])
     /// if called from within a Tokio runtime; otherwise construction still
     /// succeeds, but periodic pruning is skipped with a logged warning.
-    pub fn new(config: RateLimitConfig) -> Self {
-        let trusted_proxies = config.trusted_proxies.clone();
-        let rate_limit_config = crate::security::rate_limit::RateLimitConfig {
-            max_requests_per_window: config.max_requests_per_window,
-            window_duration: config.window_duration,
-            ..Default::default()
-        };
-
-        let limiter = std::sync::Arc::new(crate::security::rate_limit::ClientRateLimiter::new(
-            rate_limit_config,
-        ));
-        limiter.spawn_cleanup_task(crate::security::rate_limit::DEFAULT_CLEANUP_INTERVAL);
-
-        Self {
-            limiter,
-            trusted_proxies,
-        }
+    ///
+    /// Only `max_requests_per_window` and `window_duration` of `config` apply to
+    /// HTTP. The peer address is the rate-limit key unless
+    /// [`Self::with_trusted_proxies`] opts in to a proxy allowlist.
+    pub fn new(config: crate::security::rate_limit::RateLimitConfig) -> Self {
+        Self::from_limiter(std::sync::Arc::new(
+            crate::security::rate_limit::ClientRateLimiter::new(config),
+        ))
     }
 
     /// Wrap an externally constructed `ClientRateLimiter` (lets several middlewares share state).
@@ -849,28 +795,9 @@ mod tests {
         assert_eq!(middleware.max_request_size, 5 * 1024 * 1024);
     }
 
-    #[test]
-    fn test_rate_limit_config_default() {
-        let config = RateLimitConfig::default();
-        assert_eq!(config.max_requests_per_window, 100);
-        assert_eq!(config.window_duration, std::time::Duration::from_secs(60));
-    }
-
-    #[test]
-    fn test_rate_limit_config_new() {
-        let config = RateLimitConfig::new(50);
-        assert_eq!(config.max_requests_per_window, 50);
-    }
-
-    #[test]
-    fn test_rate_limit_config_with_window() {
-        let config = RateLimitConfig::new(100).with_window(std::time::Duration::from_secs(30));
-        assert_eq!(config.window_duration, std::time::Duration::from_secs(30));
-    }
-
     #[tokio::test]
     async fn test_rate_limit_middleware_creation() {
-        let config = RateLimitConfig::default();
+        let config = crate::security::rate_limit::RateLimitConfig::default();
         let _middleware = RateLimitMiddleware::new(config);
     }
 
@@ -900,7 +827,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_claims_cleanup_spawn() {
-        let middleware = RateLimitMiddleware::new(RateLimitConfig::default());
+        let middleware =
+            RateLimitMiddleware::new(crate::security::rate_limit::RateLimitConfig::default());
 
         assert!(
             middleware.limiter.is_cleanup_task_spawned(),

@@ -359,9 +359,9 @@ fn test_frame_timestamp() {
     let timestamp = frame.timestamp();
 
     // Timestamp should be recent
-    let now = chrono::Utc::now();
-    let diff = now.signed_duration_since(timestamp);
-    assert!(diff.num_seconds() < 5);
+    let now = jiff::Timestamp::now();
+    let diff = now.duration_since(timestamp);
+    assert!(diff.as_secs() < 5);
 }
 
 // ============================================================================

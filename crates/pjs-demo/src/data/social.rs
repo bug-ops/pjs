@@ -226,7 +226,7 @@ pub fn generate_social_data(size: DatasetSize) -> Value {
         "posts": posts,
         "trending": trending,
         "analytics": analytics,
-        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "generated_at": jiff::Timestamp::now().to_string(),
         "dataset_info": {
             "type": "social",
             "size": format!("{size:?}").to_lowercase(),

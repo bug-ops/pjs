@@ -202,7 +202,8 @@ async fn test_stream_init_invalid_options_over_wire_replies_400_and_streams_noth
         .expect("an error reply");
     assert_eq!(reply["type"], "Error");
     assert_eq!(reply["data"]["code"], 400);
-    assert_eq!(reply["data"]["error"], "invalid stream options");
+    assert_eq!(reply["data"]["error"], "malformed message");
+    assert!(reply["data"]["session_id"].is_null(), "{reply}");
     assert!(
         next_json(&mut ws, Duration::from_millis(300))
             .await
@@ -225,7 +226,8 @@ async fn test_stream_init_zero_client_fps_over_wire_replies_400() {
         .await
         .expect("reply");
     assert_eq!(reply["data"]["code"], 400);
-    assert_eq!(reply["data"]["error"], "invalid stream options");
+    assert_eq!(reply["data"]["error"], "malformed message");
+    assert!(reply["data"]["session_id"].is_null(), "{reply}");
 }
 
 #[tokio::test]
@@ -598,12 +600,13 @@ struct ScriptedClient {
 
 async fn run_scripted(frames: Vec<(Value, bool)>, max_session_bytes: usize) -> ScriptedClient {
     let addr = spawn_scripted_server(frames).await;
-    let client = Arc::new(PjsWebSocketClient::new(ws_url(addr)).unwrap().with_config(
-        WebSocketClientConfig {
-            max_session_bytes: NonZeroUsize::new(max_session_bytes).unwrap(),
-            ..WebSocketClientConfig::default()
-        },
-    ));
+    let mut config = WebSocketClientConfig::default();
+    config.max_session_bytes = NonZeroUsize::new(max_session_bytes).unwrap();
+    let client = Arc::new(
+        PjsWebSocketClient::new(ws_url(addr))
+            .unwrap()
+            .with_config(config),
+    );
     let connect = tokio::spawn({
         let client = Arc::clone(&client);
         async move { client.connect().await }

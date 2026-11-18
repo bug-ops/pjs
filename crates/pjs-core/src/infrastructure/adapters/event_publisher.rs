@@ -154,7 +154,7 @@ pub struct StoredEvent {
     /// Identifier of the session the event belongs to, when applicable.
     pub session_id: Option<SessionId>,
     /// Wall-clock instant the event occurred.
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub timestamp: jiff::Timestamp,
     /// Free-form metadata captured from the event.
     pub metadata: std::collections::HashMap<String, String>,
     /// Monotonic sequence number stamped by [`InMemoryEventPublisher`] when
@@ -476,7 +476,7 @@ mod tests {
         let session_id = SessionId::new();
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
 
         publisher.publish(event).await.unwrap();
@@ -495,7 +495,7 @@ mod tests {
         let session_id = SessionId::new();
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
 
         publisher.publish(event).await.unwrap();
@@ -514,12 +514,12 @@ mod tests {
         let events = vec![
             DomainEvent::SessionActivated {
                 session_id,
-                timestamp: chrono::Utc::now(),
+                timestamp: jiff::Timestamp::now(),
             },
             DomainEvent::StreamStarted {
                 session_id,
                 stream_id,
-                timestamp: chrono::Utc::now(),
+                timestamp: jiff::Timestamp::now(),
             },
         ];
 
@@ -536,7 +536,7 @@ mod tests {
         // same EventId and silently overwrote each other in `event_log`.
         let publisher = InMemoryEventPublisher::new();
         let session_id = SessionId::new();
-        let timestamp = chrono::Utc::now();
+        let timestamp = jiff::Timestamp::now();
 
         let event1 = DomainEvent::SessionActivated {
             session_id,
@@ -598,7 +598,7 @@ mod tests {
         for _ in 0..EVENT_CHANNEL_CAPACITY {
             let event = DomainEvent::SessionActivated {
                 session_id,
-                timestamp: chrono::Utc::now(),
+                timestamp: jiff::Timestamp::now(),
             };
             publisher.publish(event).await.unwrap();
         }
@@ -618,7 +618,7 @@ mod tests {
 
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
         };
         tokio::time::timeout(std::time::Duration::from_secs(2), publisher.publish(event))
             .await
@@ -657,7 +657,7 @@ mod tests {
             id: EventId::new(),
             event_type: "test".to_string(),
             session_id: None,
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
             metadata: large_metadata,
             sequence: 0,
         };
@@ -709,7 +709,7 @@ mod tests {
             let events: Vec<DomainEvent> = (0..20_000)
                 .map(|_| DomainEvent::SessionActivated {
                     session_id,
-                    timestamp: chrono::Utc::now(),
+                    timestamp: jiff::Timestamp::now(),
                 })
                 .collect();
             publisher_a.publish_batch(events).await.unwrap();
@@ -730,7 +730,7 @@ mod tests {
         publisher
             .publish(DomainEvent::SessionActivated {
                 session_id,
-                timestamp: chrono::Utc::now(),
+                timestamp: jiff::Timestamp::now(),
             })
             .await
             .unwrap();

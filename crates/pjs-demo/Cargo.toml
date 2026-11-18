@@ -10,9 +10,9 @@ description = "Interactive PJS streaming demonstration servers and examples"
 
 [dependencies]
 axum = { workspace = true, features = ["ws"] }
-chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
+jiff = { workspace = true, features = ["std", "serde"] }
 pjson-rs = { path = "../pjs-core" }
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

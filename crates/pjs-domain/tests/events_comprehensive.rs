@@ -9,7 +9,7 @@
 //! - PriorityDistribution calculations
 //! - EventId generation
 
-use chrono::Utc;
+use jiff::Timestamp;
 use pjson_rs_domain::{
     events::{
         DomainEvent, EventStore, InMemoryEventStore, PerformanceMetrics, PriorityDistribution,
@@ -24,7 +24,7 @@ mod domain_event_creation_tests {
     #[test]
     fn test_session_activated_event() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::SessionActivated {
             session_id,
@@ -43,7 +43,7 @@ mod domain_event_creation_tests {
     #[test]
     fn test_session_closed_event() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::SessionClosed {
             session_id,
@@ -59,7 +59,7 @@ mod domain_event_creation_tests {
     #[test]
     fn test_session_expired_event() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::SessionExpired {
             session_id,
@@ -75,7 +75,7 @@ mod domain_event_creation_tests {
     #[test]
     fn test_session_timed_out_event() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::SessionTimedOut {
             session_id,
@@ -92,8 +92,8 @@ mod domain_event_creation_tests {
     #[test]
     fn test_session_timeout_extended_event() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
-        let new_expires_at = Utc::now() + chrono::Duration::seconds(7200);
+        let timestamp = Timestamp::now();
+        let new_expires_at = Timestamp::now() + jiff::SignedDuration::from_secs(7200);
 
         let event = DomainEvent::SessionTimeoutExtended {
             session_id,
@@ -110,7 +110,7 @@ mod domain_event_creation_tests {
     fn test_stream_created_event() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::StreamCreated {
             session_id,
@@ -127,7 +127,7 @@ mod domain_event_creation_tests {
     fn test_stream_started_event() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::StreamStarted {
             session_id,
@@ -143,7 +143,7 @@ mod domain_event_creation_tests {
     fn test_stream_completed_event() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::StreamCompleted {
             session_id,
@@ -161,7 +161,7 @@ mod domain_event_creation_tests {
     fn test_stream_failed_event() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::StreamFailed {
             session_id,
@@ -180,7 +180,7 @@ mod domain_event_creation_tests {
     fn test_stream_cancelled_event() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::StreamCancelled {
             session_id,
@@ -196,7 +196,7 @@ mod domain_event_creation_tests {
     fn test_skeleton_generated_event() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::SkeletonGenerated {
             session_id,
@@ -213,7 +213,7 @@ mod domain_event_creation_tests {
     fn test_patch_frames_generated_event() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::PatchFramesGenerated {
             session_id,
@@ -231,7 +231,7 @@ mod domain_event_creation_tests {
     #[test]
     fn test_frames_batched_event() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::FramesBatched {
             session_id,
@@ -247,7 +247,7 @@ mod domain_event_creation_tests {
     #[test]
     fn test_priority_threshold_adjusted_event() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::PriorityThresholdAdjusted {
             session_id,
@@ -264,7 +264,7 @@ mod domain_event_creation_tests {
     fn test_stream_config_updated_event() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::StreamConfigUpdated {
             session_id,
@@ -279,7 +279,7 @@ mod domain_event_creation_tests {
     #[test]
     fn test_performance_metrics_recorded_event() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
         let metrics = PerformanceMetrics {
             frames_per_second: 100.0,
             bytes_per_second: 1024000.0,
@@ -304,7 +304,7 @@ mod event_metadata_tests {
     #[test]
     fn test_occurred_at() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::SessionActivated {
             session_id,
@@ -318,7 +318,7 @@ mod event_metadata_tests {
     fn test_metadata_extraction() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::StreamCreated {
             session_id,
@@ -339,7 +339,7 @@ mod event_metadata_tests {
     #[test]
     fn test_metadata_without_stream_id() {
         let session_id = SessionId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::SessionActivated {
             session_id,
@@ -369,11 +369,11 @@ mod event_store_tests {
         let events = vec![
             DomainEvent::SessionActivated {
                 session_id,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
             DomainEvent::SessionClosed {
                 session_id,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
         ];
 
@@ -390,15 +390,15 @@ mod event_store_tests {
         let events = vec![
             DomainEvent::SessionActivated {
                 session_id: session_id1,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
             DomainEvent::SessionActivated {
                 session_id: session_id2,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
             DomainEvent::SessionClosed {
                 session_id: session_id1,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
         ];
 
@@ -422,17 +422,17 @@ mod event_store_tests {
             DomainEvent::StreamCreated {
                 session_id,
                 stream_id: stream_id1,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
             DomainEvent::StreamCreated {
                 session_id,
                 stream_id: stream_id2,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
             DomainEvent::StreamStarted {
                 session_id,
                 stream_id: stream_id1,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
         ];
 
@@ -449,8 +449,8 @@ mod event_store_tests {
     fn test_get_events_since() {
         let mut store = InMemoryEventStore::new();
         let session_id = SessionId::new();
-        let now = Utc::now();
-        let past = now - chrono::Duration::seconds(10);
+        let now = Timestamp::now();
+        let past = now - jiff::SignedDuration::from_secs(10);
 
         let events = vec![
             DomainEvent::SessionActivated {
@@ -466,7 +466,7 @@ mod event_store_tests {
         store.append_events(events).unwrap();
 
         let recent_events = store
-            .get_events_since(now - chrono::Duration::seconds(5))
+            .get_events_since(now - jiff::SignedDuration::from_secs(5))
             .unwrap();
         assert_eq!(recent_events.len(), 1);
     }
@@ -479,11 +479,11 @@ mod event_store_tests {
         let events = vec![
             DomainEvent::SessionActivated {
                 session_id,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
             DomainEvent::SessionClosed {
                 session_id,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
         ];
 
@@ -572,7 +572,7 @@ mod event_serialization_tests {
         let session_id = SessionId::new();
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         };
 
         let serialized = serde_json::to_string(&event).expect("should serialize");
@@ -584,7 +584,7 @@ mod event_serialization_tests {
         let session_id = SessionId::new();
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         };
 
         let serialized = serde_json::to_string(&event).unwrap();
@@ -602,7 +602,7 @@ mod event_serialization_tests {
             session_id,
             stream_id,
             error: "Test error".to_string(),
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         };
 
         let serialized = serde_json::to_string(&event).expect("should serialize");
@@ -624,7 +624,7 @@ mod event_serialization_tests {
         let event = DomainEvent::PerformanceMetricsRecorded {
             session_id,
             metrics,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         };
 
         let serialized = serde_json::to_string(&event).expect("should serialize");
@@ -708,7 +708,7 @@ mod event_classification_tests {
     fn test_all_critical_events() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let critical_events: Vec<DomainEvent> = vec![
             DomainEvent::StreamFailed {
@@ -732,7 +732,7 @@ mod event_classification_tests {
     fn test_all_error_events() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let error_event = DomainEvent::StreamFailed {
             session_id,
@@ -748,7 +748,7 @@ mod event_classification_tests {
     fn test_all_completion_events() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let completion_events: Vec<DomainEvent> = vec![
             DomainEvent::StreamCompleted {

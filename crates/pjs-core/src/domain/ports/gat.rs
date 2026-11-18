@@ -17,7 +17,7 @@ use crate::domain::{
     value_objects::{JsonData, JsonPath, Priority, SessionId, StreamId},
 };
 use crate::gat_port;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::future::Future;
 use std::time::Duration;
 
@@ -482,7 +482,7 @@ gat_port! {
         async fn get_frames_by_path(&self, stream_id: StreamId, path: JsonPath) -> Vec<Frame>;
 
         /// Delete old frames
-        async fn cleanup_old_frames(&self, older_than: DateTime<Utc>) -> u64;
+        async fn cleanup_old_frames(&self, older_than: Timestamp) -> u64;
 
         /// Get priority distribution
         async fn get_frame_priority_distribution(&self, stream_id: StreamId) -> PriorityDistribution;
@@ -520,7 +520,7 @@ gat_port! {
         async fn get_events_by_type(
             &self,
             event_types: Vec<String>,
-            time_range: Option<(DateTime<Utc>, DateTime<Utc>)>
+            time_range: Option<(Timestamp, Timestamp)>
         ) -> Vec<DomainEvent>;
 
         /// Get latest sequence number

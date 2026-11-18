@@ -15,7 +15,7 @@ name = "pjson_rs_domain"
 path = "src/lib.rs"
 
 [dependencies]
-chrono = { workspace = true, features = ["serde"] }
+jiff = { workspace = true, features = ["std", "serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 smallvec = { workspace = true, features = ["serde"] }
@@ -24,6 +24,9 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["v4", "serde", "js"] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+jiff = { workspace = true, features = ["js"] }
 
 [lints]
 workspace = true

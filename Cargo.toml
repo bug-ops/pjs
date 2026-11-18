@@ -22,7 +22,6 @@ async-stream = "0.3"
 axum = "0.8"
 brotli = { version = "9", default-features = false, features = ["std"] }
 bytes = "1.12"
-chrono = "0.4"
 clap = "4.6"
 console_error_panic_hook = "0.1"
 criterion = "0.8"
@@ -35,6 +34,7 @@ headers-accept = "0.3.0"
 hmac = "0.13"
 hyper = "1.11"
 hyper-util = "0.1.20"
+jiff = { version = "1.0", default-features = false }
 jiter = "0.19"
 js-sys = "0.3"
 jsonwebtoken = { version = "12.0", default-features = false, features = ["use_pem"] }

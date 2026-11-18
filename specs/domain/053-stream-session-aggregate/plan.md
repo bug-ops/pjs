@@ -33,7 +33,7 @@ flowchart TD
 ## Design decisions
 - Two-phase frame generation (`extract_*` read-only, `commit_*` mutating) so the repository holds its per-session lock only for the commit.
 - Events are collected inside the aggregate and drained by the repository inside the same lock, then published by the handler; events are not published from the domain.
-- The clock is injected only at the aggregate; child streams use `Utc::now()`.
+- The clock is injected only at the aggregate; child streams use `Timestamp::now()`.
 - Durations use Welford mean plus fixed-alpha EMA; the EMA backs `SessionHealthSnapshot.metrics["recent_avg_duration_ms"]`.
 - Session limit is checked by `streams.len()`, not by active count.
 
@@ -46,7 +46,7 @@ flowchart TD
 |---|---|---|---|
 | `activate` | state `Initializing` | state `Active`, `SessionActivated` queued | error otherwise |
 | `create_stream` | `is_active()`, below limit | `stats.total_streams` and `active_streams` +1, `StreamCreated` queued | none |
-| `complete_stream` | stream `Streaming` | `completed_streams` +1, duration means updated, `StreamCompleted` queued | `duration_ms` uses `num_milliseconds() as f64` |
+| `complete_stream` | stream `Streaming` | `completed_streams` +1, duration means updated, `StreamCompleted` queued | `duration_ms` uses `as_millis() as f64` (`jiff::SignedDuration`) |
 | `commit_priority_frames` | `is_active()` | sequence numbers assigned only to surviving frames; output sorted by priority desc | stream vanished or no longer `Streaming`: skipped silently |
 | `close` | state `Active` | state `Completed`, active streams cancelled, `SessionClosed` queued | `stats.active_streams` not reduced |
 | `force_close_expired` | none | `Ok(false)` if not expired; else state `Failed`, streams removed | stats untouched |

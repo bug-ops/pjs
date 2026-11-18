@@ -15,6 +15,7 @@ pub mod domain;
 pub mod error;
 pub mod global_alloc;
 pub mod infrastructure;
+mod json_tree;
 pub mod parser;
 pub mod security;
 mod serialized_len;

@@ -37,7 +37,7 @@ fn default_config() -> SessionConfig {
 /// (required to satisfy `Arc<dyn TimeProvider>`) is the only indirection
 /// needed, so this type does not implement `Clone`.
 struct ManualTimeProvider {
-    now: Mutex<chrono::DateTime<chrono::Utc>>,
+    now: Mutex<jiff::Timestamp>,
 }
 
 impl ManualTimeProvider {
@@ -45,19 +45,17 @@ impl ManualTimeProvider {
     /// time, so the fake clock's starting value is itself deterministic.
     fn new() -> Self {
         Self {
-            now: Mutex::new(
-                chrono::DateTime::from_timestamp(0, 0).expect("epoch is a valid timestamp"),
-            ),
+            now: Mutex::new(jiff::Timestamp::UNIX_EPOCH),
         }
     }
 
-    fn advance(&self, duration: chrono::Duration) {
+    fn advance(&self, duration: jiff::SignedDuration) {
         *self.now.lock().unwrap() += duration;
     }
 }
 
 impl TimeProvider for ManualTimeProvider {
-    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+    fn now(&self) -> jiff::Timestamp {
         *self.now.lock().unwrap()
     }
 }
@@ -130,8 +128,8 @@ fn test_new_session_has_unique_id() {
 fn test_new_session_timestamps_set() {
     let session = StreamSession::new(default_config());
 
-    assert!(session.created_at() <= chrono::Utc::now());
-    assert!(session.updated_at() <= chrono::Utc::now());
+    assert!(session.created_at() <= jiff::Timestamp::now());
+    assert!(session.updated_at() <= jiff::Timestamp::now());
     assert!(session.expires_at() > session.created_at());
     assert_eq!(session.completed_at(), None);
 }
@@ -142,11 +140,11 @@ fn test_new_session_expiration_calculated() {
     let config = custom_config(10, timeout_seconds);
     let session = StreamSession::new(config);
 
-    let expected_duration = chrono::Duration::seconds(timeout_seconds as i64);
+    let expected_duration = jiff::SignedDuration::from_secs(timeout_seconds as i64);
     let actual_duration = session.expires_at() - session.created_at();
 
     // Allow 1 second tolerance for test execution time
-    assert!((actual_duration - expected_duration).num_seconds().abs() <= 1);
+    assert!((actual_duration - expected_duration).as_secs().abs() <= 1);
 }
 
 #[test]
@@ -226,7 +224,7 @@ fn test_activate_updates_timestamp() {
     let mut session = StreamSession::with_time_provider(default_config(), clock.clone());
     let initial_update = session.updated_at();
 
-    clock.advance(chrono::Duration::milliseconds(10));
+    clock.advance(jiff::SignedDuration::from_millis(10));
 
     session.activate().unwrap();
 
@@ -539,7 +537,7 @@ fn test_is_active_expired_session() {
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(1100));
+    clock.advance(jiff::SignedDuration::from_millis(1100));
 
     // Session is expired, so not active
     assert!(session.is_expired());
@@ -553,7 +551,7 @@ fn test_force_close_expired_success() {
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(1100));
+    clock.advance(jiff::SignedDuration::from_millis(1100));
 
     let result = session.force_close_expired();
 
@@ -582,7 +580,7 @@ fn test_force_close_expired_generates_event() {
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(1100));
+    clock.advance(jiff::SignedDuration::from_millis(1100));
     session.take_events(); // Clear previous events
 
     session.force_close_expired().unwrap();
@@ -607,7 +605,7 @@ fn test_force_close_expired_clears_streams() {
     assert_eq!(session.streams().len(), 1);
 
     // Advance the clock past expiration
-    clock.advance(chrono::Duration::milliseconds(1100));
+    clock.advance(jiff::SignedDuration::from_millis(1100));
 
     session.force_close_expired().unwrap();
 
@@ -651,7 +649,7 @@ fn test_extend_timeout_on_expired_fails() {
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(1100));
+    clock.advance(jiff::SignedDuration::from_millis(1100));
 
     let result = session.extend_timeout(SessionTimeout::try_from(1800u64).unwrap());
 
@@ -731,7 +729,7 @@ fn test_health_check_expired_session() {
     let mut session = StreamSession::with_time_provider(config, clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(1100));
+    clock.advance(jiff::SignedDuration::from_millis(1100));
 
     let health = session.health_check();
 
@@ -763,7 +761,7 @@ fn test_set_client_info_updates_timestamp() {
     let mut session = StreamSession::with_time_provider(default_config(), clock.clone());
     let initial_update = session.updated_at();
 
-    clock.advance(chrono::Duration::milliseconds(10));
+    clock.advance(jiff::SignedDuration::from_millis(10));
 
     session.set_client_info("Test Client".to_string(), None, None);
 
@@ -787,13 +785,13 @@ fn test_duration_some_when_completed() {
     let mut session = StreamSession::with_time_provider(default_config(), clock.clone());
     session.activate().unwrap();
 
-    clock.advance(chrono::Duration::milliseconds(10));
+    clock.advance(jiff::SignedDuration::from_millis(10));
 
     session.close().unwrap();
 
     let duration = session.duration();
     assert!(duration.is_some());
-    assert_eq!(duration.unwrap().num_milliseconds(), 10);
+    assert_eq!(duration.unwrap().as_millis(), 10);
 }
 
 // ============================================================================

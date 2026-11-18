@@ -15,7 +15,7 @@ code:
   - crates/pjs-core/src/infrastructure/http/axum_adapter.rs
   - crates/pjs-core/src/infrastructure/http/middleware.rs
   - crates/pjs-core/src/infrastructure/http/auth.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Plan (as-built): HTTP middleware stack
@@ -49,7 +49,7 @@ flowchart TB
 
 ## Public API surface
 
-`RateLimitConfig`, `RateLimitMiddleware`, `TrustedProxyConfig` (re-exported from `infrastructure::http`); `middleware::{PjsMiddleware, compression_middleware, security_middleware, health_check_middleware, websocket_upgrade_middleware, CircuitBreakerMiddleware, ContentValidationConfig, content_validation_middleware}` (module-public only); `auth::{ApiKeyConfig, ApiKeyAuthLayer, ApiKeyAuthService, AuthConfigError}` and with `http-auth-jwt` `{JwtConfig, JwtAuthLayer, JwtAuthService}`.
+`RateLimitMiddleware`, `TrustedProxyConfig` (re-exported from `infrastructure::http`); `middleware::{PjsMiddleware, compression_middleware, security_middleware, health_check_middleware, websocket_upgrade_middleware, CircuitBreakerMiddleware, ContentValidationConfig, content_validation_middleware}` (module-public only); `auth::{ApiKeyConfig, ApiKeyAuthLayer, ApiKeyAuthService, AuthConfigError}` and with `http-auth-jwt` `{JwtConfig, JwtAuthLayer, JwtAuthService}`.
 
 ## Contracts
 

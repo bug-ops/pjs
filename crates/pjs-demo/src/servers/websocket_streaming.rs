@@ -484,7 +484,7 @@ async fn stream_data(
             "@frame_index": index,
             "@priority": frame.priority.value(),
             "@compressed": compress,
-            "@timestamp": chrono::Utc::now(),
+            "@timestamp": jiff::Timestamp::now(),
             "data": compressed_data
         });
 
@@ -522,7 +522,7 @@ async fn stream_data(
         "@type": "stream_complete",
         "@session_id": session_id.to_string(),
         "@total_frames": frames.len(),
-        "@timestamp": chrono::Utc::now()
+        "@timestamp": jiff::Timestamp::now()
     });
 
     if let Ok(completion_text) = serde_json::to_string(&completion_message) {
@@ -579,7 +579,7 @@ fn create_demo_frames(data: &JsonValue) -> DomainResult<Vec<pjson_rs::stream::St
                 metadata: {
                     let mut meta = HashMap::new();
                     meta.insert("field_name".to_string(), key.clone());
-                    meta.insert("timestamp".to_string(), chrono::Utc::now().to_rfc3339());
+                    meta.insert("timestamp".to_string(), jiff::Timestamp::now().to_string());
                     meta
                 },
             };
@@ -608,7 +608,7 @@ fn generate_sample_streaming_data() -> JsonValue {
     serde_json::json!({
         "dashboard": {
             "title": "Real-time Analytics Dashboard",
-            "last_updated": chrono::Utc::now(),
+            "last_updated": jiff::Timestamp::now(),
             "analytics_data": analytics::generate_realtime_data(DatasetSize::Medium),
             "ecommerce_data": ecommerce::generate_ecommerce_data(DatasetSize::Medium),
             "social_data": social::generate_social_data(DatasetSize::Medium),
@@ -626,7 +626,7 @@ async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "healthy",
         "server": "websocket-streaming",
-        "timestamp": chrono::Utc::now()
+        "timestamp": jiff::Timestamp::now()
     }))
 }
 
@@ -652,6 +652,6 @@ async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
         "total_bytes_sent": total_bytes,
         "average_session_age_seconds": avg_session_age_seconds,
         "server_uptime_seconds": state.server_started_at.elapsed().as_secs(),
-        "timestamp": chrono::Utc::now()
+        "timestamp": jiff::Timestamp::now()
     }))
 }

@@ -233,7 +233,9 @@ where
                 active_stream_count,
                 created_at: session.created_at(),
                 updated_at: session.updated_at(),
-                duration_ms: session.duration().map(|d| d.num_milliseconds()),
+                duration_ms: session
+                    .duration()
+                    .and_then(|d| i64::try_from(d.as_millis()).ok()),
             })
         }
     }
@@ -480,7 +482,7 @@ where
                 total_bytes += stats.total_bytes;
 
                 if let Some(duration) = session.duration() {
-                    total_duration_ms += duration.num_milliseconds() as f64;
+                    total_duration_ms += duration.as_millis() as f64;
                     completed_sessions += 1;
                 }
             }
@@ -521,8 +523,8 @@ mod tests {
         value_objects::{SessionId, StreamId},
     };
     use crate::test_support::MockRepository;
-    use chrono::Utc;
     use core::assert_matches;
+    use jiff::Timestamp;
 
     struct MockStreamStore;
 
@@ -621,7 +623,7 @@ mod tests {
                     total_bytes: 0,
                     priority_distribution: PriorityDistribution::default(),
                     avg_frame_size: 0.0,
-                    creation_time: Utc::now(),
+                    creation_time: Timestamp::now(),
                     completion_time: None,
                     processing_duration: None,
                 })
@@ -1567,11 +1569,11 @@ mod tests {
     }
 
     impl TimeProvider for FixedTimeProvider {
-        fn now(&self) -> chrono::DateTime<Utc> {
+        fn now(&self) -> jiff::Timestamp {
             let offset = self
                 .counter
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Utc::now() + chrono::Duration::seconds(offset)
+            Timestamp::now() + jiff::SignedDuration::from_secs(offset)
         }
     }
 
@@ -1674,8 +1676,8 @@ mod tests {
 
         let query = SearchSessionsQuery {
             filters: SessionFilters {
-                created_after: Some(middle_created_at - chrono::Duration::milliseconds(1)),
-                created_before: Some(middle_created_at + chrono::Duration::milliseconds(1)),
+                created_after: Some(middle_created_at - jiff::SignedDuration::from_millis(1)),
+                created_before: Some(middle_created_at + jiff::SignedDuration::from_millis(1)),
                 ..Default::default()
             },
             sort_by: None,
@@ -1817,8 +1819,8 @@ mod tests {
 
         struct PastClock;
         impl crate::domain::ports::TimeProvider for PastClock {
-            fn now(&self) -> chrono::DateTime<Utc> {
-                Utc::now() - chrono::Duration::hours(2)
+            fn now(&self) -> jiff::Timestamp {
+                Timestamp::now() - jiff::SignedDuration::from_hours(2)
             }
         }
         let mut expired =

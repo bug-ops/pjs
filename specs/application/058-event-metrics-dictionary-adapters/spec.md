@@ -92,7 +92,7 @@ Session state shall be evicted after `SESSION_TTL` = 30 min of inactivity by a b
 - NFR-TEST-001: 21 tests in `dictionary_store.rs` (race-free single training, budget release on drop, saturation), 7 in `event_publisher.rs`, 7 in `metrics_collector.rs`, plus `tests/event_publisher_comprehensive.rs`.
 
 ## 5. Data Model
-`StoredEvent { id: EventId, event_type: String, session_id: Option<SessionId>, timestamp, metadata: HashMap<String,String>, sequence: u64 }`; `PerformanceMetrics`, `SessionMetrics`, `StreamMetrics`, `TimestampedMetrics`; `SessionDictState { corpus: Mutex<Vec<Vec<u8>>>, dict: OnceCell<Arc<ZstdDictionary>>, last_access, pending_corpus_bytes }`.
+`StoredEvent { id: EventId, event_type: String, session_id: Option<SessionId>, timestamp: jiff::Timestamp, metadata: HashMap<String,String>, sequence: u64 }`; `PerformanceMetrics`, `SessionMetrics`, `StreamMetrics`, `TimestampedMetrics`; `SessionDictState { corpus: Mutex<Vec<Vec<u8>>>, dict: OnceCell<Arc<ZstdDictionary>>, last_access, pending_corpus_bytes }`.
 
 ## 6. Edge Cases and Errors
 

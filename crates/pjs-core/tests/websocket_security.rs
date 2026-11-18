@@ -3,13 +3,11 @@
 
 use core::assert_matches;
 use pjson_rs::{
-    Error, SecureWebSocketHandler,
+    SecureWebSocketHandler,
     config::SecurityConfig,
-    domain::SessionId,
-    infrastructure::websocket::{AdaptiveStreamController, ConnectionId, StreamOptions, WsMessage},
+    infrastructure::websocket::WsMessage,
     security::{RateLimitConfig, RateLimitError},
 };
-use serde_json::json;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -30,7 +28,6 @@ async fn test_websocket_rate_limiting_integration() {
     };
 
     let security_handler = SecureWebSocketHandler::new(rate_config);
-    let stream_controller = AdaptiveStreamController::new();
     let client_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100));
 
     // Test upgrade rate limiting
@@ -53,60 +50,21 @@ async fn test_websocket_rate_limiting_integration() {
         RateLimitError::ConnectionLimitExceeded { .. }
     );
 
-    // Test streaming session with rate limiting
-    let test_data = json!({
-        "id": 1,
-        "name": "Test User",
-        "data": {
-            "details": "Some large data payload for testing"
-        }
-    });
-
-    let session_id = SessionId::new();
-    let owner = ConnectionId::new();
-    stream_controller
-        .create_session(session_id, owner, test_data, StreamOptions::default())
-        .await
-        .unwrap();
-
-    // Associate rate limit guard with session
-    stream_controller
-        .set_rate_limit_guard(owner, session_id, guard)
-        .await
-        .unwrap();
-
     // Test message validation
-    assert!(
-        stream_controller
-            .validate_message(owner, session_id, 512)
-            .await
-            .is_ok()
-    );
-    assert!(
-        stream_controller
-            .validate_message(owner, session_id, 512)
-            .await
-            .is_ok()
-    );
+    assert!(guard.check_message(512).is_ok());
+    assert!(guard.check_message(512).is_ok());
 
     // Should be rate limited after burst
-    let result = stream_controller
-        .validate_message(owner, session_id, 512)
-        .await;
+    let result = guard.check_message(512);
     assert!(result.is_err());
-    assert_matches!(
-        result.unwrap_err(),
-        Error::RateLimited(RateLimitError::LimitExceeded { .. })
-    );
+    assert_matches!(result.unwrap_err(), RateLimitError::LimitExceeded { .. });
 
     // Test frame size limits
-    let result = stream_controller
-        .validate_message(owner, session_id, 2048)
-        .await;
+    let result = guard.check_message(2048);
     assert!(result.is_err());
     assert_matches!(
         result.unwrap_err(),
-        Error::RateLimited(RateLimitError::FrameSizeExceeded { .. })
+        RateLimitError::FrameSizeExceeded { .. }
     );
 }
 
@@ -166,48 +124,17 @@ async fn test_burst_rate_limiting() {
     };
 
     let security_handler = SecureWebSocketHandler::new(rate_config);
-    let stream_controller = AdaptiveStreamController::new();
     let client_ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1));
 
-    // Create session
-    let test_data = json!({"test": "burst data"});
-    let session_id = SessionId::new();
-    let owner = ConnectionId::new();
-    stream_controller
-        .create_session(session_id, owner, test_data, StreamOptions::default())
-        .await
-        .unwrap();
-
     let guard = security_handler.create_connection_guard(client_ip).unwrap();
-    stream_controller
-        .set_rate_limit_guard(owner, session_id, guard)
-        .await
-        .unwrap();
 
     // Should allow 3 burst messages (initial token count == burst_allowance)
-    assert!(
-        stream_controller
-            .validate_message(owner, session_id, 100)
-            .await
-            .is_ok()
-    );
-    assert!(
-        stream_controller
-            .validate_message(owner, session_id, 100)
-            .await
-            .is_ok()
-    );
-    assert!(
-        stream_controller
-            .validate_message(owner, session_id, 100)
-            .await
-            .is_ok()
-    );
+    assert!(guard.check_message(100).is_ok());
+    assert!(guard.check_message(100).is_ok());
+    assert!(guard.check_message(100).is_ok());
 
     // Should be rate limited now (tokens exhausted)
-    let result = stream_controller
-        .validate_message(owner, session_id, 100)
-        .await;
+    let result = guard.check_message(100);
     assert!(result.is_err());
 }
 
@@ -252,39 +179,19 @@ async fn test_frame_size_validation() {
     };
 
     let security_handler = SecureWebSocketHandler::new(rate_config);
-    let stream_controller = AdaptiveStreamController::new();
     let client_ip = IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1));
 
-    let test_data = json!({"frame": "size test"});
-    let session_id = SessionId::new();
-    let owner = ConnectionId::new();
-    stream_controller
-        .create_session(session_id, owner, test_data, StreamOptions::default())
-        .await
-        .unwrap();
-
     let guard = security_handler.create_connection_guard(client_ip).unwrap();
-    stream_controller
-        .set_rate_limit_guard(owner, session_id, guard)
-        .await
-        .unwrap();
 
     // Small frame should work
-    assert!(
-        stream_controller
-            .validate_message(owner, session_id, 256)
-            .await
-            .is_ok()
-    );
+    assert!(guard.check_message(256).is_ok());
 
     // Large frame should be rejected
-    let result = stream_controller
-        .validate_message(owner, session_id, 1024)
-        .await;
+    let result = guard.check_message(1024);
     assert!(result.is_err());
     assert_matches!(
         result.unwrap_err(),
-        Error::RateLimited(RateLimitError::FrameSizeExceeded { .. })
+        RateLimitError::FrameSizeExceeded { .. }
     );
 }
 

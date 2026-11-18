@@ -6,6 +6,7 @@
 use super::{
     CompressionConfig, MAX_DECOMPRESSED_ELEMENTS, MAX_DELTA_ARRAY_SIZE, MAX_RLE_COUNT, as_integer,
 };
+use crate::serialized_len::decimal_digits;
 use crate::serialized_len::json_len;
 use serde_json::Value as JsonValue;
 
@@ -13,11 +14,6 @@ use serde_json::Value as JsonValue;
 const DELTA_HEADER_LEN: usize = 48;
 /// Length of `{"rle_value":,"rle_count":}`.
 const RLE_ENVELOPE_LEN: usize = 27;
-
-/// Number of base-10 digits in `n`'s decimal representation (`0` has 1 digit).
-pub(super) fn decimal_digits(n: u64) -> usize {
-    n.checked_ilog10().map_or(1, |d| d as usize + 1)
-}
 
 /// Structural equality that distinguishes `0.0` from `-0.0`, so run-length encoding preserves
 /// the sign of zero.

@@ -20,7 +20,7 @@ code:
   - crates/pjs-core/src/stream/priority.rs
   - crates/pjs-core/src/stream/mod.rs
   - crates/pjs-core/src/infrastructure/http/axum_extension.rs
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 045: Priority Stream Planning (skeleton + patches)
@@ -52,19 +52,18 @@ Status: done.
 Code: `PriorityStreamer::analyze`.
 
 ### FR-002 Skeleton content
-The Skeleton frame shall carry priority `Priority::CRITICAL` and `complete: false`. For an object root, `generate_skeleton` maps strings to `null`, numbers to `0`, booleans to `false`, nulls to `null`, arrays to `[]`, and recurses into objects. An array root yields `[]`; any other root yields `null`. When the root is a scalar, or an object with a key `JsonPath` cannot encode, `analyze` shall additionally emit a root `Set` patch (`JsonPath::root()`, value is `skeletonize_arrays` of the input: arrays under JsonPath-encodable keys replaced by `[]`, arrays under keys JsonPath cannot encode preserved whole, since no `Append` patch can reach them) at `Priority::CRITICAL`, ordered before every other CRITICAL patch, so the root round-trips (#626).
+The Skeleton frame shall carry priority `Priority::CRITICAL` and `complete: false`. For an object root, `generate_skeleton` maps strings to `null`, numbers to `0`, booleans to `false`, nulls to `null`, arrays to `[]`, and recurses into objects. An array root yields `[]`; any other root yields `null`. When the root is a scalar, `analyze` shall additionally emit a root `Set` patch (`JsonPath::root()`, value is `skeletonize_arrays` of the input) at `Priority::CRITICAL`, ordered before every other CRITICAL patch, so the root round-trips (#626). An object root needs no root `Set`: every key is addressable (FR-003).
 Status: done. `complete` is never set to `true`.
 Code: `PriorityStreamer::generate_skeleton`.
 
 ### FR-003 Patch extraction
-For each object field whose key is encodable as a `JsonPath` segment, the system shall emit a `Set` patch at the field path whose value is the field value with every array replaced by `[]` (`skeletonize_arrays`), then recurse into the value. For an array it shall emit `Append` patches carrying the elements; arrays longer than 10 elements are split into chunks of `max_patch_size`, shorter non-empty arrays produce one `Append`. Empty arrays produce no `Append`.
+For every object field (every key is addressable: a key that is not plain gets a quoted `JsonPath` segment), the system shall emit a `Set` patch at the field path whose value is the field value with every array replaced by `[]` (`skeletonize_arrays`), then recurse into the value. For an array it shall emit `Append` patches carrying the elements; arrays longer than 10 elements are split into chunks of `max_patch_size`, shorter non-empty arrays produce one `Append`. Empty arrays produce no `Append`.
 Status: done.
 Code: `PriorityStreamer::extract_patches`.
 
-### FR-004 Unencodable keys
-If an object key contains `.`, `[`, `]` or is empty (`JsonPath::append_key` fails), the system shall skip that field and its subtree in patch extraction without failing the plan, and shall leave the enclosing subtree fully populated in its parent's `Set` value so no data is lost.
-Status: done (regression test `test_round_trip_unencodable_key_parent_wipe`).
-Code: `extract_patches`, `skeletonize_arrays`.
+### FR-004 Unencodable keys (removed)
+Removed in #698: `JsonPath::append_key` is infallible, so `PriorityStreamer` neither skips fields nor keeps subtrees whole for special keys; there is no object case in `needs_root_set` and no key check in `skeletonize_arrays`. `test_round_trip_unencodable_key_parent_wipe` is a round-trip over the same documents.
+Status: obsolete.
 
 ### FR-005 Priority heuristics
 The field priority shall be, in order: `CRITICAL` for keys `id|uuid|status|type|kind`; `HIGH` for `name|title|label|email|username`; `LOW` for keys containing `analytics`, `stats` or `meta`; `BACKGROUND` for keys `reviews|comments|logs|history`; otherwise by value: array longer than 100 -> `BACKGROUND`, object containing `timestamp` -> `MEDIUM`, string longer than 1000 bytes -> `LOW`, else `MEDIUM`. Array priority: more than 50 elements -> `BACKGROUND`; last key `reviews|comments|logs` -> `BACKGROUND`; `items|data|results` or anything else -> `MEDIUM`.
@@ -117,7 +116,7 @@ Code: `stream/mod.rs`.
 
 | Case | Behaviour |
 |---|---|
-| Key with `.`/`[`/`]`/empty | skipped, parent `Set` keeps full subtree (FR-004) |
+| Key with `.`/`[`/`]`/empty | `Set` at a quoted path segment (FR-003) |
 | Empty array field | skeleton `[]`, no `Append` |
 | Array of 11..n elements | chunked by `max_patch_size`, one priority for all chunks |
 | `max_patch_size = 0` | `[NEEDS CLARIFICATION]` no validation in `StreamerConfig`; `chunks(0)` panics in std for arrays longer than 10 |
@@ -133,7 +132,7 @@ Code: `stream/mod.rs`.
 
 - Always: keep plan order = Skeleton, Patches by descending priority, Complete; add a round-trip test for any change to patch extraction or priorities.
 - Ask first: changing the serde frame representation, adding frame kinds, changing heuristic key lists (alters wire order).
-- Never: emit an `Append` before the `Set` that creates its parent; drop data for unencodable keys.
+- Never: emit an `Append` before the `Set` that creates its parent.
 
 ## Open Questions
 

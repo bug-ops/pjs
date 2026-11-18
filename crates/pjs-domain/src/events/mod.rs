@@ -1,7 +1,7 @@
 //! Domain events for event sourcing and integration
 
 use crate::value_objects::{BackpressureSignal, SessionId, StreamId};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Session state in its lifecycle
@@ -53,7 +53,7 @@ pub enum DomainEvent {
         #[serde(with = "crate::serde_support::session_id")]
         session_id: SessionId,
         /// When the session was activated
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Session was closed gracefully
@@ -62,7 +62,7 @@ pub enum DomainEvent {
         #[serde(with = "crate::serde_support::session_id")]
         session_id: SessionId,
         /// When the session was closed
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Session expired due to timeout
@@ -71,7 +71,7 @@ pub enum DomainEvent {
         #[serde(with = "crate::serde_support::session_id")]
         session_id: SessionId,
         /// When the session expired
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Session was forcefully closed due to timeout
@@ -84,7 +84,7 @@ pub enum DomainEvent {
         /// Duration in seconds before timeout occurred
         timeout_duration: u64,
         /// When the timeout occurred
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Session timeout was extended
@@ -95,9 +95,9 @@ pub enum DomainEvent {
         /// Additional seconds added to the timeout
         additional_seconds: u64,
         /// New expiration timestamp
-        new_expires_at: DateTime<Utc>,
+        new_expires_at: Timestamp,
         /// When the extension was applied
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// New stream was created in the session
@@ -109,7 +109,7 @@ pub enum DomainEvent {
         #[serde(with = "crate::serde_support::stream_id")]
         stream_id: StreamId,
         /// When the stream was created
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Stream started sending data
@@ -121,7 +121,7 @@ pub enum DomainEvent {
         #[serde(with = "crate::serde_support::stream_id")]
         stream_id: StreamId,
         /// When the stream started
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Stream completed successfully
@@ -133,7 +133,7 @@ pub enum DomainEvent {
         #[serde(with = "crate::serde_support::stream_id")]
         stream_id: StreamId,
         /// When the stream completed
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Stream failed with error
@@ -147,7 +147,7 @@ pub enum DomainEvent {
         /// Error message describing the failure
         error: String,
         /// When the stream failed
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Stream was cancelled
@@ -159,7 +159,7 @@ pub enum DomainEvent {
         #[serde(with = "crate::serde_support::stream_id")]
         stream_id: StreamId,
         /// When the stream was cancelled
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Skeleton frame was generated for a stream
@@ -173,7 +173,7 @@ pub enum DomainEvent {
         /// Size of the skeleton frame in bytes
         frame_size_bytes: u64,
         /// When the skeleton was generated
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Patch frames were generated for a stream
@@ -191,7 +191,7 @@ pub enum DomainEvent {
         /// Highest priority level among the patches
         highest_priority: u8,
         /// When the patches were generated
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Multiple frames were batched for efficient sending
@@ -202,7 +202,7 @@ pub enum DomainEvent {
         /// Number of frames in the batch
         frame_count: usize,
         /// When the batch was created
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Priority threshold was adjusted for adaptive streaming
@@ -217,7 +217,7 @@ pub enum DomainEvent {
         /// Reason for the adjustment
         reason: String,
         /// When the threshold was adjusted
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Stream configuration was updated
@@ -229,7 +229,7 @@ pub enum DomainEvent {
         #[serde(with = "crate::serde_support::stream_id")]
         stream_id: StreamId,
         /// When the configuration was updated
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Performance metrics were recorded
@@ -240,7 +240,7 @@ pub enum DomainEvent {
         /// Recorded performance metrics
         metrics: PerformanceMetrics,
         /// When the metrics were recorded
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Backpressure signal received from client
@@ -255,7 +255,7 @@ pub enum DomainEvent {
         /// Backpressure signal type
         signal: BackpressureSignal,
         /// When the signal was received
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Stream was paused due to flow control
@@ -269,7 +269,7 @@ pub enum DomainEvent {
         /// Reason for pausing
         reason: String,
         /// When the stream was paused
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Stream was resumed after pause
@@ -283,7 +283,7 @@ pub enum DomainEvent {
         /// Duration the stream was paused in milliseconds
         paused_duration_ms: u64,
         /// When the stream was resumed
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 
     /// Flow control credits were updated
@@ -296,7 +296,7 @@ pub enum DomainEvent {
         /// Maximum allowed credits
         max_credits: usize,
         /// When credits were updated
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     },
 }
 
@@ -460,7 +460,7 @@ impl DomainEvent {
     }
 
     /// Get the timestamp of this event
-    pub fn timestamp(&self) -> DateTime<Utc> {
+    pub fn timestamp(&self) -> Timestamp {
         match self {
             Self::SessionActivated { timestamp, .. } => *timestamp,
             Self::SessionClosed { timestamp, .. } => *timestamp,
@@ -561,7 +561,7 @@ pub trait EventStore {
     /// # Errors
     ///
     /// Returns an error if events cannot be retrieved
-    fn get_events_since(&self, since: DateTime<Utc>) -> Result<Vec<DomainEvent>, String>;
+    fn get_events_since(&self, since: Timestamp) -> Result<Vec<DomainEvent>, String>;
 }
 
 /// Simple in-memory event store for testing
@@ -611,7 +611,7 @@ impl EventStore for InMemoryEventStore {
             .collect())
     }
 
-    fn get_events_since(&self, since: DateTime<Utc>) -> Result<Vec<DomainEvent>, String> {
+    fn get_events_since(&self, since: Timestamp) -> Result<Vec<DomainEvent>, String> {
         Ok(self
             .events
             .iter()
@@ -668,7 +668,7 @@ pub trait EventSubscriber {
 /// Extension methods for DomainEvent
 impl DomainEvent {
     /// Alias for [`timestamp`](Self::timestamp).
-    pub fn occurred_at(&self) -> DateTime<Utc> {
+    pub fn occurred_at(&self) -> Timestamp {
         self.timestamp()
     }
 
@@ -677,7 +677,7 @@ impl DomainEvent {
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("event_type".to_string(), self.event_type().to_string());
         metadata.insert("session_id".to_string(), self.session_id().to_string());
-        metadata.insert("timestamp".to_string(), self.timestamp().to_rfc3339());
+        metadata.insert("timestamp".to_string(), self.timestamp().to_string());
 
         if let Some(stream_id) = self.stream_id() {
             metadata.insert("stream_id".to_string(), stream_id.to_string());
@@ -696,7 +696,7 @@ mod tests {
     fn test_domain_event_properties() {
         let session_id = SessionId::new();
         let stream_id = StreamId::new();
-        let timestamp = Utc::now();
+        let timestamp = Timestamp::now();
 
         let event = DomainEvent::StreamCreated {
             session_id,
@@ -721,7 +721,7 @@ mod tests {
             session_id,
             stream_id,
             error: "Connection lost".to_string(),
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         };
 
         assert!(error_event.is_critical());
@@ -738,12 +738,12 @@ mod tests {
         let events = vec![
             DomainEvent::SessionActivated {
                 session_id,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
             DomainEvent::StreamCreated {
                 session_id,
                 stream_id,
-                timestamp: Utc::now(),
+                timestamp: Timestamp::now(),
             },
         ];
 
@@ -768,7 +768,7 @@ mod tests {
         let session_id = SessionId::new();
         let event = DomainEvent::SessionActivated {
             session_id,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         };
 
         let serialized = serde_json::to_string(&event).expect("Failed to serialize event in test");

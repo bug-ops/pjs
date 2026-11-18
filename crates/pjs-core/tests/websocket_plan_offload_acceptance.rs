@@ -3,6 +3,7 @@
 //! inline when no Tokio runtime is present.
 #![cfg(feature = "websocket-server")]
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -12,7 +13,7 @@ use pjson_rs::domain::SessionId;
 use pjson_rs::error::PlanError;
 use pjson_rs::infrastructure::bounded_channel::{Envelope, byte_bounded_channel};
 use pjson_rs::infrastructure::websocket::{
-    AdaptiveStreamController, ConnectionId, CreateSessionError, Framing, StreamOptions,
+    AdaptiveStreamController, ConnectionId, CreateSessionError, StreamOptions,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc::Receiver;
@@ -33,11 +34,9 @@ fn large_document() -> Value {
 }
 
 fn patch_options() -> StreamOptions {
-    StreamOptions {
-        framing: Framing::Patch,
-        client_fps: Some(1000),
-        ..StreamOptions::default()
-    }
+    let mut options = StreamOptions::patch();
+    options.client_fps = NonZeroU32::new(1000);
+    options
 }
 
 fn attached_controller() -> (

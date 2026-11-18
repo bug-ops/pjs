@@ -12,9 +12,9 @@ publish = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
-chrono = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 futures = { workspace = true }
+jiff = { workspace = true, features = ["std", "serde"] }
 pjson-rs = { workspace = true, features = ["websocket-client", "websocket-server"] }
 pjson-rs-domain = { workspace = true }
 serde_json = { workspace = true }

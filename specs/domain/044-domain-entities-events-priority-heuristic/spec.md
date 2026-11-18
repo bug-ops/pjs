@@ -29,7 +29,7 @@ related:
   - "[[045-priority-stream-planning/spec]]"
   - "[[046-json-reconstruction/spec]]"
   - "[[070-wasm-bindings-api/spec]]"
-verified: 2026-11-15
+verified: 2026-11-18
 ---
 
 # Spec 044: Domain Entities, Events and Priority Heuristic
@@ -54,7 +54,7 @@ Part of [[MOC-specs]]. Rules in [[constitution]]. Plan: [[044-domain-entities-ev
 
 ### FR-044-001 Frame types and constructors
 
-`Frame` shall have private fields `stream_id`, `frame_type`, `priority`, `sequence: u64`, `timestamp` (UTC, set at construction), `payload: JsonData`, `metadata: HashMap<String, String>`. `FrameType` is `#[non_exhaustive]`: `Skeleton`, `Patch`, `Complete`, `Error`.
+`Frame` shall have private fields `stream_id`, `frame_type`, `priority`, `sequence: u64`, `timestamp: jiff::Timestamp` (UTC, set at construction), `payload: JsonData`, `metadata: HashMap<String, String>`. `FrameType` is `#[non_exhaustive]`: `Skeleton`, `Patch`, `Complete`, `Error`.
 Constructors: `skeleton(stream_id, seq, data)` (priority `CRITICAL`); `patch(stream_id, seq, priority, Vec<FramePatch>) -> DomainResult` (error `InvalidFrame` if the list is empty; payload `{"patches":[{"path","operation","value"}]}` with lowercase operation names); `complete(stream_id, seq, Option<checksum>)` (payload `{}` or `{"checksum": ..}`, `CRITICAL`); `error(stream_id, seq, message, Option<code>)` (payload `{"message", ["code"]}`, `CRITICAL`).
 Status: done.
 
@@ -71,16 +71,16 @@ Status: done.
 
 ### FR-044-004 Stream state machine
 
-`Stream` shall hold `id` (fresh `StreamId`), `session_id`, `state`, `config`, `stats`, timestamps, `next_sequence` (starts at 1), optional `source_data`, `metadata`. `StreamState` (`#[non_exhaustive]`): `Preparing`, `Streaming`, `Completed`, `Failed`, `Cancelled`.
+`Stream` shall hold `id` (fresh `StreamId`), `session_id`, `state`, `config`, `stats`, timestamps (`created_at`, `updated_at`, `completed_at`: `jiff::Timestamp`; `duration()` is `Option<jiff::SignedDuration>`), `next_sequence` (starts at 1), optional `source_data`, `metadata`. `StreamState` (`#[non_exhaustive]`): `Preparing`, `Streaming`, `Completed`, `Failed`, `Cancelled`.
 Transitions: `start_streaming` (Preparing -> Streaming); `complete` (Streaming -> Completed); `fail(error)` (Preparing or Streaming -> Failed, stores `error` metadata); `cancel` (Preparing or Streaming -> Cancelled). Any other source state shall return `DomainError::InvalidStateTransition`. `Completed`/`Failed`/`Cancelled` set `completed_at`. Predicates: `is_active` (Preparing or Streaming), `is_finished`.
 Status: done.
 
 ### FR-044-005 Frame generation rules
 
 While not `Streaming`, `create_skeleton_frame`, `create_patch_frames`, `extract_prioritized_patches`, `commit_patch_frames`, `finalize_patch_frame` and `create_completion_frame` shall return `InvalidStreamState`. In `Streaming`:
-- the skeleton replaces strings with `null`, numbers with 0, booleans with `false`, arrays with `[]`, recurses into objects, keeps the value under a key that `JsonPath` cannot encode (`.`, `[`, `]`, empty) verbatim at any depth, and yields `null` for a scalar root and `[]` for an array root;
-- patch extraction walks objects only; every non-object value (scalars and whole arrays) becomes a `Set` patch at its `JsonPath`, kept when its priority is `>= threshold`; subtrees under keys that `JsonPath` cannot encode (`.`, `[`, `]`, empty) are not descended into and instead make extraction insert a root `Set` at index 0 whose value holds the unencodable subtrees verbatim, empty objects, and only the object parents that those subtrees or an emitted leaf patch need; every other leaf and array is omitted, and so is an object whose leaves were all dropped by the threshold (no placeholders or empty shells, so dropped values stay absent) with priority `max(CRITICAL, every other patch priority)`, dropped only below `threshold`; documents without such keys emit no root patch. Each extraction is a self-contained snapshot: the root `Set` resets earlier deltas, and a cross-stream truncation can deliver it without the leaf patches that follow;
-- array elements are never descended into: a key that `JsonPath` cannot encode inside an array element travels verbatim in that array's `Set` and does not trigger a root `Set`; a client that receives only the patch frames (no skeleton frame, as on the HTTP path) therefore reconstructs such documents exactly, because the root `Set` supplies the object structure that nested `Set` paths need, and leaves or arrays dropped by the threshold stay absent;
+- the skeleton replaces strings with `null`, numbers with 0, booleans with `false`, arrays with `[]`, recurses into every object key like any other (no value is kept verbatim by key), and yields `null` for a scalar root and `[]` for an array root;
+- patch extraction walks objects only and addresses every key (`.`, `[`, `]` and the empty key included) through a `JsonPath` with quoted segments; every non-object value (scalars and whole arrays) becomes a `Set` patch at its `JsonPath`, kept when its priority is `>= threshold`; no subtree is skipped and no root `Set` is emitted; dropped leaves and arrays stay absent;
+- array elements are never descended into: an array travels whole in one `Set`; patch frames assume that the skeleton (or a parent-creating client) provides the parent objects;
 - extracted patches are sorted by descending priority;
 - `chunk_patches_for_commit(patches, max_frames)` splits them into `ceil(n / max_frames)`-sized chunks (empty for no patches or `max_frames == 0`), each chunk's priority being its maximum;
 - each created frame takes `next_sequence`, then `next_sequence += 1`.
@@ -104,7 +104,7 @@ Status: done.
 
 ### FR-044-009 Domain events
 
-`DomainEvent` shall be a `#[non_exhaustive]` enum serialised with an `event_type` tag in `snake_case` and timestamped (`DateTime<Utc>`), with these 20 variants:
+`DomainEvent` shall be a `#[non_exhaustive]` enum serialised with an `event_type` tag in `snake_case` and timestamped (`jiff::Timestamp`, serialised as RFC 3339 UTC with a `Z` suffix and the shortest exact fraction; `metadata()["timestamp"]` uses the same form), with these 20 variants:
 - session: `SessionActivated`, `SessionClosed`, `SessionExpired`, `SessionTimedOut`, `SessionTimeoutExtended`;
 - stream lifecycle: `StreamCreated`, `StreamStarted`, `StreamCompleted`, `StreamFailed { error }`, `StreamCancelled`, `StreamConfigUpdated`;
 - generation: `SkeletonGenerated { frame_size_bytes }`, `PatchFramesGenerated { frame_count, total_bytes, highest_priority }`, `FramesBatched { frame_count }`, `PriorityThresholdAdjusted { old_threshold, new_threshold, reason }`, `PerformanceMetricsRecorded { metrics }`;
@@ -161,11 +161,11 @@ Status: done.
 
 - Always: add new frame or event kinds as new enum variants with golden-test coverage; keep `compute_priority` the single source of priority logic (WASM and HTTP).
 - Ask first: changing default field lists or thresholds (visible to every consumer); making `Frame` deserialisation validate.
-- Never: add I/O or time-provider indirection hacks to entities without updating the `StreamSession` clock design in `pjs-core` (it uses a `TimeProvider` port; entities here call `Utc::now()` directly).
+- Never: add I/O or time-provider indirection hacks to entities without updating the `StreamSession` clock design in `pjs-core` (it uses a `TimeProvider` port; entities here call `Timestamp::now()` directly).
 
 ## Open Questions
 
-- Entities call `Utc::now()` directly (`Frame::*`, `Stream::*`), while `StreamSession` in `pjs-core` uses a `TimeProvider` port (CHANGELOG 0.6.3, #330); frame and stream timestamps are therefore untestable with a fake clock.
+- Entities call `Timestamp::now()` directly (`Frame::*`, `Stream::*`), while `StreamSession` in `pjs-core` uses a `TimeProvider` port (CHANGELOG 0.6.3, #330); frame and stream timestamps are therefore untestable with a fake clock.
 - `Stream::collect_patches`/`generate_skeleton` recurse over `JsonData` without a depth bound; trees built programmatically (not via deserialisation, which is capped at 64) can overflow the stack.
 - Patch order within one priority level is hash-map dependent (`HashMap` iteration then a stable sort by priority).
 - Patches treat whole arrays as leaf values, so array elements are never prioritised individually; `append`/`merge`/`delete` operations exist on `FramePatch` but `Stream` only emits `set`.

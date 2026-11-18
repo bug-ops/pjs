@@ -14,6 +14,7 @@ const PRE_683: Weights = Weights {
     int_extra: 0,
     element: 0,
     root_entry: 0,
+    nested: 0,
 };
 
 fn serialized_len(value: &Value) -> usize {
@@ -50,7 +51,7 @@ fn small_ints(n: usize) -> Value {
     Value::Object((0..n).map(|i| (key(i), json!(i % 1000))).collect())
 }
 
-/// The seven `websocket_controller` bench shapes, each sized just under the
+/// The ten `websocket_controller` bench shapes, each sized just under the
 /// pre-#683 gate cost of 32768 (spec 075 FR-008).
 fn calibration_shapes() -> Vec<(&'static str, Value)> {
     vec![
@@ -64,6 +65,15 @@ fn calibration_shapes() -> Vec<(&'static str, Value)> {
         ("escape_strings", array_of(3640, &json!("\u{1}"))),
         ("nested_arrays", array_of(8191, &json!([0]))),
         ("small_objects", array_of(4095, &json!({"a": 0}))),
+        ("nested_objects_2", array_of(2340, &json!({"a": {"b": 0}}))),
+        (
+            "nested_objects_3",
+            array_of(1638, &json!({"a": {"b": {"c": 0}}})),
+        ),
+        (
+            "nested_objects_4",
+            array_of(1260, &json!({"a": {"b": {"c": {"d": 0}}}})),
+        ),
     ]
 }
 
@@ -120,10 +130,12 @@ fn test_plan_cost_weights_are_all_positive_and_size_bound_has_none() {
 
     assert_ne!(plan.element, 0);
     assert_ne!(plan.root_entry, 0);
+    assert_ne!(plan.nested, 0);
     assert_ne!(plan.int_extra, 0);
     assert!(plan.float >= size.float);
     assert_eq!(size.element, 0);
     assert_eq!(size.root_entry, 0);
+    assert_eq!(size.nested, 0);
     assert_eq!(size.int_extra, 0);
 }
 
@@ -292,7 +304,8 @@ fn test_exceeds_plan_cost_flips_at_the_weighted_total_for_an_array_of_floats() {
 #[test]
 fn test_exceeds_plan_cost_flips_at_the_weighted_total_for_nested_arrays() {
     let n = 100;
-    let total = (n + 1) + n * (3 + PLAN_COST.int_extra) + 2 * n * PLAN_COST.element;
+    let total =
+        (n + 1) + n * (3 + PLAN_COST.int_extra + PLAN_COST.nested) + 2 * n * PLAN_COST.element;
 
     assert_flips_at("[[0]; n]", &array_of(n, &json!([0])), total);
 }
@@ -300,7 +313,8 @@ fn test_exceeds_plan_cost_flips_at_the_weighted_total_for_nested_arrays() {
 #[test]
 fn test_exceeds_plan_cost_flips_at_the_weighted_total_for_small_objects() {
     let n = 100;
-    let total = (n + 1) + n * (7 + PLAN_COST.int_extra) + 2 * n * PLAN_COST.element;
+    let total =
+        (n + 1) + n * (7 + PLAN_COST.int_extra + PLAN_COST.nested) + 2 * n * PLAN_COST.element;
 
     assert_flips_at("[{\"a\":0}; n]", &array_of(n, &json!({"a": 0})), total);
 }
@@ -310,8 +324,31 @@ fn test_exceeds_plan_cost_counts_the_root_entry_weight_once_for_a_nested_object(
     let n = 100;
     let document = json!({"o": object_of(n, &json!("v"))});
     let size = 12 * n + 7;
-    let total = size + PLAN_COST.root_entry + PLAN_COST.element * (1 + n);
+    let total = size + PLAN_COST.root_entry + PLAN_COST.element * (1 + n) + PLAN_COST.nested;
 
     assert_eq!(serialized_len(&document), size);
     assert_flips_at("{\"o\": {n entries}}", &document, total);
+}
+
+#[test]
+fn test_exceeds_plan_cost_flips_at_the_weighted_total_for_nested_objects() {
+    let n = 100;
+    // Per element: 13 bytes (`{"a":{"b":0}}`), two nested containers, and one
+    // `element` weight each for the array item and the two object entries.
+    let total =
+        (n + 1) + n * (13 + PLAN_COST.int_extra + 2 * PLAN_COST.nested) + 3 * n * PLAN_COST.element;
+
+    assert_flips_at(
+        "[{\"a\":{\"b\":0}}; n]",
+        &array_of(n, &json!({"a": {"b": 0}})),
+        total,
+    );
+}
+
+#[test]
+fn test_exceeds_plan_cost_empty_nested_containers_carry_no_nested_weight() {
+    let n = 100;
+    let total = (n + 1) + n * (2 + PLAN_COST.element);
+
+    assert_flips_at("[[]; n]", &array_of(n, &json!([])), total);
 }
