@@ -51,7 +51,7 @@ For a `Patch` frame, each patch shall be applied in order: `Set` and `Replace` -
 Status: done. A failing patch aborts the frame; patches before it stay applied (no rollback).
 
 ### FR-004 Set semantics
-`set_at_path` on the root path replaces the whole document. Otherwise it navigates to the parent (all segments but the last) and: for an object parent inserts/overwrites the key; for an array parent parses the key as `usize` and overwrites an existing index, failing for out-of-bounds or non-numeric keys; for any other parent fails.
+`set_at_path` on the root path replaces the whole document. Otherwise it delegates to `json_tree::set`, which navigates to the parent (all segments but the last) and matches on the last segment: a key on an object parent inserts/overwrites the entry; an index on an array parent overwrites an existing element and fails with `IndexOutOfBounds` for `index >= len`; a segment kind that does not match the parent fails with `ExpectedObject`/`ExpectedArray`. Paths ending in an index (`$.arr[1]`) are supported. The state is unchanged on error. The WebSocket protocol `Set` uses the same function.
 Status: done.
 
 ### FR-005 Append semantics
@@ -59,7 +59,7 @@ Status: done.
 Status: done.
 
 ### FR-006 Remove semantics
-`remove_at_path` shall remove the object key; for arrays, remove the index if it is in range (an out-of-range index is a silent no-op); other parents fail. A missing object key is a silent no-op.
+`remove_at_path` delegates to `json_tree::remove` and matches on the last segment: a key on an object parent removes the entry, and a missing key is an idempotent `Ok` no-op (the document is already in the target state); an index on an array parent removes the element (later elements shift) and fails with `IndexOutOfBounds` for `index >= len`, because an out-of-range index shows that the sender's view of the array diverged; a mismatched segment kind fails with `ExpectedObject`/`ExpectedArray`; an empty path fails with `NoTargetKey`. Consistent in outcome with JS FR-009 (JS skips an out-of-range patch silently, Rust reports it as an error).
 Status: done.
 
 ### FR-007 Completion
@@ -71,7 +71,7 @@ Status: done.
 Status: done.
 
 ### FR-009 Error type
-All failures shall be `crate::Error::Patch(PatchError)` with variants `KeyNotFound(String)`, `IndexOutOfBounds { index, len }`, `NotAnIndex`, `ExpectedObject`, `ExpectedArray`, `NotAContainer`, `NoTargetKey` (`UnsupportedSegment` was removed in #699: `PathSegment` is closed).
+All failures shall be `crate::Error::Patch(PatchError)` with variants `KeyNotFound(String)`, `IndexOutOfBounds { index, len }`, `ExpectedObject`, `ExpectedArray`, `NoTargetKey` (`NotAnIndex` and `NotAContainer` were removed in #719 as unreachable; `UnsupportedSegment` was removed in #699: `PathSegment` is closed).
 Status: done (stringly typed; see Open Questions).
 
 ## Non-Functional Requirements
@@ -91,8 +91,9 @@ Status: done (stringly typed; see Open Questions).
 | `process_next_frame` on empty queue | `Ok(NoFrames)` |
 | Patch path with missing intermediate key | `Err("Key not found: ..")` |
 | `Set` on array parent, index == len | `Err("Array index out of bounds")` |
-| `Remove` missing key / out-of-range index | `Ok`, no change |
-| Path ending in an index segment | by code reading `last_key()` returns the last *key* segment, not the last segment, so `Set`/`Remove` on `$.a[0]` use the wrong key and fail. The streamer never emits such paths. `[NEEDS CLARIFICATION: add a test]` |
+| `Remove` missing key | `Ok`, no change |
+| `Remove` index >= len | `Err(IndexOutOfBounds)` |
+| Path ending in an index segment | resolved (#719): `Set`/`Remove` on `$.arr[i]` act on element `i`; `Set`/`Remove` on `$.a[0]` where `a` is not an array fails with `ExpectedArray` |
 | Frames after `Complete` | still applied; `is_complete` stays true |
 
 ## Success Criteria
@@ -102,7 +103,7 @@ Status: done (stringly typed; see Open Questions).
 ## Agent Boundaries
 
 - Always: keep application strictly ordered; add a test for each new path shape.
-- Ask first: adding out-of-order buffering, rollback, or changing the `PatchError` variants.
+- Ask first: adding out-of-order buffering, rollback, or changing the `PatchError` variants (removal of `NotAnIndex`/`NotAContainer` approved by the user in #719).
 - Never: panic on malformed patches; silently swallow errors that lose data.
 
 ## Open Questions

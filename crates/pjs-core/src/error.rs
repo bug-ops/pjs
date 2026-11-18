@@ -173,18 +173,12 @@ pub enum PatchError {
         /// Array length
         len: usize,
     },
-    /// An array was addressed with a non-numeric key
-    #[error("array element key is not an index")]
-    NotAnIndex,
     /// The path crosses a value that is not an object
     #[error("expected an object")]
     ExpectedObject,
     /// The path crosses or targets a value that is not an array
     #[error("expected an array")]
     ExpectedArray,
-    /// The parent of the target is neither an object nor an array
-    #[error("target parent is not an object or array")]
-    NotAContainer,
     /// The path is empty where an operation needs a target key
     #[error("path has no target key")]
     NoTargetKey,

@@ -10,6 +10,8 @@ import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 
 /**
  * HTTP transport implementation
+ *
+ * @experimental Speaks a wire format that no shipped pjs-core route serves; see the README "Transport Options" section.
  */
 export class HttpTransport extends Transport {
   private abortController?: AbortController;

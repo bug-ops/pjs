@@ -3,3 +3,8 @@
 [[IgnoredVulns]]
 id = "GHSA-fc5q-39xc-vjpf"
 reason = "picomatch is a dev-only dependency of the JS client test tooling (jest, eslint); the ReDoS needs attacker-supplied glob patterns, which never reach it; no fixed version exists"
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2027-05-18
+reason = "minimatch 10.x is pinned only under typedoc (dev-only docs tool; typedoc 0.28 needs Minimatch#matchOne, removed in 11); typedoc never sets minimatch optimizationLevel (default 1 in 10.2.6) while the advisory needs >= 2; the vulnerable path is unreachable and nothing ships to users"

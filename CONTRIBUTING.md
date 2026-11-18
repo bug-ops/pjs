@@ -181,7 +181,7 @@ libFuzzer writes every new input into the first corpus directory, so never pass 
 
 The `fuzzing` entry points of `pjson-rs` are compiled only under `--cfg fuzzing` (`cargo fuzz` sets it); to build or lint the fuzz crate directly use `RUSTFLAGS="--cfg fuzzing" cargo build --manifest-path fuzz/Cargo.toml`.
 
-The fuzz crate builds without `serde_json/float_roundtrip`, so it runs the production float parsing path; `ws_message_decode` therefore compares round trips with a 1-ULP float tolerance (`approx_eq` in the `pjs_fuzz` library, `fuzz/src/lib.rs`). The opt-in `float-roundtrip` feature is covered by `crates/pjs-core/tests/float_roundtrip.rs`.
+The fuzz crate builds without `serde_json/float_roundtrip`, so it runs the production float parsing path; `ws_message_decode` therefore compares round trips exactly against `reparsed` (one serialize/parse cycle, in the `pjs_fuzz` library, `fuzz/src/lib.rs`). The opt-in `float-roundtrip` feature is covered by `crates/pjs-core/tests/float_roundtrip.rs`.
 
 Seeds are tiny hand-written inputs under `fuzz/seeds/<target>/`. Do not commit crash artifacts or generated corpora; file an issue for a crash instead. CI replays seeds on every relevant change (`fuzz` job) and explores each target for 60 seconds on the weekly schedule and on manual dispatch (`fuzz-explore` job, non-gating).
 
@@ -526,17 +526,22 @@ cargo clippy --target x86_64-unknown-linux-gnu
 When making performance-related changes, always benchmark:
 
 ```bash
-# Save baseline before changes
-cargo bench -p pjs-bench -- --save-baseline before
+# Save baseline before changes (Criterion flags need an explicit --bench target)
+cargo bench -p pjs-bench --bench simple_throughput -- --save-baseline before
 
 # Make your changes
 
 # Compare against baseline
-cargo bench -p pjs-bench -- --baseline before
+cargo bench -p pjs-bench --bench simple_throughput -- --baseline before
+
+# Full suite incl. client_apply_patches (needs the pjs_bench cfg)
+RUSTFLAGS="-C target-cpu=native --cfg pjs_bench" cargo bench -p pjs-bench
 
 # View results
 open target/criterion/report/index.html
 ```
+
+See `crates/pjs-bench/README.md` (Before/After Comparison) for the full A/B procedure.
 
 **Benchmark Suites:**
 - `simple_throughput.rs` - Parser performance

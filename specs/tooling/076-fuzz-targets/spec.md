@@ -54,7 +54,7 @@ Code: `fuzz/Cargo.toml`.
 Status: done.
 
 ### FR-001a Shared oracle library
-The fuzz crate shall also expose a crate-private library target `pjs_fuzz` (`fuzz/src/lib.rs`, `publish = false`) holding the oracles shared by targets: `approx_eq` (1-ULP float tolerance, currently unused by every target), `reparsed` (the document after one serialize/parse round trip, the exact oracle of `planner_round_trip`) and `assert_decode_error` (accepts only `Error::CompressionBomb` or `Error::Codec`). It exists because a `no_main` fuzz binary cannot run unit tests; the helpers' unit tests run in CI.
+The fuzz crate shall also expose a crate-private library target `pjs_fuzz` (`fuzz/src/lib.rs`, `publish = false`) holding the oracles shared by targets: `reparsed` (the document after one serialize/parse round trip, the exact oracle of `planner_round_trip`) and `assert_decode_error` (accepts only `Error::CompressionBomb` or `Error::Codec`). It exists because a `no_main` fuzz binary cannot run unit tests; the helpers' unit tests run in CI.
 Code: `fuzz/src/lib.rs`.
 Status: done.
 
@@ -81,7 +81,7 @@ Status: done.
 ### FR-006 ws_message_decode
 The target shall decode bytes as `pjson_rs::infrastructure::WsMessage` and, on success, assert that the value of the re-decoded message equals exactly `pjs_fuzz::reparsed(&value)`, i.e. the value after one serialize/parse cycle through the production float path (#690, the oracle `planner_round_trip` uses, #684). Both sides carry the same float re-parse drift, so a benign large integer no longer fails the oracle. `expect` calls are also part of the oracle.
 Code: `ws_message_decode.rs`.
-Status: done. The fuzz crate does not enable `float_roundtrip` / `pjson-rs/float-roundtrip`, so the target runs the production (default) float path. The opt-in feature path is covered by `crates/pjs-core/tests/float_roundtrip.rs` under `--all-features`. The helper `reparsed` lives in the fuzz crate's library target (`fuzz/src/lib.rs`, because a `no_main` fuzz binary cannot run unit tests). `approx_eq` (1 ULP tolerance) remains in the library with its unit tests but no target uses it.
+Status: done. The fuzz crate does not enable `float_roundtrip` / `pjson-rs/float-roundtrip`, so the target runs the production (default) float path. The opt-in feature path is covered by `crates/pjs-core/tests/float_roundtrip.rs` under `--all-features`. The helper `reparsed` lives in the fuzz crate's library target (`fuzz/src/lib.rs`, because a `no_main` fuzz binary cannot run unit tests). The former `approx_eq` oracle (1 ULP tolerance) was removed in #721 because no target used it.
 
 ### FR-007 Seed corpora
 Committed seeds shall live in `fuzz/seeds/<target>/` (3 for `parser_partial`, 3 `parser_zero_copy`, 4 `secure_decompress` (one per codec), 3 `streaming_decompressor`, 9 `ws_message_decode` (including `huge_integer`, a `StreamInit` whose `data` is a 199-digit integer: red on the former 1-ULP oracle, green on the exact one), 5 `zstd_dict_codec`, 5 `client_apply_patches`, 9 `planner_round_trip`). The first byte of `secure_decompress` seeds is the selector; the first bytes of `streaming_decompressor` seeds select the strategy. `corpus/`, `artifacts/`, `coverage/`, `target/` are git-ignored.

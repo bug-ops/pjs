@@ -34,6 +34,67 @@ pub(crate) fn resolve_mut<'a>(
     Ok(node)
 }
 
+/// Writes `value` at `path`, replacing the root for an empty path.
+///
+/// A final key inserts or overwrites the entry of an object parent; a final
+/// index replaces an existing element of an array parent and never grows it.
+///
+/// # Errors
+///
+/// Resolution errors from [`resolve_mut`]; [`PatchError::ExpectedObject`] /
+/// [`PatchError::ExpectedArray`] when the parent kind does not match the last
+/// segment; [`PatchError::IndexOutOfBounds`] when the final index is past the
+/// end. `state` is unchanged on error.
+pub(crate) fn set(state: &mut Value, path: &[PathSegment], value: Value) -> Result<(), PatchError> {
+    let Some((last, parent_path)) = path.split_last() else {
+        *state = value;
+        return Ok(());
+    };
+    match (resolve_mut(state, parent_path)?, last) {
+        (Value::Object(map), PathSegment::Key(key)) => {
+            map.insert(key.clone(), value);
+        }
+        (Value::Array(items), PathSegment::Index(index)) => {
+            let len = items.len();
+            *items
+                .get_mut(*index)
+                .ok_or(PatchError::IndexOutOfBounds { index: *index, len })? = value;
+        }
+        (_, PathSegment::Key(_)) => return Err(PatchError::ExpectedObject),
+        (_, PathSegment::Index(_)) => return Err(PatchError::ExpectedArray),
+    }
+    Ok(())
+}
+
+/// Removes the node at `path`.
+///
+/// A missing object key is a no-op (the document already is in the target
+/// state); an index past the end is an error because the sender's view of the
+/// array has diverged and positional removal would shift the wrong element.
+///
+/// # Errors
+///
+/// [`PatchError::NoTargetKey`] for an empty path; otherwise as [`set`].
+/// `state` is unchanged on error.
+pub(crate) fn remove(state: &mut Value, path: &[PathSegment]) -> Result<(), PatchError> {
+    let (last, parent_path) = path.split_last().ok_or(PatchError::NoTargetKey)?;
+    match (resolve_mut(state, parent_path)?, last) {
+        (Value::Object(map), PathSegment::Key(key)) => {
+            map.remove(key);
+        }
+        (Value::Array(items), PathSegment::Index(index)) => {
+            let len = items.len();
+            if *index >= len {
+                return Err(PatchError::IndexOutOfBounds { index: *index, len });
+            }
+            items.remove(*index);
+        }
+        (_, PathSegment::Key(_)) => return Err(PatchError::ExpectedObject),
+        (_, PathSegment::Index(_)) => return Err(PatchError::ExpectedArray),
+    }
+    Ok(())
+}
+
 /// Read-only counterpart of [`resolve_mut`]; `None` when any step does not
 /// resolve.
 #[cfg(any(test, feature = "websocket-client"))]
