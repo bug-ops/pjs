@@ -215,8 +215,8 @@ fn hostile_fragment() -> impl Strategy<Value = String> {
     prop_oneof![
         canonical_fragment(),
         prop::sample::select(vec![
-            r"\/", r"A", r"é", r"\u001F", r"\ud800", r"\udc00", "\u{1}", "\n", "\t", "\"", r"\",
-            r"\x", "\u{7f}",
+            r"\/", r"\u0041", r"\u00E9", r"\u001F", r"\ud800", r"\udc00", "\u{1}", "\n", "\t",
+            "\"", r"\", r"\x", "\u{7f}",
         ])
         .prop_map(str::to_owned),
     ]
