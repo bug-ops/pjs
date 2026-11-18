@@ -26,7 +26,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::{
-    FutureExt, StreamExt,
+    StreamExt,
     stream::{SplitSink, SplitStream},
 };
 use std::net::{IpAddr, SocketAddr};
@@ -150,6 +150,28 @@ impl Handled {
             outcome: Err(error),
         }
     }
+}
+
+/// What [`AxumWebSocketTransport::send_frame`] did with a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendOutcome {
+    /// The frame is queued on the connection's outgoing channel.
+    Queued,
+    /// The frame was discarded for the given reason.
+    Dropped(DropReason),
+}
+
+/// Why [`AxumWebSocketTransport::send_frame`] discarded a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropReason {
+    /// The connection has no outgoing channel.
+    NoConnection,
+    /// The message could not be serialized.
+    Unserializable,
+    /// Queuing the frame would exceed the connection's byte budget.
+    OverBudget,
+    /// The outgoing channel is full or closed.
+    ChannelUnavailable,
 }
 
 /// Capacity of each per-connection outgoing message channel.
@@ -362,8 +384,10 @@ impl AxumWebSocketTransport {
                     let Some(controller) = weak_controller.upgrade() else {
                         break;
                     };
-                    let pass = controller.cleanup_expired_sessions(SESSION_MAX_AGE);
-                    if AssertUnwindSafe(pass).catch_unwind().await.is_err() {
+                    let pass = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        controller.cleanup_expired_sessions(SESSION_MAX_AGE);
+                    }));
+                    if pass.is_err() {
                         error!("session cleanup sweep panicked; continuing");
                     }
                 }
@@ -615,7 +639,7 @@ impl AxumWebSocketTransport {
     /// Returns the number of currently active WebSocket connections.
     ///
     /// Useful for observability, health endpoints, and integration tests.
-    pub async fn active_connection_count(&self) -> usize {
+    pub fn active_connection_count(&self) -> usize {
         self.controller.connection_count()
     }
 
@@ -628,41 +652,40 @@ impl AxumWebSocketTransport {
     /// run until the in-flight branch finishes. Using `try_send` keeps that
     /// hazard from becoming a real deadlock.
     ///
-    /// Always returns `Ok(())` even when the frame is dropped (channel
-    /// full, or larger than `MAX_QUEUED_OUTGOING_BYTES`) — this mirrors
-    /// the underlying channel's own fire-and-forget delivery guarantee. Both
-    /// drop reasons are logged via `warn!`.
-    pub async fn send_frame(&self, connection: ConnectionId, message: WsMessage) -> PjsResult<()> {
-        let tx = self.controller.outgoing_for(connection);
-        let Some(tx) = tx else {
+    /// Returns [`SendOutcome::Dropped`] with the reason when the frame is not
+    /// queued (no connection, serialization failure, byte budget exceeded, or
+    /// channel full or closed); every drop is logged via `warn!`.
+    pub fn send_frame(&self, connection: ConnectionId, message: WsMessage) -> SendOutcome {
+        let Some(tx) = self.controller.outgoing_for(connection) else {
             warn!("send_frame: no outgoing channel for connection {connection}");
-            return Ok(());
+            return SendOutcome::Dropped(DropReason::NoConnection);
         };
         // Serialized once here, rather than in the consuming loop: this is
         // also what the byte-budget check in `try_send` measures, so the
         // queued-bytes accounting matches the actual bytes held in memory.
-        match serde_json::to_string(&message) {
-            Ok(json_str) => {
-                let len = json_str.len();
-                match tx.try_send(json_str, len) {
-                    Ok(()) => {}
-                    Err(bounded_channel::TrySendError::BudgetExceeded(_)) => {
-                        warn!(
-                            "send_frame: dropping frame for connection {connection} (byte budget exceeded, {len} bytes)"
-                        );
-                    }
-                    Err(bounded_channel::TrySendError::Channel(_)) => {
-                        warn!(
-                            "send_frame: dropping frame for connection {connection} (channel full or closed)"
-                        );
-                    }
-                }
-            }
+        let json_str = match serde_json::to_string(&message) {
+            Ok(json_str) => json_str,
             Err(e) => {
                 warn!("send_frame: failed to serialize frame for connection {connection}: {e}");
+                return SendOutcome::Dropped(DropReason::Unserializable);
+            }
+        };
+        let len = json_str.len();
+        match tx.try_send(json_str, len) {
+            Ok(()) => SendOutcome::Queued,
+            Err(bounded_channel::TrySendError::BudgetExceeded(_)) => {
+                warn!(
+                    "send_frame: dropping frame for connection {connection} (byte budget exceeded, {len} bytes)"
+                );
+                SendOutcome::Dropped(DropReason::OverBudget)
+            }
+            Err(bounded_channel::TrySendError::Channel(_)) => {
+                warn!(
+                    "send_frame: dropping frame for connection {connection} (channel full or closed)"
+                );
+                SendOutcome::Dropped(DropReason::ChannelUnavailable)
             }
         }
-        Ok(())
     }
 
     /// Handles one decoded message from `connection` and queues its reply.
@@ -690,7 +713,7 @@ impl AxumWebSocketTransport {
     ) -> PjsResult<()> {
         let Handled { reply, outcome } = self.dispatch(connection, message).await;
         if let Some(reply) = reply {
-            self.send_frame(connection, reply.into()).await?;
+            self.send_frame(connection, reply.into());
         }
         outcome
     }
@@ -753,11 +776,7 @@ impl AxumWebSocketTransport {
                         );
                     }
                 }
-                if let Err(e) = self
-                    .controller
-                    .start_streaming(connection, session_id)
-                    .await
-                {
+                if let Err(e) = self.controller.start_streaming(connection, session_id) {
                     return Handled::failed(e);
                 }
                 info!("Created new streaming session for connection {connection}");
@@ -771,11 +790,12 @@ impl AxumWebSocketTransport {
                     "Received frame ack: session={:?}, frame={}, time={}ms",
                     session_id, frame_id, processing_time_ms
                 );
-                if let Err(e) = self
-                    .controller
-                    .handle_frame_ack(connection, session_id, frame_id, processing_time_ms)
-                    .await
-                {
+                if let Err(e) = self.controller.handle_frame_ack(
+                    connection,
+                    session_id,
+                    frame_id,
+                    processing_time_ms,
+                ) {
                     debug!(
                         "Ignored frame ack for connection {connection}: {}",
                         ErrorChain(&e)
@@ -783,7 +803,7 @@ impl AxumWebSocketTransport {
                 }
             }
             WsMessage::StreamCancel { session_id } => {
-                if !self.controller.remove_session(connection, session_id).await {
+                if !self.controller.remove_session(connection, session_id) {
                     debug!(
                         "Ignored cancel of unknown session {session_id} on connection {connection}"
                     );
@@ -1099,7 +1119,6 @@ mod tests {
         transport
             .controller
             .start_streaming(owner, session_id)
-            .await
             .unwrap();
     }
 
@@ -1372,8 +1391,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(5)).await;
         transport
             .controller
-            .cleanup_expired_sessions(Duration::ZERO)
-            .await;
+            .cleanup_expired_sessions(Duration::ZERO);
         while rx.try_recv().is_ok() {}
 
         transport
@@ -1440,10 +1458,10 @@ mod tests {
             code: 0,
         };
 
-        transport
-            .send_frame(connection, oversized_message)
-            .await
-            .expect("send_frame returns Ok even when it drops the frame");
+        assert_eq!(
+            transport.send_frame(connection, oversized_message),
+            SendOutcome::Dropped(DropReason::OverBudget)
+        );
 
         assert!(
             rx.try_recv().is_err(),
@@ -1469,19 +1487,16 @@ mod tests {
 
         let connection = connection_id;
         for _ in 0..OUTGOING_QUEUE_CAPACITY {
-            transport
-                .send_frame(connection, WsMessage::Ping { timestamp: 0 })
-                .await
-                .expect("send_frame should accept sends up to channel capacity");
+            assert_eq!(
+                transport.send_frame(connection, WsMessage::Ping { timestamp: 0 }),
+                SendOutcome::Queued
+            );
         }
 
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+        assert_eq!(
             transport.send_frame(connection, WsMessage::Ping { timestamp: 0 }),
-        )
-        .await
-        .expect("send_frame must not block when the outgoing channel is full")
-        .expect("send_frame must return Ok even when dropping the overflow frame");
+            SendOutcome::Dropped(DropReason::ChannelUnavailable)
+        );
 
         rx.close();
         let mut drained = 0;
@@ -1573,7 +1588,7 @@ mod tests {
             .await
             .expect("the Close frame was sent before the drain completed");
         assert_eq!(code, CLOSE_GOING_AWAY);
-        assert_eq!(server.transport.active_connection_count().await, 0);
+        assert_eq!(server.transport.active_connection_count(), 0);
     }
 
     #[tokio::test]
@@ -1595,6 +1610,6 @@ mod tests {
             rest.is_empty(),
             "no WebSocket task may have started: {rest:?}"
         );
-        assert_eq!(server.transport.active_connection_count().await, 0);
+        assert_eq!(server.transport.active_connection_count(), 0);
     }
 }

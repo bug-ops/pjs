@@ -739,11 +739,7 @@ impl AdaptiveStreamController {
     /// # Errors
     ///
     /// Returns [`PjsError::UnknownSession`] if `owner` has no such session.
-    pub async fn start_streaming(
-        &self,
-        owner: ConnectionId,
-        session_id: SessionId,
-    ) -> PjsResult<()> {
+    pub fn start_streaming(&self, owner: ConnectionId, session_id: SessionId) -> PjsResult<()> {
         let mut connections = self.connections.write();
         let entry = connections
             .get_mut(&owner)
@@ -971,7 +967,7 @@ impl AdaptiveStreamController {
     ///
     /// Returns [`PjsError::UnknownSession`] if `owner` has no such live
     /// session; nothing is changed.
-    pub async fn handle_frame_ack(
+    pub fn handle_frame_ack(
         &self,
         owner: ConnectionId,
         session_id: SessionId,
@@ -1055,12 +1051,12 @@ impl AdaptiveStreamController {
     ///     .create_session(id, owner, json!({}), StreamOptions::default())
     ///     .await
     ///     .unwrap();
-    /// assert!(controller.remove_session(owner, id).await);
+    /// assert!(controller.remove_session(owner, id));
     /// // Idempotent — second call is a no-op:
-    /// assert!(!controller.remove_session(owner, id).await);
+    /// assert!(!controller.remove_session(owner, id));
     /// # }
     /// ```
-    pub async fn remove_session(&self, owner: ConnectionId, session_id: SessionId) -> bool {
+    pub fn remove_session(&self, owner: ConnectionId, session_id: SessionId) -> bool {
         let mut connections = self.connections.write();
         let removed = connections
             .get_mut(&owner)
@@ -1113,7 +1109,7 @@ impl AdaptiveStreamController {
     }
 
     /// Clean up expired sessions
-    pub async fn cleanup_expired_sessions(&self, max_age: Duration) {
+    pub fn cleanup_expired_sessions(&self, max_age: Duration) {
         let mut connections = self.connections.write();
         let now = Instant::now();
 
@@ -1286,7 +1282,7 @@ mod tests {
 
         for _ in 0..3 {
             let id = new_session(&controller, owner, json!({})).await;
-            controller.start_streaming(owner, id).await.unwrap();
+            controller.start_streaming(owner, id).unwrap();
             assert_matches!(
                 next_message(&mut outbox).await,
                 WsMessage::StreamFrame { .. }
@@ -1304,7 +1300,7 @@ mod tests {
         let owner = ConnectionId::new();
         let mut outbox = attach(&controller, owner);
         let id = new_session(&controller, owner, json!({})).await;
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         loop {
             if matches!(
@@ -1330,7 +1326,7 @@ mod tests {
         let old_generation = controller
             .with_session_mut(owner, id, |s| s.generation)
             .unwrap();
-        assert!(controller.remove_session(owner, id).await);
+        assert!(controller.remove_session(owner, id));
         new_session_with_id(&controller, owner, id).await;
         let new_generation = controller
             .with_session_mut(owner, id, |s| s.generation)
@@ -1376,16 +1372,16 @@ mod tests {
         let mut outbox = attach(&controller, owner);
         let id = new_session(&controller, owner, json!({})).await;
         poison_metrics(&controller, owner, id);
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
         assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
         );
 
-        assert!(controller.remove_session(owner, id).await);
+        assert!(controller.remove_session(owner, id));
         new_session_with_id(&controller, owner, id).await;
         poison_metrics(&controller, owner, id);
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(controller.session_count(owner), 1);
@@ -1402,13 +1398,13 @@ mod tests {
         let mut outbox = attach(&controller, owner);
         let id = new_session(&controller, owner, json!({})).await;
         poison_metrics(&controller, owner, id);
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
         assert_matches!(
             next_message(&mut outbox).await,
             WsMessage::StreamFrame { .. }
         );
 
-        assert!(controller.remove_session(owner, id).await);
+        assert!(controller.remove_session(owner, id));
 
         let late = tokio::time::timeout(Duration::from_millis(1500), outbox.recv()).await;
         assert!(
@@ -1425,7 +1421,7 @@ mod tests {
         let mut b_outbox = attach(&controller, b);
         let id = new_session(&controller, a, json!({"k": "v"})).await;
 
-        controller.start_streaming(a, id).await.unwrap();
+        controller.start_streaming(a, id).unwrap();
 
         assert_matches!(
             next_message(&mut a_outbox).await,
@@ -1443,11 +1439,11 @@ mod tests {
         let mut healthy_outbox = attach(&controller, healthy);
         for _ in 0..5 {
             let id = new_session(&controller, stalled, json!({})).await;
-            controller.start_streaming(stalled, id).await.unwrap();
+            controller.start_streaming(stalled, id).unwrap();
         }
         let id = new_session(&controller, healthy, json!({})).await;
 
-        controller.start_streaming(healthy, id).await.unwrap();
+        controller.start_streaming(healthy, id).unwrap();
 
         assert_matches!(
             next_message(&mut healthy_outbox).await,
@@ -1467,7 +1463,7 @@ mod tests {
         controller.attach_connection(owner, tx);
         let id = new_session(&controller, owner, json!({"blob": "x".repeat(8192)})).await;
 
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         assert_matches!(
             next_message(&mut outbox).await,
@@ -1483,8 +1479,8 @@ mod tests {
         let mut outbox = attach(&controller, owner);
         let id = new_session(&controller, owner, json!({})).await;
 
-        controller.start_streaming(owner, id).await.unwrap();
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         let (mut frames, mut completes) = (0, 0);
         while let Ok(Some(envelope)) =
@@ -1508,7 +1504,6 @@ mod tests {
 
         controller
             .handle_frame_ack(owner, session_id, 0, 50)
-            .await
             .unwrap();
 
         let (acked, average) = controller
@@ -1528,9 +1523,7 @@ mod tests {
         let owner = ConnectionId::new();
         let session_id = new_session(&controller, owner, json!({})).await;
 
-        let result = controller
-            .handle_frame_ack(ConnectionId::new(), session_id, 0, 50)
-            .await;
+        let result = controller.handle_frame_ack(ConnectionId::new(), session_id, 0, 50);
 
         assert_matches!(result, Err(PjsError::UnknownSession(_)));
         let acked = controller
@@ -1597,8 +1590,8 @@ mod tests {
             })
             .unwrap();
 
-        controller.start_streaming(owner, session_id).await.unwrap();
-        assert!(controller.remove_session(owner, session_id).await);
+        controller.start_streaming(owner, session_id).unwrap();
+        assert!(controller.remove_session(owner, session_id));
 
         // Drain whatever the task managed to emit before the abort took
         // effect, for a window far shorter than the full 200-frame plan
@@ -1653,7 +1646,7 @@ mod tests {
             .await
             .unwrap();
 
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
         tokio::time::sleep(STREAM_STALL_TIMEOUT + Duration::from_secs(1)).await;
 
         let mut kinds = Vec::new();
@@ -1689,7 +1682,7 @@ mod tests {
             .create_session(id, owner, data, options)
             .await
             .unwrap();
-        controller.start_streaming(owner, id).await.unwrap();
+        controller.start_streaming(owner, id).unwrap();
 
         // A reader that frees one frame every 25 s keeps every enqueue under
         // the 30 s stall timeout, so only the absolute deadline can end it.
@@ -1794,9 +1787,9 @@ mod tests {
             ))
         );
 
-        controller.start_streaming(owner, first).await.unwrap();
+        controller.start_streaming(owner, first).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(controller.remove_session(owner, first).await);
+        assert!(controller.remove_session(owner, first));
 
         controller
             .create_session(SessionId::new(), owner, data, options)
@@ -1846,7 +1839,7 @@ mod tests {
         let session_id = new_session(&controller, owner, json!({"test": "data"})).await;
         poison_metrics(&controller, owner, session_id);
 
-        controller.start_streaming(owner, session_id).await.unwrap();
+        controller.start_streaming(owner, session_id).unwrap();
 
         let result = tokio::time::timeout(MAX_ADAPTIVE_FRAME_DELAY * 2, async {
             loop {

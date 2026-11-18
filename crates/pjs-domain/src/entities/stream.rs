@@ -537,10 +537,11 @@ impl Stream {
         let mut projection = HashMap::new();
         let mut needed = false;
         for (key, value) in obj.iter() {
-            let Ok(child) = path.append_key(key) else {
+            if !JsonPath::is_valid_key(key) {
                 projection.insert(key.clone(), value.clone());
                 continue;
-            };
+            }
+            let child = path.append_key(key);
             match value {
                 JsonData::Object(children) if children.is_empty() => {
                     projection.insert(key.clone(), value.clone());
@@ -618,10 +619,11 @@ impl Stream {
         if let JsonData::Object(map) = data {
             let mut has_unencodable_keys = false;
             for (key, value) in map.iter() {
-                let Ok(child_path) = path.append_key(key) else {
+                if !JsonPath::is_valid_key(key) {
                     has_unencodable_keys = true;
                     continue;
-                };
+                }
+                let child_path = path.append_key(key);
                 has_unencodable_keys |= self.collect_patches(value, &child_path, threshold, out)?;
             }
             return Ok(has_unencodable_keys);

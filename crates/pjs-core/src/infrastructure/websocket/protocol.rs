@@ -6,7 +6,7 @@
 
 use crate::domain::{Priority, SessionId};
 #[cfg(any(feature = "websocket-client", test))]
-use crate::error::PatchError;
+use crate::error::{PatchError, StreamOptionsError};
 use futures::{Sink, SinkExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -662,6 +662,60 @@ pub struct StreamOptions {
     /// Frame encoding the stream uses; omitted on the wire when [`Framing::Merge`]
     #[serde(default, skip_serializing_if = "Framing::is_merge")]
     pub framing: Framing,
+}
+
+impl StreamOptions {
+    /// Default options with [`Framing::Patch`], the encoding
+    /// [`PjsWebSocketClient`](super::PjsWebSocketClient) reconstructs.
+    pub fn patch() -> Self {
+        Self {
+            framing: Framing::Patch,
+            ..Self::default()
+        }
+    }
+}
+
+/// Validated `max_frame_size`: the largest message the server sends, in bytes.
+///
+/// # Examples
+///
+/// ```no_run
+/// use pjson_rs::infrastructure::websocket::MaxFrameSize;
+///
+/// assert_eq!(MaxFrameSize::new(1024).unwrap().get(), 1024);
+/// assert!(MaxFrameSize::new(1023).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaxFrameSize(usize);
+
+impl MaxFrameSize {
+    /// Validates `bytes` against the minimum frame size.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamOptionsError::MaxFrameSizeTooSmall`] below 1024 bytes.
+    pub fn new(_bytes: usize) -> Result<Self, StreamOptionsError> {
+        todo!("MaxFrameSize::new")
+    }
+
+    /// The validated size in bytes.
+    pub fn get(self) -> usize {
+        todo!("MaxFrameSize::get")
+    }
+}
+
+impl TryFrom<usize> for MaxFrameSize {
+    type Error = StreamOptionsError;
+
+    fn try_from(_bytes: usize) -> Result<Self, Self::Error> {
+        todo!("MaxFrameSize::try_from")
+    }
+}
+
+impl Default for MaxFrameSize {
+    fn default() -> Self {
+        todo!("MaxFrameSize::default")
+    }
 }
 
 impl Default for StreamOptions {

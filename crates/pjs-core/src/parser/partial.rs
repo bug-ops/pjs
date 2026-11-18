@@ -773,7 +773,11 @@ fn walk_object(
         // Keys JsonPath cannot encode (`.`, `[`, `]`, empty) fall back to the
         // parent path: the token stream must still be consumed in lockstep,
         // so this cannot skip the value the way a post-hoc tree walk can.
-        let child_path = path.append_key(&key).unwrap_or_else(|_| path.clone());
+        let child_path = if JsonPath::is_valid_key(&key) {
+            path.append_key(&key)
+        } else {
+            path.clone()
+        };
 
         // Peek at the value following the key.
         let peek = match jiter.peek() {
@@ -976,7 +980,11 @@ fn collect_leaves(value: &JsonData, path: &JsonPath, out: &mut Vec<JsonPath>) {
     match value {
         JsonData::Object(map) => {
             for (key, child) in map {
-                let child_path = path.append_key(key).unwrap_or_else(|_| path.clone());
+                let child_path = if JsonPath::is_valid_key(key) {
+                    path.append_key(key)
+                } else {
+                    path.clone()
+                };
                 collect_leaves(child, &child_path, out);
             }
         }

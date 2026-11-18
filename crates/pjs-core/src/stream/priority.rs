@@ -252,9 +252,10 @@ impl PriorityStreamer {
                 for (key, value) in map {
                     // Keys JsonPath cannot encode (`.`, `[`, `]`) are skipped:
                     // one weird key must not abort the whole streaming plan.
-                    let Ok(field_path) = current_path.append_key(key) else {
+                    if !JsonPath::is_valid_key(key) {
                         continue;
-                    };
+                    }
+                    let field_path = current_path.append_key(key);
                     let own_priority = self.calculate_field_priority(&field_path, key, value);
 
                     let mut child_patches = Vec::new();
@@ -430,14 +431,14 @@ mod tests {
                 PriorityStreamer::needs_root_set(&json!({ key: 1 })),
                 "{key:?}"
             );
-            assert!(JsonPath::root().append_key(key).is_err(), "{key:?}");
+            assert!(!JsonPath::is_valid_key(key), "{key:?}");
         }
         for key in ["ok", "0", "with space"] {
             assert!(
                 !PriorityStreamer::needs_root_set(&json!({ key: 1 })),
                 "{key:?}"
             );
-            assert!(JsonPath::root().append_key(key).is_ok(), "{key:?}");
+            assert!(JsonPath::is_valid_key(key), "{key:?}");
         }
     }
 
@@ -460,12 +461,7 @@ mod tests {
         let path = JsonPath::root();
         assert_eq!(path.to_json_pointer(), "/");
 
-        let path = path
-            .append_key("users")
-            .unwrap()
-            .append_index(0)
-            .append_key("name")
-            .unwrap();
+        let path = path.append_key("users").append_index(0).append_key("name");
         assert_eq!(path.to_json_pointer(), "/users/0/name");
     }
 

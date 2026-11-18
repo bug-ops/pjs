@@ -59,7 +59,6 @@ impl Harness {
             .await?;
         self.controller
             .start_streaming(self.owner, id)
-            .await
             .expect("session exists");
         Ok(())
     }
@@ -648,7 +647,6 @@ async fn test_remove_session_releases_plan_bytes() {
         harness
             .controller
             .remove_session(harness.owner, accepted[0])
-            .await
     );
 
     harness
@@ -671,7 +669,6 @@ async fn test_remove_sessions_owned_by_releases_plan_bytes_of_streaming_sessions
         harness
             .controller
             .start_streaming(harness.owner, *id)
-            .await
             .expect("starts");
     }
     sleep(Duration::from_millis(100)).await;
@@ -836,7 +833,7 @@ async fn test_stream_slow_but_progressing_client_completes() {
         )
         .await
         .expect("accepted");
-    controller.start_streaming(owner, id).await.expect("starts");
+    controller.start_streaming(owner, id).expect("starts");
 
     let seen = reader.await.expect("reader");
 
@@ -870,7 +867,7 @@ async fn test_stream_absolute_deadline_ends_session_without_stream_complete() {
         )
         .await
         .expect("accepted");
-    controller.start_streaming(owner, id).await.expect("starts");
+    controller.start_streaming(owner, id).expect("starts");
 
     sleep(Duration::from_secs(130)).await;
     let reusable = controller

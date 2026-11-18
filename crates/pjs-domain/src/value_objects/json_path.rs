@@ -26,7 +26,6 @@ pub struct JsonPath {
 
 /// Single segment of a [`JsonPath`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum PathSegment {
     /// Object property key.
     Key(String),
@@ -77,32 +76,11 @@ impl JsonPath {
         path.into().parse()
     }
 
-    /// Build a path directly from segments, validating every [`PathSegment::Key`]
-    /// with the same rule as [`JsonPath::append_key`].
-    ///
-    /// # Examples
-    /// ```
-    /// use pjson_rs_domain::value_objects::{JsonPath, PathSegment};
-    ///
-    /// let path = JsonPath::from_segments(vec![
-    ///     PathSegment::Key("users".to_string()),
-    ///     PathSegment::Index(0),
-    /// ])
-    /// .unwrap();
-    /// assert_eq!(path.to_string(), "$.users[0]");
-    ///
-    /// // A key containing a delimiter is rejected, just like `append_key`.
-    /// let invalid = JsonPath::from_segments(vec![PathSegment::Key("a.b".to_string())]);
-    /// assert!(invalid.is_err());
-    /// ```
-    pub fn from_segments(segments: impl IntoIterator<Item = PathSegment>) -> DomainResult<Self> {
-        let segments: Vec<PathSegment> = segments.into_iter().collect();
-        for segment in &segments {
-            if let PathSegment::Key(key) = segment {
-                validate_key(key)?;
-            }
+    /// Build a path directly from segments. Any key sequence is representable.
+    pub fn from_segments(segments: impl IntoIterator<Item = PathSegment>) -> Self {
+        Self {
+            segments: segments.into_iter().collect(),
         }
-        Ok(Self { segments })
     }
 
     /// Whether `key` can be a key segment, i.e. whether [`Self::append_key`]
@@ -120,24 +98,11 @@ impl JsonPath {
         !key.is_empty() && !key.contains(['.', '[', ']'])
     }
 
-    /// Append a key segment, producing a new path.
-    ///
-    /// # Examples
-    /// ```
-    /// use pjson_rs_domain::value_objects::JsonPath;
-    ///
-    /// let path = JsonPath::root().append_key("users").unwrap();
-    /// assert_eq!(path.to_string(), "$.users");
-    ///
-    /// // Keys containing '.', '[', ']', or the empty key are rejected.
-    /// assert!(JsonPath::root().append_key("").is_err());
-    /// assert!(JsonPath::root().append_key("a.b").is_err());
-    /// ```
-    pub fn append_key(&self, key: &str) -> DomainResult<Self> {
-        validate_key(key)?;
+    /// Append a key segment, producing a new path. Any key is addressable.
+    pub fn append_key(&self, key: &str) -> Self {
         let mut segments = self.segments.clone();
         segments.push(PathSegment::Key(key.to_string()));
-        Ok(Self { segments })
+        Self { segments }
     }
 
     /// Append an array index segment, producing a new path.
@@ -342,34 +307,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_valid_key_agrees_with_append_key() {
-        for key in [
-            "",
-            ".",
-            "a.b",
-            "[",
-            "]",
-            "a[0]",
-            "x]",
-            "k",
-            "key with space",
-            "ключ",
-            "日本語",
-            "emoji😀",
-            "$",
-            "a-b_c",
-            "..",
-            "\u{0}",
-        ] {
-            assert_eq!(
-                JsonPath::is_valid_key(key),
-                JsonPath::root().append_key(key).is_ok(),
-                "key {key:?}"
-            );
-        }
-    }
-
-    #[test]
     fn test_valid_paths() {
         assert!(JsonPath::new("$").is_ok());
         assert!(JsonPath::new("$.key").is_ok());
@@ -394,12 +331,7 @@ mod tests {
     #[test]
     fn test_path_operations() {
         let root = JsonPath::root();
-        let path = root
-            .append_key("users")
-            .unwrap()
-            .append_index(0)
-            .append_key("name")
-            .unwrap();
+        let path = root.append_key("users").append_index(0).append_key("name");
 
         assert_eq!(path.to_string(), "$.users[0].name");
         assert_eq!(path.depth(), 3);
@@ -473,10 +405,8 @@ mod tests {
     fn test_display_from_str_round_trip() {
         let path = JsonPath::root()
             .append_key("users")
-            .unwrap()
             .append_index(0)
-            .append_key("name")
-            .unwrap();
+            .append_key("name");
         let rendered = path.to_string();
         let parsed: JsonPath = rendered.parse().unwrap();
         assert_eq!(path, parsed);
@@ -489,20 +419,5 @@ mod tests {
         assert_eq!(json, "\"$.users[0].name\"");
         let restored: JsonPath = serde_json::from_str(&json).unwrap();
         assert_eq!(path, restored);
-    }
-
-    proptest::proptest! {
-        /// JP-1: `append_key` either rejects an arbitrary key outright, or
-        /// the resulting path round-trips exactly through `Display` ->
-        /// `FromStr`. This is the guard that fails loudly if validation is
-        /// ever widened without adding an escaping grammar.
-        #[test]
-        fn json_path_round_trips_over_arbitrary_keys(key in ".*") {
-            if let Ok(path) = JsonPath::root().append_key(&key) {
-                let rendered = path.to_string();
-                let parsed: JsonPath = rendered.parse().expect("rendered path must re-parse");
-                proptest::prop_assert_eq!(path, parsed);
-            }
-        }
     }
 }

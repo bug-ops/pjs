@@ -457,7 +457,10 @@ async fn test_client_request_stream_default_options_reconstructs_multi_frame_pat
     });
     let data = wide_document();
 
-    let id = client.request_stream(data.clone(), None).await.unwrap();
+    let id = client
+        .request_stream(data.clone(), StreamOptions::patch())
+        .await
+        .unwrap();
     wait_until_complete(&client, id).await;
 
     assert_eq!(client.get_current_data(id).await.unwrap(), Some(data));
@@ -476,7 +479,7 @@ async fn test_client_request_stream_explicit_default_options_uses_merge_framing(
     let data = wide_document();
 
     let id = client
-        .request_stream(data.clone(), Some(StreamOptions::default()))
+        .request_stream(data.clone(), StreamOptions::default())
         .await
         .unwrap();
     wait_until_complete(&client, id).await;
@@ -517,9 +520,12 @@ async fn test_client_request_stream_none_sends_patch_framing_and_some_sends_verb
         async move { client.connect().await }
     });
 
-    client.request_stream(json!({"a": 1}), None).await.unwrap();
     client
-        .request_stream(json!({"a": 2}), Some(StreamOptions::default()))
+        .request_stream(json!({"a": 1}), StreamOptions::patch())
+        .await
+        .unwrap();
+    client
+        .request_stream(json!({"a": 2}), StreamOptions::default())
         .await
         .unwrap();
 
@@ -602,7 +608,10 @@ async fn run_scripted(frames: Vec<(Value, bool)>, max_session_bytes: usize) -> S
         let client = Arc::clone(&client);
         async move { client.connect().await }
     });
-    let id = client.request_stream(json!({}), None).await.unwrap();
+    let id = client
+        .request_stream(json!({}), StreamOptions::patch())
+        .await
+        .unwrap();
     ScriptedClient {
         client,
         id,

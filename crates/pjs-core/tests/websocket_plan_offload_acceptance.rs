@@ -64,7 +64,6 @@ async fn test_create_session_large_document_streams_the_complete_document() {
         .expect("large document is accepted");
     controller
         .start_streaming(owner, id)
-        .await
         .expect("session exists");
 
     let mut state = json!({});

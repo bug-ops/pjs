@@ -52,10 +52,11 @@ pub use controller::{AdaptiveStreamController, ClientMetrics, ConnectionId, Crea
 #[cfg(feature = "websocket-client")]
 pub(crate) use protocol::WRITE_TIMEOUT;
 pub use protocol::{
-    Framing, MAX_PATCH_PATH_DEPTH, StreamOptions, WirePatch, WirePath, WireSegment, WsMessage,
+    Framing, MAX_PATCH_PATH_DEPTH, MaxFrameSize, StreamOptions, WirePatch, WirePath, WireSegment,
+    WsMessage,
 };
 pub(crate) use protocol::{WriteFailure, send_with_write_timeout};
 #[cfg(feature = "websocket-server")]
 pub use security::SecureWebSocketHandler;
 #[cfg(feature = "websocket-server")]
-pub use server::{AxumWebSocketTransport, create_websocket_router};
+pub use server::{AxumWebSocketTransport, DropReason, SendOutcome, create_websocket_router};

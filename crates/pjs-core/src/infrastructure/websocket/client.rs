@@ -1,7 +1,7 @@
 //! WebSocket client implementation for PJS streaming
 
 #[cfg(feature = "websocket-client")]
-use super::{Framing, StreamOptions, WireSegment, WriteFailure, WsMessage};
+use super::{StreamOptions, WireSegment, WriteFailure, WsMessage};
 use crate::{
     Error as PjsError, Result as PjsResult,
     config::ConfigError,
@@ -715,7 +715,7 @@ impl PjsWebSocketClient {
     /// # Examples
     ///
     /// ```no_run
-    /// use pjson_rs::infrastructure::websocket::PjsWebSocketClient;
+    /// use pjson_rs::infrastructure::websocket::{PjsWebSocketClient, StreamOptions};
     /// use serde_json::json;
     /// use std::sync::Arc;
     ///
@@ -727,7 +727,7 @@ impl PjsWebSocketClient {
     ///     tokio::spawn(async move { client.connect().await })
     /// };
     ///
-    /// let session = client.request_stream(json!({"hello": "world"}), None).await?;
+    /// let session = client.request_stream(json!({"hello": "world"}), StreamOptions::patch()).await?;
     /// # let _ = session;
     ///
     /// // Completes when the server closes the connection.
@@ -785,10 +785,11 @@ impl PjsWebSocketClient {
     /// reached, expired sessions are dropped and then the incomplete session
     /// idle the longest is evicted (see [`WebSocketClientConfig::max_sessions`]).
     ///
-    /// `None` requests [`Framing::Patch`], which this client reconstructs, so
-    /// arbitrarily large documents stream in bounded frames. `Some(options)` is
-    /// sent verbatim; [`StreamOptions::default`] is [`Framing::Merge`], the
-    /// encoding peers that predate patch framing understand. The server rejects
+    /// `options` is sent verbatim. [`StreamOptions::patch`] requests
+    /// [`super::Framing::Patch`], which this client reconstructs, so arbitrarily large
+    /// documents stream in bounded frames; [`StreamOptions::default`] is
+    /// [`super::Framing::Merge`], the encoding peers that predate patch framing
+    /// understand. The server rejects
     /// invalid options with an `Error` message (code 400) and no stream.
     ///
     /// # Errors
@@ -799,13 +800,9 @@ impl PjsWebSocketClient {
     pub async fn request_stream(
         &self,
         data: Value,
-        options: Option<StreamOptions>,
+        options: StreamOptions,
     ) -> PjsResult<SessionId> {
         let session_id = SessionId::new();
-        let options = options.unwrap_or_else(|| StreamOptions {
-            framing: Framing::Patch,
-            ..StreamOptions::default()
-        });
 
         let message = WsMessage::StreamInit {
             session_id,
@@ -1154,7 +1151,10 @@ mod tests {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
         let data = json!({"test": "data"});
 
-        let session_id = client.request_stream(data, None).await.unwrap();
+        let session_id = client
+            .request_stream(data, StreamOptions::patch())
+            .await
+            .unwrap();
         let sessions = client.sessions.read().await;
         assert!(sessions.contains_key(&session_id));
     }
@@ -1363,8 +1363,14 @@ mod tests {
                 ..WebSocketClientConfig::default()
             });
 
-        let first = client.request_stream(json!({}), None).await.unwrap();
-        let second = client.request_stream(json!({}), None).await.unwrap();
+        let first = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
+        let second = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
         client
             .sessions
             .write()
@@ -1372,7 +1378,10 @@ mod tests {
             .get_mut(&second)
             .unwrap()
             .last_activity += Duration::from_secs(1);
-        let third = client.request_stream(json!({}), None).await.unwrap();
+        let third = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
 
         let sessions = client.sessions.read().await;
         assert_eq!(sessions.len(), 2);
@@ -1386,7 +1395,12 @@ mod tests {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
         drop(client.message_rx.lock().take());
 
-        assert!(client.request_stream(json!({}), None).await.is_err());
+        assert!(
+            client
+                .request_stream(json!({}), StreamOptions::patch())
+                .await
+                .is_err()
+        );
         assert!(client.sessions.read().await.is_empty());
     }
 
@@ -1403,7 +1417,7 @@ mod tests {
 
         let pending = tokio::time::timeout(
             Duration::from_millis(50),
-            client.request_stream(json!({}), None),
+            client.request_stream(json!({}), StreamOptions::patch()),
         )
         .await;
 
@@ -1576,8 +1590,14 @@ mod tests {
                 max_sessions: max(2),
                 ..WebSocketClientConfig::default()
             });
-        let first = client.request_stream(json!({}), None).await.unwrap();
-        let second = client.request_stream(json!({}), None).await.unwrap();
+        let first = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
+        let second = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
         let (tx, _rx) = control_channel();
         for id in [first, second] {
             deliver(&client.sessions, &tx, client.config, complete(id))
@@ -1585,12 +1605,17 @@ mod tests {
                 .unwrap();
         }
 
-        let refused = client.request_stream(json!({}), None).await;
+        let refused = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await;
         assert_matches!(refused, Err(PjsError::SessionLimitReached { .. }));
         assert!(client.is_stream_complete(first).await);
 
         assert!(client.close_session(first).await.is_some());
-        let fresh = client.request_stream(json!({}), None).await.unwrap();
+        let fresh = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
         let sessions = client.sessions.read().await;
         assert!(sessions.contains_key(&second));
         assert!(sessions.contains_key(&fresh));
@@ -1662,7 +1687,10 @@ mod tests {
     #[tokio::test]
     async fn test_close_session_returns_data_and_stats_or_none() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
-        let id = client.request_stream(json!({}), None).await.unwrap();
+        let id = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
         let (tx, _rx) = control_channel();
         deliver(
             &client.sessions,
@@ -1699,7 +1727,10 @@ mod tests {
     #[tokio::test]
     async fn test_close_session_queues_stream_cancel_for_incomplete_session() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
-        let id = client.request_stream(json!({}), None).await.unwrap();
+        let id = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
 
         client.close_session(id).await.expect("known session");
 
@@ -1714,7 +1745,10 @@ mod tests {
     #[tokio::test]
     async fn test_close_session_of_expired_session_still_queues_stream_cancel() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
-        let id = client.request_stream(json!({}), None).await.unwrap();
+        let id = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
         let later =
             Instant::now() + client.config.session_idle_ttl.as_duration() + Duration::from_secs(1);
 
@@ -1729,7 +1763,10 @@ mod tests {
     #[tokio::test]
     async fn test_close_session_of_complete_session_sends_no_cancel() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
-        let id = client.request_stream(json!({}), None).await.unwrap();
+        let id = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
         client
             .sessions
             .write()
@@ -1755,7 +1792,10 @@ mod tests {
     #[tokio::test]
     async fn test_close_session_of_expired_session_is_none_and_frees_the_slot() {
         let client = PjsWebSocketClient::new("ws://localhost:3001/ws").unwrap();
-        let id = client.request_stream(json!({}), None).await.unwrap();
+        let id = client
+            .request_stream(json!({}), StreamOptions::patch())
+            .await
+            .unwrap();
         let ttl = client.config.session_idle_ttl.as_duration();
         let later = Instant::now() + ttl + Duration::from_secs(1);
 

@@ -99,7 +99,7 @@ fn bench_plan_case(
                 ));
                 total += started.elapsed();
                 assert!(result.is_ok(), "{result:?}");
-                rt.block_on(controller.remove_session(owner, id));
+                controller.remove_session(owner, id);
             }
             total
         });
@@ -237,7 +237,7 @@ fn bench_handle_frame_ack(c: &mut Criterion) {
                         tokio::spawn(async move {
                             for i in 0..ACKS_PER_TASK {
                                 let (owner, id) = sessions[(task * 31 + i) % CONNECTIONS];
-                                let result = controller.handle_frame_ack(owner, id, 0, 1).await;
+                                let result = controller.handle_frame_ack(owner, id, 0, 1);
                                 assert!(result.is_ok(), "{result:?}");
                             }
                         })

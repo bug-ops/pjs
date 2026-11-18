@@ -193,7 +193,8 @@ impl PriorityAssigner {
         match data {
             JsonData::Object(map) => {
                 for (key, value) in map {
-                    if let Ok(field_path) = current_path.append_key(key) {
+                    if JsonPath::is_valid_key(key) {
+                        let field_path = current_path.append_key(key);
                         let priority = self.calculate_field_priority(&field_path, value);
 
                         fields.push(PrioritizedField {
