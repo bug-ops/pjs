@@ -20,39 +20,32 @@ Use case orchestration with CQRS pattern.
 
 ## Commands (`application/commands/`)
 
-- `CreateSessionCommand`
-- `StartStreamCommand`
-- `StopStreamCommand`
+- `CreateSessionCommand`, `CloseSessionCommand`
+- `CreateStreamCommand`, `StartStreamCommand`, `CompleteStreamCommand`
+- `GenerateFramesCommand`, `BatchGenerateFramesCommand`
 
 Commands are intent to change state. Validation happens in domain.
 
 ## Queries (`application/queries/`)
 
-- `GetSessionQuery`
-- `ListActiveSessionsQuery`
-- `GetMetricsQuery`
+- `GetSessionQuery`, `GetActiveSessionsQuery`, `SearchSessionsQuery`
+- `GetStreamQuery`, `GetStreamsForSessionQuery`, `GetStreamFramesQuery`
+- `GetSessionHealthQuery`, `GetSessionStatsQuery`, `GetSystemStatsQuery`
 
 Queries read state without side effects.
 
 ## Handlers
 
-- `CommandHandler` - processes commands
-- `QueryHandler` - processes queries
+- `SessionCommandHandler` - processes commands
+- `SessionQueryHandler`, `StreamQueryHandler`, `SystemQueryHandler` - process queries
 
-Handlers orchestrate domain services and ports.
+Handlers are generic over domain ports (for example `StreamRepositoryGat`, `EventPublisherGat`) and orchestrate them; they never name a concrete adapter.
 
 ## DTOs (`application/dto/`)
 
 - Data transfer objects for external communication
 - Convert between domain types and external formats
 - Validation at boundaries
-
-## Services
-
-- `SessionService` - session lifecycle orchestration
-- `StreamingService` - stream orchestration
-
-Services compose domain operations into use cases.
 
 ## Testing
 

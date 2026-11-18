@@ -44,7 +44,7 @@ Part of [[MOC-specs]]; see [[constitution]]. PR-time checks are in [[078-ci-pipe
 ## Functional Requirements
 
 ### FR-001 Trigger and version gate
-The workflow shall run on pushed tags matching `v[0-9]+.[0-9]+.[0-9]+`. Job `version-check` shall derive the version from the tag and fail unless it equals the first `version = "..."` line of the root `Cargo.toml` (`[workspace.package]` version, currently 0.7.0).
+The workflow shall run on pushed tags matching `v[0-9]+.[0-9]+.[0-9]+`. Job `version-check` shall derive the version from the tag and fail unless it equals the first `version = "..."` line of the root `Cargo.toml` (`[workspace.package]` version, currently 0.8.0).
 Status: done.
 
 ### FR-002 Verification gates

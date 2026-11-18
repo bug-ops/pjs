@@ -15,7 +15,7 @@ status: moc
 > [!abstract]
 > Map of Content for all PJS specifications. Specs 001-037 were originally written as issue-driven specs and were re-verified against the code on 2026-11-15; specs 038-079 document existing functionality as built (living specs). Status values: `implemented`, `partial`, `draft`, `obsolete`.
 
-Counts across 79 spec folders: 54 implemented, 20 partial, 0 draft, 5 obsolete.
+Counts across 79 spec folders: 54 implemented, 19 partial, 0 draft, 6 obsolete.
 
 ## Project Foundation
 

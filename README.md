@@ -18,7 +18,7 @@
 
 A large JSON response is all-or-nothing: the client renders only after the last byte arrives. PJS splits one document into a **skeleton** plus prioritized **patches**, so the UI shows meaningful content after the first frames while the heavy tail streams in the background.
 
-It is the same breadth-first idea behind the React Server Components wire format and GraphQL's `@defer`/`@stream` — packaged as a small, framework-agnostic protocol: plain-JSON frames, [JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) paths, any transport. Rust core, WebAssembly client (~70 KB gzipped).
+It is the same breadth-first idea behind the React Server Components wire format and GraphQL's `@defer`/`@stream` — packaged as a small, framework-agnostic protocol: plain-JSON frames, path-addressed patches, HTTP and WebSocket transports. Rust core, WebAssembly client (~70 KB gzipped).
 
 ## How it works
 
@@ -30,17 +30,21 @@ The server derives a skeleton (full structure, empty values), assigns each subtr
 
 ### 2 · Stream
 
-Frames go out in priority order over HTTP/1.1, HTTP/2, WebSocket, or raw TCP. Every frame is plain JSON:
+Frames go out in priority order over HTTP (SSE or NDJSON) or WebSocket. Every frame is plain JSON. On the WebSocket transport, a patch frame carries `[op, path, argument]` triples, where `path` is an array of segments and `op` is one of `set`, `merge`, `append` or `append_str`:
 
 ```json
 {
-  "@type": "patch",
-  "@seq": 1,
-  "@priority": 100,
-  "@patches": [
-    { "op": "replace", "path": "/user/id",   "value": 12345 },
-    { "op": "replace", "path": "/user/name", "value": "Alice" }
-  ]
+  "type": "StreamPatch",
+  "data": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "frame_id": 1,
+    "priority": 100,
+    "patches": [
+      ["set", ["user", "id"], 12345],
+      ["set", ["user", "name"], "Alice"]
+    ],
+    "is_complete": false
+  }
 }
 ```
 
@@ -50,7 +54,7 @@ Large arrays are chunked and streamed at low priority so they never block critic
 
 The client applies each patch to its local tree and re-renders immediately. Apply, render, repeat — no custom parser required on the consuming side.
 
-![Reassembly: each frame patches the tree at a JSON Pointer path, the UI updates instantly](docs/assets/03-reassembly.svg)
+![Reassembly: each frame patches the tree at a path, the UI updates instantly](docs/assets/03-reassembly.svg)
 
 ## Why bother
 
@@ -64,7 +68,7 @@ Same bytes, same bandwidth — only the *order* changes. Layout appears with the
 
 ```toml
 [dependencies]
-pjson-rs = "0.7"
+pjson-rs = "0.8"
 ```
 
 ```rust
@@ -123,8 +127,8 @@ stream.start(json);
 |  | **PJS** | RSC wire format | GraphQL `@defer`/`@stream` | NDJSON / SSE |
 |---|---|---|---|---|
 | Stack | any | React | GraphQL | any |
-| Transport | HTTP, WS, TCP | HTTP | HTTP multipart | HTTP |
-| Unit of delivery | JSON Pointer patches | component props | fragments / list items | independent lines |
+| Transport | HTTP (SSE, NDJSON), WS | HTTP | HTTP multipart | HTTP |
+| Unit of delivery | path-addressed patches | component props | fragments / list items | independent lines |
 | Explicit priorities | ✅ `0–255` per subtree | implicit (`Suspense`) | per directive | — |
 | Falls back to plain JSON | ✅ content negotiation | — | — | n/a |
 
@@ -172,11 +176,11 @@ Defaults cover the common server + browser path; everything else is opt-in.
 | `schema-validation` | Schema validation engine | ✅ |
 | `compression` | zlib/gzip/brotli/zstd with per-session dictionaries | ✅ |
 | `partial-parse` | Streaming partial JSON parsing (`jiter`) | — |
-| `http-server` / `http-client` | Axum server · reqwest client | ✅ |
+| `http-server` | Axum server with the `/pjs/*` REST routes | ✅ |
 | `http-auth-jwt` | JWT middleware | — |
 | `websocket-server` / `websocket-client` | WebSocket transport | ✅ |
 | `mimalloc` | mimalloc as global allocator | — |
-| `metrics` | Prometheus endpoint | — |
+| `metrics` | Prometheus `/metrics` endpoint (requires nightly `once_cell_try`) | — |
 | `float-roundtrip` | Exact `f64` round-trip in `serde_json` parsing (about 2x cost on float tokens; unifies across the whole build) | — |
 
 > [!NOTE]
@@ -189,13 +193,13 @@ Defaults cover the common server + browser path; everything else is opt-in.
 
 ## Status
 
-`0.7.x` — the core protocol works end to end (Rust server, WASM browser client, Node.js), CI on Linux/macOS/Windows.
+`0.8.x` — the core protocol works end to end (Rust server, WASM browser client, Node.js), CI on Linux/macOS/Windows.
 
 > [!IMPORTANT]
 > `pjson-rs` currently requires **nightly Rust** (`impl_trait_in_assoc_type`, plus `once_cell_try` with the `metrics` feature); `rust-toolchain.toml` pins a dated nightly. `pjson-rs-domain` and `pjs-wasm` build on stable Rust 1.89+ (MSRV, checked in CI). Supporting stable is a priority on the road to `1.0` — if this blocks you, say so in [Discussions](https://github.com/bug-ops/pjs/discussions): it directly affects how we prioritize.
 
 > [!NOTE]
-> Pre-`1.0`: the [wire format](docs/architecture/SPECIFICATION.md) is a draft and may still change. Feedback on the frame format is the most valuable contribution right now.
+> Pre-`1.0`: the wire format may still change. The [specification](docs/architecture/SPECIFICATION.md) is a draft whose `@type`/`@patches` frame notation predates the shipped WebSocket `WsMessage` protocol shown above. Feedback on the frame format is the most valuable contribution right now.
 
 ## Architecture
 
@@ -205,9 +209,9 @@ Workspace crates, one line each: `pjs-domain` (pure protocol logic, WASM-compati
 
 ```bash
 # rust-toolchain.toml selects the pinned nightly automatically
-cargo clippy --workspace -- -D warnings
-cargo nextest run --workspace --all-features
 cargo +nightly fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo nextest run --workspace --all-features --lib --bins
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

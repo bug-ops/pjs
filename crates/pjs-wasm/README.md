@@ -16,8 +16,8 @@ WebAssembly bindings for the PJS (Priority JSON Streaming) protocol, enabling hi
 ## Features
 
 - **Zero-copy JSON parsing** where possible
-- **Priority-based streaming** support
-- **Schema validation** capabilities
+- **Priority-based streaming** with a callback API (`PriorityStream`) and batch frame generation (`PjsParser.generateFrames`)
+- **Security limits** - configurable bounds on input size, depth and cardinality
 - **Optimized for size** - minimal WASM bundle using `opt-level = "s"`
 - **Full TypeScript support** - TypeScript definitions generated automatically
 
@@ -163,7 +163,7 @@ Get the parser version.
 
 ```javascript
 const v = PjsParser.version();
-console.log(v); // e.g. "0.7.0"
+console.log(v); // e.g. "0.8.0"
 ```
 
 ##### `generateFrames(jsonStr: string, minPriority: number): Frame[]`
@@ -224,7 +224,7 @@ Get the WASM module version.
 
 ```javascript
 import { version } from '@pjson/wasm';
-console.log(version()); // e.g. "0.7.0"
+console.log(version()); // e.g. "0.8.0"
 ```
 
 ## Security Limits
@@ -355,7 +355,7 @@ Contributions are welcome! Please read the [Contributing Guide](../../CONTRIBUTI
 ## Links
 
 - [PJS GitHub Repository](https://github.com/bug-ops/pjs)
-- [PJS Specification](../../SPECIFICATION.md)
+- [PJS Specification (draft)](../../docs/architecture/SPECIFICATION.md)
 - [API Documentation](https://docs.rs/pjson-rs)
 - [wasm-bindgen Documentation](https://rustwasm.github.io/docs/wasm-bindgen/)
 
@@ -423,6 +423,8 @@ const frames = parser.generateFrames(
 
 ### Progressive Rendering Example
 
+`generateFrames` returns frame objects with `frame_type` (`"Skeleton"`, `"Patch"`, `"Complete"` or `"Error"`), `priority`, `sequence` and a structured `payload`. A patch frame's `payload` is an array of `{ path, operation: "set", value }` entries.
+
 ```javascript
 const parser = new PjsParser();
 const frames = parser.generateFrames(jsonData, PriorityConstants.MEDIUM);
@@ -433,13 +435,38 @@ for (const frame of frames) {
             renderLoadingSkeleton(frame.payload);
             break;
         case 'Patch':
-            applyDataPatches(frame.payload.patches);
+            for (const { path, value } of frame.payload) {
+                applyPatch(path, value);
+            }
             break;
         case 'Complete':
             finalizeRendering();
             break;
     }
 }
+```
+
+### Callback Streaming with `PriorityStream`
+
+`PriorityStream` delivers the same frames through callbacks. Unlike `generateFrames`, each frame it delivers is a `FrameData` object with a lowercase `type`, a numeric `sequence`, a `priority` and a `payload` that is a JSON string.
+
+```javascript
+import init, { PriorityStream, PriorityConstants } from '@pjson/wasm';
+
+await init();
+
+const stream = new PriorityStream();
+stream.setMinPriority(PriorityConstants.MEDIUM);
+
+stream.onFrame((frame) => {
+    console.log(frame.type, frame.priority, JSON.parse(frame.payload));
+});
+stream.onComplete((stats) => {
+    console.log(`${stats.totalFrames} frames, ${stats.patchFrames} patches in ${stats.durationMs} ms`);
+});
+stream.onError((message) => console.error(message));
+
+stream.start('{"id": 1, "name": "Alice", "bio": "Software developer"}');
 ```
 
 ## Roadmap

@@ -6,9 +6,9 @@ We actively support the following versions of PJS with security updates:
 
 | Version | Supported          | Notes                                    |
 | ------- | ------------------ | ---------------------------------------- |
-| 0.7.x   | :white_check_mark: | Current stable release (recommended)     |
-| 0.6.x   | :x:                | Unsupported - upgrade to 0.7.x           |
-| < 0.6   | :x:                | Unsupported - upgrade to 0.7.x           |
+| 0.8.x   | :white_check_mark: | Current stable release (recommended)     |
+| 0.7.x   | :x:                | Unsupported - upgrade to 0.8.x           |
+| < 0.7   | :x:                | Unsupported - upgrade to 0.8.x           |
 
 **Recommendation:** Always use the latest patch version within the supported major.minor release.
 
@@ -168,19 +168,29 @@ The following are **not considered security vulnerabilities**:
 
 **Production Deployment:**
 
-```rust
-use pjson_rs::infrastructure::http::axum_adapter::create_pjs_router;
-use tower_http::limit::RequestBodyLimitLayer;
+`create_pjs_router()` allows only `http://localhost:3000` and requires no authentication; it is for local development. In production, build the router from an explicit `HttpServerConfig`, add authentication, and serve it with `serve_with_limits`, which enforces connection-level limits (header read timeout, connection lifetime, connection and per-IP caps) and a graceful shutdown drain:
 
-let app = create_pjs_router()
-    .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))  // 10 MB limit
-    .with_state(app_state);
+```rust
+use pjson_rs::infrastructure::http::{
+    ConnectionLimits, HttpServerConfig, ShutdownConfig, create_pjs_router_with_auth,
+    auth::{ApiKeyAuthLayer, ApiKeyConfig},
+    serve_with_limits,
+};
+
+let config = HttpServerConfig::new(vec!["https://app.example.com".to_string()]);
+let auth = ApiKeyAuthLayer::new(ApiKeyConfig::new(&["my-api-key"])?);
+let router = create_pjs_router_with_auth(&config, auth)?.with_state(app_state);
+
+let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+serve_with_limits(listener, router, ConnectionLimits::default(), ShutdownConfig::default()).await?;
 ```
+
+The router already applies a 10 MB request body limit, a request timeout and a global concurrency cap. `ConnectionLimits::default()` closes connections after 300 seconds; a listener that serves WebSocket routes must set `max_connection_duration` to `None`.
 
 **WASM Security Limits:**
 
 ```javascript
-import { PriorityStream, SecurityConfig } from '@pjson/wasm';
+import { PjsParser, PriorityStream, SecurityConfig } from '@pjson/wasm';
 
 const security = new SecurityConfig()
     .setMaxJsonSize(5 * 1024 * 1024)  // 5 MB max
@@ -188,7 +198,10 @@ const security = new SecurityConfig()
     .setMaxArrayElements(10000)        // 10K elements max
     .setMaxObjectKeys(10000);          // 10K keys max
 
-const stream = PriorityStream.withSecurityConfig(security);
+const parser = PjsParser.withSecurityConfig(security);
+
+const stream = new PriorityStream();
+stream.setSecurityConfig(security);
 ```
 
 ### Security Checklist
@@ -209,7 +222,7 @@ PJS includes defense-in-depth security:
 **Decompression Protection (v0.4.7+):**
 - MAX_RLE_COUNT: 100,000 items per run-length encoded segment
 - MAX_DELTA_ARRAY_SIZE: 1,000,000 elements in delta-encoded arrays
-- MAX_DECOMPRESSED_SIZE: 10 MB total output
+- MAX_DECOMPRESSED_SIZE: 10 MB total output (stream decompression)
 - Integer overflow protection: Checked arithmetic throughout
 
 **Parsing Limits:**
@@ -222,6 +235,12 @@ PJS includes defense-in-depth security:
 - Configurable per-session and global limits
 - Automatic cleanup of expired sessions
 - Bounded memory usage
+
+**Connection and Memory Bounds:**
+- `serve_with_limits` caps connections (1024 total, 64 per source IP by default), header read time (10 s) and connection lifetime (300 s)
+- WebSocket servers enforce per-IP connection, message-rate and frame-size limits (`RateLimitConfig`) and a write timeout against peers that stop reading
+- The aligned `BufferPool` enforces a total memory budget (`max_total_memory`) and fails allocations that exceed it
+- The only `unsafe` code (`parser::buffer_pool`, `parser::aligned_alloc`) is checked under Miri in CI
 
 ## Security Advisories
 
@@ -257,10 +276,12 @@ We maintain a history of security issues in our changelog. See `CHANGELOG.md` fo
 
 Our CI pipeline includes:
 
-- **OSV Scanner**: Weekly vulnerability scanning on Saturdays at 17:39 UTC
-- **Cargo Audit**: Dependency vulnerability checks
-- **Clippy**: Static analysis with security lints enabled
-- **Codecov**: Code coverage monitoring (87.35% coverage)
+- **OSV Scanner**: Vulnerability scanning on pull requests and merge groups, plus weekly on Saturdays at 17:39 UTC
+- **Cargo Deny**: Advisory, license and source checks for the workspace and the fuzz crate
+- **Clippy**: Static analysis with warnings denied
+- **Miri**: Memory-safety checks of the `unsafe` buffer pool code
+- **Fuzzing**: Committed seeds replayed on every relevant change; each target explored for 60 seconds weekly
+- **Codecov**: Code coverage monitoring
 
 ### Manual Security Reviews
 

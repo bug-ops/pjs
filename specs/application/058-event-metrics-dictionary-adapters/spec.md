@@ -83,7 +83,7 @@ Status: implemented, not wired.
 `register(session, dict)` shall validate the dictionary size with the bomb detector (`Error::InvalidDictionary(DictionaryError::Rejected)` on rejection) and set it if none exists.
 
 ### FR-008 Dictionary eviction
-Session state shall be evicted after `SESSION_TTL` = 30 min of inactivity by a background task spawned in `new` when a Tokio runtime is present (interval `SESSION_CLEANUP_INTERVAL` = 5 min, holds only `Weak` references so it stops when the store drops); without a runtime a `warn!` is logged and no task starts. `cleanup_expired(ttl)` runs one pass manually and resynchronizes the global byte counter. `release_corpus_bytes` saturates instead of wrapping.
+Session state shall be evicted after `SESSION_TTL` = 30 min of inactivity by a background task spawned in `new` when a Tokio runtime is present (interval `SESSION_CLEANUP_INTERVAL` = 5 min, holds only `Weak` references so it stops when the store drops); without a runtime a `warn!` is logged and no task starts. `cleanup_expired(ttl)` runs one pass manually and resynchronizes the global byte counter. `release_corpus_bytes` saturates instead of wrapping; millisecond clocks and TTLs convert with `u64::try_from(..).unwrap_or(u64::MAX)`, so a TTL beyond `u64` milliseconds evicts nothing (#762).
 
 ## 4. Non-Functional Requirements
 - NFR-MEM-001: event log at most about 10 000 entries; channel at most 1000 messages and 16 MiB; dictionary corpus at most 128 MiB process-wide and 32 MiB per session (`N_TRAIN * 1 MiB`).

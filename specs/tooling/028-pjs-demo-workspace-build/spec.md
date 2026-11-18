@@ -30,7 +30,7 @@ verified: 2026-11-15
 > **State: implemented** (option (a) of #112 applied).
 >
 > **Evidence**
-> - Root `Cargo.toml`: `members = ["crates/*"]`, `default-members = [pjs-core, pjs-domain, pjs-wasm]`, `exclude = ["crates/pjs-js-client", "fuzz"]` - `crates/pjs-demo` is no longer excluded. `cargo pkgid -p pjs-demo` resolves to `crates/pjs-demo#0.7.0`.
+> - Root `Cargo.toml`: `members = ["crates/*"]`, `default-members = [pjs-core, pjs-domain, pjs-wasm]`, `exclude = ["crates/pjs-js-client", "fuzz"]` - `crates/pjs-demo` is no longer excluded. `cargo pkgid -p pjs-demo` resolves to `crates/pjs-demo#0.8.0`.
 > - Delivered by PR #356 (commit `3b9b426`, "restore pjs-demo as a buildable workspace member"), which closed issue #318 ("pjs-demo remains completely unbuildable ... regression of closed #112"). CHANGELOG entry cites #318.
 > - The same PR fixed two latent compile defects (stale `rand::Rng` imports in `crates/pjs-demo/src/data/*.rs`, a clippy `unnecessary_sort_by` in `websocket_streaming.rs`).
 > - `.github/workflows/ci.yml`: the `rust` paths-filter includes `crates/pjs-demo/**`; `cargo clippy --workspace --all-features --all-targets -- -D warnings` covers the demo crate; the coverage job runs `--exclude pjs-demo`.
