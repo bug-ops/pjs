@@ -180,3 +180,67 @@ proptest! {
         prop_assert_eq!(parse(&text), Some(path));
     }
 }
+
+const STRUCTURAL: [&str; 3] = [".", "[", "]"];
+
+fn plain_fragment() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "[a-z0-9 ]{1,3}",
+        prop::sample::select(vec!["ключ", "é", "日本", "😀"]).prop_map(str::to_owned),
+    ]
+}
+
+fn escape_fragment() -> impl Strategy<Value = String> {
+    prop_oneof![
+        prop::sample::select(vec![r#"\""#, r"\\", r"\b", r"\f", r"\n", r"\r", r"\t"])
+            .prop_map(str::to_owned),
+        prop::sample::select(
+            (0u8..0x20)
+                .filter(|c| !matches!(c, 0x08 | 0x09 | 0x0a | 0x0c | 0x0d))
+                .collect::<Vec<_>>()
+        )
+        .prop_map(|c| format!("\\u{c:04x}")),
+    ]
+}
+
+fn structural_fragment() -> impl Strategy<Value = String> {
+    prop::sample::select(STRUCTURAL.to_vec()).prop_map(str::to_owned)
+}
+
+fn canonical_fragment() -> impl Strategy<Value = String> {
+    prop_oneof![plain_fragment(), escape_fragment(), structural_fragment()]
+}
+
+fn hostile_fragment() -> impl Strategy<Value = String> {
+    prop_oneof![
+        canonical_fragment(),
+        prop::sample::select(vec![
+            r"\/", r"A", r"é", r"\u001F", r"\ud800", r"\udc00", "\u{1}", "\n", "\t", "\"", r"\",
+            r"\x", "\u{7f}",
+        ])
+        .prop_map(str::to_owned),
+    ]
+}
+
+proptest! {
+    #[test]
+    fn from_str_round_trips_canonical_quoted_keys_built_from_fragments(
+        head in prop::collection::vec(canonical_fragment(), 0..4),
+        structural in structural_fragment(),
+        tail in prop::collection::vec(canonical_fragment(), 0..4),
+    ) {
+        let body = [head.concat(), structural, tail.concat()].concat();
+        let text = format!("$[\"{body}\"]");
+        prop_assert_eq!(parse(&text).map(|p| p.to_string()), Some(text));
+    }
+
+    #[test]
+    fn from_str_accepts_hostile_quoted_text_only_when_it_re_renders_identically(
+        parts in prop::collection::vec(hostile_fragment(), 0..8),
+    ) {
+        let text = format!("$[\"{}\"]", parts.concat());
+        if let Some(path) = parse(&text) {
+            prop_assert_eq!(path.to_string(), text);
+        }
+    }
+}
