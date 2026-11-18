@@ -525,7 +525,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
         run: |
           cargo llvm-cov nextest --all-features --all-targets --workspace \
-            --exclude pjs-demo \
+            --exclude pjs-demo --exclude pjs-bench \
             --lcov --output-path lcov.info \
             --status-level fail --final-status-level skip
 

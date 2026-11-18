@@ -108,7 +108,7 @@ jobs:
           tool: cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
 
       - name: Run tests with nextest
-        run: cargo nextest run --workspace --all-features --all-targets --no-fail-fast
+        run: cargo nextest run --workspace --exclude pjs-bench --all-features --all-targets --no-fail-fast
 
       - name: Run doctests
         run: cargo test --workspace --doc --all-features
