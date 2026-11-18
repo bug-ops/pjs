@@ -189,39 +189,44 @@ export class JsonReconstructor {
 
   // Path resolution helpers
 
-  private static readonly UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  private static ownValue(container: any, key: string | number): any {
+    return Object.prototype.hasOwnProperty.call(container, key) ? container[key] : undefined;
+  }
 
-  private static assertSafeKey(key: string): void {
-    if (JsonReconstructor.UNSAFE_KEYS.has(key)) {
-      throw new Error(`Unsafe path segment: ${key}`);
-    }
+  private static defineOwn(container: any, key: string | number, value: unknown): void {
+    Object.defineProperty(container, key, { value, writable: true, enumerable: true, configurable: true });
   }
 
   private setPatchValue(segments: readonly JsonPathSegment[], value: any): void {
     const { parent, key } = this.resolveSlot(segments);
-    Object.defineProperty(parent, key, { value, writable: true, enumerable: true, configurable: true });
+    JsonReconstructor.defineOwn(parent, key, value);
   }
 
   private appendPatchValue(segments: readonly JsonPathSegment[], value: any): void {
     const { parent, key } = this.resolveSlot(segments);
-    if (!Array.isArray(parent[key])) {
-      Object.defineProperty(parent, key, { value: [], writable: true, enumerable: true, configurable: true });
+    let target = JsonReconstructor.ownValue(parent, key);
+    if (!Array.isArray(target)) {
+      target = [];
+      JsonReconstructor.defineOwn(parent, key, target);
     }
     if (Array.isArray(value)) {
-      parent[key].push(...value);
+      target.push(...value);
     } else {
-      parent[key].push(value);
+      target.push(value);
     }
   }
 
   private mergePatchValue(segments: readonly JsonPathSegment[], value: any): void {
     const { parent, key } = this.resolveSlot(segments);
-    const merged =
-      typeof parent[key] === 'object' && typeof value === 'object' &&
-      !Array.isArray(parent[key]) && !Array.isArray(value)
-        ? { ...parent[key], ...value }
-        : value;
-    Object.defineProperty(parent, key, { value: merged, writable: true, enumerable: true, configurable: true });
+    const existing = JsonReconstructor.ownValue(parent, key);
+    let merged = value;
+    if (
+      typeof existing === 'object' && typeof value === 'object' &&
+      !Array.isArray(existing) && !Array.isArray(value)
+    ) {
+      merged = { ...existing, ...value };
+    }
+    JsonReconstructor.defineOwn(parent, key, merged);
   }
 
   private deletePatchValue(segments: readonly JsonPathSegment[]): void {
@@ -248,7 +253,6 @@ export class JsonReconstructor {
         current = JsonReconstructor.elementAt(current, segment.index);
         continue;
       }
-      JsonReconstructor.assertSafeKey(segment.key);
       if (!JsonReconstructor.isPlainObject(current)) {
         throw new Error(`Path segment is not an object: ${segment.key}`);
       }
@@ -256,8 +260,7 @@ export class JsonReconstructor {
         if (segments[i + 1].kind === 'index') {
           throw new Error(`Path segment not found: ${segment.key}`);
         }
-        // Object.create(null) so nested objects have no prototype chain
-        Object.defineProperty(current, segment.key, { value: Object.create(null), writable: true, enumerable: true, configurable: true });
+        JsonReconstructor.defineOwn(current, segment.key, Object.create(null));
       }
       current = current[segment.key];
     }
@@ -267,7 +270,6 @@ export class JsonReconstructor {
       JsonReconstructor.elementAt(current, tail.index);
       return { parent: current, key: tail.index };
     }
-    JsonReconstructor.assertSafeKey(tail.key);
     if (!JsonReconstructor.isPlainObject(current)) {
       throw new Error(`Path segment is not an object: ${tail.key}`);
     }

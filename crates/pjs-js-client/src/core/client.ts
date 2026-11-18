@@ -417,7 +417,7 @@ export class PJSClient extends EventEmitter {
               throw new PJSError(PJSErrorType.ProtocolError, 'Received patch frame before skeleton');
             }
 
-            reconstructor.applyPatch(frame);
+            const applied = reconstructor.applyPatch(frame);
             result = reconstructor.getCurrentState();
 
             // Emit one PatchApplied per frame (not per operation)
@@ -427,7 +427,9 @@ export class PJSClient extends EventEmitter {
                 patch: patches[0],
                 path: patches[0].path,
                 priority: frame.priority,
-                resultingData: result
+                resultingData: result,
+                appliedPatches: applied.appliedPatches,
+                skippedPatches: applied.skippedPatches
               });
             }
 

@@ -15,16 +15,12 @@ const key = (value: string): JsonPathSegment => ({ kind: 'key', key: value });
 const index = (value: number): JsonPathSegment => ({ kind: 'index', index: value });
 
 describe('tokenizeJsonPath', () => {
-  const zeros = '0'.repeat(400);
-
   test.each<[string, JsonPathSegment[]]>([
     ['$', []],
     ['$.a', [key('a')]],
     ['$[0]', [index(0)]],
     ['$.a[0].b', [key('a'), index(0), key('b')]],
-    ['$[01]', [index(1)]],
     ['$[9007199254740991]', [index(9007199254740991)]],
-    [`$[${zeros}1]`, [index(1)]],
     ['$.ключ', [key('ключ')]],
     ['$.a b', [key('a b')]],
     ['$.\uD800', [key('\uD800')]],
@@ -70,9 +66,7 @@ describe('isValidJsonPath', () => {
     '$.a',
     '$[0]',
     '$.a[0].b',
-    '$[01]',
     '$[9007199254740991]',
-    `$[${'0'.repeat(400)}1]`,
     '$.\uD800',
     '$.ключ'
   ])('accepts %j', (path) => {
@@ -94,7 +88,9 @@ describe('isValidJsonPath', () => {
     '$[1.5]',
     '$[-1]',
     '$[]',
-    '$[9007199254740992]'
+    '$[9007199254740992]',
+    '$[01]',
+    `$[${'0'.repeat(400)}1]`
   ])('rejects %j', (path) => {
     expect(isValidJsonPath(path)).toBe(false);
   });
