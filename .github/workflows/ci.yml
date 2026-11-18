@@ -926,7 +926,7 @@ jobs:
     name: JS Client Tests
     needs: [changes, wasm-build]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     if: |
       needs.changes.outputs.wasm == 'true' ||
       needs.changes.outputs.js == 'true' ||
@@ -961,6 +961,25 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Build client bundle
+        run: npm run build
+
+      - uses: ./.github/actions/setup-rust
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "js-client-ws-fixture"
+          cache-on-failure: true
+
+      - name: Build WebSocket fixture
+        working-directory: .
+        run: cargo build -p pjson-rs --example js_client_ws_fixture
+
+      - name: Run cross-stack tests
+        env:
+          PJS_WS_FIXTURE_BIN: ${{ github.workspace }}/target/debug/examples/js_client_ws_fixture
+        run: npx jest --config jest.cross-stack.config.js
 
   # Keys off this job name in branch protection settings.
   # Skipped jobs (wasm/rust on JS-only PRs, security on push) are treated as

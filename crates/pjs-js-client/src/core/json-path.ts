@@ -148,3 +148,21 @@ export function tokenizeJsonPath(path: string): JsonPathParse {
 export function isValidJsonPath(path: string): boolean {
   return scanJsonPath(path, null) === null;
 }
+
+/**
+ * Formats typed segments into the canonical path string; inverse of
+ * {@link tokenizeJsonPath} for every key without a lone surrogate.
+ */
+export function formatJsonPath(segments: readonly JsonPathSegment[]): string {
+  let path = '$';
+  for (const segment of segments) {
+    if (segment.kind === 'index') {
+      path += `[${segment.index}]`;
+    } else if (isPlainKey(segment.key)) {
+      path += `.${segment.key}`;
+    } else {
+      path += `[${JSON.stringify(segment.key)}]`;
+    }
+  }
+  return path;
+}

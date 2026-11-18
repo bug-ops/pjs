@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `client_apply_patches` bench behind the `pjs_bench` cfg, a shared allocation-free `serialized_len` helper, and CI steps for test targets in the feature matrix and `npm run lint` (#670, #680, #679) (#688)
 - Bench shapes for the offload gate calibration in `pjs-bench` (#686) (#691)
 - Miri CI job for `parser::buffer_pool` and `parser::aligned_alloc`, credential patterns in `.gitignore` with a gitleaks allowlist, and tracing spans for WebSocket connections and sessions (#716, #697, #708, #726)
+- Cross-stack test running the compiled `pjs-js-client` bundle against a real `pjs-core` WebSocket server in the `js-client-test` CI job (#731) (#740)
 
 ### Changed
 
@@ -92,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependabot cooldown for cargo and github-actions, and JS CI installs with `npm ci --ignore-scripts` (#723) (#734)
 - Benchmark docs describe `--cfg pjs_bench` for `client_apply_patches` (#722) (#734)
 - Unused `approx_eq` and `MAX_FLOAT_ULPS` removed from the fuzz crate (#721) (#734)
+- `pjs-js-client` `WebSocketTransport` speaks the shipped `WsMessage` protocol on `/ws` with patch framing, requires `StreamOptions.data` and no longer auto-reconnects; `PatchOperation` gains `append_str` (**BREAKING**) (#731) (#740)
+- `PjsExtension` and WebSocket route doc comments no longer promise a `pjs-js-client` SSE match or a `/pjs/ws/{session_id}` route (#729, #730) (#740)
+- ADR-002 (proposed) records the instruction-count bench gate evaluation; teammate-suffixed spec delta files renamed to topic names; dead nested `pjs-js-client` workflow removed (#695, #733, #732) (#740)
 
 ### Fixed
 

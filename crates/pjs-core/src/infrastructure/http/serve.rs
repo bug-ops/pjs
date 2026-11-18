@@ -163,9 +163,11 @@ pub struct ConnectionLimits {
     /// set this to `None` and rely on WS-level idle/ping timeouts instead;
     /// `crates/pjs-demo/src/servers/websocket_streaming.rs` does exactly
     /// that. In particular, if serving a router that mounts this crate's own
-    /// `/pjs/ws/{session_id}` upgrade route (see `infrastructure::websocket`),
-    /// set this to `None` — the default 300s ceiling will otherwise kill
-    /// every WebSocket session it outlives.
+    /// `/ws` upgrade route (`create_websocket_router()` in
+    /// `infrastructure::websocket`; the session is established by the
+    /// `StreamInit` message, not by a path parameter), set this to `None` —
+    /// the default 300s ceiling will otherwise kill every WebSocket session
+    /// it outlives.
     pub max_connection_duration: Option<Duration>,
 
     /// Maximum number of concurrently open connections.

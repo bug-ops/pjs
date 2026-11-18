@@ -243,8 +243,10 @@ where
 /// `EventSource` will treat clean end-of-stream as a dropped connection and redial
 /// on its default ~3s interval — callers using `EventSource` against this route
 /// **must** call `.close()` after the final event. Clients that want continuous,
-/// live push should use the WebSocket endpoint (`ws://…/pjs/ws/{session_id}`)
-/// instead; `retry:`/`Last-Event-ID` handling is out of scope for this route.
+/// live push should use the WebSocket endpoint (`/ws`, served by the nestable
+/// `create_websocket_router()`) instead. That route takes no session path
+/// parameter: the session is established by the `StreamInit` message sent after
+/// the upgrade. `retry:`/`Last-Event-ID` handling is out of scope for this route.
 ///
 /// The response carries `X-Total-Count`, mirroring [`FramesResponse::total_count`],
 /// since a frame-delimited stream has no envelope to carry it in-body.

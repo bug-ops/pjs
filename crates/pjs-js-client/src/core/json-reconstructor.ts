@@ -7,7 +7,7 @@
 
 import {
   PatchFrame,
-  PatchOperation,
+  PatchOperationKind,
   SkeletonFrame
 } from '../types/index.js';
 
@@ -100,6 +100,9 @@ export class JsonReconstructor {
           case 'delete':
             this.deletePatchValue(parsed.segments);
             break;
+          case 'append_str':
+            this.appendStrPatchValue(parsed.segments, patch.value);
+            break;
           default:
             skipped++;
             continue;
@@ -161,9 +164,17 @@ export class JsonReconstructor {
     this.patchesApplied = 0;
   }
 
-  /** Applies a patch addressed at the root path `$`; only `set` and `merge` are meaningful there. */
-  private applyRootPatch(operation: PatchOperation['operation'], value: unknown): boolean {
+  /** Applies a patch addressed at the root path `$`; `delete` is not meaningful there. */
+  private applyRootPatch(operation: PatchOperationKind, value: unknown): boolean {
     switch (operation) {
+      case 'append':
+        if (!Array.isArray(this.state)) return false;
+        JsonReconstructor.pushValue(this.state, value);
+        return true;
+      case 'append_str':
+        if (typeof this.state !== 'string' || typeof value !== 'string') return false;
+        this.state += value;
+        return true;
       case 'set':
         this.state = this.deepClone(value);
         return true;
@@ -209,8 +220,23 @@ export class JsonReconstructor {
       target = [];
       JsonReconstructor.defineOwn(parent, key, target);
     }
+    JsonReconstructor.pushValue(target, value);
+  }
+
+  private appendStrPatchValue(segments: readonly JsonPathSegment[], value: unknown): void {
+    const { parent, key } = this.resolveSlot(segments);
+    const existing = JsonReconstructor.ownValue(parent, key);
+    if (typeof existing !== 'string' || typeof value !== 'string') {
+      throw new Error('append_str target is not a string');
+    }
+    JsonReconstructor.defineOwn(parent, key, existing + value);
+  }
+
+  /** Pushes the elements of an array value, or a scalar value once. */
+  private static pushValue(target: unknown[], value: unknown): void {
     if (Array.isArray(value)) {
-      target.push(...value);
+      // A loop, not push(...value): spreading a very large array overflows the call stack.
+      for (const element of value) target.push(element);
     } else {
       target.push(value);
     }

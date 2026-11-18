@@ -59,7 +59,7 @@ Status: done.
 Status: done.
 
 ### FR-006 Remove semantics
-`remove_at_path` delegates to `json_tree::remove` and matches on the last segment: a key on an object parent removes the entry, and a missing key is an idempotent `Ok` no-op (the document is already in the target state); an index on an array parent removes the element (later elements shift) and fails with `IndexOutOfBounds` for `index >= len`, because an out-of-range index shows that the sender's view of the array diverged; a mismatched segment kind fails with `ExpectedObject`/`ExpectedArray`; an empty path fails with `NoTargetKey`. Consistent in outcome with JS FR-009 (JS skips an out-of-range patch silently, Rust reports it as an error).
+`remove_at_path` delegates to `json_tree::remove` and matches on the last segment: a key on an object parent removes the entry, and a missing key is an idempotent `Ok` no-op (the document is already in the target state); an index on an array parent removes the element (later elements shift) and fails with `IndexOutOfBounds` for `index >= len`, because an out-of-range index shows that the sender's view of the array diverged; a mismatched segment kind fails with `ExpectedObject`/`ExpectedArray`; an empty path fails with `NoTargetKey`. Differs from JS FR-009: the JS client skips an out-of-range patch silently, while Rust reports `IndexOutOfBounds` as an error.
 Status: done.
 
 ### FR-007 Completion

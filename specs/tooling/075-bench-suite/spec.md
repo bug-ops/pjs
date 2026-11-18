@@ -127,6 +127,7 @@ Fixtures are inline: `SMALL_JSON`, `MEDIUM_JSON`, `generate_large_json()` (1000 
 - `profile.sh` help text refers to `.local/performance-profile.md`, which is untracked.
 - SIMD paths (`simd-auto`, `simd-avx512`) and the hybrid parser selection have no dedicated bench (only `sonic_rs` vs `serde_json` directly).
 - No benchmark for WASM, compression, or priority queue ordering, though those are listed as critical paths.
+- No automated gate for the 10% regression rule: [[decisions/adr-002-instruction-count-bench-gate|ADR-002]] (proposed) evaluates a gungraun instruction-count job with a provisional, unmeasured limit; implementation and variance measurement are tracked in #736.
 
 ## See Also
 
