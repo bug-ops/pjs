@@ -9,6 +9,8 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Etc/GMT-0"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     ignore:
       # headers-accept 0.3 pins mediatype 0.21; types must match until it updates
@@ -36,6 +38,8 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Etc/GMT-0"
+    cooldown:
+      default-days: 7
     ignore:
       # headers-accept 0.3 pins mediatype 0.21; types must match until it updates
       - dependency-name: "mediatype"
@@ -87,6 +91,8 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Etc/GMT-0"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
       - "github-actions"

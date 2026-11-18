@@ -10,6 +10,8 @@ import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 
 /**
  * WebSocket transport implementation
+ *
+ * @experimental Speaks a wire format that no shipped pjs-core route serves; see the README "Transport Options" section.
  */
 export class WebSocketTransport extends Transport {
   private ws?: WebSocket;

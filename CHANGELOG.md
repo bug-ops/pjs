@@ -88,6 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JS client rejects non-canonical path indices, parses quoted keys and reports `appliedPatches` and `skippedPatches` in `PatchApplied`; its dev toolchain moves to TypeScript 6.0 with an npm entry in Dependabot (#713, #698, #693, #694, #726)
 - `tokio` no longer enables `parking_lot` in `pjson-rs`, `Duration::from_mins` replaces `from_secs(60/120)`, and shared helpers replace duplicated path, length and timeout code (#709, #710, #699, #703, #711, #726)
 - Offload gate calibration covers arrays of nested small objects (#715, #726)
+- `pjs-js-client` HTTP, SSE and WebSocket transports are marked experimental and their wire format is documented (#714) (#PRNUM)
+- Dependabot cooldown for cargo and github-actions, and JS CI installs with `npm ci --ignore-scripts` (#723) (#PRNUM)
+- Benchmark docs describe `--cfg pjs_bench` for `client_apply_patches` (#722) (#PRNUM)
+- Unused `approx_eq` and `MAX_FLOAT_ULPS` removed from the fuzz crate (#721) (#PRNUM)
 
 ### Fixed
 
@@ -118,6 +122,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pjs-js-client` `JsonReconstructor` keeps values under the keys `constructor`, `prototype` and `__proto__` (#712, #726)
 - `ws_message_decode` fuzz oracle no longer drifts on a 199-digit integer (#690, #726)
 - `JsonPath::from_str` rejects unterminated, signed and zero-padded indices (#713, #726)
+- `JsonReconstructor` `Set` and `Remove` resolve paths ending in an index against the array and reject `index >= len`; `PatchError::NotAnIndex` and `PatchError::NotAContainer` are removed (**BREAKING**) (#719) (#PRNUM)
+- `npm run docs` in `pjs-js-client` works again via a typedoc-scoped `minimatch` override with a documented OSV exception (#720) (#PRNUM)
 
 ## [0.7.0] - 2026-08-19
 

@@ -35,7 +35,7 @@ verified: 2026-11-18
 Part of [[MOC-specs]]; see [[constitution]].
 
 > [!info] Verification (2026-11-15)
-> Partially implemented: HTTP/SSE/WebSocket transports, event-driven `PJSClient`, frame validation and JSON reconstruction exist and are unit/integration tested. Several config options are accepted but unused, and the transports' endpoint paths have no verified counterpart in `pjs-core` routes (see Open Questions). Evidence: `crates/pjs-js-client/src/**`, `tests/core/*`, `tests/integration/full-stream.test.ts`, `tests/utils/utils.test.ts`; issues #178 (API mismatch, closed) and #180 (CI, closed).
+> Partially implemented: HTTP/SSE/WebSocket transports, event-driven `PJSClient`, frame validation and JSON reconstruction exist and are unit/integration tested. Several config options are accepted but unused, and the transports are experimental: their wire format has no counterpart in the shipped `pjs-core` routes (FR-011). Evidence: `crates/pjs-js-client/src/**`, `tests/core/*`, `tests/integration/full-stream.test.ts`, `tests/utils/utils.test.ts`; issues #178 (API mismatch, closed) and #180 (CI, closed).
 
 ## Overview
 
@@ -109,7 +109,12 @@ Status: done.
 - `WebSocketTransport`: connects to `{base with http->ws}/pjs/ws`, sends `{type:'start_stream', endpoint, session_id, stream_id, query_params, headers}` / `{type:'stop_stream'}`, expects `{type:'frame', frame}` or `{type:'error', error}`; reconnects with exponential backoff (base 1000 ms, up to 5 attempts) on non-1000 close.
 - `Transport` base class: `connect`, `disconnect`, `startStream`, `stopStream`; emits `frame`, `error`, `disconnect`, `shutdown` (`SHUTDOWN_EVENT`).
 Code: `transport/*.ts`.
-Status: done as code; endpoint compatibility with the server is unverified.
+Status: experimental, external server only (#714). The shipped `pjs-core` routes and payloads differ from this wire format (near-misses below); the README "Transport Options" documents it and the `@experimental` TSDoc marks each transport. Shipped near-misses:
+- `HttpTransport.connect` reaches the real `POST /pjs/sessions`, but `client_info` is an object while the server expects `Option<String>`; the response is 422.
+- `PjsExtension` mounts `GET /pjs/stream/{stream_id}/sse` (matches `SSETransport` with `endpoint="/{stream_id}"`), but serves externally tagged `PriorityStreamFrame` JSON that frame validation rejects.
+- WebSocket `/pjs/ws` is 404 (the server mounts `/ws`), and `start_stream` is not a `WsMessage`.
+Alignment with the shipped protocol is a separate public-API redesign (client uploads vs. fetches data).
+Test: `tests/transport/wire-format.test.ts`.
 
 ### FR-012 Public exports
 `src/index.ts` shall export `PJSClient`, `FrameProcessor`, `JsonReconstructor`, the transports, `WasmBackend`/`createWasmBackend`, `WasmParser`/`createWasmParser`, all types, `createPJSClient`, `validateFrame`, `parseJsonPath`, `VERSION`, `DEFAULT_CONFIG`, `quickStart`.
@@ -162,7 +167,7 @@ Status: done (#644). Tests: `tests/transport/{sse,http,shutdown-marker,client-sh
 - Unused configuration: `bufferSize`, `priorityThreshold`, `maxConcurrentStreams` and `StreamOptions.priorityStrategy` are accepted and defaulted but never read.
 - `calculateHeuristicPriority` in `utils/index.ts` is a third, substring-based priority table that is exported but unused by the client and differs from `compute_priority` in the domain crate.
 - Two frame validators (`FrameProcessor.validateFrame` and `utils.validateFrame`) with different rules (priority range, error reporting).
-- Endpoint compatibility: no route `/pjs/stream{endpoint}`, `/pjs/stream{endpoint}/sse`, or `/pjs/ws` was found in `crates/pjs-core/src/infrastructure/http`; the server routes are `/pjs/sessions/{id}/streams/{stream_id}/frames/stream` and `/pjs/ws/{session_id}` (per `.claude/rules/continuous-improvement.md`). [NEEDS CLARIFICATION: which server the client targets]
+- Endpoint compatibility: the real routes are `POST /pjs/sessions`, `/pjs/sessions/{id}/streams/{stream_id}/frames/stream`, PjsExtension `GET /pjs/stream/{id}/sse` and WebSocket `/ws`; the transports target a different, documented wire format and are experimental (FR-011). Aligning them is deferred.
 - Version strings disagree: `package.json` `0.3.0-alpha.2`, `src/index.ts` `VERSION` and HTTP `client_info.version` `0.3.0-alpha.1`.
 - `ws` is a dependency and optional peer dependency but no source file imports it.
 - `createTransport` uses `require()` for the WASM branch inside an ESM-first TypeScript module.

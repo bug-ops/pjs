@@ -6,7 +6,7 @@
 Comprehensive performance benchmarking for the Priority JSON Streaming Protocol (PJS).
 
 > [!NOTE]
-> This crate is part of the [PJS workspace](https://github.com/bug-ops/pjs). Run benchmarks with `cargo bench -p pjs-bench`.
+> This crate is part of the [PJS workspace](https://github.com/bug-ops/pjs). Run benchmarks with `cargo bench -p pjs-bench` (the full suite, including `client_apply_patches`, additionally needs `--cfg pjs_bench`, see [Running Benchmarks](#running-benchmarks)).
 
 ## Overview
 
@@ -110,8 +110,10 @@ Added to answer #514: isolates `sonic_rs` vs `serde_json` on the exact serializa
 ### All Benchmarks
 
 ```bash
-cargo bench
+cargo bench -p pjs-bench
 ```
+
+Without the `pjs_bench` cfg, `client_apply_patches` compiles to a stub that only prints a skip line. The full suite needs `RUSTFLAGS="-C target-cpu=native --cfg pjs_bench" cargo bench -p pjs-bench`; `RUSTFLAGS` replaces the flags from `.cargo/config.toml`, so `target-cpu=native` must be repeated.
 
 ### Individual Benchmark Suites
 

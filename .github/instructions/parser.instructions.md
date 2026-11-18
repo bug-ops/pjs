@@ -13,10 +13,12 @@ SIMD-accelerated JSON parsing achieving 6.3x faster performance than serde_json.
 - NEVER introduce allocations in hot paths without justification
 
 ```bash
-cargo bench -p pjs-bench -- --save-baseline before
+cargo bench -p pjs-bench --bench simple_throughput -- --save-baseline before
 # Make changes
-cargo bench -p pjs-bench -- --baseline before
+cargo bench -p pjs-bench --bench simple_throughput -- --baseline before
 ```
+
+See `crates/pjs-bench/README.md` for the A/B procedure. Criterion flags need an explicit `--bench <name>`.
 
 ## Zero-Copy Operations
 

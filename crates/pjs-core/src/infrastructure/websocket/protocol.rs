@@ -11,7 +11,7 @@ use crate::error::PatchError;
 use crate::error::PlanError;
 use crate::error::{FrameKind, StreamOptionsError};
 #[cfg(any(feature = "websocket-client", test))]
-use crate::json_tree::resolve_mut;
+use crate::json_tree::{self, resolve_mut};
 use futures::{Sink, SinkExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -621,22 +621,7 @@ pub(crate) fn apply_patch(state: &mut Value, patch: WirePatch) -> Result<(), Pat
     }
 
     match patch {
-        WirePatch::Set { path, value } => match path.segments().split_last() {
-            None => *state = value,
-            Some((last, parent_path)) => match (resolve_mut(state, parent_path)?, last) {
-                (Value::Object(map), PathSegment::Key(key)) => {
-                    map.insert(key.clone(), value);
-                }
-                (Value::Array(items), PathSegment::Index(index)) => {
-                    let len = items.len();
-                    *items
-                        .get_mut(*index)
-                        .ok_or(PatchError::IndexOutOfBounds { index: *index, len })? = value;
-                }
-                (_, PathSegment::Key(_)) => return Err(PatchError::ExpectedObject),
-                (_, PathSegment::Index(_)) => return Err(PatchError::ExpectedArray),
-            },
-        },
+        WirePatch::Set { path, value } => json_tree::set(state, path.segments(), value)?,
         WirePatch::Merge { path, entries } => {
             let Value::Object(target) = resolve_mut(state, path.segments())? else {
                 return Err(PatchError::ExpectedObject);

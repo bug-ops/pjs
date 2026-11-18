@@ -19,6 +19,7 @@ cargo nextest run --workspace --all-features   # Run tests
 cargo clippy --workspace -- -D warnings        # Lint (zero warnings)
 cargo fmt --check                              # Format check
 cargo bench -p pjs-bench                       # Benchmarks
+RUSTFLAGS="-C target-cpu=native --cfg pjs_bench" cargo bench -p pjs-bench  # Full suite incl. client_apply_patches
 ```
 
 ## Clean Architecture

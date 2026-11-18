@@ -13,7 +13,7 @@ The official JavaScript/TypeScript client library for the Priority JSON Streamin
 - 🚀 **Progressive Loading**: Render critical data first, details later
 - ⚡ **Priority-Based Streaming**: Critical fields arrive in milliseconds
 - 🎯 **Smart Reconstruction**: Automatic JSON patching and assembly
-- 🌐 **Multiple Transports**: HTTP, WebSocket, Server-Sent Events
+- 🌐 **Multiple Transports**: HTTP, WebSocket, Server-Sent Events (**experimental**, see [Transport Options](#-transport-options))
 - 🛡️ **Type Safety**: Full TypeScript support with comprehensive types
 - 📊 **Performance Metrics**: Built-in monitoring and statistics
 - 🎨 **React Integration**: (Coming soon) Hooks and components
@@ -166,6 +166,32 @@ pending `stream()` that has not completed with a `PJSError` of type
 `SERVER_SHUTDOWN`.
 
 ## 🌐 Transport Options
+
+**Experimental:** the HTTP, WebSocket and SSE transports speak the wire format
+described below, which an external server must implement. The routes and
+payloads shipped with `pjs-core` do not match it, so these transports do not
+work against a stock `pjs-core` server. Known near-misses:
+
+- `HttpTransport.connect` calls the real `POST /pjs/sessions`, but sends
+  `client_info` as an object while the server expects a string; the server
+  answers 422.
+- `PjsExtension` mounts `GET /pjs/stream/{stream_id}/sse`, which matches the SSE
+  URL when `endpoint` is `/{stream_id}`, but it serves externally tagged
+  `PriorityStreamFrame` JSON (`{"Skeleton":{...}}`) that client frame validation
+  rejects.
+- WebSocket `/pjs/ws` returns 404 (the server mounts `/ws`), and `start_stream`
+  is not a server message.
+
+### Wire format
+
+| Transport | Requests | Responses |
+|-----------|----------|-----------|
+| HTTP | `POST /pjs/sessions` with `{"client_info":{"type":"javascript","version":"<client version>"}}`, then `GET /pjs/stream{endpoint}?session_id&stream_id&<queryParams>` with `Accept: application/x-ndjson` | `{"session_id","supported_features"?}`; one Frame per NDJSON line, optional terminal `{"event":"shutdown"}` |
+| SSE | `GET /pjs/stream{endpoint}/sse?session_id&stream_id&<queryParams>` | `message`/`frame` events carry Frame data; `shutdown` event; `error` event with `{"message"}` |
+| WebSocket | `/pjs/ws`; client sends `{"type":"start_stream","endpoint","session_id","stream_id","query_params","headers"}` and `{"type":"stop_stream"}` | `{"type":"frame","frame"}` and `{"type":"error","error"}` |
+
+A Frame is the `pjs-core` Frame JSON (`frame_type`, `priority`, `payload`, ...)
+that the client validates.
 
 ### HTTP Transport (Default)
 

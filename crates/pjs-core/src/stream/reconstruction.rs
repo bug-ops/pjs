@@ -6,7 +6,7 @@
 use crate::Result;
 use crate::domain::value_objects::JsonPath;
 use crate::error::PatchError;
-use crate::json_tree::resolve_mut;
+use crate::json_tree::{self, resolve_mut};
 use crate::stream::priority::{JsonPatch, PatchOperation, PriorityStreamFrame};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
@@ -145,42 +145,11 @@ impl JsonReconstructor {
 
     /// Set value at specified JSON path
     fn set_at_path(&mut self, path: &JsonPath, value: JsonValue) -> Result<()> {
-        // Root path: whole-document replacement.
-        if path.segments().is_empty() {
-            self.current_state = value;
-            return Ok(());
-        }
-
-        // Navigate to parent and set the target field
-        let target_key = path.last_key().ok_or(PatchError::NoTargetKey)?;
-
-        let parent = self.get_parent_mut(path)?;
-
-        match parent {
-            JsonValue::Object(map) => {
-                map.insert(target_key.to_string(), value);
-            }
-            JsonValue::Array(arr) => {
-                if let Ok(index) = target_key.parse::<usize>() {
-                    if index < arr.len() {
-                        arr[index] = value;
-                    } else {
-                        return Err(PatchError::IndexOutOfBounds {
-                            index,
-                            len: arr.len(),
-                        }
-                        .into());
-                    }
-                } else {
-                    return Err(PatchError::NotAnIndex.into());
-                }
-            }
-            _ => {
-                return Err(PatchError::NotAContainer.into());
-            }
-        }
-
-        Ok(())
+        Ok(json_tree::set(
+            &mut self.current_state,
+            path.segments(),
+            value,
+        )?)
     }
 
     /// Append values to array at specified path
@@ -201,33 +170,7 @@ impl JsonReconstructor {
 
     /// Remove value at specified path
     fn remove_at_path(&mut self, path: &JsonPath) -> Result<()> {
-        let target_key = path.last_key().ok_or(PatchError::NoTargetKey)?;
-
-        let parent = self.get_parent_mut(path)?;
-
-        match parent {
-            JsonValue::Object(map) => {
-                map.remove(target_key);
-            }
-            JsonValue::Array(arr) => {
-                if let Ok(index) = target_key.parse::<usize>()
-                    && index < arr.len()
-                {
-                    arr.remove(index);
-                }
-            }
-            _ => {
-                return Err(PatchError::NotAContainer.into());
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Get mutable reference to parent of target path
-    fn get_parent_mut(&mut self, path: &JsonPath) -> Result<&mut JsonValue> {
-        let parent = path.segments().split_last().map_or(&[][..], |(_, p)| p);
-        Ok(resolve_mut(&mut self.current_state, parent)?)
+        Ok(json_tree::remove(&mut self.current_state, path.segments())?)
     }
 
     /// Get mutable reference at specified path

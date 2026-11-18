@@ -75,7 +75,7 @@ Jobs `wasm-native-tests` (`cargo nextest run -p pjs-wasm --tests`), `wasm-build`
 Status: done.
 
 ### FR-007 JS client job
-Job `js-client-test` (Node 20, `npm ci`, downloads `wasm-build-web` into `crates/pjs-wasm/pkg`) shall run `npm run typecheck` and `npm test` in `crates/pjs-js-client`. It also runs for JS-only changes because `wasm-build` runs when `js` changed.
+Job `js-client-test` (Node 20, `npm ci --ignore-scripts`, downloads `wasm-build-web` into `crates/pjs-wasm/pkg`) shall run `npm run typecheck` and `npm test` in `crates/pjs-js-client`. It also runs for JS-only changes because `wasm-build` runs when `js` changed.
 Status: done ([[022-ci-js-client-enforcement/spec]]; #180).
 
 ### FR-008 Fuzz jobs
@@ -108,7 +108,7 @@ All actions shall be pinned to full commit SHAs with a trailing version comment 
 Status: done.
 
 ### FR-014 Dependency automation
-`dependabot.yml` shall schedule weekly (Monday 09:00 GMT) updates for cargo (`/`), cargo (`/fuzz`), npm (`/crates/pjs-js-client`, minor and patch grouped, commit prefix `chore` with scope, labels `dependencies` + `pjs-js-client`, #693) and github-actions, grouping minor and patch updates, also proposing semver-major updates (#616), commit prefix `chore` (cargo) / `ci` (actions), labels `dependencies` + ecosystem. `dependabot-automerge.yml` (pull_request_target, only when the PR author is `dependabot[bot]`) shall wait for all other checks (`wait-on-check-action`, allowed `success,skipped,neutral`) then `gh pr merge --auto --squash` only when every updated dependency is a patch update or a minor update from a version already >= 1.0.0 (a 0.x minor is breaking), and label other updates `major-update`. `labeler.yml` applies path labels from `.github/labeler.yml` (core, domain, benchmarks, application, infrastructure, rust, documentation, ci/cd, dependencies, security, performance, testing, wasm, pjs-demo, pjs-js-client).
+`dependabot.yml` shall schedule weekly (Monday 09:00 GMT) updates for cargo (`/`), cargo (`/fuzz`), npm (`/crates/pjs-js-client`, minor and patch grouped, commit prefix `chore` with scope, labels `dependencies` + `pjs-js-client`, #693) and github-actions, each with a 7-day `cooldown` for cargo, cargo `/fuzz` and github-actions (npm already had it; security updates are not delayed, #723), grouping minor and patch updates, also proposing semver-major updates (#616), commit prefix `chore` (cargo) / `ci` (actions), labels `dependencies` + ecosystem. `dependabot-automerge.yml` (pull_request_target, only when the PR author is `dependabot[bot]`) shall wait for all other checks (`wait-on-check-action`, allowed `success,skipped,neutral`) then `gh pr merge --auto --squash` only when every updated dependency is a patch update or a minor update from a version already >= 1.0.0 (a 0.x minor is breaking), and label other updates `major-update`. `labeler.yml` applies path labels from `.github/labeler.yml` (core, domain, benchmarks, application, infrastructure, rust, documentation, ci/cd, dependencies, security, performance, testing, wasm, pjs-demo, pjs-js-client).
 Status: done.
 
 ### FR-016 Miri job
@@ -155,7 +155,6 @@ Job graph: `changes` -> {`quality`, `feature-matrix`, `fuzz`, `build`, `doctest`
 
 - Root `CLAUDE.md` says "Coverage threshold is enforced in CI"; `codecov.yml` is informational and uploads never fail.
 - No benchmark job (see [[075-bench-suite/spec]]); the quiet-machine A/B procedure is documented in `crates/pjs-bench/README.md` (#619); `CLAUDE.md` and `.claude/rules` mention a `jemalloc` feature, but no `Cargo.toml` defines it (the matrix covers `system` and `mimalloc`).
-- Dependabot has no npm ecosystem entry for `crates/pjs-js-client` (so its `package-lock.json` is not auto-updated by this file).
 - `crates/pjs-js-client/.github/workflows/ci.yml` (Node 18/20/21 matrix) is a nested workflow GitHub never runs.
 - Demo integration tests are not exercised in PR CI ([[077-demo-servers/spec]]); the comment near `coverage` ("zero tests") is stale.
 - `wasm-pack test` (documented in `.claude/rules/branching.md`) is not run in CI.

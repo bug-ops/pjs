@@ -723,7 +723,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: crates/pjs-js-client
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Type check against the real pjs-wasm bindings
         working-directory: crates/pjs-js-client
@@ -951,7 +951,7 @@ jobs:
           cache-dependency-path: crates/pjs-js-client/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Type check
         run: npm run typecheck

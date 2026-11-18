@@ -10,6 +10,8 @@ import { Frame, PJSError, PJSErrorType } from '../types/index.js';
 
 /**
  * Server-Sent Events transport implementation
+ *
+ * @experimental Speaks a wire format that no shipped pjs-core route serves; see the README "Transport Options" section.
  */
 export class SSETransport extends Transport {
   private eventSource?: EventSource;
