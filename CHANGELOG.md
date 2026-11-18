@@ -46,16 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING** `pjson-rs` removes `infrastructure::http::axum_extension` (`PjsExtension` and its config and request types); use `create_pjs_router*` with `Router::merge` (#748) (#PR)
-- **BREAKING** `pjson-rs` removes the placeholder middlewares `websocket_upgrade_middleware`, `compression_middleware`, `CircuitBreakerMiddleware`, `health_check_middleware` and `PjsMiddleware::with_compression` (#749) (#PR)
-- **BREAKING** `pjson-rs` has one patch vocabulary: `WirePatch` moved to `stream::patch`, `stream::priority::PatchOperation` and `PatchError::NoTargetKey` are removed, `JsonPatch` wraps `WirePatch`, and `JsonReconstructor` accepts Merge and AppendStr (#751) (#PR)
-- **BREAKING** `pjs-domain` `Frame` holds a typed `FrameBody` and `FramePatch` is a private-field set patch; `Frame::payload`/`validate` and `frame::PatchOperation` are removed and decoding validates (#752) (#PR)
-- **BREAKING** `pjs-domain` `Stream` exposes `failure_reason()`, no longer writes `metadata["error"]`, and decoding validates state, `completed_at` and the reason (#753) (#PR)
-- **BREAKING** `SessionQueryCriteria` filters session states as `SessionState` instead of `String` (#754) (#PR)
-- **BREAKING** `compute_priority` takes a `ValueShape` and does not allocate; `PriorityStreamer` uses the shared heuristic, so its frame order changes; `pjs-wasm` drops `PriorityAssigner::{config,config_mut}`, `extract_prioritized_fields`, `PriorityConfig::new` and `PrioritizedField::new` (#750, #755) (#PR)
-- `BufferPool` bounds outstanding plus pooled bytes by `max_total_memory`, reports real `PoolStats`, drops the rayon scan, and `acquire_with_capacity` above 4 MiB returns an error; `current_memory_usage` returns `usize` and `BufferSize::for_capacity` returns `Option` (**BREAKING**) (#747) (#PR)
-- `pjs-domain` `Frame::estimated_size` counts compact JSON bytes (changes `StreamStats`), `JsonPatch` serializes as `{"patch", "priority"}`, and a `Stream` serialized after `fail()` without `failure_reason` no longer decodes (**BREAKING**) (#752, #753, #751) (#PR)
-- `pjs-domain` patch extraction walks one path buffer and chunking moves patches instead of cloning them (#756) (#PR)
+- **BREAKING** `pjson-rs` removes `infrastructure::http::axum_extension` (`PjsExtension` and its config and request types); use `create_pjs_router*` with `Router::merge` (#748) (#775)
+- **BREAKING** `pjson-rs` removes the placeholder middlewares `websocket_upgrade_middleware`, `compression_middleware`, `CircuitBreakerMiddleware`, `health_check_middleware` and `PjsMiddleware::with_compression` (#749) (#775)
+- **BREAKING** `pjson-rs` has one patch vocabulary: `WirePatch` moved to `stream::patch`, `stream::priority::PatchOperation` and `PatchError::NoTargetKey` are removed, `JsonPatch` wraps `WirePatch`, and `JsonReconstructor` accepts Merge and AppendStr (#751) (#775)
+- **BREAKING** `pjs-domain` `Frame` holds a typed `FrameBody` and `FramePatch` is a private-field set patch; `Frame::payload`/`validate` and `frame::PatchOperation` are removed and decoding validates (#752) (#775)
+- **BREAKING** `pjs-domain` `Stream` exposes `failure_reason()`, no longer writes `metadata["error"]`, and decoding validates state, `completed_at` and the reason (#753) (#775)
+- **BREAKING** `SessionQueryCriteria` filters session states as `SessionState` instead of `String` (#754) (#775)
+- **BREAKING** `compute_priority` takes a `ValueShape` and does not allocate; `PriorityStreamer` uses the shared heuristic, so its frame order changes; `pjs-wasm` drops `PriorityAssigner::{config,config_mut}`, `extract_prioritized_fields`, `PriorityConfig::new` and `PrioritizedField::new` (#750, #755) (#775)
+- `BufferPool` bounds outstanding plus pooled bytes by `max_total_memory`, reports real `PoolStats`, drops the rayon scan, and `acquire_with_capacity` above 4 MiB returns an error; `current_memory_usage` returns `usize` and `BufferSize::for_capacity` returns `Option` (**BREAKING**) (#747) (#775)
+- `pjs-domain` `Frame::estimated_size` counts compact JSON bytes (changes `StreamStats`), `JsonPatch` serializes as `{"patch", "priority"}`, and a `Stream` serialized after `fail()` without `failure_reason` no longer decodes (**BREAKING**) (#752, #753, #751) (#775)
+- `pjs-domain` patch extraction walks one path buffer and chunking moves patches instead of cloning them (#756) (#775)
 - **BREAKING** WebSocket sessions are keyed by `SessionId`; the server adopts the client's `session_id`, answers duplicates with 409 and malformed ids with 400, and `create_session` returns `CreateSessionError` (#563, #577)
 - **BREAKING** `WebSocketClientConfig::max_sessions` is a `NonZeroUsize`; completed client sessions are frozen and the oldest-idle incomplete session is evicted at the cap (#565, #577)
 - **BREAKING** `serde_support::stream_map` replaced by `StreamMap`, which rejects mismatched, malformed and duplicate keys on decode; wire format unchanged (#567, #577)
@@ -109,8 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `pjs-domain` `JsonPath::to_json_pointer` escapes `~` and `/` in keys per RFC 6901 (#757) (#PR)
-- `pjs-js-client` `WebSocketTransport.startStream` sends `StreamInit` before registering the active stream, so a failed start no longer crashes the next `stream()` or `disconnect()` (#763) (#PR)
+- `pjs-domain` `JsonPath::to_json_pointer` escapes `~` and `/` in keys per RFC 6901 (#757) (#775)
+- `pjs-js-client` `WebSocketTransport.startStream` sends `StreamInit` before registering the active stream, so a failed start no longer crashes the next `stream()` or `disconnect()` (#763) (#775)
 - `pjs-domain` `Stream` keeps values under object keys `JsonPath` cannot encode via the skeleton and a root `Set` patch (#643) (#665)
 - `PriorityStreamer` plan/reconstruct round trip keeps scalar roots and top-level keys that `JsonPath` cannot encode (#626, #645)
 - `SecurityConfig::validate` rejects invalid `max_ratio`, zero compression-bomb sizes, zero rate-limit rates and `check_interval_bytes` above `max_decompressed_size` (**BREAKING**) (#627, #645)
