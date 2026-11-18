@@ -107,6 +107,9 @@ Write clear, descriptive commit messages:
 - `perf` - Performance improvements
 - `chore` - Maintenance tasks
 - `ci` - CI/CD changes
+- `style`, `build`, `release` - Formatting, build system and release preparation
+
+Follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/). Mark breaking changes with `!` after the type or scope (`feat(http)!: ...`) and a `BREAKING CHANGE:` footer. Scopes are crate or module names: `pjson-rs`, `pjson-rs-domain`, `wasm`, `parser`, `stream`, `http`, `security`, `bench`, `ci`.
 
 **Examples:**
 ```
@@ -203,9 +206,11 @@ cargo llvm-cov nextest --workspace --summary-only
 
 **Coverage Requirements:**
 
-- **Domain Layer (`pjson-rs-domain`)**: Minimum 80% coverage (enforced in CI)
-- **Core Library (`pjson-rs`)**: Minimum 70% coverage (recommended)
-- **Infrastructure Layer**: Minimum 60% coverage (recommended)
+- **Domain Layer (`pjson-rs-domain`)**: Minimum 80% coverage
+- **Core Library (`pjson-rs`)**: Minimum 70% coverage
+- **Infrastructure Layer**: Minimum 60% coverage
+
+CI uploads coverage to Codecov (`.github/codecov.yml`); the checks are informational and do not block merging, so reviewers enforce these targets.
 - **Security-Critical Code**: 100% coverage required
   - `security/` module (rate limiting, compression bomb detection)
   - `domain/services/validation_service.rs`
@@ -239,13 +244,19 @@ mod tests {
 **Integration Tests:**
 ```rust
 // In crates/pjs-core/tests/
-#[tokio::test]
-async fn test_session_lifecycle() {
-    let service = SessionService::new(/* deps */);
-    let session_id = service.create_session().await.unwrap();
-    assert!(service.get_session(&session_id).await.is_ok());
+use pjson_rs::{JsonData, StreamSession};
+
+#[test]
+fn test_streams_require_an_active_session() {
+    let mut session = StreamSession::new(Default::default());
+    assert!(session.create_stream(JsonData::Null).is_err());
+
+    session.activate().unwrap();
+    assert!(session.create_stream(JsonData::Null).is_ok());
 }
 ```
+
+Tests that need the `websocket-server`, `websocket-client` or `http-server` features declare them through `required-features` in `crates/pjs-core/Cargo.toml`, so run them with `--all-features`.
 
 **Property-Based Tests:**
 ```rust
@@ -253,7 +264,7 @@ use proptest::prelude::*;
 
 proptest! {
     #[test]
-    fn priority_values_are_valid(p in 0u8..=100) {
+    fn priority_values_are_valid(p in 1u8..=255) {
         let priority = Priority::new(p);
         assert!(priority.is_ok());
     }
@@ -298,9 +309,13 @@ cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo nextest run --workspace --all-features
 
 # 4. Verify doctests
-cargo test --workspace --doc
+cargo test --workspace --doc --all-features
 
-# 5. Check coverage (optional but recommended)
+# 5. Verify rustdoc links (same flags as the CI `docs` job)
+RUSTDOCFLAGS="--deny rustdoc::broken_intra_doc_links --deny rustdoc::private_intra_doc_links --deny rustdoc::redundant_explicit_links" \
+  cargo doc --no-deps --all-features -p pjson-rs -p pjson-rs-domain
+
+# 6. Check coverage (optional but recommended)
 cargo llvm-cov nextest --workspace --summary-only
 ```
 
@@ -317,10 +332,12 @@ cargo llvm-cov nextest --workspace --summary-only
 2. Run the full CI check locally:
    ```bash
    cargo +nightly fmt --all --check
-   cargo clippy --workspace --all-features -- -D warnings
+   cargo clippy --workspace --all-features --all-targets -- -D warnings
    cargo nextest run --workspace --all-features
-   cargo test --workspace --doc
+   cargo test --workspace --doc --all-features
    ```
+
+   CI builds with `RUSTFLAGS="-D warnings"`; export it locally to reproduce warning failures.
 
 3. Update documentation if needed:
    - Update `CHANGELOG.md` with your changes
@@ -375,10 +392,16 @@ Closes #123
 
 1. **Automated Checks**: CI must pass before review
    - Code quality (formatting, clippy)
-   - Tests (all platforms: Linux, macOS, Windows)
-   - Coverage thresholds
-   - Security scanning (OSV)
-   - WASM builds (if applicable)
+   - Tests (Linux, macOS, Windows; system allocator and `mimalloc`)
+   - Feature matrix (`cargo hack --each-feature`)
+   - MSRV 1.89 check of `pjson-rs-domain` and `pjs-wasm`
+   - Miri on the `unsafe` code in `parser::buffer_pool` and `parser::aligned_alloc`
+   - Fuzz seed replay (`fuzz` job)
+   - Coverage upload (informational)
+   - Security scanning (OSV, `cargo deny`)
+   - WASM builds, bundle size and type drift check (if applicable)
+   - JS client tests on Node 22 and 24 (if applicable)
+   - Instruction-count benchmarks via gungraun (report-only, never gating)
 
 2. **Code Review**: At least one maintainer approval required
    - Architecture compliance
@@ -397,15 +420,20 @@ PJS follows **Clean Architecture** with **Domain-Driven Design**. Understanding 
 ```
 crates/
 ├── pjs-domain/          # Pure business logic (WASM-compatible)
-│   ├── value_objects/   # Priority, SessionId, Schema, JsonData
-│   ├── entities/        # StreamSession, Stream
+│   ├── value_objects/   # Priority, SessionId, StreamId, Schema, JsonData, JsonPath
+│   ├── entities/        # Frame, Stream
 │   ├── events/          # Domain events
-│   └── ports/           # GAT-based traits
+│   └── services/        # Pure domain services (priority, skeleton)
 ├── pjs-core/            # Rust implementation
-│   ├── application/     # CQRS handlers, use cases
-│   ├── infrastructure/  # HTTP, WebSocket, repositories
-│   ├── parser/          # SIMD JSON parsing
-│   └── stream/          # Priority streaming engine
+│   ├── domain/          # Re-exports pjs-domain; aggregates (StreamSession),
+│   │                    # GAT ports, services, validated config types
+│   ├── application/     # CQRS commands, queries, handlers, DTOs
+│   ├── infrastructure/  # HTTP (axum), WebSocket, adapters, repositories
+│   ├── parser/          # SIMD JSON parsing, buffer pool
+│   ├── stream/          # Priority streaming engine
+│   ├── compression/     # Compression with bomb protection
+│   ├── security/        # Rate limiting, compression bomb detection
+│   └── config/          # Runtime configuration
 ├── pjs-wasm/            # WebAssembly bindings
 ├── pjs-bench/           # Performance benchmarks
 └── pjs-demo/            # Demo applications
@@ -417,15 +445,15 @@ crates/
 2. **Domain Layer** must not import `serde_json::Value` (use `JsonData` instead)
 3. **Application Layer** orchestrates but contains no business logic
 4. **Infrastructure Layer** implements domain ports (traits)
-5. All async abstractions use **GATs** (Generic Associated Types), not `async_trait`
+5. Async ports (`domain/ports/`) use **GATs** (`impl Trait` in associated types, nightly), not `async_trait`
 
 ### Adding New Features
 
 **Example: Adding a new validation rule**
 
-1. Update domain value object: `domain/value_objects/schema.rs`
-2. Implement validation logic: `domain/services/validation_service.rs`
-3. Add DTOs: `application/dto/schema_dto.rs`
+1. Update domain value object: `crates/pjs-domain/src/value_objects/schema.rs`
+2. Implement validation logic: `crates/pjs-core/src/domain/services/validation_service.rs`
+3. Add DTOs: `crates/pjs-core/src/application/dto/schema_dto.rs`
 4. Add integration tests: `crates/pjs-core/tests/`
 5. Add benchmarks: `crates/pjs-bench/benches/`
 
@@ -433,18 +461,21 @@ crates/
 
 PJS uses feature flags to minimize compile times and binary size. Be mindful when adding dependencies:
 
-### Core Features (Default)
+### Default Features
 - `simd-auto` - Auto-detect SIMD support at runtime (x86_64 and aarch64)
 - `schema-validation` - Schema validation engine
+- `compression` - Compression codecs (zlib/gzip, brotli, zstd)
+- `http-server` - Axum HTTP server
+- `websocket-server` / `websocket-client` - WebSocket transport
 
 ### SIMD Features
 - `simd-avx512` - Forwards to `sonic-rs/avx512` (x86_64-only; requires `RUSTFLAGS="-C target-cpu=native"` to take effect)
 
 ### Optional Features
-- `compression` - Schema-based compression
-- `http-server` - Axum HTTP server
-- `websocket-client` - WebSocket client
-- `websocket-server` - WebSocket server
+- `http-auth-jwt` - JWT authentication for the HTTP server (implies `http-server`)
+- `metrics` - Prometheus `/metrics` endpoint (implies `http-server`; needs the `once_cell_try` nightly feature)
+- `partial-parse` - Partial JSON parsing via `jiter`
+- `float-roundtrip` - Exact `f64` round trips in `serde_json` parsing
 
 ### Memory Allocators (Optional)
 - `mimalloc` - Use mimalloc allocator
@@ -471,7 +502,8 @@ PJS uses feature flags to minimize compile times and binary size. Be mindful whe
    - run: cargo test --features my-feature
    ```
 
-4. Document in README.md feature table
+4. Document in the README feature table
+5. Run `cargo hack check -p pjson-rs --each-feature --no-dev-deps` (the CI `feature-matrix` job) to confirm each feature builds on its own
 
 ## Cross-Platform Considerations
 
@@ -517,7 +549,7 @@ cargo nextest run --workspace --all-features
 
 # Check for platform-specific warnings
 cargo clippy --target x86_64-pc-windows-msvc
-cargo clippy --target x86_64-apple-darwin
+cargo clippy --target aarch64-apple-darwin
 cargo clippy --target x86_64-unknown-linux-gnu
 ```
 
@@ -545,8 +577,12 @@ See `crates/pjs-bench/README.md` (Before/After Comparison) for the full A/B proc
 
 **Benchmark Suites:**
 - `simple_throughput.rs` - Parser performance
-- `memory_benchmarks.rs` - Arena allocation efficiency
-- `streaming_benchmarks.rs` - Progressive loading speed
+- `buffer_pool.rs` - Aligned buffer pool
+- `priority_streamer.rs` - Priority streaming
+- `http_streaming.rs`, `http_serve_lifecycle.rs` - HTTP adapter
+- `websocket_controller.rs` - WebSocket controller
+- `client_apply_patches.rs` - Client patch application (needs `--cfg pjs_bench`)
+- `gungraun_parser.rs` - Instruction counts (Linux only; CI report-only job)
 
 ## Documentation
 
@@ -555,28 +591,23 @@ See `crates/pjs-bench/README.md` (Before/After Comparison) for the full A/B proc
 Use clear, concise doc comments:
 
 ```rust
-/// Parses JSON with priority-based frame generation.
+/// Creates a stream in this session.
 ///
-/// # Arguments
-///
-/// * `json` - Input JSON string
-/// * `min_priority` - Minimum priority threshold (0-100)
-///
-/// # Returns
-///
-/// Vector of frames ordered by priority
-///
-/// # Example
+/// # Examples
 ///
 /// ```
-/// use pjson_rs::parser::parse;
-/// let frames = parse(r#"{"id": 123}"#, 50);
+/// use pjson_rs::{JsonData, StreamSession};
+///
+/// let mut session = StreamSession::new(Default::default());
+/// session.activate().unwrap();
+/// assert!(session.create_stream(JsonData::Null).is_ok());
 /// ```
 ///
 /// # Errors
 ///
-/// Returns `ParseError` if JSON is invalid
-pub fn parse(json: &str, min_priority: u8) -> Result<Vec<Frame>, ParseError> {
+/// Returns an error if the session is not active or already holds its
+/// maximum number of concurrent streams.
+pub fn create_stream(&mut self, source_data: JsonData) -> DomainResult<StreamId> {
     // ...
 }
 ```
@@ -586,8 +617,7 @@ pub fn parse(json: &str, min_priority: u8) -> Result<Vec<Frame>, ParseError> {
 Update relevant docs when changing architecture:
 
 - `docs/architecture/SPECIFICATION.md` - Protocol specification
-- `CLAUDE.md` - Project instructions for AI assistants
-- `.local/` - Internal project documentation
+- `specs/` - Per-capability specifications; a change to an existing capability is a delta against its `spec.md`, and `specs/MOC-specs.md` must stay in sync with the code
 
 ## Getting Help
 

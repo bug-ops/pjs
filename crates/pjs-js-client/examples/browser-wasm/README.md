@@ -14,8 +14,10 @@ Interactive browser demo showcasing priority-based JSON streaming with WebAssemb
 
 ### 1. Build WASM Package
 
+From the repository root:
+
 ```bash
-cd ../../pjs-wasm
+cd crates/pjs-wasm
 wasm-pack build --target web --release
 ```
 
@@ -28,6 +30,7 @@ This generates the `pkg/` directory with:
 
 ```bash
 cp -r pkg ../pjs-js-client/examples/browser-wasm/
+cd ../pjs-js-client/examples/browser-wasm
 ```
 
 ### 3. Serve Locally
@@ -36,14 +39,13 @@ You need a local web server (WASM requires HTTPS or localhost):
 
 **Option A: Using Python**
 ```bash
-cd examples/browser-wasm
 python3 -m http.server 8000
 ```
 
 **Option B: Using Node.js (http-server)**
 ```bash
 npm install -g http-server
-http-server examples/browser-wasm -p 8000
+http-server . -p 8000
 ```
 
 **Option C: Using VS Code Live Server**
@@ -176,16 +178,7 @@ PriorityConstants.BACKGROUND  // 10
 
 ## Performance
 
-Typical performance on modern hardware:
-
-| JSON Size | WASM Time | Native JS Time | Speedup |
-|-----------|-----------|----------------|---------|
-| 1 KB      | ~0.5ms    | ~0.3ms         | 0.6x    |
-| 10 KB     | ~2ms      | ~5ms           | 2.5x    |
-| 100 KB    | ~15ms     | ~45ms          | 3x      |
-| 1 MB      | ~120ms    | ~400ms         | 3.3x    |
-
-**Note**: WASM has initialization overhead (~10-20ms) but scales better with data size.
+The page times WASM frame generation against a JavaScript implementation on your machine, so you can compare them on your own payloads. Results depend on the browser and payload size; WASM adds a one-time initialization cost.
 
 ## Browser Compatibility
 
@@ -227,7 +220,7 @@ Works in all browsers with WebAssembly support:
 ### Rebuild WASM After Changes
 
 ```bash
-cd ../../pjs-wasm
+cd crates/pjs-wasm                        # from the repository root
 cargo test --lib                          # Run tests
 wasm-pack build --target web --release   # Build WASM
 cp -r pkg ../pjs-js-client/examples/browser-wasm/

@@ -16,7 +16,8 @@ Security-critical code requiring complete test coverage.
 
 - ALWAYS use bounded allocations to prevent DoS
 - NEVER allow unbounded memory growth from external input
-- Arena allocations must have size limits
+- Every pool, queue and channel has an explicit capacity (for example `BufferPool` memory budget, `byte_bounded_channel`)
+- Limits are validated config types; reject invalid values at construction instead of clamping silently
 
 ## Rate Limiting
 
@@ -32,8 +33,8 @@ Security-critical code requiring complete test coverage.
 
 ## Unsafe Code Requirements
 
-- ALL `unsafe` blocks require `#![deny(unsafe_op_in_unsafe_fn)]`
-- 100% test coverage for unsafe code
+- The workspace denies `unsafe_op_in_unsafe_fn`; every `unsafe` operation sits in an explicit block
+- 100% test coverage for unsafe code, plus Miri in CI for `parser::buffer_pool` and `parser::aligned_alloc`
 - Document justification for each unsafe block
 - Minimize unsafe scope to smallest possible region
 

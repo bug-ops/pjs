@@ -4,11 +4,11 @@ applyTo: "crates/pjs-core/src/parser/**/*.rs"
 
 # Parser Layer Instructions
 
-SIMD-accelerated JSON parsing achieving 6.3x faster performance than serde_json.
+SIMD-accelerated JSON parsing on the sonic-rs backend, with runtime CPU dispatch.
 
 ## Performance Requirements
 
-- Target: 6.3x faster than serde_json for priority-based streaming
+- Parsing and streaming throughput is the project's core promise: no regressions
 - ALWAYS benchmark before/after changes in this directory
 - NEVER introduce allocations in hot paths without justification
 
@@ -23,6 +23,7 @@ See `crates/pjs-bench/README.md` for the A/B procedure. Criterion flags need an 
 ## Zero-Copy Operations
 
 - Use `parser::buffer_pool::{AlignedBuffer, BufferPool}` for reusable, aligned scratch buffers
+- `BufferPool` enforces a total memory budget; allocations past it fail with `ResourceExhausted` after idle buffers are evicted
 - Bounded memory usage prevents DoS attacks
 - Depth tracking prevents stack overflow in nested JSON
 
@@ -33,8 +34,9 @@ See `crates/pjs-bench/README.md` for the A/B procedure. Criterion flags need an 
 
 ## Memory Safety
 
-- All `unsafe` blocks require `#![deny(unsafe_op_in_unsafe_fn)]` compliance
+- The workspace denies `unsafe_op_in_unsafe_fn`; every `unsafe` block is explicit and carries a SAFETY comment
 - 100% test coverage for any unsafe code
+- Changes to `buffer_pool.rs` or `aligned_alloc.rs` must pass Miri: `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" cargo miri test -p pjson-rs --lib -- parser::buffer_pool parser::aligned_alloc` (the CI `miri` job)
 - Bounded buffer-pool allocations to prevent DoS
 
 ## Security Requirements
@@ -48,6 +50,9 @@ See `crates/pjs-bench/README.md` for the A/B procedure. Criterion flags need an 
 
 Changes to these require benchmarking:
 
-- `sonic.rs` - SIMD parsing core
+- `simd/` - SIMD classification and dispatch
 - `zero_copy.rs` - Zero-copy string handling
+- `buffer_pool.rs`, `aligned_alloc.rs` - Aligned buffer management
 - Token iteration paths
+
+CI also runs a report-only instruction-count benchmark (`gungraun_parser`, Linux) that never gates a merge.

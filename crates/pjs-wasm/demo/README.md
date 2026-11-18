@@ -53,10 +53,9 @@ Or use "Custom" to enter your own JSON.
    wasm-pack build --target web --release
    ```
 
-2. Serve the demo directory with an HTTP server (required for ES modules):
+2. Serve the `crates/pjs-wasm` directory (not `demo/` alone) with an HTTP server, because `app.js` imports `../pkg/pjs_wasm.js`:
    ```bash
    # Using Python 3
-   cd demo
    python3 -m http.server 8000
 
    # Or using Node.js
@@ -69,7 +68,7 @@ Or use "Custom" to enter your own JSON.
 
 3. Open in browser:
    ```
-   http://localhost:8000
+   http://localhost:8000/demo/
    ```
 
 ## File Structure
@@ -124,10 +123,7 @@ The benchmark compares:
 1. **PJS WASM**: Full priority-based streaming with frame generation
 2. **JSON.parse()**: Standard JavaScript parsing
 
-**Expected results:**
-- WASM may be slightly slower for small payloads (overhead)
-- WASM shows advantages with larger datasets (10KB+)
-- Priority streaming provides faster time-to-first-frame
+Results depend on the browser, the payload and the machine. The two sides do different work: `JSON.parse()` only parses, while PJS WASM also assigns priorities and generates frames, so treat the numbers as a cost indication, not a like-for-like speed race.
 
 ### Memory Usage
 
@@ -184,8 +180,9 @@ wasm-pack build --target web --release
 The build creates `pkg/pjs_wasm.js` and `pkg/pjs_wasm_bg.wasm`.
 
 ### ES Module Errors
-Ensure you're serving via HTTP, not `file://`:
+Ensure you're serving `crates/pjs-wasm` via HTTP, not `file://`:
 ```bash
+cd crates/pjs-wasm
 python3 -m http.server 8000
 ```
 

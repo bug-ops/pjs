@@ -63,7 +63,7 @@ console.log('Complete data:', data);
 import { quickStart } from '@pjs/client';
 
 // Minimal setup with smart defaults
-const client = quickStart('http://localhost:3000');
+const client = await quickStart('http://localhost:3000');
 const userData = await client.stream('/api/user/profile');
 ```
 
@@ -142,8 +142,8 @@ client.on('skeleton_ready', ({ data, processingTime }) => {
   console.log('Initial structure ready:', data);
 });
 
-client.on('patch_applied', ({ patch, priority, path }) => {
-  console.log(`Applied ${patch.operation} to ${path}`);
+client.on('patch_applied', ({ patch, priority, path, appliedPatches, skippedPatches }) => {
+  console.log(`Applied ${patch.operation} to ${path} (${appliedPatches} applied, ${skippedPatches} skipped)`);
 });
 
 client.on('stream_complete', ({ data, stats, totalTime }) => {
@@ -169,6 +169,8 @@ pending `stream()` that has not completed with a `PJSError` of type
 `SERVER_SHUTDOWN`.
 
 ## 🌐 Transport Options
+
+**Note:** The HTTP, SSE and WebSocket transports are experimental: their wire format is documented below and may still change before `1.0`.
 
 The WebSocket transport works against a stock `pjs-core` WebSocket server (see
 [WebSocket Transport](#websocket-transport)).
@@ -418,7 +420,7 @@ console.log(result.segments); // ['user', 'profile[0]', 'name']
 console.log(result.isValid);  // true
 ```
 
-A path is `$` followed by `.key` or `[n]` segments (`$`, `$[0].a`, `$.m[0][1]`, `$.user-id`); keys are non-empty and contain no `.`, `[` or `]`, and indices are non-negative safe integers.
+A path is `$` followed by `.key`, `["quoted key"]` or `[n]` segments (`$`, `$[0].a`, `$.m[0][1]`, `$.user-id`, `$["a.b"]`); unquoted keys are non-empty and contain no `.`, `[` or `]`, and indices are canonical non-negative safe integers (no signs or leading zeros).
 
 ### Memory Estimation
 

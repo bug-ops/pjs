@@ -1,8 +1,21 @@
 # PJS WebAssembly Implementation Roadmap
 
-**Status**: Planning Phase
+**Status**: Implemented; kept as the original plan and design rationale
 **Version**: 0.1.0-draft
-**Last Updated**: 2025-11-08
+**Last Updated**: 2026-11
+
+## Current State (0.8)
+
+The plan below has been carried out. Where it differs from the plan, the code is authoritative:
+
+- `crates/pjs-domain` is published as `pjson-rs-domain`. It depends on `serde`, `serde_json`, `jiff`, `smallvec`, `uuid` and `thiserror`, requires `std`, and forbids `unsafe`. There is no `no_std` mode.
+- `crates/pjs-wasm` is a workspace crate named `pjs-wasm`; the release workflow publishes the built package to npm as `@pjson/wasm`. The bindings are `wasm-bindgen` with `serde-wasm-bindgen` and `tsify`, optimized with `wasm-opt -Os`.
+- `pjson-rs-domain` and `pjs-wasm` declare MSRV 1.89, checked in CI on the native and `wasm32-unknown-unknown` targets. `pjson-rs` itself is nightly-only.
+- CI builds the WASM package for the `web`, `nodejs` and `bundler` targets, reports bundle sizes, runs a Node.js example, validates the npm package, and type-checks the JS client declarations against the real bindings (`wasm-types-drift`).
+- `crates/pjs-js-client` (`@pjs/client`) loads the `pjs-wasm` bindings through `src/utils/wasm-loader.ts` and `src/parser/wasm-parser.ts`; its HTTP, SSE and WebSocket transports are experimental. It requires Node 22 or newer and is tested on Node 22 and 24, including a cross-stack suite against a Rust WebSocket fixture (`crates/pjs-core/examples/js_client_ws_fixture.rs`).
+- Patches use the unified `WirePatch` vocabulary (`set`, `merge`, `append`, `append_str`) and `JsonPath` with quoted segments; see `specs/` for the exact contracts.
+
+The sections that follow keep the original plan, phases and timeline for context.
 
 ## Executive Summary
 
@@ -633,54 +646,22 @@ jobs:
 ### Internal Documents
 
 - [SPECIFICATION.md](SPECIFICATION.md) - PJS protocol specification
-- [CLAUDE.md](../guides/CLAUDE.md) - Project development guidelines
+- [CONTRIBUTING.md](../../CONTRIBUTING.md) - Project development guidelines
 - [pjs-js-client README](../../crates/pjs-js-client/README.md) - JS client documentation
 
 ## Appendix A: Dependencies
 
 ### pjs-domain Dependencies
 
-```toml
-[dependencies]
-serde = { version = "1.0", features = ["derive"], optional = true }
-thiserror = { version = "2.0", default-features = false }
-
-[features]
-default = ["std"]
-std = ["thiserror/std"]
-serde = ["dep:serde"]
-```
+See `crates/pjs-domain/Cargo.toml`: `jiff`, `serde`, `serde_json`, `smallvec`, `thiserror` and `uuid` (with the `js` features on `wasm32`).
 
 ### pjs-wasm Dependencies
 
-```toml
-[dependencies]
-pjs-domain = { path = "../pjs-domain", default-features = false }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
-web-sys = { version = "0.3", features = ["console", "WebSocket"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde-wasm-bindgen = "0.6"
-once_cell = { version = "1.21", default-features = false, features = ["alloc"] }
-
-[dev-dependencies]
-wasm-bindgen-test = "0.3"
-```
+See `crates/pjs-wasm/Cargo.toml`: `pjson-rs-domain`, `wasm-bindgen`, `js-sys`, `serde`, `serde_json`, `serde-wasm-bindgen`, `tsify` and the optional `console_error_panic_hook`; `wasm-bindgen-test` for tests.
 
 ### pjs-js-client Updates
 
-```json
-{
-  "dependencies": {
-    "@pjs/wasm": "^0.1.0"
-  },
-  "devDependencies": {
-    "@types/wasm-bindgen": "^0.2.0"
-  }
-}
-```
+The client package is `@pjs/client` (`crates/pjs-js-client/package.json`); it imports the bindings as `pjs-wasm`.
 
 ## Appendix B: File Structure
 
@@ -692,7 +673,7 @@ docs/
 │   └── adr/                     # Architecture Decision Records
 │       └── 001-wasm-support.md
 ├── guides/
-│   ├── CLAUDE.md                # Development guidelines
+│   ├── (CONTRIBUTING.md lives at the repository root)
 │   ├── wasm-quickstart.md       # WASM getting started
 │   └── wasm-migration.md        # Migration guide
 └── api/

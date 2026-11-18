@@ -6,7 +6,7 @@ resolver = "3"
 
 [workspace.package]
 documentation = "https://docs.rs/pjson-rs"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Andrei G. <k05h31@gmail.com>"]
 readme = "README.md"
 edition = "2024"
@@ -33,20 +33,20 @@ getrandom = "0.4"
 gungraun = "=0.20.0"
 headers-accept = "0.3.0"
 hmac = "0.13"
-hyper = "1.11"
-hyper-util = "0.1.20"
-jiff = { version = "1.0", default-features = false }
+hyper = "1.12"
+hyper-util = "0.1"
+jiff = { version = "1.0.1", default-features = false }
 jiter = "0.19"
 js-sys = "0.3"
 jsonwebtoken = { version = "12.0", default-features = false, features = ["use_pem"] }
-mediatype = "0.21.0"
+mediatype = "0.23"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 mimalloc = "0.1"
 parking_lot = "0.13"
 pastey = "0.2"
-pjson-rs = { version = "0.7.0", path = "crates/pjs-core" }
-pjson-rs-domain = { version = "0.7.0", path = "crates/pjs-domain" }
+pjson-rs = { version = "0.8.0", path = "crates/pjs-core" }
+pjson-rs-domain = { version = "0.8.0", path = "crates/pjs-domain" }
 proptest = "1.11"
 rand = "0.10"
 rayon = "1.12"

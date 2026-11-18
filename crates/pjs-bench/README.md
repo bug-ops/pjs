@@ -16,37 +16,19 @@ This suite compares PJS against major JSON parsing libraries to demonstrate the 
 - **sonic-rs** - SIMD-optimized JSON parser  
 - **PJS** - Priority JSON Streaming Protocol
 
-## Actual Performance Results 🚀
+## Performance Results
 
 ### Raw Parsing Performance (serde_json vs sonic-rs)
 
 > **Note:** the standalone "PJS Parser" benchmark group (`benchmark_pjs_parser`, plus the `pjs_parser` arm of `benchmark_comparison`) and the `pjson_rs::Parser` type it measured were removed as dead code in #486/#488 — the type had no production caller. The tables that used to compare a "PJS Parser" column against `serde_json`/`sonic-rs` here are removed along with it; `simple_throughput`'s `parsing_comparison` group still benchmarks `serde_json` against `sonic_rs` directly. Re-run `cargo bench -p pjs-bench --bench simple_throughput` for current numbers on your hardware.
 
-### 🚀 Memory Usage Comparison (from memory_benchmarks)
-
-| Dataset Size | PJS Parser | serde_json | sonic-rs | PJS vs serde_json |
-|--------------|------------|------------|----------|-------------------|
-| **1MB** | 20.3μs | 65.6μs | 16.7μs | **3.2x faster** |
-| **5MB** | 85.3μs | 322μs | 82.8μs | **3.8x faster** |
-| **10MB** | 217μs | 655μs | 184μs | **3.0x faster** |
-
-### ⚡ Progressive Memory Patterns - The Game Changer
-
-| Pattern | Traditional (Batch Load) | PJS (Progressive) | PJS Advantage |
-|---------|-------------------------|------------------|---------------|
-| **Memory Usage** | 198μs (peak memory spike) | 37μs (bounded memory) | **5.3x faster** |
-| **UI Rendering** | Must wait for full parse | Progressive updates | Instant start |
-| **User Experience** | Loading... → Complete | Skeleton → Progressive | Much better |
-
-*PJS enables bounded memory usage and instant UI updates vs traditional batch loading*
-
 ## Benchmark Categories
 
-The `[[bench]]` targets below are the ones actually wired into `Cargo.toml` and runnable today; older docs on this page describing `memory_benchmarks`, `streaming_benchmarks`, and `time_to_first_data` predate a benchmark-suite cleanup and no longer apply (those files were disabled since v0.2.0).
+The `[[bench]]` targets below are the ones wired into `Cargo.toml`. The former `memory_benchmarks`, `streaming_benchmarks` and `time_to_first_data` targets were removed in an earlier benchmark-suite cleanup, so no published numbers from them remain here.
 
 ### 1. Basic Throughput (`cargo bench --bench simple_throughput`)
 
-Raw parsing speed comparison across different JSON sizes (small/medium/large payloads), `serde_json` vs `sonic_rs` (`benchmark_serde_json`, `benchmark_sonic_rs`, `benchmark_comparison`). See the note above — the dedicated "PJS Parser" comparison arm was removed along with the dead parser it measured (#486, #488); this bench now only compares `serde_json` against `sonic_rs` directly.
+Raw parsing speed comparison across different JSON sizes (small/medium/large payloads), `serde_json` vs `sonic_rs` (`benchmark_serde_json`, `benchmark_sonic_rs`, `benchmark_comparison`). The dedicated "PJS Parser" comparison arm was removed along with the dead parser it measured (#486, #488); this bench now only compares `serde_json` against `sonic_rs` directly.
 
 ### 2. Zero-Copy Parser (`cargo bench --bench zero_copy_bench`)
 
@@ -64,7 +46,37 @@ Validates the GAT-based repository ports meet their performance targets (sub-mil
 
 Added to answer #514: isolates `sonic_rs` vs `serde_json` on the exact serialization primitive #510 swapped (`bench_serialization_many_small_calls`, `bench_serialization_one_big_call`), plus an end-to-end baseline over the actual production call chain (`bench_batch_frame_stream_e2e`, via `BatchFrameStream::into_stream()`). Measured: `sonic_rs` is ~1.4-1.6x faster per-frame and ~1.7-1.8x faster per-batch at the primitive level, but only ~9-11% faster on the full production route once `frame_to_value`'s unchanged `serde_json`-based prep and stream/async overhead are accounted for — see the bench's own module doc for the full caveat.
 
-## Real-World Impact
+### 6. Connection Lifecycle (`cargo bench --bench http_serve_lifecycle`)
+
+Covers the `serve_with_limits` accept loop and graceful shutdown: request round trip, a pre-triggered shutdown signal, and a shutdown trigger with idle connections waiting to drain.
+
+### 7. WebSocket Controller (`cargo bench --bench websocket_controller`)
+
+Benchmarks `AdaptiveStreamController`: `create_session` planning cost for 1 KiB to 1 MiB documents, the entry-dense document shapes that calibrate the blocking-plan offload gate, the `spawn_blocking` hop, and per-frame `handle_frame_ack` throughput under concurrent tasks.
+
+### 8. Client Patch Application (`cargo bench --bench client_apply_patches`)
+
+Measures applying patches on the client. It is a stub that only prints a skip line unless built with `--cfg pjs_bench` (see [Running Benchmarks](#running-benchmarks)).
+
+### 9. Patch Extraction (`cargo bench --bench patch_extraction`)
+
+Measures the two halves of `Stream::create_patch_frames` on a wide document: the priority-priced traversal and the chunking commit.
+
+### 10. Buffer Pool (`cargo bench --bench buffer_pool`)
+
+`BufferPool::acquire` plus drop, for a warmed pool (hit) and a fresh pool (miss).
+
+### 11. Priority Streamer (`cargo bench --bench priority_streamer`)
+
+`PriorityStreamer::analyze` on wide documents (many scalar leaves) and deep documents (a chain of nested objects).
+
+### 12. Instruction Counts (`cargo bench --bench gungraun_parser`)
+
+Deterministic Callgrind instruction-count counterpart of the `simple_throughput` parser group. Valgrind runs on Linux only; other targets compile an empty `main`.
+
+## Modelled Scenarios
+
+The payload shapes below illustrate how priorities map to documents; they are not measured results.
 
 ### Social Media Feed
 
@@ -76,8 +88,6 @@ Added to answer #514: isolates `sonic_rs` vs `serde_json` on the exact serializa
 }
 ```
 
-**Traditional**: Wait 1.2ms for complete parsing  
-**PJS**: Show posts in <50μs with skeleton, full data follows
 
 ### E-commerce Catalog
 
@@ -89,8 +99,6 @@ Added to answer #514: isolates `sonic_rs` vs `serde_json` on the exact serializa
 }
 ```
 
-**Traditional**: 1.2ms+ for full page  
-**PJS**: Product grid in 50μs, progressive enhancement
 
 ### Analytics Dashboard
 
@@ -102,8 +110,6 @@ Added to answer #514: isolates `sonic_rs` vs `serde_json` on the exact serializa
 }
 ```
 
-**Traditional**: 1.2ms dashboard load time  
-**PJS**: Key metrics in <100μs, charts follow
 
 ## Running Benchmarks
 
@@ -132,6 +138,13 @@ cargo bench --bench gat_query_benchmarks
 
 # HTTP streaming serialization (sonic_rs vs serde_json, e2e route)
 cargo bench --bench http_streaming
+
+# Connection lifecycle, WebSocket controller, patch extraction, buffer pool, streamer
+cargo bench --bench http_serve_lifecycle
+cargo bench --bench websocket_controller
+cargo bench --bench patch_extraction
+cargo bench --bench buffer_pool
+cargo bench --bench priority_streamer
 
 # Client patch application (needs the pjs_bench cfg)
 RUSTFLAGS="-C target-cpu=native --cfg pjs_bench" cargo bench -p pjs-bench --bench client_apply_patches
@@ -167,26 +180,7 @@ Criterion's `--save-baseline` and `--baseline` flags are only understood by the 
 
 ### Streaming Advantage
 
-- **Time to First Data** - PJS delivers critical data 143-1565x faster
-- **Progressive Enhancement** - UI updates while parsing continues
-- **Memory Efficiency** - Process large JSON with constant memory
-- **Massive Dataset Handling** - 1.7-1.8 GiB/s throughput on 10MB+ JSON
-
-## Performance Summary
-
-### Real-world Impact
-
-- **6.3x faster** than serde_json for large JSON processing (357KB)
-- **3.0-3.8x faster** than serde_json for massive datasets (1MB-10MB)
-- **5.3x faster** progressive loading vs traditional batch processing
-- **1.06x faster** than sonic-rs while adding streaming capabilities
-
-### Key Achievements
-
-✅ **Production-ready performance** - 6.3x faster than serde_json on large data
-✅ **Streaming advantage preserved** - 5.3x faster progressive loading
-✅ **Memory efficiency** - Bounded memory usage vs peak spikes  
-✅ **SIMD performance** - Exceeds sonic-rs on large datasets (1.71 vs 1.61 GiB/s)
+The suite measures costs (parsing, planning, patch application, pool operations), not end-to-end time to first render. An end-to-end comparison is not part of this crate yet.
 
 ## Hardware Considerations
 
@@ -217,12 +211,3 @@ When adding benchmarks:
 2. Measure end-to-end performance including allocation costs
 3. Test across different data sizes and structures
 4. Validate streaming scenarios separately from batch processing
-
-## Conclusion
-
-**PJS has achieved its performance goals:**
-
-🎯 **Competitive raw parsing** - Within 1.4x of sonic-rs for medium/large JSON
-🚀 **Superior streaming experience** - 1565x faster time-to-first-data on massive datasets
-📈 **Production ready** - 5x faster than serde_json with streaming benefits
-⚡ **Massive data optimized** - 1.8 GiB/s throughput, sub-microsecond skeleton delivery

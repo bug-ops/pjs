@@ -5,6 +5,22 @@ Status: Draft Specification
 Authors: [Contributors]  
 Date: 2025
 
+## Implementation Status
+
+This document is the draft design of the protocol. The reference implementation (`pjson-rs` 0.8) follows it in spirit but not in every detail. Where they differ, the code and the per-capability documents under `specs/` are authoritative (the shipped WebSocket format is `specs/websocket/067-websocket-wire-protocol/spec.md`; HTTP streaming is `specs/http/063-http-streaming-negotiation/spec.md`).
+
+| Topic | This draft | Reference implementation (0.8) |
+|-------|-----------|--------------------------------|
+| Priority range | 0-255 | 1-255; zero is rejected by the `Priority` type. Named levels: `CRITICAL` 100, `HIGH` 80, `MEDIUM` 50, `LOW` 25, `BACKGROUND` 10 |
+| Frame types | `skeleton`, `patch`, `complete`, `error`, `heartbeat` | `Skeleton`, `Patch`, `Complete`, `Error` (typed `FrameBody`); keep-alive on WebSocket is `Ping`/`Pong` |
+| Frame envelope | `@`-prefixed fields (`@type`, `@seq`, ...) | WebSocket: `{"type": "<Variant>", "data": {...}}` (`WsMessage`); HTTP: one frame JSON object per NDJSON line or SSE `data:` event |
+| Patch operations | `replace`, `add`, `remove`, `move`, `copy` | `WirePatch` arrays `[op, path, arg]` with `set`, `merge`, `append`, `append_str` |
+| Path addressing | JSON Pointer (RFC 6901), optional JSON Path | Domain `JsonPath`: text `$.key[0]` or `$["a.b"]` (quoted segment for any key that is not plain); on the WebSocket wire an array of segments (string = key, integer = index), at most 128 segments |
+| Content negotiation | `Accept: application/pjs+json`, `PJS-*` headers | `GET /pjs/sessions/{sid}/streams/{stid}/frames/stream` selects SSE (`text/event-stream`) or NDJSON (`application/x-ndjson`, also the fallback) from `Accept`; no 406 |
+| Relative paths (`@base_path`), array chunk metadata, checksums | Specified below | Not implemented |
+
+Sections 3 to 8 and 11 describe the draft design and are kept for reference.
+
 ## Abstract
 
 Priority JSON Streaming Protocol (PJS) is a protocol for efficient, prioritized transmission of JSON documents over network streams. It enables clients to receive and process critical data immediately while less important data continues streaming in the background.
@@ -39,7 +55,7 @@ PJS solves these problems by:
 - **Skeleton** - Initial JSON structure with empty/default values
 - **Patch** - Update to specific paths in the skeleton
 - **Frame** - Single transmission unit in the protocol
-- **Priority** - Numeric value (0-255) indicating transmission order
+- **Priority** - Numeric value (0-255 in this draft; 1-255 in the implementation) indicating transmission order
 - **JSON Pointer** - Path to a value in JSON document (RFC 6901)
 
 ## 2. Protocol Overview
@@ -102,7 +118,7 @@ Each frame is a JSON object with metadata and payload:
 interface Frame {
   "@type": FrameType;           // Frame type identifier
   "@seq": number;                // Sequence number
-  "@priority"?: number;          // Priority (0-255, higher = more important)
+  "@priority"?: number;          // Priority (0-255 in this draft, 1-255 implemented; higher = more important)
   "@timestamp"?: number;         // Unix timestamp in milliseconds
   // Frame-specific fields
 }
@@ -240,7 +256,7 @@ Communicates errors during streaming:
 
 ### 4.1 Priority Levels
 
-Priorities range from 0 to 255, with suggested bands:
+Priorities range from 0 to 255 in this draft (the implementation accepts 1 to 255), with suggested bands:
 
 | Priority Range | Category | Use Case |
 |---------------|----------|----------|
@@ -520,6 +536,8 @@ Recommended limits:
 - Maximum array size per frame: 10,000 items
 - Maximum total patches: 100,000
 
+The reference implementation enforces its own bounds, for example a WebSocket patch path of at most 128 segments, a per-connection cap of 64 live sessions, a 16 MiB outgoing byte budget per frame, and configurable HTTP connection limits (see `SECURITY.md`).
+
 ### 10.3 Authentication
 
 PJS frames should be authenticated using standard transport security:
@@ -644,3 +662,4 @@ Optional parameters:
 ### Appendix C: Changelog
 
 - v1.0-draft (2025-05): Initial draft specification
+- 2026-11: Added the Implementation Status section describing where `pjson-rs` 0.8 differs from this draft

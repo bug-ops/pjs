@@ -3,14 +3,14 @@ tags:
   - sdd
   - delta
 created: 2026-11-18
-status: proposed
+status: merged
 related:
   - "[[046-json-reconstruction/spec|spec]]"
 ---
 
 # Delta: index-ending-paths
 
-Proposed for [[046-json-reconstruction/spec|spec]] (#719, #725).
+Merged into [[046-json-reconstruction/spec|spec]] on 2026-11-18 (#719, #725); the Remove parts are superseded by #751, which removed Remove entirely.
 
 ## MODIFIED
 - FR-004 `Set` delegates to shared `json_tree::set`: paths ending in an index overwrite an existing element; `index >= len` is `IndexOutOfBounds`; state is unchanged on error.
