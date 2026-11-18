@@ -13,7 +13,7 @@ The official JavaScript/TypeScript client library for the Priority JSON Streamin
 - 🚀 **Progressive Loading**: Render critical data first, details later
 - ⚡ **Priority-Based Streaming**: Critical fields arrive in milliseconds
 - 🎯 **Smart Reconstruction**: Automatic JSON patching and assembly
-- 🌐 **Multiple Transports**: HTTP, WebSocket, Server-Sent Events (**experimental**, see [Transport Options](#-transport-options))
+- 🌐 **Multiple Transports**: WebSocket, plus HTTP and Server-Sent Events (**experimental**, see [Transport Options](#-transport-options))
 - 🛡️ **Type Safety**: Full TypeScript support with comprehensive types
 - 📊 **Performance Metrics**: Built-in monitoring and statistics
 - 🎨 **React Integration**: (Coming soon) Hooks and components
@@ -114,6 +114,7 @@ interface StreamOptions {
   onRender?: RenderCallback           // Progressive rendering
   onProgress?: ProgressCallback       // Progress updates
   timeout?: number                    // Stream timeout
+  data?: JsonValue                    // Document to stream (required by the WebSocket transport)
   queryParams?: Record<string, string>
   headers?: Record<string, string>
 }
@@ -167,10 +168,13 @@ pending `stream()` that has not completed with a `PJSError` of type
 
 ## 🌐 Transport Options
 
-**Experimental:** the HTTP, WebSocket and SSE transports speak the wire format
-described below, which an external server must implement. The routes and
-payloads shipped with `pjs-core` do not match it, so these transports do not
-work against a stock `pjs-core` server. Known near-misses:
+The WebSocket transport works against a stock `pjs-core` WebSocket server (see
+[WebSocket Transport](#websocket-transport)).
+
+**Experimental:** the HTTP and SSE transports speak the wire format described
+below, which an external server must implement. The routes and payloads shipped
+with `pjs-core` do not match it, so these transports do not work against a
+stock `pjs-core` server. Known near-misses:
 
 - `HttpTransport.connect` calls the real `POST /pjs/sessions`, but sends
   `client_info` as an object while the server expects a string; the server
@@ -179,8 +183,6 @@ work against a stock `pjs-core` server. Known near-misses:
   URL when `endpoint` is `/{stream_id}`, but it serves externally tagged
   `PriorityStreamFrame` JSON (`{"Skeleton":{...}}`) that client frame validation
   rejects.
-- WebSocket `/pjs/ws` returns 404 (the server mounts `/ws`), and `start_stream`
-  is not a server message.
 
 ### Wire format
 
@@ -188,7 +190,6 @@ work against a stock `pjs-core` server. Known near-misses:
 |-----------|----------|-----------|
 | HTTP | `POST /pjs/sessions` with `{"client_info":{"type":"javascript","version":"<client version>"}}`, then `GET /pjs/stream{endpoint}?session_id&stream_id&<queryParams>` with `Accept: application/x-ndjson` | `{"session_id","supported_features"?}`; one Frame per NDJSON line, optional terminal `{"event":"shutdown"}` |
 | SSE | `GET /pjs/stream{endpoint}/sse?session_id&stream_id&<queryParams>` | `message`/`frame` events carry Frame data; `shutdown` event; `error` event with `{"message"}` |
-| WebSocket | `/pjs/ws`; client sends `{"type":"start_stream","endpoint","session_id","stream_id","query_params","headers"}` and `{"type":"stop_stream"}` | `{"type":"frame","frame"}` and `{"type":"error","error"}` |
 
 A Frame is the `pjs-core` Frame JSON (`frame_type`, `priority`, `payload`, ...)
 that the client validates.
@@ -208,12 +209,71 @@ const client = new PJSClient({
 
 Best for: Real-time applications, bi-directional communication
 
+The client uploads the document and the server streams it back by priority, so
+`StreamOptions.data` is required (`null` is a valid document):
+
 ```typescript
 const client = new PJSClient({
   baseUrl: 'ws://localhost:3000',
   transport: 'websocket'
 });
+
+const document = await client.stream('/ignored', { data: { id: 1, name: 'Ada' } });
 ```
+
+How it behaves:
+
+- It connects to `{baseUrl}/ws` (`http`/`https` map to `ws`/`wss`) and speaks the
+  `pjs-core` `WsMessage` protocol with patch framing. The `endpoint` argument is
+  ignored.
+- One stream at a time: starting a second stream cancels the first, and the
+  first `stream()` rejects with `STREAM_ERROR` (as does `stopStream()`).
+  `disconnect()` rejects a pending stream with a `ConnectionError`. There is no
+  automatic reconnection; a socket that closes mid-stream rejects with a
+  `ConnectionError`.
+- A server `Error` reply rejects with a `ProtocolError` whose `context` is
+  `{ code, error }`. A document over the server's inbound cap (1 MiB by
+  default) makes the server close the socket, so the stream rejects with a
+  `ConnectionError` and no code; 413 comes only from plan limits. A document
+  nested deeper than the server's JSON recursion limit is answered with 400,
+  not the 413 `PathTooDeep` that spec 066 describes (#737).
+- The server's 400 for an undecodable message carries no session id, so it is
+  attributed to the active stream; after a superseded `StreamInit` it can fail
+  the stream that replaced it.
+- The reconstructed object has the server's **sorted** key order, not the input
+  order.
+- It needs `globalThis.WebSocket` (browsers and Node 22+; on older Node assign
+  one from the `ws` package) and `globalThis.crypto.randomUUID`; without
+  `randomUUID`, `stream()` rejects with a `ConfigurationError`.
+- `data` is typed `JsonValue`. A document declared as an `interface` is not
+  assignable to it (interfaces lack an index signature); declare it with a
+  `type` alias or annotate it once:
+
+  ```typescript
+  const payload: JsonValue = { id: 1, tags: ['a'] };
+  ```
+
+Server requirements (Rust side):
+
+- Serve the router with `into_make_service_with_connect_info::<SocketAddr>()`;
+  without connect info every upgrade is answered with 500.
+- Browsers always send an `Origin` header, and the default origin policy rejects
+  any upgrade that carries one with 403. Build the server with
+  `AxumWebSocketTransport::new().with_allowed_origins(vec![...])` to accept
+  browser clients. Node's `ws` sends no `Origin` by default, so it connects to
+  a stock server.
+
+**Breaking changes (WebSocket):**
+
+- The old `start_stream`/`stop_stream` protocol and the `/pjs/ws` path are gone;
+  the transport talks to `/ws`.
+- `StreamOptions.data` is required for the WebSocket transport.
+- Automatic reconnection was removed.
+- `connect()` now advertises the feature `patch-framing` instead of
+  `realtime`/`multiplexing`.
+- `PatchOperation.operation` gains `append_str`, so exhaustive switches over the
+  operation need a new case; `PATCH_OPERATIONS` lists all operations.
+- A root-path `append` now pushes onto an array root instead of being skipped.
 
 ### Server-Sent Events
 

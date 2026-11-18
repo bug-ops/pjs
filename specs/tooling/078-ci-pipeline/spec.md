@@ -75,7 +75,7 @@ Jobs `wasm-native-tests` (`cargo nextest run -p pjs-wasm --tests`), `wasm-build`
 Status: done.
 
 ### FR-007 JS client job
-Job `js-client-test` (Node 20, `npm ci --ignore-scripts`, downloads `wasm-build-web` into `crates/pjs-wasm/pkg`) shall run `npm run typecheck` and `npm test` in `crates/pjs-js-client`. It also runs for JS-only changes because `wasm-build` runs when `js` changed.
+Job `js-client-test` (Node 20, `npm ci --ignore-scripts`, downloads `wasm-build-web` into `crates/pjs-wasm/pkg`) shall run `npm run typecheck` and `npm test` in `crates/pjs-js-client`. It also runs `npm run build`, builds the `js_client_ws_fixture` example, and runs `npx jest --config jest.cross-stack.config.js` against `dist` with `PJS_WS_FIXTURE_BIN` (#731). It also runs for JS-only changes because `wasm-build` runs when `js` changed.
 Status: done ([[022-ci-js-client-enforcement/spec]]; #180).
 
 ### FR-008 Fuzz jobs
@@ -155,7 +155,6 @@ Job graph: `changes` -> {`quality`, `feature-matrix`, `fuzz`, `build`, `doctest`
 
 - Root `CLAUDE.md` says "Coverage threshold is enforced in CI"; `codecov.yml` is informational and uploads never fail.
 - No benchmark job (see [[075-bench-suite/spec]]); the quiet-machine A/B procedure is documented in `crates/pjs-bench/README.md` (#619); `CLAUDE.md` and `.claude/rules` mention a `jemalloc` feature, but no `Cargo.toml` defines it (the matrix covers `system` and `mimalloc`).
-- `crates/pjs-js-client/.github/workflows/ci.yml` (Node 18/20/21 matrix) is a nested workflow GitHub never runs.
 - Demo integration tests are not exercised in PR CI ([[077-demo-servers/spec]]); the comment near `coverage` ("zero tests") is stale.
 - `wasm-pack test` (documented in `.claude/rules/branching.md`) is not run in CI.
 - `wasm-pack@latest` and `cargo-fuzz` are installed unpinned.

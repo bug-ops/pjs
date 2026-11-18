@@ -45,10 +45,12 @@ pub struct HttpExtensionConfig {
     /// `Access-Control-Allow-Origin: *` on the SSE endpoint regardless of
     /// the mounting application's own CORS policy.
     ///
-    /// Set this to the origin(s) a cross-origin consumer runs on — e.g.
-    /// `pjs-js-client`'s `EventSource`-based SSE transport — to opt back
+    /// Set this to the origin(s) a cross-origin consumer runs on to opt back
     /// into cross-origin access with a validated allowlist instead of an
-    /// unconditional wildcard. `["*"]` allows any origin; mixing `"*"` with
+    /// unconditional wildcard. This only controls CORS; it does not make the
+    /// SSE endpoint's payload compatible with any particular client (the
+    /// endpoint is currently a sample-data stub, see
+    /// [`PjsExtension::extend_router`]). `["*"]` allows any origin; mixing `"*"` with
     /// explicit origins is invalid and falls back to no CORS layer at all
     /// (logged) rather than panicking. Origins are matched against the
     /// request's `Origin` header by case-sensitive byte equality — write
@@ -101,8 +103,18 @@ impl PjsExtension {
     /// The mounted routes (including the SSE stream endpoint) add no
     /// `Access-Control-Allow-Origin` header unless
     /// [`HttpExtensionConfig::allowed_origins`] is set — see that field's
-    /// docs if a cross-origin consumer (e.g. `pjs-js-client`'s SSE
-    /// transport) needs to reach these routes.
+    /// docs if a cross-origin consumer needs to reach these routes.
+    ///
+    /// # SSE endpoint status
+    ///
+    /// `GET {route_prefix}/stream/{stream_id}/sse` is a sample-data stub: it
+    /// ignores the `stream_id` path parameter and the query string, and
+    /// always streams frames built from a fixed sample document. Each
+    /// `data:` line is the externally tagged JSON of a `PriorityStreamFrame`
+    /// (e.g. `{"Skeleton":{...}}`), not the `frame_type`/`priority`/`payload`
+    /// frame shape, so it is not compatible with `pjs-js-client`'s SSE
+    /// transport. Aligning the HTTP/SSE endpoints with the client is tracked
+    /// in #735.
     pub fn extend_router<S>(self, router: axum::Router<S>) -> axum::Router<S>
     where
         S: Clone + Send + Sync + 'static,

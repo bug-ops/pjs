@@ -413,7 +413,7 @@ export class PJSClient extends EventEmitter {
             }
 
           } else if (frame.frame_type === FrameType.Patch) {
-            if (!result) {
+            if (!skeletonReceived) {
               throw new PJSError(PJSErrorType.ProtocolError, 'Received patch frame before skeleton');
             }
 
@@ -511,6 +511,7 @@ export class PJSClient extends EventEmitter {
       this.transport.startStream(endpoint, {
         sessionId: this.sessionId!,
         streamId,
+        data: options.data,
         queryParams: options.queryParams,
         headers: options.headers
       }).then(() => {

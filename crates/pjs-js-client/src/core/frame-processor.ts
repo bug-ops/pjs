@@ -7,6 +7,7 @@
 
 import {
   FrameType,
+  isPatchOperationKind,
   PJSErrorType,
   Priority
 } from '../types/index.js';
@@ -194,8 +195,7 @@ export class FrameProcessor {
       errors.push(`Patch operation ${index} has invalid JSON path: ${candidate.path}`);
     }
 
-    const validOperations = ['set', 'append', 'merge', 'delete'];
-    if (typeof candidate.operation !== 'string' || !validOperations.includes(candidate.operation)) {
+    if (!isPatchOperationKind(candidate.operation)) {
       errors.push(`Patch operation ${index} has invalid operation: ${candidate.operation}`);
     }
   }

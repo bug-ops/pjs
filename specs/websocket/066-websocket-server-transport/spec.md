@@ -177,7 +177,6 @@ At session creation the server shall plan the stream (`planner.rs`, `plan_stream
 
 - Heuristic priorities for keys without a `priority_mapping` entry are not computed (`Priority::HIGH`).
 - Client-side `StreamPatch` handling is specified by the client change ([[068-websocket-client/spec|068]]), not here.
-- Rustdoc elsewhere (`serve.rs`, `streams.rs`) names `/pjs/ws/{session_id}`; the crate route is `/ws`, and the demo mounts `/ws/{session_id}` itself ([[029-websocket-stream-session-binding/spec|029]]).
 
 ## See Also
 

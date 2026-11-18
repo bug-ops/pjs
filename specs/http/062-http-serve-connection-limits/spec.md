@@ -114,7 +114,6 @@ When `max_connection_duration` is `Some`, the connection future shall be cancell
 
 - Residual: single-byte-preface stall and `permit` acquired before the per-IP check (documented in code).
 - `ConnectionLimits` is not part of `config::` validation (`PjsConfig`); values are code-only [NEEDS CLARIFICATION: confirm no config-file binding].
-- The doc names `/pjs/ws/{session_id}` as the crate's upgrade route, but `create_websocket_router` mounts `/ws`; see [[066-websocket-server-transport/spec|066]].
 
 ## See Also
 

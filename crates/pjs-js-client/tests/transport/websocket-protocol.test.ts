@@ -9,88 +9,12 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { PJSClient } from '../../src/core/client.js';
 import { WebSocketTransport } from '../../src/transport/websocket.js';
-import {
-  PJSError,
-  PJSErrorType,
-  Priority,
-  TransportType,
-  type PJSClientConfig
-} from '../../src/types/index.js';
+import { PJSError, PJSErrorType, TransportType } from '../../src/types/index.js';
+import { FakeSocket, flush, makeConfig, settle } from '../helpers/fake-websocket.js';
 
 const UUID = '11111111-1111-4111-8111-111111111111';
 const OTHER_UUID = '22222222-2222-4222-8222-222222222222';
 const SECOND_UUID = '33333333-3333-4333-8333-333333333333';
-
-class FakeSocket {
-  static instances: FakeSocket[] = [];
-  static readonly OPEN = 1;
-
-  readonly sent: string[] = [];
-  readonly closeCalls: Array<{ code?: number; reason?: string }> = [];
-  readyState = 0;
-  onopen: ((event: unknown) => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
-  onclose: ((event: { code: number }) => void) | null = null;
-
-  constructor(readonly url: string) {
-    FakeSocket.instances.push(this);
-  }
-
-  send(data: string): void {
-    this.sent.push(data);
-  }
-
-  close(code?: number, reason?: string): void {
-    this.closeCalls.push({ code, reason });
-  }
-
-  open(): void {
-    this.readyState = FakeSocket.OPEN;
-    this.onopen?.({});
-  }
-
-  receive(message: unknown): void {
-    this.onmessage?.({ data: typeof message === 'string' ? message : JSON.stringify(message) });
-  }
-
-  fail(): void {
-    this.onerror?.({});
-  }
-
-  closeFromServer(code: number): void {
-    this.onclose?.({ code });
-  }
-
-  sentMessages(): Array<{ type: string; data: Record<string, unknown> }> {
-    return this.sent.map((text) => JSON.parse(text));
-  }
-}
-
-function makeConfig(baseUrl = 'http://localhost:3000'): Required<PJSClientConfig> {
-  return {
-    baseUrl,
-    transport: TransportType.WebSocket,
-    sessionId: 'session-1',
-    headers: {},
-    timeout: 2000,
-    debug: false,
-    bufferSize: 1024,
-    priorityThreshold: Priority.Background,
-    maxConcurrentStreams: 1
-  };
-}
-
-const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
-
-type Outcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
-
-function settle(promise: Promise<void>): Promise<Outcome> {
-  return promise.then(
-    (): Outcome => ({ ok: true }),
-    (error: unknown): Outcome => ({ ok: false, error })
-  );
-}
 
 function patchMessage(
   frameId: number,
@@ -448,14 +372,19 @@ describe('WebSocketTransport lifecycle', () => {
     expect(transport.isTransportConnected()).toBe(false);
   });
 
-  test('stopStream sends StreamCancel for the active session and resolves the pending stream', async () => {
+  test('stopStream sends StreamCancel for the active session and rejects the pending stream with StreamError', async () => {
     const { transport, socket } = await connectTransport();
     const outcome = settle(transport.startStream('/x', { sessionId: 's', streamId: 'st', data: {} }));
     await flush();
 
     await transport.stopStream();
 
-    expect(await outcome).toEqual({ ok: true });
+    const result = await outcome;
+    expect(result.ok).toBe(false);
+    expect((result as { error: PJSError }).error).toMatchObject({
+      type: PJSErrorType.StreamError,
+      message: 'Stream stopped'
+    });
     expect(socket.sentMessages()[1]).toEqual({ type: 'StreamCancel', data: { session_id: UUID } });
   });
 
@@ -467,7 +396,7 @@ describe('WebSocketTransport lifecycle', () => {
     expect(socket.sent).toEqual([]);
   });
 
-  test('disconnect closes with 1000 and resolves the pending stream without an error', async () => {
+  test('disconnect closes with 1000 and rejects the pending stream with ConnectionError', async () => {
     const { transport, socket } = await connectTransport();
     const outcome = settle(transport.startStream('/x', { sessionId: 's', streamId: 'st', data: {} }));
     await flush();
@@ -475,7 +404,12 @@ describe('WebSocketTransport lifecycle', () => {
     await transport.disconnect();
     socket.closeFromServer(1000);
 
-    expect(await outcome).toEqual({ ok: true });
+    const result = await outcome;
+    expect(result.ok).toBe(false);
+    expect((result as { error: PJSError }).error).toMatchObject({
+      type: PJSErrorType.ConnectionError,
+      message: 'Client disconnected'
+    });
     expect(socket.closeCalls[0].code).toBe(1000);
     expect(transport.isTransportConnected()).toBe(false);
   });
@@ -488,7 +422,12 @@ describe('WebSocketTransport lifecycle', () => {
     const second = settle(transport.startStream('/x', { sessionId: 's', streamId: 'st', data: { n: 2 } }));
     await flush();
 
-    expect(await first).toEqual({ ok: true });
+    const firstResult = await first;
+    expect(firstResult.ok).toBe(false);
+    expect((firstResult as { error: PJSError }).error).toMatchObject({
+      type: PJSErrorType.StreamError,
+      message: 'Stream superseded'
+    });
     const messages = socket.sentMessages();
     expect(messages.map((m) => m.type)).toEqual(['StreamInit', 'StreamCancel', 'StreamInit']);
     expect(messages[1].data).toEqual({ session_id: UUID });

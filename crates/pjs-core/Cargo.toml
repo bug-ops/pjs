@@ -177,3 +177,8 @@ required-features = ["compression"]
 [[example]]
 name = "schema_validation_demo"
 required-features = ["schema-validation"]
+
+[[example]]
+name = "js_client_ws_fixture"
+path = "examples/js_client_ws_fixture.rs"
+required-features = ["websocket-server"]
