@@ -411,9 +411,7 @@ mod origin_allow_list {
     }
 
     /// Mixing `"*"` with an explicit origin must fail closed (deny-all)
-    /// rather than falling back to permissive matching or panicking. Mirrors
-    /// `http_axum_extension_comprehensive.rs`'s
-    /// `test_sse_stream_endpoint_invalid_allowed_origins_fails_closed`.
+    /// rather than falling back to permissive matching or panicking.
     #[tokio::test]
     async fn test_wildcard_mixed_with_explicit_origin_fails_closed() {
         let transport = AxumWebSocketTransport::new().with_allowed_origins(vec![

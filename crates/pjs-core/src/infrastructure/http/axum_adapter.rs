@@ -147,10 +147,8 @@ fn build_cors_layer(config: &HttpServerConfig) -> Result<CorsLayer, PjsError> {
 /// Build a [`CorsLayer`] from a raw allowed-origins list.
 ///
 /// Shared validated-allowlist logic behind both [`build_cors_layer`] (used by
-/// [`create_pjs_router_with_config`]) and `axum_extension::PjsExtension`'s
-/// own opt-in `allowed_origins` config — see that module for why it needs
-/// its own CORS layer rather than always relying on [`build_cors_layer`]'s
-/// caller.
+/// [`create_pjs_router_with_config`]) and any other caller that mounts PJS
+/// routes with its own opt-in `allowed_origins` list.
 ///
 /// # Matching semantics
 ///

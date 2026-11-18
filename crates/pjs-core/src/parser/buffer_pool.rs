@@ -15,16 +15,72 @@ use std::{
     mem::{self, MaybeUninit},
     ptr::{self, NonNull},
     slice,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 /// Buffer pool that manages reusable byte buffers for parsing
+///
+/// `max_total_memory` bounds the bytes the pool has handed out plus the bytes it
+/// retains idle: every buffer is charged its size-class capacity from allocation
+/// until it is freed, and a new allocation that would push the total past the
+/// limit fails with [`DomainError::ResourceExhausted`]. Reusing an idle buffer
+/// never fails on the budget.
+///
+/// A buffer is returned to the pool on drop only while it still has exactly its
+/// size-class capacity and layout. One grown through
+/// [`AlignedBuffer::reserve`] (or replaced) is freed instead, so growth past the
+/// class while a buffer is checked out is the caller's own allocation and lies
+/// outside the budget.
 #[derive(Debug)]
 pub struct BufferPool {
     pools: Arc<DashMap<BufferSize, BufferBucket>>,
     config: PoolConfig,
     stats: Arc<parking_lot::Mutex<PoolStats>>, // Keep stats under mutex as it's written less frequently
+    budget: Arc<MemoryBudget>,
+}
+
+/// Lock-free accounting of the bytes a pool has allocated and not yet freed
+#[derive(Debug, Default)]
+struct MemoryBudget {
+    live: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl MemoryBudget {
+    /// Charge `bytes` unless that would exceed `limit`; `Err` carries the current total
+    fn try_reserve(&self, bytes: usize, limit: usize) -> Result<(), usize> {
+        let previous = self
+            .live
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+                live.checked_add(bytes).filter(|total| *total <= limit)
+            })?;
+        self.peak.fetch_max(previous + bytes, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn release(&self, bytes: usize) {
+        self.live.fetch_sub(bytes, Ordering::AcqRel);
+    }
+
+    fn live(&self) -> usize {
+        self.live.load(Ordering::Acquire)
+    }
+
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+}
+
+/// What a dropped [`PooledBuffer`] needs to decide between retaining and freeing
+#[derive(Debug, Clone, Copy)]
+struct ReturnPolicy {
+    class_bytes: usize,
+    alignment: usize,
+    max_buffers_per_bucket: usize,
 }
 
 /// Configuration for buffer pool behavior
@@ -119,9 +175,9 @@ pub struct PoolStats {
     pub cache_hits: u64,
     /// Cache misses (new buffer allocated)
     pub cache_misses: u64,
-    /// Current memory usage in bytes
+    /// Bytes handed out plus bytes retained idle, as charged against `max_total_memory`
     pub current_memory_usage: usize,
-    /// Peak memory usage in bytes
+    /// Highest value `current_memory_usage` has reached
     pub peak_memory_usage: usize,
     /// Number of cleanup operations performed
     pub cleanup_count: u64,
@@ -139,6 +195,7 @@ impl BufferPool {
             pools: Arc::new(DashMap::new()),
             config,
             stats: Arc::new(parking_lot::Mutex::new(PoolStats::new())),
+            budget: Arc::new(MemoryBudget::default()),
         }
     }
 
@@ -148,6 +205,13 @@ impl BufferPool {
     }
 
     /// Acquire a buffer of specified size, reusing if available
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::SecurityViolation`] when `size` exceeds the configured maximum
+    /// buffer size; [`DomainError::ResourceExhausted`] when a new allocation would push
+    /// the bytes handed out plus retained past `max_total_memory`. Reuse never fails on
+    /// the budget.
     pub fn acquire(&self, size: BufferSize) -> DomainResult<PooledBuffer> {
         // Security validation: check buffer size
         self.config
@@ -157,18 +221,12 @@ impl BufferPool {
                 DomainError::SecurityViolation(crate::error::ErrorChain(&e).to_string())
             })?;
 
-        // Check if we would exceed total memory limit
-        let current_usage = self.current_memory_usage().unwrap_or(0);
-        if current_usage + (size as usize) > self.config.max_total_memory {
-            return Err(DomainError::ResourceExhausted(format!(
-                "Adding buffer of size {} would exceed memory limit: current={}, limit={}",
-                size as usize, current_usage, self.config.max_total_memory
-            )));
-        }
-
-        if self.config.track_stats {
-            self.increment_allocations();
-        }
+        let (alignment, class_bytes) = class_layout(size as usize, self.config.simd_alignment)?;
+        let policy = ReturnPolicy {
+            class_bytes,
+            alignment,
+            max_buffers_per_bucket: self.config.max_buffers_per_bucket,
+        };
 
         // Try to get a buffer from existing bucket
         if let Some(mut bucket_ref) = self.pools.get_mut(&size)
@@ -176,36 +234,48 @@ impl BufferPool {
         {
             buffer.last_used = Instant::now();
             bucket_ref.last_access = Instant::now();
+            drop(bucket_ref);
 
-            if self.config.track_stats {
-                self.increment_cache_hits();
+            self.record_acquire(true);
+            return Ok(self.checked_out(buffer, size, policy));
+        }
+
+        // No buffer available: charge the budget, then create a new one
+        self.budget
+            .try_reserve(class_bytes, self.config.max_total_memory)
+            .map_err(|live| {
+                DomainError::ResourceExhausted(format!(
+                    "Adding buffer of size {} would exceed memory limit: current={}, limit={}",
+                    class_bytes, live, self.config.max_total_memory
+                ))
+            })?;
+
+        let buffer = match AlignedBuffer::new(size as usize, self.config.simd_alignment) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                self.budget.release(class_bytes);
+                return Err(error);
             }
+        };
 
-            return Ok(PooledBuffer::new(
-                buffer,
-                Arc::clone(&self.pools),
-                size,
-                self.config.max_buffers_per_bucket,
-            ));
-        }
-
-        // No buffer available, create new one
-        if self.config.track_stats {
-            self.increment_cache_misses();
-        }
-
-        let buffer = AlignedBuffer::new(size as usize, self.config.simd_alignment)?;
-        Ok(PooledBuffer::new(
-            buffer,
-            Arc::clone(&self.pools),
-            size,
-            self.config.max_buffers_per_bucket,
-        ))
+        self.record_acquire(false);
+        Ok(self.checked_out(buffer, size, policy))
     }
 
     /// Acquire a buffer with at least the specified capacity
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::InvalidInput`] when `min_capacity` exceeds the largest
+    /// [`BufferSize`] class (4 MiB), plus every error of [`acquire`](Self::acquire).
     pub fn acquire_with_capacity(&self, min_capacity: usize) -> DomainResult<PooledBuffer> {
-        let size = BufferSize::for_capacity(min_capacity);
+        let size = BufferSize::for_capacity(min_capacity).ok_or_else(|| {
+            DomainError::InvalidInput(format!(
+                "Capacity {} exceeds the largest buffer size class of {} bytes",
+                min_capacity,
+                BufferSize::Huge as usize
+            ))
+        })?;
         self.acquire(size)
     }
 
@@ -247,9 +317,9 @@ impl BufferPool {
             self.pools.remove(&key);
         }
 
+        self.budget.release(freed_memory);
         if self.config.track_stats {
-            self.increment_cleanup_count();
-            self.update_current_memory_usage(-(freed_memory as i64));
+            self.stats.lock().cleanup_count += 1;
         }
 
         Ok(CleanupStats {
@@ -259,70 +329,72 @@ impl BufferPool {
     }
 
     /// Get current pool statistics
+    ///
+    /// The memory counters are always real, whether or not `track_stats` is enabled.
     pub fn stats(&self) -> DomainResult<PoolStats> {
-        let stats = self.stats.lock();
-        Ok(stats.clone())
+        let mut stats = self.stats.lock().clone();
+        stats.current_memory_usage = self.budget.live();
+        stats.peak_memory_usage = self.budget.peak();
+        Ok(stats)
     }
 
-    /// Get current memory usage across all pools
-    pub fn current_memory_usage(&self) -> DomainResult<usize> {
-        use rayon::prelude::*;
-
-        let usage = self
-            .pools
-            .iter()
-            .par_bridge()
-            .map(|entry| {
-                entry
-                    .value()
-                    .buffers
-                    .par_iter()
-                    .map(|b| b.capacity)
-                    .sum::<usize>()
-            })
-            .sum();
-
-        Ok(usage)
+    /// Bytes handed out plus bytes retained idle, as charged against `max_total_memory`
+    ///
+    /// O(1); the same value as [`PoolStats::current_memory_usage`].
+    pub fn current_memory_usage(&self) -> usize {
+        self.budget.live()
     }
 
-    // Private statistics methods
+    fn checked_out(
+        &self,
+        buffer: AlignedBuffer,
+        size: BufferSize,
+        policy: ReturnPolicy,
+    ) -> PooledBuffer {
+        PooledBuffer::new(
+            buffer,
+            Arc::clone(&self.pools),
+            Arc::clone(&self.budget),
+            size,
+            policy,
+        )
+    }
 
-    fn increment_allocations(&self) {
+    fn record_acquire(&self, cache_hit: bool) {
+        if !self.config.track_stats {
+            return;
+        }
         let mut stats = self.stats.lock();
         stats.total_allocations += 1;
-    }
-
-    fn increment_cache_hits(&self) {
-        let mut stats = self.stats.lock();
-        stats.cache_hits += 1;
-    }
-
-    fn increment_cache_misses(&self) {
-        let mut stats = self.stats.lock();
-        stats.cache_misses += 1;
-    }
-
-    fn increment_cleanup_count(&self) {
-        let mut stats = self.stats.lock();
-        stats.cleanup_count += 1;
-    }
-
-    fn update_current_memory_usage(&self, delta: i64) {
-        let mut stats = self.stats.lock();
-        stats.current_memory_usage = (stats.current_memory_usage as i64 + delta).max(0) as usize;
-        stats.peak_memory_usage = stats.peak_memory_usage.max(stats.current_memory_usage);
+        if cache_hit {
+            stats.cache_hits += 1;
+        } else {
+            stats.cache_misses += 1;
+        }
     }
 }
 
 impl BufferSize {
-    /// Get appropriate buffer size for given capacity
-    pub fn for_capacity(capacity: usize) -> Self {
+    /// Get the smallest buffer size that holds `capacity` bytes
+    ///
+    /// Returns `None` when `capacity` exceeds the largest class (4 MiB) instead of
+    /// silently handing back a buffer that is too small.
+    ///
+    /// # Examples
+    /// ```
+    /// use pjson_rs::parser::BufferSize;
+    ///
+    /// assert_eq!(BufferSize::for_capacity(2000), Some(BufferSize::Medium));
+    /// assert_eq!(BufferSize::for_capacity(BufferSize::Huge as usize + 1), None);
+    /// ```
+    pub fn for_capacity(capacity: usize) -> Option<Self> {
         match capacity {
-            0..=1024 => BufferSize::Small,
-            1025..=8192 => BufferSize::Medium,
-            8193..=65536 => BufferSize::Large,
-            65537..=524288 => BufferSize::XLarge,
-            _ => BufferSize::Huge,
+            0..=1024 => Some(BufferSize::Small),
+            1025..=8192 => Some(BufferSize::Medium),
+            8193..=65536 => Some(BufferSize::Large),
+            65537..=524288 => Some(BufferSize::XLarge),
+            524289..=4194304 => Some(BufferSize::Huge),
+            _ => None,
         }
     }
 
@@ -338,6 +410,45 @@ impl BufferSize {
     }
 }
 
+/// Validate `alignment` and return the effective alignment with `capacity` rounded up to it
+///
+/// Shared by [`AlignedBuffer::new`] and the pool's budget accounting so a buffer's
+/// charged size always equals its allocated capacity.
+fn class_layout(capacity: usize, alignment: usize) -> DomainResult<(usize, usize)> {
+    // Validate alignment is power of 2 and reasonable
+    if !alignment.is_power_of_two() {
+        return Err(DomainError::InvalidInput(format!(
+            "Alignment {} is not a power of 2",
+            alignment
+        )));
+    }
+
+    // Validate alignment is not too large (max 4096 bytes for page alignment)
+    if alignment > 4096 {
+        return Err(DomainError::InvalidInput(format!(
+            "Alignment {} exceeds maximum of 4096",
+            alignment
+        )));
+    }
+
+    // Minimum alignment should be at least size of usize for proper alignment
+    let alignment = alignment.max(mem::align_of::<usize>());
+
+    // Align capacity to SIMD boundaries. `capacity + alignment - 1` can overflow `usize`
+    // when `capacity` is near `usize::MAX`; wrapping would silently mask `aligned_capacity`
+    // down to a small value instead of surfacing the out-of-range request as an error.
+    let rounded = capacity.checked_add(alignment - 1).ok_or_else(|| {
+        DomainError::InvalidInput(format!(
+            "Capacity {} overflows when rounding to alignment {}",
+            capacity, alignment
+        ))
+    })?;
+    let aligned_capacity = rounded & !(alignment - 1);
+
+    // Ensure minimum capacity for safety
+    Ok((alignment, aligned_capacity.max(alignment)))
+}
+
 impl AlignedBuffer {
     /// Create new aligned buffer with guaranteed SIMD alignment
     ///
@@ -349,38 +460,7 @@ impl AlignedBuffer {
     /// This function uses unsafe code to allocate aligned memory.
     /// The memory is properly tracked and will be deallocated on drop.
     pub fn new(capacity: usize, alignment: usize) -> DomainResult<Self> {
-        // Validate alignment is power of 2 and reasonable
-        if !alignment.is_power_of_two() {
-            return Err(DomainError::InvalidInput(format!(
-                "Alignment {} is not a power of 2",
-                alignment
-            )));
-        }
-
-        // Validate alignment is not too large (max 4096 bytes for page alignment)
-        if alignment > 4096 {
-            return Err(DomainError::InvalidInput(format!(
-                "Alignment {} exceeds maximum of 4096",
-                alignment
-            )));
-        }
-
-        // Minimum alignment should be at least size of usize for proper alignment
-        let alignment = alignment.max(mem::align_of::<usize>());
-
-        // Align capacity to SIMD boundaries. `capacity + alignment - 1` can overflow `usize`
-        // when `capacity` is near `usize::MAX`; wrapping would silently mask `aligned_capacity`
-        // down to a small value instead of surfacing the out-of-range request as an error.
-        let rounded = capacity.checked_add(alignment - 1).ok_or_else(|| {
-            DomainError::InvalidInput(format!(
-                "Capacity {} overflows when rounding to alignment {}",
-                capacity, alignment
-            ))
-        })?;
-        let aligned_capacity = rounded & !(alignment - 1);
-
-        // Ensure minimum capacity for safety
-        let aligned_capacity = aligned_capacity.max(alignment);
+        let (alignment, aligned_capacity) = class_layout(capacity, alignment)?;
 
         // Create layout for allocation (kept for Drop implementation)
         let layout = Layout::from_size_align(aligned_capacity, alignment).map_err(|e| {
@@ -685,22 +765,25 @@ impl Clone for AlignedBuffer {
 pub struct PooledBuffer {
     buffer: Option<AlignedBuffer>,
     pool: Arc<DashMap<BufferSize, BufferBucket>>,
+    budget: Arc<MemoryBudget>,
     size: BufferSize,
-    max_buffers_per_bucket: usize,
+    policy: ReturnPolicy,
 }
 
 impl PooledBuffer {
     fn new(
         buffer: AlignedBuffer,
         pool: Arc<DashMap<BufferSize, BufferBucket>>,
+        budget: Arc<MemoryBudget>,
         size: BufferSize,
-        max_buffers_per_bucket: usize,
+        policy: ReturnPolicy,
     ) -> Self {
         Self {
             buffer: Some(buffer),
             pool,
+            budget,
             size,
-            max_buffers_per_bucket,
+            policy,
         }
     }
 
@@ -729,21 +812,32 @@ impl PooledBuffer {
 
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
-        if let Some(mut buffer) = self.buffer.take() {
-            buffer.clear(); // Clear contents before returning to pool
+        let Some(mut buffer) = self.buffer.take() else {
+            return;
+        };
+        buffer.clear(); // Clear contents before returning to pool
 
-            // Get or create bucket for this buffer size
+        // Compare the stored layout alignment, never `actual_alignment()` (address-derived,
+        // usually larger): only a buffer still in its size class is charged `class_bytes`.
+        let in_class = buffer.capacity == self.policy.class_bytes
+            && buffer.layout.align() == self.policy.alignment;
+
+        if in_class {
             let mut bucket_ref = self.pool.entry(self.size).or_insert_with(|| BufferBucket {
                 buffers: Vec::new(),
                 last_access: Instant::now(),
             });
 
             // Only return to pool if we haven't exceeded the per-bucket limit
-            if bucket_ref.buffers.len() < self.max_buffers_per_bucket {
+            if bucket_ref.buffers.len() < self.policy.max_buffers_per_bucket {
                 bucket_ref.buffers.push(buffer);
                 bucket_ref.last_access = Instant::now();
+                return;
             }
         }
+
+        drop(buffer);
+        self.budget.release(self.policy.class_bytes);
     }
 }
 
@@ -910,10 +1004,11 @@ mod tests {
 
     #[test]
     fn test_buffer_size_selection() {
-        assert_eq!(BufferSize::for_capacity(500), BufferSize::Small);
-        assert_eq!(BufferSize::for_capacity(2000), BufferSize::Medium);
-        assert_eq!(BufferSize::for_capacity(50000), BufferSize::Large);
-        assert_eq!(BufferSize::for_capacity(100000), BufferSize::XLarge);
+        assert_eq!(BufferSize::for_capacity(500), Some(BufferSize::Small));
+        assert_eq!(BufferSize::for_capacity(2000), Some(BufferSize::Medium));
+        assert_eq!(BufferSize::for_capacity(50000), Some(BufferSize::Large));
+        assert_eq!(BufferSize::for_capacity(100000), Some(BufferSize::XLarge));
+        assert_eq!(BufferSize::for_capacity(usize::MAX), None);
     }
 
     #[test]

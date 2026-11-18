@@ -111,6 +111,17 @@ impl JsonPath {
         Self { segments }
     }
 
+    /// Append a segment in place; with [`Self::pop`] it lets a walker reuse
+    /// one buffer instead of building a path per node.
+    pub(crate) fn push(&mut self, segment: PathSegment) {
+        self.segments.push(segment);
+    }
+
+    /// Remove and return the last segment, `None` for the root.
+    pub(crate) fn pop(&mut self) -> Option<PathSegment> {
+        self.segments.pop()
+    }
+
     /// Borrow the path's segments.
     pub fn segments(&self) -> &[PathSegment] {
         &self.segments
@@ -166,8 +177,13 @@ impl JsonPath {
 
     /// Convert to a JSON Pointer (RFC 6901) string.
     ///
-    /// The root is the empty string and the empty key is `"/"`. Does not
-    /// escape `~` or `/` within keys; see follow-up issue for #379.
+    /// The root is the empty string and the empty key is `"/"`. Within keys,
+    /// `~` is escaped as `~0` and `/` as `~1`, so a pointer decodes back to
+    /// the exact key sequence it came from.
+    ///
+    /// RFC 6901 has no key/index distinction: `Key("0")` and `Index(0)` both
+    /// give `/0`. Pointers are therefore unique only among paths whose
+    /// segments agree position by position in kind.
     ///
     /// # Examples
     /// ```
@@ -177,13 +193,23 @@ impl JsonPath {
     /// assert_eq!(path.to_json_pointer(), "/users/0/name");
     /// assert_eq!(JsonPath::root().to_json_pointer(), "");
     /// assert_eq!(JsonPath::root().append_key("").to_json_pointer(), "/");
+    /// assert_eq!(JsonPath::root().append_key("a/b").to_json_pointer(), "/a~1b");
+    /// assert_eq!(JsonPath::root().append_key("m~n").to_json_pointer(), "/m~0n");
     /// ```
     pub fn to_json_pointer(&self) -> String {
         let mut pointer = String::new();
         for segment in &self.segments {
             pointer.push('/');
             match segment {
-                PathSegment::Key(key) => pointer.push_str(key),
+                PathSegment::Key(key) => {
+                    for c in key.chars() {
+                        match c {
+                            '~' => pointer.push_str("~0"),
+                            '/' => pointer.push_str("~1"),
+                            c => pointer.push(c),
+                        }
+                    }
+                }
                 PathSegment::Index(idx) => pointer.push_str(&idx.to_string()),
             }
         }

@@ -47,19 +47,19 @@ A `Skeleton` frame shall replace the entire current state with its `data` (its `
 Status: done.
 
 ### FR-003 Patch application
-For a `Patch` frame, each patch shall be applied in order: `Set` and `Replace` -> `set_at_path`; `Append` -> `append_at_path`; `Remove` -> `remove_at_path`. Target resolution goes through one crate-private resolver over `&[PathSegment]` (`resolve_mut`; read-only `resolve` for the WebSocket client), shared with the WebSocket protocol and client (#699). The result is `PatchesApplied { count, priority, paths }`.
+For a `Patch` frame, each patch (`JsonPatch.patch`, a `WirePatch`) shall be applied in order through the crate-private `stream::patch::apply_patch`, shared with the WebSocket client (#751): `Set` -> `json_tree::set`; `Merge`, `Append` and `AppendStr` resolve the target with `resolve_mut` and extend the object, array or string (a wrong target kind fails with `ExpectedObject`/`ExpectedArray`/`ExpectedString`). There is no path depth limit; the WebSocket client checks `MAX_PATCH_PATH_DEPTH` before it calls the shared core. A failing patch leaves the state unchanged; patches applied earlier in the same frame stay applied. The result is `PatchesApplied { count, priority, paths }`.
 Status: done. A failing patch aborts the frame; patches before it stay applied (no rollback).
 
 ### FR-004 Set semantics
-`set_at_path` on the root path replaces the whole document. Otherwise it delegates to `json_tree::set`, which navigates to the parent (all segments but the last) and matches on the last segment: a key on an object parent inserts/overwrites the entry; an index on an array parent overwrites an existing element and fails with `IndexOutOfBounds` for `index >= len`; a segment kind that does not match the parent fails with `ExpectedObject`/`ExpectedArray`. Paths ending in an index (`$.arr[1]`) are supported. The state is unchanged on error. The WebSocket protocol `Set` uses the same function.
+`set_at_path` on the root path replaces the whole document. Otherwise it delegates to `json_tree::set`, which navigates to the parent (all segments but the last) and matches on the last segment: a key on an object parent inserts/overwrites the entry; an index on an array parent overwrites an existing element and fails with `IndexOutOfBounds` for `index >= len`; a segment kind that does not match the parent fails with `ExpectedObject`/`ExpectedArray`. Paths ending in an index (`$.arr[1]`) are supported. The state is unchanged on error. The shared patch core uses the same function.
 Status: done.
 
 ### FR-005 Append semantics
 `append_at_path` shall extend the array at the path; a non-array target is an error.
 Status: done.
 
-### FR-006 Remove semantics
-`remove_at_path` delegates to `json_tree::remove` and matches on the last segment: a key on an object parent removes the entry, and a missing key is an idempotent `Ok` no-op (the document is already in the target state); an index on an array parent removes the element (later elements shift) and fails with `IndexOutOfBounds` for `index >= len`, because an out-of-range index shows that the sender's view of the array diverged; a mismatched segment kind fails with `ExpectedObject`/`ExpectedArray`; an empty path fails with `NoTargetKey`. Differs from JS FR-009: the JS client skips an out-of-range patch silently, while Rust reports `IndexOutOfBounds` as an error.
+### FR-006 Remove semantics (removed)
+Removed in #751: `PatchOperation::Remove`, `remove_at_path`, `json_tree::remove` and `PatchError::NoTargetKey` no longer exist. The producers (`PriorityStreamer`, the domain `Stream`) only emit `set` and `append`.
 Status: done.
 
 ### FR-007 Completion
@@ -71,7 +71,7 @@ Status: done.
 Status: done.
 
 ### FR-009 Error type
-All failures shall be `crate::Error::Patch(PatchError)` with variants `KeyNotFound(String)`, `IndexOutOfBounds { index, len }`, `ExpectedObject`, `ExpectedArray`, `NoTargetKey` (`NotAnIndex` and `NotAContainer` were removed in #719 as unreachable; `UnsupportedSegment` was removed in #699: `PathSegment` is closed).
+All failures shall be `crate::Error::Patch(PatchError)` with variants `KeyNotFound(String)`, `IndexOutOfBounds { index, len }`, `ExpectedObject`, `ExpectedArray`, `ExpectedString`, `PathTooDeep` (`NoTargetKey` was removed in #751 with `Remove`, `NotAnIndex` and `NotAContainer` in #719 as unreachable; `UnsupportedSegment` was removed in #699: `PathSegment` is closed).
 Status: done (stringly typed; see Open Questions).
 
 ## Non-Functional Requirements
@@ -91,9 +91,7 @@ Status: done (stringly typed; see Open Questions).
 | `process_next_frame` on empty queue | `Ok(NoFrames)` |
 | Patch path with missing intermediate key | `Err("Key not found: ..")` |
 | `Set` on array parent, index == len | `Err("Array index out of bounds")` |
-| `Remove` missing key | `Ok`, no change |
-| `Remove` index >= len | `Err(IndexOutOfBounds)` |
-| Path ending in an index segment | resolved (#719): `Set`/`Remove` on `$.arr[i]` act on element `i`; `Set`/`Remove` on `$.a[0]` where `a` is not an array fails with `ExpectedArray` |
+| Path ending in an index segment | resolved (#719): `Set` on `$.arr[i]` acts on element `i`; `Set` on `$.a[0]` where `a` is not an array fails with `ExpectedArray` |
 | Frames after `Complete` | still applied; `is_complete` stays true |
 
 ## Success Criteria
@@ -111,7 +109,7 @@ Status: done (stringly typed; see Open Questions).
 1. Counters `frames_processed: u32` / `patches_applied: u32` use unchecked `+=`.
 2. Resolved by #599: errors are typed `PatchError` variants.
 3. `Skeleton.complete` is ignored, so "skeleton may continue in later frames" has no effect.
-4. `Replace` and `Set` are indistinguishable in behaviour.
+4. Resolved (#751): `Replace` and `Remove` no longer exist; the reconstructor applies the `WirePatch` ops.
 5. `Instant` times make `ReconstructionStats` non-`Serialize`; fine for local use only.
 
 ## See Also

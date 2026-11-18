@@ -109,7 +109,10 @@ fn test_session_query_criteria_empty() {
 #[test]
 fn test_session_query_criteria_with_states() {
     let criteria = SessionQueryCriteria::builder()
-        .states(vec!["active".to_string(), "closed".to_string()])
+        .states(vec![
+            pjson_rs::domain::SessionState::Active,
+            pjson_rs::domain::SessionState::Closing,
+        ])
         .exclude_expired(false)
         .build()
         .unwrap();
@@ -149,7 +152,7 @@ fn test_session_query_criteria_with_stream_counts() {
 #[test]
 fn test_session_query_criteria_clone() {
     let criteria = SessionQueryCriteria::builder()
-        .states(vec!["active".to_string()])
+        .states(vec![pjson_rs::domain::SessionState::Active])
         .client_info_pattern("test%".to_string())
         .exclude_expired(false)
         .build()

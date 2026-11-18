@@ -101,7 +101,7 @@ Counts across 79 spec folders: 54 implemented, 20 partial, 0 draft, 5 obsolete.
 | 061 | [[061-http-middleware-stack/spec\|HTTP middleware stack: layers, rate limiting, auth, security headers]] | partial | P2 |  |
 | 062 | [[062-http-serve-connection-limits/spec\|Connection-level protection: `serve_with_limits`]] | implemented | P2 | #523 |
 | 063 | [[063-http-streaming-negotiation/spec\|HTTP frame streaming and `Accept` negotiation]] | implemented | P2 | #511 |
-| 064 | [[064-http-axum-extension/spec\|`PjsExtension`: bolt-on PJS routes for existing axum apps]] | partial | P3 |  |
+| 064 | [[064-http-axum-extension/spec\|`PjsExtension`: bolt-on PJS routes for existing axum apps]] | obsolete | P3 |  |
 | 065 | [[065-http-prometheus-metrics/spec\|Prometheus `/metrics` endpoint]] | partial | P3 |  |
 | 066 | [[066-websocket-server-transport/spec\|WebSocket server transport: upgrade, ownership, caps and TTL]] | implemented | P2 |  |
 | 067 | [[067-websocket-wire-protocol/spec\|WebSocket wire protocol (`WsMessage`)]] | implemented | P2 |  |
@@ -153,7 +153,7 @@ Specs whose work is not complete (`draft` or `partial`); see each Verification c
 | 058 | [[058-event-metrics-dictionary-adapters/spec\|Event Publisher, Metrics Collector and Dictionary Store Adapters]] | partial |
 | 059 | [[059-crate-api-errors-features/spec\|Crate Public API Surface, `pjson_rs::Error` and Feature-Flag Matrix]] | partial |
 | 061 | [[061-http-middleware-stack/spec\|HTTP middleware stack: layers, rate limiting, auth, security headers]] | partial |
-| 064 | [[064-http-axum-extension/spec\|`PjsExtension`: bolt-on PJS routes for existing axum apps]] | partial |
+| 064 | [[064-http-axum-extension/spec\|`PjsExtension`: bolt-on PJS routes for existing axum apps]] | obsolete |
 | 065 | [[065-http-prometheus-metrics/spec\|Prometheus `/metrics` endpoint]] | partial |
 | 068 | [[068-websocket-client/spec\|`PjsWebSocketClient`: client sessions, caps and TTL]] | partial |
 | 073 | [[073-js-client-core/spec\|TypeScript client core (client, transports, reconstruction)]] | partial |

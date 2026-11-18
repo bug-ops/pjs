@@ -76,22 +76,22 @@ Status: done. Test: `test_reused_buffer_exposes_no_stale_bytes`.
 
 ### FR-040-006 Pool buckets
 
-`BufferSize` shall have exactly five variants: `Small` = 1 KiB, `Medium` = 8 KiB, `Large` = 64 KiB, `XLarge` = 512 KiB, `Huge` = 4 MiB. `BufferSize::for_capacity(n)` shall map `0..=1024` to Small, `..=8192` to Medium, `..=65536` to Large, `..=524288` to XLarge and every larger value to Huge.
-Status: done. A request above 4 MiB receives a 4 MiB buffer; the caller must `reserve` further (see Open Questions).
+`BufferSize` shall have exactly five variants: `Small` = 1 KiB, `Medium` = 8 KiB, `Large` = 64 KiB, `XLarge` = 512 KiB, `Huge` = 4 MiB. `BufferSize::for_capacity(n)` shall return `Some` of Small for `0..=1024`, Medium for `..=8192`, Large for `..=65536`, XLarge for `..=524288`, Huge for `..=4194304`, and `None` for every larger value.
+Status: done. `acquire_with_capacity(n)` with `n` above 4 MiB returns `DomainError::InvalidInput` instead of a smaller buffer (#747).
 
 ### FR-040-007 Acquire
 
-`BufferPool::acquire(size)` shall: validate `size` against `buffers.max_buffer_size` (`SecurityViolation`); reject when idle-pooled bytes plus `size` would exceed `max_total_memory` (`ResourceExhausted`, message contains "memory limit"); reuse a pooled buffer of the same size if any (cache hit) or allocate a new aligned buffer (cache miss). A returned `PooledBuffer` shall have `len == 0`.
+`BufferPool::acquire(size)` shall: validate `size` against `buffers.max_buffer_size` (`SecurityViolation`); reuse a pooled buffer of the same size if any (cache hit, never fails on the budget); otherwise reject when the live bytes (handed out plus retained) plus the size-class capacity of `size` would exceed `max_total_memory` (`ResourceExhausted`, message contains "memory limit", live bytes unchanged) and allocate a new aligned buffer (cache miss). Every buffer is charged its size-class capacity (`size` rounded up to the effective alignment) from allocation until it is freed; `current_memory_usage()` returns the live bytes in O(1). A returned `PooledBuffer` shall have `len == 0`.
 Status: done.
 
 ### FR-040-008 Return on drop
 
-When a `PooledBuffer` is dropped, the pool shall clear it and push it back to its bucket only if the bucket holds fewer than `max_buffers_per_bucket` buffers; otherwise the buffer is freed.
+When a `PooledBuffer` is dropped, the pool shall clear it and push it back to its bucket only if its capacity equals its size-class capacity, its layout alignment equals the pool's effective alignment, and the bucket holds fewer than `max_buffers_per_bucket` buffers; otherwise the buffer is freed and its charge released. A buffer grown or replaced while checked out is therefore freed; that growth is outside the budget.
 Status: done. Test: `test_per_bucket_limit_enforcement`.
 
 ### FR-040-009 Cleanup
 
-`BufferPool::cleanup()` shall free idle buffers older than `buffer_ttl` since last use, remove buckets that are empty and not accessed within the TTL, and return `CleanupStats { freed_buffers, freed_memory }`. It is never invoked automatically.
+`BufferPool::cleanup()` shall free idle buffers older than `buffer_ttl` since last use, remove buckets that are empty and not accessed within the TTL, and return `CleanupStats { freed_buffers, freed_memory }`. Each freed buffer releases its charge from the live bytes. It is never invoked automatically.
 Status: done.
 
 ### FR-040-010 Configuration
@@ -107,7 +107,8 @@ Status: done.
 ### FR-040-012 Statistics
 
 When `track_stats` is true the pool shall count `total_allocations`, `cache_hits`, `cache_misses`, `cleanup_count`. `PoolStats::hit_ratio()` returns hits / allocations.
-Status: partial. `current_memory_usage` and `peak_memory_usage` are never incremented (see Open Questions).
+`PoolStats::current_memory_usage` and `peak_memory_usage` report the live bytes and their high-water mark regardless of `track_stats`.
+Status: done (#747).
 
 ### FR-040-013 SIMD compatibility queries
 
@@ -118,7 +119,7 @@ Status: done.
 
 - NFR-SEC-040-001: every `unsafe` block carries a `SAFETY` comment; `unsafe_op_in_unsafe_fn` is denied crate-wide (`#![deny(unsafe_op_in_unsafe_fn)]` in `lib.rs`).
 - NFR-SEC-040-002: size arithmetic uses checked operations (FR-040-003/004); regression tests exist for `usize::MAX` and the wraparound boundary.
-- NFR-PERF-040-001: pooled reuse avoids allocation; verified only by the cache-hit counters in tests, no dedicated benchmark `[NEEDS CLARIFICATION: no benches/ file targets the buffer pool; confirm none is planned]`.
+- NFR-PERF-040-001: `acquire` is O(1) with a single stats lock and no thread-pool fan-out; pooled reuse avoids allocation; verified only by the cache-hit counters in tests, no dedicated benchmark `[NEEDS CLARIFICATION: no benches/ file targets the buffer pool; confirm none is planned]`.
 - NFR-CONF-040-001: default limits come from `BufferLimits::default()`: max buffer 256 MiB, total 512 MiB, TTL 300 s, 50 buffers per bucket.
 
 ## Data Model
@@ -127,7 +128,7 @@ Status: done.
 |---|---|
 | `AlignedAllocator` | ZST, `Debug + Default + Clone + Copy` |
 | `AlignedBuffer` | `ptr: NonNull<u8>`, `len`, `capacity`, `alignment`, `layout`, timestamps; `unsafe impl Send + Sync`; `Clone` deep-copies |
-| `BufferPool` | `Arc<DashMap<BufferSize, BufferBucket>>`, `PoolConfig`, `Arc<parking_lot::Mutex<PoolStats>>` |
+| `BufferPool` | `Arc<DashMap<BufferSize, BufferBucket>>`, `PoolConfig`, `Arc<parking_lot::Mutex<PoolStats>>`, `Arc<MemoryBudget>` (atomic live and peak bytes) |
 | `PooledBuffer` | owns `Option<AlignedBuffer>` plus the pool handle; `buffer()`/`buffer_mut()` return `Option` |
 | `PoolConfig` | `max_buffers_per_bucket`, `max_total_memory`, `buffer_ttl`, `track_stats`, `simd_alignment`, `SecurityValidator` |
 | `PoolStats`, `CleanupStats`, `SimdType`, `BufferSize` | as above |
@@ -158,9 +159,6 @@ Status: done.
 
 ## Open Questions
 
-- The total-memory budget counts only idle buffers (`current_memory_usage` sums pooled `capacity`). Buffers currently checked out are not counted, so outstanding buffers can exceed `max_total_memory`; the budget is a cap on retained memory plus one acquire, not on live memory.
-- `PoolStats::current_memory_usage` and `peak_memory_usage` start at 0 and are only decremented (clamped at 0) in `cleanup`; they never reflect allocations, so `memory_efficiency()` is always 1.0 and the fields are dead.
-- `acquire_with_capacity(n)` for `n` > 4 MiB returns a 4 MiB buffer without error; callers get less than requested unless they `reserve`.
 - `AlignedBuffer::clone` uses `.expect("Failed to clone buffer")`, a panic path on allocation failure.
 - `BufferLimits::max_pool_size` exists in the security config presets but is not read by `BufferPool`.
 - `PooledBuffer::buffer()`/`buffer_mut()` return `Option` although the inner value is always `Some` until drop.

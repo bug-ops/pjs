@@ -179,9 +179,6 @@ pub enum PatchError {
     /// The path crosses or targets a value that is not an array
     #[error("expected an array")]
     ExpectedArray,
-    /// The path is empty where an operation needs a target key
-    #[error("path has no target key")]
-    NoTargetKey,
     /// The target of a string operation is not a string
     #[error("expected a string")]
     ExpectedString,

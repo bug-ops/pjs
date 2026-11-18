@@ -4,7 +4,7 @@
 //! Frame generation is crate-private, so this file is compiled as a test-only
 //! module of the crate (see `lib.rs`) instead of living under `tests/`.
 
-use crate::frame_generation::build_skeleton;
+use crate::frame_generation::{build_skeleton, payload_data};
 use crate::security::DEFAULT_MAX_DEPTH;
 use crate::{PjsParser, PriorityStream};
 use pjson_rs_domain::entities::Frame;
@@ -52,12 +52,12 @@ fn patch_frames(frames: &[Frame]) -> impl Iterator<Item = &Frame> {
         .filter(|f| matches!(f.frame_type(), FrameType::Patch))
 }
 
-fn patches_of(frame: &Frame) -> &[JsonData] {
-    frame
-        .payload()
+fn patches_of(frame: &Frame) -> Vec<JsonData> {
+    payload_data(frame)
         .get("patches")
         .and_then(JsonData::as_array)
         .expect("patch frame payload carries a patches array")
+        .to_vec()
 }
 
 /// Applies the skeleton and then every patch frame in order, as a client does.
@@ -65,9 +65,8 @@ fn reconstruct(frames: &[Frame]) -> JsonData {
     let skeleton = frames
         .iter()
         .find(|f| matches!(f.frame_type(), FrameType::Skeleton))
-        .expect("a skeleton frame is present")
-        .payload();
-    let mut state = serde_json::to_value(skeleton).expect("JsonData serializes");
+        .expect("a skeleton frame is present");
+    let mut state = serde_json::to_value(skeleton.body()).expect("body serializes");
     for frame in patch_frames(frames) {
         for patch in patches_of(frame) {
             let path: JsonPath = patch
@@ -146,7 +145,7 @@ fn test_generate_frames_addresses_unencodable_keys_with_quoted_segments() {
     let frames = stream_frames(&input, Priority::BACKGROUND);
 
     let paths: Vec<String> = patch_frames(&frames)
-        .flat_map(|f| patches_of(f).iter())
+        .flat_map(patches_of)
         .map(|p| {
             p.get("path")
                 .and_then(JsonData::as_str)
@@ -167,12 +166,12 @@ fn test_generate_frames_unchanged_for_documents_without_unencodable_keys() {
     let frames = stream_frames(&input, Priority::LOW);
 
     assert_eq!(
-        frames[0].payload(),
-        &data(json!({"id": 0, "name": null, "meta": {"n": 0}, "logs": []}))
+        payload_data(&frames[0]),
+        data(json!({"id": 0, "name": null, "meta": {"n": 0}, "logs": []}))
     );
     let summary: Vec<(u64, u8, String, String, JsonData)> = patch_frames(&frames)
         .flat_map(|f| {
-            patches_of(f).iter().map(move |p| {
+            patches_of(f).into_iter().map(move |p| {
                 let text = |k: &str| p.get(k).and_then(JsonData::as_str).expect(k).to_owned();
                 (
                     f.sequence(),

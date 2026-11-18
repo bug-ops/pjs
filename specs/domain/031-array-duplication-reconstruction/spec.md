@@ -28,14 +28,14 @@ verified: 2026-11-15
 >
 > **Evidence**
 > - PR #397 (commit `e2e40f3`, "stop PriorityStreamer::analyze() from duplicating object-nested arrays on reconstruction") closed issue #394. CHANGELOG entry cites #394.
-> - `PriorityStreamer::extract_patches` (`crates/pjs-core/src/stream/priority.rs`) now emits, per object field, a `PatchOperation::Set { value: Self::skeletonize_arrays(value) }` followed by the child patches from the recursive call. `skeletonize_arrays` replaces every array in the subtree with `[]`, except under keys `JsonPath::append_key` cannot encode (those subtrees stay populated because recursion never reaches them).
-> - Priority hoisting: the `Set` priority is raised to at least the highest `Append` priority in its subtree (`append_ceiling`), so a `Set` is never sorted after an `Append` it must precede. Chunked arrays compute one priority from the full array (`calculate_array_priority`) shared by all chunks.
+> - `PriorityStreamer::extract_patches` (`crates/pjs-core/src/stream/priority.rs`) now emits, per object field, a `WirePatch::Set { path, value: Self::skeletonize_arrays(value) }` followed by the child patches from the recursive call. `skeletonize_arrays` replaces every array in the subtree with `[]`, except under keys `JsonPath::append_key` cannot encode (those subtrees stay populated because recursion never reaches them).
+> - Priority hoisting: the `Set` priority is raised to at least the highest `Append` priority in its subtree (`append_ceiling`), so a `Set` is never sorted after an `Append` it must precede. Chunked arrays compute one priority from the full array (`priority_of_array`, the shared `compute_priority`, #750) shared by all chunks.
 > - Regression tests in `priority.rs` run the full `analyze()` -> `JsonReconstructor::add_frame` -> `process_all_frames` -> `current_state()` round trip via a `round_trip` helper: `test_round_trip_exact_repro_case`, `..._multi_entity_payload`, `..._chunked_array_exceeds_max_patch_size`, `..._chunked_array_divergent_chunk_priority`, `..._array_nested_at_depth_three`, `..._array_of_arrays`, `..._array_of_objects_with_nested_arrays`, `..._empty_array_field`, `..._top_level_bare_array`, `..._mixed_payload_no_regression`, `..._same_path_priority_inversion`, `..._parent_object_priority_inversion` (+ `_chunked`), `..._unencodable_key_parent_wipe`.
 >
 > **Drift from original spec**
 > - Line numbers in the source spec are obsolete (file reorganised, `JsonPath::append_key` now fallible and handled with `let Ok(..) else continue`).
 > - The fix went beyond duplication: priority-sort inversions between `Set` and `Append` and divergent per-chunk priorities (#394 C1/C2) and unencodable keys (C3) were fixed in the same PR.
-> - `PatchOperation` shape is unchanged (`Set`, `Append`, `Replace`, `Remove`); no wire break.
+> - Since #751 `PatchOperation` is gone: `JsonPatch` is `{ patch: WirePatch, priority }` and serializes as `{"patch": ["set", [..], value], "priority": n}`. The reconstructor applies patches through the shared `stream::patch::apply_patch` with no path depth limit, so the any-depth round trip holds (200 levels is tested).
 > - Open question about other patch producers (`pjs-wasm`, HTTP/WebSocket paths) was not audited here. [NEEDS CLARIFICATION]
 > - Fields whose key cannot be encoded are still silently skipped from patches (`continue`), as the original spec declared out of scope.
 
@@ -52,7 +52,7 @@ For any valid JSON `payload`, applying every frame of `PriorityStreamer::analyze
 ### Out of Scope
 
 - New patch kinds; wire-format redesign.
-- `calculate_field_priority` / `calculate_array_priority` heuristics.
+- The priority heuristic itself (`compute_priority`).
 - Partial or out-of-order frame application.
 
 ## 2. User Stories
@@ -85,8 +85,8 @@ For any valid JSON `payload`, applying every frame of `PriorityStreamer::analyze
 
 | Entity | Description |
 |--------|-------------|
-| `JsonPatch` | `path: JsonPath`, `operation: PatchOperation`, `priority: Priority` |
-| `PatchOperation` | `Set { value }`, `Append { values }`, `Replace { value }`, `Remove` |
+| `JsonPatch` | `patch: WirePatch`, `priority: Priority` |
+| `WirePatch` | `Set`, `Merge`, `Append`, `AppendStr` (spec 067 grammar, `stream::patch`); the streamer emits only `Set` and `Append` |
 | `PriorityStreamFrame` | `Skeleton`, `Patch`, `Complete` variants |
 | `StreamingPlan` | ordered `frames` produced by `PriorityStreamer::analyze` |
 
@@ -115,7 +115,7 @@ For any valid JSON `payload`, applying every frame of `PriorityStreamer::analyze
 ## 8. Agent Boundaries
 
 **Always**: run fmt, clippy, nextest; keep a round-trip test for any change to `extract_patches` or `skeletonize_arrays`.
-**Ask first**: changing `PatchOperation` or `JsonPatch`/`PriorityStreamFrame` serialization (consumed by `pjs-wasm`, `pjs-js-client`, HTTP/WebSocket adapters).
+**Ask first**: changing `WirePatch`, `JsonPatch` or `PriorityStreamFrame` serialization (consumed by `pjs-wasm`, `pjs-js-client`, HTTP/WebSocket adapters).
 **Never**: fix at the reconstructor layer by deduplicating `Append`; change priority heuristics as part of this contract.
 
 ## 9. Open Questions

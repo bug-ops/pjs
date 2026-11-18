@@ -27,7 +27,7 @@ fn extract_prioritized_patches_addresses_unencodable_keys_without_a_root_set() {
         .extract_prioritized_patches(Priority::BACKGROUND)
         .expect("patches");
 
-    let paths: BTreeSet<String> = patches.iter().map(|(p, _)| p.path.to_string()).collect();
+    let paths: BTreeSet<String> = patches.iter().map(|(p, _)| p.path().to_string()).collect();
     let expected: BTreeSet<String> = [r#"$["a.b"]"#, r#"$[""]"#, r#"$.x["k]"]"#, "$.ok"]
         .map(str::to_owned)
         .into();
@@ -39,7 +39,7 @@ fn create_skeleton_frame_does_not_ship_unencodable_subtrees_verbatim() {
     let mut stream = streaming(&json!({"a.b": {"c": 7}, "x": {"a[0]": 8}}));
 
     let skeleton = stream.create_skeleton_frame().expect("skeleton");
-    let payload = serde_json::to_value(skeleton.payload()).expect("serializable");
+    let payload = serde_json::to_value(skeleton.body()).expect("serializable");
 
     assert_ne!(payload["a.b"]["c"], json!(7), "{payload}");
     assert_ne!(payload["x"]["a[0]"], json!(8), "{payload}");

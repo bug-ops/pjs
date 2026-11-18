@@ -39,7 +39,7 @@ Layers: `aligned_alloc.rs` (unsafe allocation primitive, `DomainResult`), `buffe
 
 - Buckets are five fixed sizes, each 8x the previous (1 KiB .. 4 MiB); no per-request sizing.
 - `DashMap` gives per-shard locking for buckets; the stats counters sit behind one `parking_lot::Mutex` because they are write-light.
-- `current_memory_usage` is computed on demand with `rayon` (`par_bridge`) over buckets rather than tracked incrementally; this is why the stored `PoolStats::current_memory_usage` is unused.
+- Memory is tracked incrementally in a shared atomic `MemoryBudget` (live and peak bytes), charging each buffer its size-class capacity from allocation until it is freed. `max_total_memory` bounds handed-out plus retained bytes, `current_memory_usage()` is O(1), and `PoolStats` reports the same live and peak values. A buffer is re-pooled on drop only while it still has its class capacity and layout alignment (#747).
 - Config fields are private and derived only from `ValidatedSecurityConfig` so the pool limits and its validator cannot diverge.
 - The allocator is a ZST so `AlignedBuffer` can call `aligned_allocator()` in `Drop` without storing a handle.
 

@@ -19,7 +19,6 @@ related:
 code:
   - crates/pjs-core/src/stream/priority.rs
   - crates/pjs-core/src/stream/mod.rs
-  - crates/pjs-core/src/infrastructure/http/axum_extension.rs
 verified: 2026-11-18
 ---
 
@@ -28,7 +27,7 @@ verified: 2026-11-18
 [[constitution]] | [[MOC-specs]]
 
 > [!info] Scope
-> Documents existing behaviour of `pjson_rs::stream::priority` (`PriorityStreamer`, `StreamingPlan`, `PriorityStreamFrame`, `JsonPatch`, `PatchOperation`, `StreamerConfig`) and `pjson_rs::stream::{StreamProcessor, StreamProcessorConfig}`. The reverse direction is [[046-json-reconstruction/spec|spec 046]]. The array-duplication bug is covered by [[031-array-duplication-reconstruction/spec|spec 031]]; this spec describes the resulting design.
+> Documents existing behaviour of `pjson_rs::stream::priority` (`PriorityStreamer`, `StreamingPlan`, `PriorityStreamFrame`, `JsonPatch`, `StreamerConfig`; patches are `stream::patch::WirePatch`) and `pjson_rs::stream::{StreamProcessor, StreamProcessorConfig}`. The reverse direction is [[046-json-reconstruction/spec|spec 046]]. The array-duplication bug is covered by [[031-array-duplication-reconstruction/spec|spec 031]]; this spec describes the resulting design.
 
 ## Overview
 
@@ -66,9 +65,9 @@ Removed in #698: `JsonPath::append_key` is infallible, so `PriorityStreamer` nei
 Status: obsolete.
 
 ### FR-005 Priority heuristics
-The field priority shall be, in order: `CRITICAL` for keys `id|uuid|status|type|kind`; `HIGH` for `name|title|label|email|username`; `LOW` for keys containing `analytics`, `stats` or `meta`; `BACKGROUND` for keys `reviews|comments|logs|history`; otherwise by value: array longer than 100 -> `BACKGROUND`, object containing `timestamp` -> `MEDIUM`, string longer than 1000 bytes -> `LOW`, else `MEDIUM`. Array priority: more than 50 elements -> `BACKGROUND`; last key `reviews|comments|logs` -> `BACKGROUND`; `items|data|results` or anything else -> `MEDIUM`.
-Status: done. Matching is by exact/substring key name only; there is no user-supplied extractor.
-Code: `calculate_field_priority`, `calculate_array_priority`.
+Every `Set` and `Append` priority shall be `compute_priority(&PriorityHeuristicConfig::default(), path, shape)` from `pjs-domain` ([[044-domain-entities-events-priority-heuristic/spec|spec 044]] FR-044-011), with `shape` the `ValueShape` of the value (a string's byte length, an array's or object's element count) and `path` the full path, so a document is ordered the same way on every transport (#750). The streamer owns one heuristic, built when it is constructed. A `Set` is still raised to the highest `Append` priority in its subtree (FR-008).
+Status: done. The streamer uses the default field lists; there is no user-supplied extractor.
+Code: `PriorityStreamer::{priority_of, priority_of_array}`, `ValueShape::from(&serde_json::Value)`.
 
 ### FR-006 Ordering and batching
 The system shall sort all patches by descending priority with a stable sort, then emit them as `Patch` frames in which every patch shares one priority and a frame holds at most `max_patch_size` patches (default 100).
@@ -85,7 +84,7 @@ Code: `extract_patches`.
 Status: done.
 
 ### FR-009 Frame wire form (serde)
-`PriorityStreamFrame`, `JsonPatch` and `PatchOperation` derive `Serialize` only. The default serde enum representation applies (externally tagged: `{"Skeleton":{...}}`, `{"Patch":{...}}`, `{"Complete":{...}}`); `JsonPatch.path` serialises as the `JsonPath` display string (`$.a.b[0]`), `priority` as its `u8` value.
+`PriorityStreamFrame` and `JsonPatch` derive `Serialize` only. The default serde enum representation applies (externally tagged: `{"Skeleton":{...}}`, `{"Patch":{...}}`, `{"Complete":{...}}`); `JsonPatch` serialises as `{"patch": <WirePatch>, "priority": <u8>}`, where `WirePatch` is the spec 067 3-array `[op, [segments], argument]`.
 Status: done. There is no `Deserialize`; clients in this crate consume frames as Rust values.
 Code: `stream/priority.rs`, `pjs-domain` `JsonPath` `Serialize`.
 
@@ -106,8 +105,8 @@ Code: `stream/mod.rs`.
 | Type | Notes |
 |---|---|
 | `PriorityStreamFrame` | `Skeleton{data, priority, complete}`, `Patch{patches, priority}`, `Complete{checksum: Option<u64>}` |
-| `JsonPatch` | `path: JsonPath`, `operation: PatchOperation`, `priority: Priority` |
-| `PatchOperation` | `Set{value}`, `Append{values}`, `Replace{value}`, `Remove` |
+| `JsonPatch` | `patch: WirePatch`, `priority: Priority` |
+| `WirePatch` | `Set`, `Merge`, `Append`, `AppendStr` (`pjson_rs::stream::patch`); the streamer emits `Set` and `Append` only |
 | `StreamerConfig` | `detect_semantics: bool`, `max_patch_size: usize`, `priority_threshold: Priority` |
 | `StreamingPlan` | `frames: VecDeque<PriorityStreamFrame>` |
 | `StreamFrame` / `StreamProcessorConfig` / `ProcessResult` / `StreamStats` | in `stream/mod.rs` |
@@ -131,19 +130,18 @@ Code: `stream/mod.rs`.
 ## Agent Boundaries
 
 - Always: keep plan order = Skeleton, Patches by descending priority, Complete; add a round-trip test for any change to patch extraction or priorities.
-- Ask first: changing the serde frame representation, adding frame kinds, changing heuristic key lists (alters wire order).
+- Ask first: changing the serde frame representation, adding frame kinds, changing the shared heuristic's field lists (alters wire order).
 - Never: emit an `Append` before the `Set` that creates its parent.
 
 ## Open Questions
 
-1. `StreamerConfig::detect_semantics` and `priority_threshold` are never read (grep: only the definition and `Default`). Heuristics always run and no patch is dropped. Dead configuration.
+1. `StreamerConfig::detect_semantics` and `priority_threshold` are never read (grep: only the definition and `Default`). The shared heuristic always runs and no patch is dropped. Dead configuration.
 2. Nested objects are transmitted redundantly (by code reading): an object field's `Set` value contains its whole subtree except arrays, and child fields then get their own `Set`. Bytes grow with nesting depth. `[NEEDS CLARIFICATION: confirm with a payload-size measurement]`.
 3. Resolved (#626): a scalar root, or an object root with a key `JsonPath` cannot encode, is transmitted through a root `Set` patch at CRITICAL priority; the skeleton stays `null` for a scalar root.
-4. `PatchOperation::Replace` is identical to `Set` in the only consumer; the streamer never emits `Replace` or `Remove`.
+4. Resolved (#751): `PatchOperation` and its `Replace` and `Remove` are removed; patches use the `WirePatch` vocabulary.
 5. `Complete.checksum` is always `None`.
-6. Drift from `docs/architecture/SPECIFICATION.md` (sections 3.1-3.6): spec uses `@type/@seq/@priority` envelopes, JSON Pointer paths, ops `replace|add|remove|move|copy`, `@array_metadata`, error and heartbeat frames, `sha256` checksum. Implementation: externally tagged enum, `$.a[0]` paths, ops `Set|Append|Replace|Remove`, no sequence numbers, no error/heartbeat frame, no array metadata. The draft is a design target, not what `pjson-rs` emits.
-7. `axum_extension.rs` serialises frames with `serde_json::to_string(&frame).expect(..)` on the SSE path; the stated reason (NaN rejected at construction) applies to `JsonData`, whereas `PriorityStreamFrame` carries `serde_json::Value`. `[NEEDS CLARIFICATION: confirm the invariant]`.
-8. Priority wire value is a bare `u8`; `StreamFrame.metadata` is `HashMap<String,String>` (stringly typed).
+6. Drift from `docs/architecture/SPECIFICATION.md` (sections 3.1-3.6): spec uses `@type/@seq/@priority` envelopes, JSON Pointer paths, ops `replace|add|remove|move|copy`, `@array_metadata`, error and heartbeat frames, `sha256` checksum. Implementation: externally tagged enum, `$.a[0]` paths, ops `set|merge|append|append_str` (`WirePatch`), no sequence numbers, no error/heartbeat frame, no array metadata. The draft is a design target, not what `pjson-rs` emits.
+7. Priority wire value is a bare `u8`; `StreamFrame.metadata` is `HashMap<String,String>` (stringly typed).
 
 ## See Also
 
@@ -151,4 +149,4 @@ Code: `stream/mod.rs`.
 - [[046-json-reconstruction/spec|Spec 046 reconstruction]]
 - [[031-array-duplication-reconstruction/spec|Spec 031]]
 - `docs/architecture/SPECIFICATION.md`
-- `crates/pjs-core/src/infrastructure/http/axum_extension.rs` (production consumer), `crates/pjs-demo/src/servers/simple_demo.rs`
+- `crates/pjs-demo/src/servers/simple_demo.rs` (consumer)

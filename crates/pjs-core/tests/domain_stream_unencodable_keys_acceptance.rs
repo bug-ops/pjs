@@ -8,7 +8,8 @@ use pjson_rs::domain::entities::frame::FrameType;
 use pjson_rs::domain::entities::stream::StreamConfig;
 use pjson_rs::domain::value_objects::{JsonData, JsonPath, Priority, SessionId};
 use pjson_rs::domain::{Frame, Stream};
-use pjson_rs::stream::priority::{JsonPatch, PatchOperation as CorePatchOp, PriorityStreamFrame};
+use pjson_rs::stream::patch::WirePatch;
+use pjson_rs::stream::priority::{JsonPatch, PriorityStreamFrame};
 use pjson_rs::stream::reconstruction::JsonReconstructor;
 use serde_json::{Value, json};
 
@@ -31,7 +32,7 @@ fn streaming(data: &Value, config: StreamConfig) -> Stream {
 }
 
 fn payload_value(frame: &Frame) -> Value {
-    serde_json::to_value(frame.payload()).expect("JsonData serializes")
+    serde_json::to_value(frame.body()).expect("JsonData serializes")
 }
 
 fn to_priority_frame(frame: &Frame) -> PriorityStreamFrame {
@@ -52,18 +53,15 @@ fn to_priority_frame(frame: &Frame) -> PriorityStreamFrame {
                     let path = JsonPath::new(p["path"].as_str().expect("path is a string"))
                         .expect("emitted path parses");
                     let value = p["value"].clone();
-                    let operation = match p["operation"].as_str().expect("operation") {
-                        "set" => CorePatchOp::Set { value },
-                        "append" => CorePatchOp::Append {
+                    let patch = match p["operation"].as_str().expect("operation") {
+                        "set" => WirePatch::Set { path, value },
+                        "append" => WirePatch::Append {
+                            path,
                             values: value.as_array().cloned().unwrap_or_else(|| vec![value]),
                         },
                         other => panic!("unexpected patch operation {other}"),
                     };
-                    JsonPatch {
-                        path,
-                        operation,
-                        priority,
-                    }
+                    JsonPatch { patch, priority }
                 })
                 .collect();
             PriorityStreamFrame::Patch { patches, priority }
@@ -182,13 +180,13 @@ fn test_extract_prioritized_patches_addresses_unencodable_keys_without_a_root_se
         .expect("patches");
 
     assert!(
-        patches.iter().all(|(p, _)| !p.path.segments().is_empty()),
+        patches.iter().all(|(p, _)| !p.path().segments().is_empty()),
         "no patch targets the root"
     );
     assert!(
         patches
             .iter()
-            .any(|(p, _)| p.path.to_string() == r#"$["a.b"].c"#),
+            .any(|(p, _)| p.path().to_string() == r#"$["a.b"].c"#),
         "the unencodable key is addressed by a quoted segment"
     );
 }
@@ -204,7 +202,7 @@ fn test_extract_prioritized_patches_has_no_root_set_without_unencodable_keys() {
 
     assert!(!patches.is_empty());
     assert!(
-        patches.iter().all(|(p, _)| !p.path.segments().is_empty()),
+        patches.iter().all(|(p, _)| !p.path().segments().is_empty()),
         "documents without unencodable keys must not emit a root patch"
     );
 }

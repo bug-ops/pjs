@@ -103,10 +103,7 @@ mod stream_lifecycle_tests {
         assert!(stream.fail("Test error".to_string()).is_ok());
         assert_eq!(stream.state(), &StreamState::Failed);
         assert!(stream.is_finished());
-        assert_eq!(
-            stream.metadata().get("error"),
-            Some(&"Test error".to_string())
-        );
+        assert_eq!(stream.failure_reason(), Some("Test error"));
     }
 
     #[test]
@@ -390,16 +387,14 @@ mod metadata_tests {
     }
 
     #[test]
-    fn test_fail_adds_error_metadata() {
+    fn test_fail_records_reason_outside_metadata() {
         let session_id = SessionId::new();
         let source_data = JsonData::Null;
         let mut stream = Stream::new(session_id, source_data, StreamConfig::default());
 
         assert!(stream.fail("Connection timeout".to_string()).is_ok());
-        assert_eq!(
-            stream.metadata().get("error"),
-            Some(&"Connection timeout".to_string())
-        );
+        assert_eq!(stream.failure_reason(), Some("Connection timeout"));
+        assert!(stream.metadata().is_empty());
     }
 }
 

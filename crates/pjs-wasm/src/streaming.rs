@@ -86,7 +86,7 @@ impl From<&Frame> for FrameData {
             _ => "unknown".to_string(),
         };
 
-        let payload = serde_json::to_string(frame.payload()).unwrap_or_else(|_| "null".to_string());
+        let payload = serde_json::to_string(frame.body()).unwrap_or_else(|_| "null".to_string());
 
         Self {
             frame_type,

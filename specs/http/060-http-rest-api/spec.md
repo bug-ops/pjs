@@ -40,7 +40,7 @@ verified: 2026-11-15
 
 **Goal.** `create_pjs_router*` returns an `axum::Router<PjsAppState<R, P, S>>` that exposes the routes below, mapping application errors to a uniform JSON error envelope.
 
-**Out of scope.** Live push (see [[066-websocket-server-transport/spec|066]]), the standalone `PjsExtension` (see [[064-http-axum-extension/spec|064]]), the Prometheus endpoint ([[065-http-prometheus-metrics/spec|065]]).
+**Out of scope.** Live push (see [[066-websocket-server-transport/spec|066]]), the Prometheus endpoint ([[065-http-prometheus-metrics/spec|065]]).
 
 Feature gate: the whole `infrastructure::http` module requires `http-server` (`infrastructure/mod.rs`).
 

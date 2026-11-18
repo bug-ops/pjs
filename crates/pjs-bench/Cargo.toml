@@ -60,3 +60,7 @@ harness = false
 [[bench]]
 name = "client_apply_patches"
 harness = false
+
+[[bench]]
+name = "patch_extraction"
+harness = false

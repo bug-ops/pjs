@@ -219,13 +219,16 @@ fn test_session_query_criteria_build_empty_builder_accepted() {
 #[test]
 fn test_session_query_criteria_getters_return_set_values() {
     let criteria = SessionQueryCriteria::builder()
-        .states(vec!["Active".to_owned()])
+        .states(vec![pjson_rs::domain::SessionState::Active])
         .client_info_pattern("agent".to_owned())
         .has_active_streams(true)
         .exclude_expired(true)
         .build()
         .expect("valid");
-    assert_eq!(criteria.states(), Some(["Active".to_owned()].as_slice()));
+    assert_eq!(
+        criteria.states(),
+        Some([pjson_rs::domain::SessionState::Active].as_slice())
+    );
     assert_eq!(criteria.client_info_pattern(), Some("agent"));
     assert_eq!(criteria.has_active_streams(), Some(true));
     assert!(criteria.exclude_expired());

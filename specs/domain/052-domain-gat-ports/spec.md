@@ -98,7 +98,7 @@ Code: `domain/ports/gat.rs`, `domain/ports/repositories.rs`.
 Code: `domain/ports/repositories.rs`.
 
 ### FR-010 Query criteria validate at construction
-`SessionQueryCriteria` and `StreamFilter` are built through `builder()` and `build() -> DomainResult<_>`; their fields are private (read through accessors) and there is no `validate()`. `SessionQueryCriteriaBuilder::build` shall reject `min_stream_count > max_stream_count`, `created_after > created_before`, and an empty `states` vector (`None` means no filter). `StreamFilterBuilder::build` shall reject an empty `statuses` list (`NonEmptyStatuses`); `has_frames` is a `FramePresence` enum. `StreamFilter.min_priority` and `max_priority` were removed because no adapter honoured them (#604).
+`SessionQueryCriteria` and `StreamFilter` are built through `builder()` and `build() -> DomainResult<_>`; their fields are private (read through accessors) and there is no `validate()`. `SessionQueryCriteriaBuilder::build` shall reject `min_stream_count > max_stream_count`, `created_after > created_before`, and an empty `states` vector (`None` means no filter). `states` is `Option<Vec<SessionState>>` (accessor `Option<&[SessionState]>`), so an invalid state cannot be expressed and adapters match with exact `contains` (#754). `StreamFilterBuilder::build` shall reject an empty `statuses` list (`NonEmptyStatuses`); `has_frames` is a `FramePresence` enum. `StreamFilter.min_priority` and `max_priority` were removed because no adapter honoured them (#604).
 Status: done.
 Code: `domain/ports/repositories.rs`.
 
@@ -146,7 +146,7 @@ Port errors are `DomainError` (`#[non_exhaustive]`): `SessionNotFound`, `StreamN
 
 ## 9. Open Questions
 - Seven declared ports (FR-008) have no implementation or caller. [NEEDS CLARIFICATION: keep as forward declarations or remove before v1.0.0?]
-- `SessionQueryCriteria::states` is `Option<&[String]>` and `client_info_pattern` is a `String`: stringly typed where `SessionState` exists. The adapter compares with `eq_ignore_ascii_case` on `SessionState::as_str()`.
+- `SessionQueryCriteria::client_info_pattern` is a `String`, not a validated type.
 - `StreamStatus::Paused` has no `StreamState` counterpart.
 - Two `SortOrder` enums exist: `domain::ports::SortOrder` (no serde) and `application::queries::SortOrder` (serde, `asc`/`desc` aliases); the handler maps one to the other.
 - `gat_port!` bound is always `Send + Sync`; no port can opt out.

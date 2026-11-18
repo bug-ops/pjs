@@ -8,41 +8,23 @@
 
 use crate::Result;
 use crate::domain::value_objects::{JsonPath, Priority};
+use crate::stream::patch::WirePatch;
+use pjson_rs_domain::services::{PriorityHeuristicConfig, ValueShape, compute_priority};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::VecDeque;
 
 /// Patch operation for updating JSON structure
+///
+/// Applying a patch has no path depth limit; see
+/// [`JsonReconstructor`](crate::stream::JsonReconstructor) for what an
+/// embedder must bound for untrusted peers.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct JsonPatch {
-    /// Path within the target JSON document.
-    pub path: JsonPath,
-    /// Operation to apply at `path`.
-    pub operation: PatchOperation,
+    /// Operation and target path, in the wire vocabulary.
+    pub patch: WirePatch,
     /// Priority assigned to this patch.
     #[serde(with = "pjson_rs_domain::serde_support::priority")]
     pub priority: Priority,
-}
-
-/// Operation a [`JsonPatch`] performs at its target path.
-#[derive(Debug, Clone, serde::Serialize)]
-pub enum PatchOperation {
-    /// Replace the value at the path with `value`.
-    Set {
-        /// New value to set at the path.
-        value: JsonValue,
-    },
-    /// Append values to the array at the path.
-    Append {
-        /// Values appended to the target array.
-        values: Vec<JsonValue>,
-    },
-    /// Replace the value at the path with `value` (semantically distinct from `Set`).
-    Replace {
-        /// Replacement value.
-        value: JsonValue,
-    },
-    /// Remove the value at the path.
-    Remove,
 }
 
 /// Streaming frame containing skeleton or patch data
@@ -74,8 +56,15 @@ pub enum PriorityStreamFrame {
 }
 
 /// Priority-based JSON streamer
+///
+/// Every `Set` and `Append` patch is priced with the shared
+/// [`compute_priority`] heuristic and its default field lists, so a document
+/// is ordered the same way on every transport. A `Set` is raised to the
+/// highest `Append` priority in its subtree, so it is never applied after an
+/// `Append` it must precede.
 pub struct PriorityStreamer {
     config: StreamerConfig,
+    heuristic: PriorityHeuristicConfig,
 }
 
 /// Configuration for [`PriorityStreamer`].
@@ -107,7 +96,10 @@ impl PriorityStreamer {
 
     /// Create streamer with custom configuration
     pub fn with_config(config: StreamerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            heuristic: PriorityHeuristicConfig::default(),
+        }
     }
 
     /// Analyze JSON and create streaming plan
@@ -128,8 +120,8 @@ impl PriorityStreamer {
             // Pushed first so the stable priority sort applies it before any
             // other CRITICAL patch; later patches then refine its value.
             patches.push(JsonPatch {
-                path: JsonPath::root(),
-                operation: PatchOperation::Set {
+                patch: WirePatch::Set {
+                    path: JsonPath::root(),
                     value: Self::skeletonize_arrays(json),
                 },
                 priority: Priority::CRITICAL,
@@ -235,7 +227,7 @@ impl PriorityStreamer {
             JsonValue::Object(map) => {
                 for (key, value) in map {
                     let field_path = current_path.append_key(key);
-                    let own_priority = self.calculate_field_priority(&field_path, key, value);
+                    let own_priority = self.priority_of(&field_path, value);
 
                     let mut child_patches = Vec::new();
                     self.extract_patches(value, &field_path, &mut child_patches)?;
@@ -245,15 +237,15 @@ impl PriorityStreamer {
                     // sorted/applied after an Append it must precede (#394 C1/C2).
                     let append_ceiling = child_patches
                         .iter()
-                        .filter(|p| matches!(p.operation, PatchOperation::Append { .. }))
+                        .filter(|p| matches!(p.patch, WirePatch::Append { .. }))
                         .map(|p| p.priority)
                         .max();
                     let priority =
                         append_ceiling.map_or(own_priority, |ceiling| own_priority.max(ceiling));
 
                     patches.push(JsonPatch {
-                        path: field_path.clone(),
-                        operation: PatchOperation::Set {
+                        patch: WirePatch::Set {
+                            path: field_path.clone(),
                             value: Self::skeletonize_arrays(value),
                         },
                         priority,
@@ -270,11 +262,11 @@ impl PriorityStreamer {
                     // let a short tail chunk outrank the bulk chunks and jump
                     // ahead of them in the priority sort, corrupting element
                     // order on reconstruction (#394 C2, chunked variant).
-                    let priority = self.calculate_array_priority(current_path, arr);
+                    let priority = self.priority_of_array(current_path, arr);
                     for chunk in arr.chunks(self.config.max_patch_size) {
                         patches.push(JsonPatch {
-                            path: current_path.clone(),
-                            operation: PatchOperation::Append {
+                            patch: WirePatch::Append {
+                                path: current_path.clone(),
                                 values: chunk.to_vec(),
                             },
                             priority,
@@ -282,11 +274,11 @@ impl PriorityStreamer {
                     }
                 } else if !arr.is_empty() {
                     patches.push(JsonPatch {
-                        path: current_path.clone(),
-                        operation: PatchOperation::Append {
+                        patch: WirePatch::Append {
+                            path: current_path.clone(),
                             values: arr.clone(),
                         },
-                        priority: self.calculate_array_priority(current_path, arr),
+                        priority: self.priority_of_array(current_path, arr),
                     });
                 }
             }
@@ -298,54 +290,18 @@ impl PriorityStreamer {
         Ok(())
     }
 
-    /// Calculate priority for a field based on path and content
-    fn calculate_field_priority(&self, _path: &JsonPath, key: &str, value: &JsonValue) -> Priority {
-        // Critical fields
-        if matches!(key, "id" | "uuid" | "status" | "type" | "kind") {
-            return Priority::CRITICAL;
-        }
-
-        // High priority fields
-        if matches!(key, "name" | "title" | "label" | "email" | "username") {
-            return Priority::HIGH;
-        }
-
-        // Low priority patterns
-        if key.contains("analytics") || key.contains("stats") || key.contains("meta") {
-            return Priority::LOW;
-        }
-
-        if matches!(key, "reviews" | "comments" | "logs" | "history") {
-            return Priority::BACKGROUND;
-        }
-
-        // Content-based priority
-        match value {
-            JsonValue::Array(arr) if arr.len() > 100 => Priority::BACKGROUND,
-            JsonValue::Object(obj) if obj.contains_key("timestamp") => Priority::MEDIUM,
-            JsonValue::String(s) if s.len() > 1000 => Priority::LOW,
-            _ => Priority::MEDIUM,
-        }
+    fn priority_of(&self, path: &JsonPath, value: &JsonValue) -> Priority {
+        compute_priority(&self.heuristic, path, ValueShape::from(value))
     }
 
-    /// Calculate priority for array elements
-    fn calculate_array_priority(&self, path: &JsonPath, elements: &[JsonValue]) -> Priority {
-        // Large arrays get background priority
-        if elements.len() > 50 {
-            return Priority::BACKGROUND;
-        }
-
-        // Arrays in certain paths get different priorities
-        if let Some(last_key) = path.last_key() {
-            if matches!(last_key, "reviews" | "comments" | "logs") {
-                return Priority::BACKGROUND;
-            }
-            if matches!(last_key, "items" | "data" | "results") {
-                return Priority::MEDIUM;
-            }
-        }
-
-        Priority::MEDIUM
+    fn priority_of_array(&self, path: &JsonPath, elements: &[JsonValue]) -> Priority {
+        compute_priority(
+            &self.heuristic,
+            path,
+            ValueShape::Array {
+                len: elements.len(),
+            },
+        )
     }
 }
 
@@ -467,20 +423,20 @@ mod tests {
     #[test]
     fn test_field_priority_calculation() {
         let streamer = PriorityStreamer::new();
-        let path = JsonPath::root();
+        let at = |text: &str| JsonPath::new(text).expect("valid path");
 
         assert_eq!(
-            streamer.calculate_field_priority(&path, "id", &json!(123)),
+            streamer.priority_of(&at("$.id"), &json!(123)),
             Priority::CRITICAL
         );
 
         assert_eq!(
-            streamer.calculate_field_priority(&path, "name", &json!("John")),
+            streamer.priority_of(&at("$.name"), &json!("John")),
             Priority::HIGH
         );
 
         assert_eq!(
-            streamer.calculate_field_priority(&path, "reviews", &json!([])),
+            streamer.priority_of(&at("$.reviews"), &json!([])),
             Priority::BACKGROUND
         );
     }
@@ -556,14 +512,12 @@ mod tests {
 
     #[test]
     fn test_round_trip_chunked_array_divergent_chunk_priority() {
-        // #394 M2: guards against computing `calculate_array_priority` per
-        // chunk slice instead of once for the whole array. With
-        // max_patch_size 60 over a 130-element "items" array, chunks are
-        // 60/60/10: under the old per-chunk scheme the 10-element tail (len
-        // <= 50) would fall through to the "items" last-key boost and get
-        // MEDIUM priority, while the two 60-element head chunks (len > 50)
-        // get BACKGROUND — the higher-priority tail would then sort ahead of
-        // the head chunks and be applied first, corrupting element order.
+        // #394 M2: guards against pricing each chunk slice instead of the whole
+        // array once. With max_patch_size 60 over a 130-element array, chunks
+        // are 60/60/10: pricing per slice would give the 10-element tail a
+        // higher priority than the two 60-element head chunks, so the tail
+        // would sort ahead of the head and be applied first, corrupting
+        // element order.
         let config = StreamerConfig {
             max_patch_size: 60,
             ..StreamerConfig::default()

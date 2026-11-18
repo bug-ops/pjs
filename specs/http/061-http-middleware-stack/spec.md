@@ -124,9 +124,8 @@ By default `X-Forwarded-For` and `X-Real-IP` shall be ignored. When `TrustedProx
 
 ## Open Questions
 
-- Unwired public items in `middleware.rs`: `PjsMiddleware` (adds `X-PJS-Duration-Ms`, `X-PJS-Version`, `X-PJS-Compression`, rejects large `Content-Length`), `compression_middleware` (header hint only, no compression), `health_check_middleware`, `content_validation_middleware`/`ContentValidationConfig`. They are referenced only by tests (`tests/http_middleware_comprehensive.rs`, `http_middleware_tests.rs`) and never by `apply_common_layers`.
-- `CircuitBreakerMiddleware` stores `failure_threshold` and `recovery_timeout_seconds` but implements neither `Layer` nor `Service`; it has no behaviour.
-- `websocket_upgrade_middleware` answers any `Upgrade: websocket` request with `501 "WebSocket support coming soon"`; stale relative to [[066-websocket-server-transport/spec|066]] and unused by routers.
+- Unwired public items in `middleware.rs`: `PjsMiddleware` (adds `X-PJS-Duration-Ms`, `X-PJS-Version`, rejects large `Content-Length`), `content_validation_middleware`/`ContentValidationConfig`. They are referenced only by tests (`tests/http_middleware_comprehensive.rs`, `http_middleware_tests.rs`) and never by `apply_common_layers`.
+- Removed in #749: `websocket_upgrade_middleware` and `handle_websocket_upgrade` (answered real upgrades with 501), `compression_middleware`, `CircuitBreakerMiddleware`, `health_check_middleware` and `PjsMiddleware::with_compression` (all placeholders). Users who want compression add `tower_http::compression::CompressionLayer`.
 - Stale "Phase" narrative: spec [[007-http-auth-middleware/spec|007]] describes auth as a draft; auth is implemented and wired.
 - Rate limiting is opt-in; `create_pjs_router()` and `_with_config` apply none.
 - Per-route rate limits or per-key quotas do not exist.

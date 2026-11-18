@@ -7,7 +7,8 @@ use pjson_rs::domain::aggregates::StreamSession;
 use pjson_rs::domain::aggregates::stream_session::SessionConfig;
 use pjson_rs::domain::value_objects::{JsonData, JsonPath, Priority};
 use pjson_rs::stream::StreamFrame;
-use pjson_rs::stream::priority::{JsonPatch, PatchOperation, PriorityStreamFrame};
+use pjson_rs::stream::patch::WirePatch;
+use pjson_rs::stream::priority::{JsonPatch, PriorityStreamFrame};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -88,13 +89,15 @@ fn stream_frame_encodes_priority_as_u8() {
 #[test]
 fn json_patch_encodes_priority_as_u8() {
     let patch = JsonPatch {
-        path: JsonPath::new("$.a").unwrap(),
-        operation: PatchOperation::Remove,
+        patch: WirePatch::Set {
+            path: JsonPath::new("$.a").unwrap(),
+            value: json!(1),
+        },
         priority: Priority::new(9).unwrap(),
     };
     let value = serde_json::to_value(&patch).unwrap();
     assert_eq!(value["priority"], 9);
-    assert_eq!(value["operation"], "Remove");
+    assert_eq!(value["patch"], json!(["set", ["a"], 1]));
 }
 
 #[test]

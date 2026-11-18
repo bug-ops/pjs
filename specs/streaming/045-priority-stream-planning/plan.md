@@ -17,14 +17,14 @@ verified: 2026-11-18
 
 ## Architecture
 
-Pure, synchronous, allocation-based transformation in `pjs-core::stream`. No I/O, no async. Consumers: `infrastructure/http/axum_extension.rs` (SSE/NDJSON responses) and `pjs-demo`.
+Pure, synchronous, allocation-based transformation in `pjs-core::stream`. No I/O, no async. Consumer: `pjs-demo`.
 
 ```mermaid
 flowchart LR
   J[serde_json::Value] --> A[PriorityStreamer::analyze]
   A --> S[generate_skeleton]
   A --> E[extract_patches]
-  E --> P[calculate_field_priority / calculate_array_priority]
+  E --> P[compute_priority (pjs-domain)]
   E --> K[skeletonize_arrays]
   A --> O[stable sort by Reverse priority + batching]
   S --> PL[StreamingPlan: Skeleton, Patch*, Complete]
@@ -41,7 +41,7 @@ flowchart LR
 
 ## Public API surface
 
-`PriorityStreamer::{new, with_config, analyze}`, `StreamerConfig`, `StreamingPlan`, `PriorityStreamFrame`, `JsonPatch`, `PatchOperation`; `StreamProcessor::{new, process_frame, stats}`, `StreamProcessorConfig`, `StreamFrame`, `ProcessResult`, `StreamStats`. Crate root re-exports `PriorityStreamer`, `StreamProcessor`, `StreamProcessorConfig`, `StreamFrame`, `ProcessResult`, `StreamStats`.
+`PriorityStreamer::{new, with_config, analyze}`, `StreamerConfig`, `StreamingPlan`, `PriorityStreamFrame`, `JsonPatch`, `stream::patch::WirePatch`; `StreamProcessor::{new, process_frame, stats}`, `StreamProcessorConfig`, `StreamFrame`, `ProcessResult`, `StreamStats`. Crate root re-exports `PriorityStreamer`, `StreamProcessor`, `StreamProcessorConfig`, `StreamFrame`, `ProcessResult`, `StreamStats`.
 
 ## Contracts
 
@@ -55,7 +55,7 @@ flowchart LR
 ## Testing strategy
 
 - Unit: `crates/pjs-core/src/stream/priority.rs` (19 tests incl. 14 round trips through `JsonReconstructor`), `stream/mod.rs` (7).
-- Integration: `crates/pjs-core/tests/http_axum_extension_comprehensive.rs`, `stream_session_comprehensive.rs` exercise consumers.
+- Integration: `crates/pjs-core/tests/stream_session_comprehensive.rs` exercises consumers.
 - No fuzz target and no benchmark targets `analyze`.
 
 ## Security notes

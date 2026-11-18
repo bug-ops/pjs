@@ -82,8 +82,8 @@ Code: `frame_generation.rs` (`build_skeleton`, `generate_frames`), `priority_ass
 Status: done.
 
 ### FR-006 Priority assignment parity with HTTP
-The system shall compute every field priority by delegating to `pjson_rs_domain::services::compute_priority` with a `PriorityHeuristicConfig` projected from `PriorityConfig`, so WASM and HTTP transports produce identical priorities for identical `(path, value)` input. Matching is case-insensitive on the last path segment. `PriorityConfig` mutations made through `config_mut` take effect on the next call.
-Code: `priority_assignment.rs` (`PriorityConfig::to_heuristic`, `PriorityAssigner::calculate_field_priority`); regression test `crates/pjs-wasm/tests/priority_parity.rs` (issue #242).
+The system shall compute every field priority by delegating to `pjson_rs_domain::services::compute_priority` with a `PriorityHeuristicConfig` projected once from `PriorityConfig` (`PriorityConfig::into_heuristic`) when the assigner is built and a `ValueShape` of the value (#755), so WASM and HTTP transports produce identical priorities for identical `(path, value)` input. Matching is case-insensitive on the last path segment. The assigner's configuration is fixed at construction; a call allocates nothing.
+Code: `priority_assignment.rs` (`PriorityConfig::into_heuristic`, `PriorityAssigner::calculate_field_priority`); regression test `crates/pjs-wasm/tests/priority_parity.rs` (issue #242).
 Status: done.
 
 ### FR-007 PriorityConfigBuilder
@@ -125,7 +125,7 @@ Status: done.
 | `PriorityStream` | `#[wasm_bindgen]` struct | assigner, `min_priority: u8`, `SecurityConfig`, 3 optional callbacks |
 | `PriorityConfigBuilder` | `#[wasm_bindgen]`, `Clone` | wraps `PriorityConfig` |
 | `PriorityConfig` | Rust-only | tier lists + two thresholds; `pub` in `pub mod priority_assignment` |
-| `PriorityAssigner`, `PrioritizedField` | Rust-only | `pub` for tests |
+| `PriorityAssigner`, `PrioritizedField` | Rust-only | `pub` for tests; `PriorityAssigner` has `new`, `with_config`, `calculate_field_priority` and `extract_prioritized_fields_with_limit` |
 | `FrameData`, `StreamStats` | serde + `Tsify` | callback payloads |
 | `PriorityConstants` | unit struct | static getters |
 
@@ -162,7 +162,6 @@ Status: done.
 - `PjsParser::version` duplicates the free `version()` function.
 - `PriorityStream::set_min_priority` accepts 1..=255 although domain priorities in practice range 1..=100.
 - Typed errors: all JS errors are `JsValue::from_str(format!(..))` strings; `SecurityError` is not exposed as a typed JS error (stringly typed).
-- `PriorityAssigner::refreshed_heuristic` re-projects the config on every `calculate_field_priority` call (clones the vectors per field); the cached `heuristic` field is only used when equal. Candidate performance cleanup.
 - Item docs in `priority_constants.rs` use property syntax, the crate docs use call syntax.
 - `FrameData.type` is a `String`, not a TS union.
 - Issue #591 (open): `pjs-wasm` lacks `#![forbid(unsafe_code)]`.

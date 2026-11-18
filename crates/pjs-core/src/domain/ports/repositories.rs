@@ -12,7 +12,7 @@
 //! - `CacheGat` - Caching operations
 
 use crate::domain::{
-    DomainResult,
+    DomainResult, SessionState,
     aggregates::StreamSession,
     entities::Frame,
     value_objects::{Priority, SessionId},
@@ -75,10 +75,11 @@ impl<T: super::gat::CacheGat> CacheExtensions for T {}
 /// # Examples
 ///
 /// ```
+/// use pjson_rs::domain::SessionState;
 /// use pjson_rs::domain::ports::SessionQueryCriteria;
 ///
 /// let criteria = SessionQueryCriteria::builder()
-///     .states(vec!["Active".to_owned()])
+///     .states(vec![SessionState::Active])
 ///     .exclude_expired(true)
 ///     .build()?;
 /// assert!(criteria.exclude_expired());
@@ -88,7 +89,7 @@ impl<T: super::gat::CacheGat> CacheExtensions for T {}
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct SessionQueryCriteria {
-    states: Option<Vec<String>>,
+    states: Option<Vec<SessionState>>,
     created_after: Option<Timestamp>,
     created_before: Option<Timestamp>,
     client_info_pattern: Option<String>,
@@ -107,7 +108,7 @@ impl SessionQueryCriteria {
 
     /// Match sessions whose state is one of these values.
     #[must_use]
-    pub fn states(&self) -> Option<&[String]> {
+    pub fn states(&self) -> Option<&[SessionState]> {
         self.states.as_deref()
     }
 
@@ -163,7 +164,7 @@ pub struct SessionQueryCriteriaBuilder {
 impl SessionQueryCriteriaBuilder {
     /// Sets the accepted session states.
     #[must_use]
-    pub fn states(mut self, states: Vec<String>) -> Self {
+    pub fn states(mut self, states: Vec<SessionState>) -> Self {
         self.criteria.states = Some(states);
         self
     }
@@ -1010,13 +1011,13 @@ mod tests {
     #[test]
     fn test_session_query_criteria_with_states() {
         let criteria = SessionQueryCriteria {
-            states: Some(vec!["active".to_string(), "pending".to_string()]),
+            states: Some(vec![SessionState::Active, SessionState::Initializing]),
             ..Default::default()
         };
         assert!(criteria.states.is_some());
         let states = criteria.states.unwrap();
         assert_eq!(states.len(), 2);
-        assert!(states.iter().any(|s| s == "active"));
+        assert!(states.contains(&SessionState::Active));
     }
 
     #[test]
@@ -1054,7 +1055,7 @@ mod tests {
     #[test]
     fn test_session_query_criteria_clone() {
         let criteria = SessionQueryCriteria {
-            states: Some(vec!["active".to_string()]),
+            states: Some(vec![SessionState::Active]),
             client_info_pattern: Some("test*".to_string()),
             ..Default::default()
         };
@@ -1099,14 +1100,14 @@ mod tests {
     fn test_criteria_build_valid_criteria_accepted() {
         let now = Timestamp::now();
         let criteria = SessionQueryCriteria::builder()
-            .states(vec!["active".to_string()])
+            .states(vec![SessionState::Active])
             .created_after(now - jiff::SignedDuration::from_hours(1))
             .created_before(now)
             .min_stream_count(1)
             .max_stream_count(10)
             .build()
             .unwrap();
-        assert_eq!(criteria.states(), Some(["active".to_string()].as_slice()));
+        assert_eq!(criteria.states(), Some([SessionState::Active].as_slice()));
         assert_eq!(criteria.min_stream_count(), Some(1));
     }
 

@@ -179,10 +179,6 @@ stock `pjs-core` server. Known near-misses:
 - `HttpTransport.connect` calls the real `POST /pjs/sessions`, but sends
   `client_info` as an object while the server expects a string; the server
   answers 422.
-- `PjsExtension` mounts `GET /pjs/stream/{stream_id}/sse`, which matches the SSE
-  URL when `endpoint` is `/{stream_id}`, but it serves externally tagged
-  `PriorityStreamFrame` JSON (`{"Skeleton":{...}}`) that client frame validation
-  rejects.
 
 ### Wire format
 

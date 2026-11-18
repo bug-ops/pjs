@@ -4,6 +4,7 @@
 //! and compression integration.
 
 pub mod compression_integration;
+pub mod patch;
 pub mod priority;
 pub mod reconstruction;
 

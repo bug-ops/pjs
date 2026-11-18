@@ -9,7 +9,7 @@ tags:
   - axum
   - sse
 created: 2026-11-15
-status: partial
+status: obsolete
 priority: P3
 related:
   - "[[constitution]]"
@@ -17,15 +17,13 @@ related:
   - "[[060-http-rest-api/spec|HTTP REST API]]"
   - "[[063-http-streaming-negotiation/spec|Streaming and negotiation]]"
 code:
-  - crates/pjs-core/src/infrastructure/http/axum_extension.rs
-  - crates/pjs-core/tests/http_axum_extension_comprehensive.rs
 verified: 2026-11-15
 ---
 
 # `PjsExtension`: bolt-on PJS routes for existing axum apps
 
 > [!info] Status
-> `partial`: the routing, CORS opt-in and request-marker middleware are real; stream creation does not persist anything and the SSE endpoint serves hard-coded sample data. The extension is a scaffold, independent from the CQRS stack in [[060-http-rest-api/spec|060]].
+> `obsolete`: removed in #748. The module was a scaffold (stub stream endpoints, inert config knobs). Use `create_pjs_router*` from [[060-http-rest-api/spec|060]] and compose with `Router::merge`. The text below describes the removed behaviour and is kept for history.
 
 ## Overview
 

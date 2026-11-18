@@ -152,15 +152,14 @@ where
             // Active and not expired), so the endpoint's default result set
             // is unchanged. An explicit `filters.state` opts out of that
             // default and matches only the requested state(s), expired or not.
-            let (states, exclude_expired) = match query.filters.state {
-                Some(state) => (Some(vec![state.as_str().to_string()]), false),
-                None => (Some(vec![SessionState::Active.as_str().to_string()]), true),
+            let (state, exclude_expired) = match query.filters.state {
+                Some(state) => (state, false),
+                None => (SessionState::Active, true),
             };
 
-            let mut criteria = SessionQueryCriteria::builder().exclude_expired(exclude_expired);
-            if let Some(states) = states {
-                criteria = criteria.states(states);
-            }
+            let mut criteria = SessionQueryCriteria::builder()
+                .exclude_expired(exclude_expired)
+                .states(vec![state]);
             if let Some(after) = query.filters.created_after {
                 criteria = criteria.created_after(after);
             }
