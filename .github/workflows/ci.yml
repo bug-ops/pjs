@@ -22,11 +22,17 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
-  # install-action tool pins; refresh together with the Actions bump
+  # Skip sccache's startup `.sccache_check` read/write probe against GHA cache.
+  # Since sccache v0.20.0 (mozilla/sccache#2911), GHA retries temporary errors
+  # (e.g. 429 rate limits during parallel CI bursts) with up to 6x8s backoff,
+  # blocking server startup past sccache's 10s client startup timeout.
+  SCCACHE_SKIP_CACHE_CHECK: "true"
+  # CI tool pins; refresh together with the Actions bump
   CARGO_FUZZ_VERSION: 0.13.2
   CARGO_HACK_VERSION: 0.6.46
   CARGO_LLVM_COV_VERSION: 0.9.1
   CARGO_NEXTEST_VERSION: 0.9.152
+  SCCACHE_VERSION: v0.20.0
   WASM_PACK_VERSION: 0.15.1
 
 concurrency:
@@ -108,6 +114,8 @@ jobs:
           components: rustfmt, clippy
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: ${{ env.SCCACHE_VERSION }}
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -264,6 +272,8 @@ jobs:
           components: llvm-tools-preview
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: ${{ env.SCCACHE_VERSION }}
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -371,6 +381,8 @@ jobs:
           components: llvm-tools-preview
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: ${{ env.SCCACHE_VERSION }}
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -457,6 +469,8 @@ jobs:
       - uses: ./.github/actions/setup-rust
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: ${{ env.SCCACHE_VERSION }}
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
@@ -502,6 +516,8 @@ jobs:
           components: llvm-tools-preview
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: ${{ env.SCCACHE_VERSION }}
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
