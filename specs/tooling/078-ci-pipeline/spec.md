@@ -51,7 +51,7 @@ Part of [[MOC-specs]]; see [[constitution]]. Release is in [[079-release-pipelin
 ## Functional Requirements
 
 ### FR-001 Triggers and concurrency
-CI shall run on push and pull_request to `main`/`develop`, on `merge_group` for `main`, weekly on schedule (`39 17 * * 6`, Saturday), and on manual dispatch; runs in the same workflow/ref cancel in-progress ones. Workflow env: `RUSTFLAGS=-D warnings`, `CARGO_INCREMENTAL=0`, `CARGO_NET_RETRY=10`, `RUST_BACKTRACE=short`.
+CI shall run on push and pull_request to `main`/`develop`, on `merge_group` for `main`, weekly on schedule (`39 17 * * 6`, Saturday), and on manual dispatch; runs in the same workflow/ref cancel in-progress ones. Workflow env: `RUSTFLAGS=-D warnings`, `CARGO_INCREMENTAL=0`, `CARGO_NET_RETRY=10`, `RUST_BACKTRACE=short`, `SCCACHE_SKIP_CACHE_CHECK=true`.
 Status: done.
 
 ### FR-002 Change detection
@@ -162,7 +162,7 @@ Job graph: `changes` -> {`quality`, `feature-matrix`, `fuzz`, `build`, `doctest`
 - No benchmark job (see [[075-bench-suite/spec]]); the quiet-machine A/B procedure is documented in `crates/pjs-bench/README.md` (#619); `CLAUDE.md` and `.claude/rules` mention a `jemalloc` feature, but no `Cargo.toml` defines it (the matrix covers `system` and `mimalloc`).
 - Demo integration tests are not exercised in PR CI ([[077-demo-servers/spec]]); the comment near `coverage` ("zero tests") is stale.
 - `wasm-pack test` (documented in `.claude/rules/branching.md`) is not run in CI.
-- `install-action` tool pins (`CARGO_FUZZ_VERSION`, `CARGO_HACK_VERSION`, `CARGO_LLVM_COV_VERSION`, `CARGO_NEXTEST_VERSION`, `WASM_PACK_VERSION`) live in the workflow `env:` block; Dependabot cannot track them, so refresh them with the Actions bump (#744). Node inputs are not tracked by Dependabot either: review the Node matrix each April and October (#743; Node 26 once `actions/setup-node` supports it).
+- CI tool pins (`CARGO_FUZZ_VERSION`, `CARGO_HACK_VERSION`, `CARGO_LLVM_COV_VERSION`, `CARGO_NEXTEST_VERSION`, `SCCACHE_VERSION`, `WASM_PACK_VERSION`) live in the workflow `env:` block; Dependabot cannot track them, so refresh them with the Actions bump (#744). Node inputs are not tracked by Dependabot either: review the Node matrix each April and October (#743; Node 26 once `actions/setup-node` supports it).
 - `ci.yml` mentions `main, develop`; there is no `develop` branch convention elsewhere in the repo docs. [NEEDS CLARIFICATION]
 
 ## See Also
